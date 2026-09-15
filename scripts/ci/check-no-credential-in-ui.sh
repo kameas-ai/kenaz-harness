@@ -67,9 +67,20 @@ fail=0
 # false-trigger.
 matches=$(grep -rEn '\b(interface|type)[[:space:]]+[A-Z][a-zA-Z0-9]*((Reference|Credential|Secret)\b|Auth([A-Z][a-zA-Z0-9]*)?\b)' --include='*.ts' --include='*.vue' "$ROOT" 2>/dev/null || true)
 
+# Discovery floor (Finding #74, CI-gate-hardening, 2026-09-14): a bare
+# "found nothing, clean" cannot distinguish "no credential-shaped type
+# exists" from "the naming-convention regex stopped matching anything" —
+# this codebase is known to ship credential-shaped types today (e.g.
+# OAuthToken, DeviceAuthBeginResult, the WireRecipeAuth family the
+# gate's own header cites). If discovery finds none of them, the scan
+# is broken, not the codebase clean.
 if [[ -z "$matches" ]]; then
-  echo "[no-credential-in-ui] no credential-shaped types found — clean."
-  exit 0
+  echo "[no-credential-in-ui] FAIL: found zero credential-shaped (Reference/Credential/Secret/Auth*)" >&2
+  echo "[no-credential-in-ui] type declarations under ${ROOT} — this codebase is known to ship" >&2
+  echo "[no-credential-in-ui] several (OAuthToken, DeviceAuthBeginResult, the WireRecipeAuth family)," >&2
+  echo "[no-credential-in-ui] so finding none is almost certainly a broken naming-convention regex," >&2
+  echo "[no-credential-in-ui] not a codebase that stopped declaring credential-shaped types." >&2
+  exit 1
 fi
 
 while IFS= read -r line; do

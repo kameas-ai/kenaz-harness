@@ -153,6 +153,24 @@ import_path_for() {
 candidates=$(grep -rnE '^func (Evaluate|Enforce|Authorize|Check|Verify|Guard|Permit)[A-Za-z0-9_]*\(|^func [A-Z][A-Za-z0-9_]*Gate\(' \
   --include='*.go' "$SCAN_ROOT" 2>/dev/null | grep -v '_test\.go' || true)
 
+# Discovery floor (Finding #74, CI-gate-hardening, 2026-09-14): this
+# gate's own header names a real incident where a regex backtracking
+# bug silently broke `symbol` EXTRACTION (every candidate collapsed to
+# a 1-char match) without ever breaking DISCOVERY — candidates stayed
+# non-empty throughout, so that bug needed its own detection, not a
+# floor. This floor covers the OTHER failure mode the fix didn't touch:
+# if the naming-convention regex itself stops matching (a rename away
+# from Evaluate*/Enforce*/etc, a directory move), candidates goes empty
+# and the gate reports clean with nothing checked. This codebase is
+# known to ship dozens of Evaluate*/Enforce*/Check*/*Gate functions.
+if [[ -z "$candidates" ]]; then
+  echo "${GATE} FAIL: found zero Evaluate*/Enforce*/Authorize*/Check*/Verify*/Guard*/Permit*/*Gate" >&2
+  echo "${GATE} candidate functions under ${SCAN_ROOT}. This naming convention is known to be in" >&2
+  echo "${GATE} active use — finding none is almost certainly a broken discovery pattern, not a" >&2
+  echo "${GATE} codebase that renamed every gate-shaped function away from it." >&2
+  exit 1
+fi
+
 violations=""
 while IFS=: read -r file line rest; do
   [[ -z "$file" ]] && continue

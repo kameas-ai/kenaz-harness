@@ -16,8 +16,15 @@
 # known instance was already fixed by UNIT-6 before this gate was
 # written, and the scan found zero others under core/+cmd/.
 #
-# Format: one line per violation, exactly matching
-# checkdeadnilbranch's violationString() output, with a DATED
-# justification naming the blocker and owner appended after a " — "
-# separator. Allowlists shrink monotonically; a line with no matching
-# live violation is STALE and fails the gate.
+# Format (Finding #92, CI-gate-hardening, 2026-09-14 — designed keyed
+# from the start; this gate postdates the finding, so it never shipped
+# the file:line-keyed form the other allowlists had to migrate away
+# from): one FULLY-QUALIFIED KEY per entry —
+# `<enclosing-func-qualified-name>#<varName>` (see
+# check-dead-nil-branch.sh's own header for the rare `#N` disambiguating
+# suffix) — followed by an auto-generated `# at file:line: description`
+# locator comment (copy it verbatim from the gate's FAIL output; never
+# compared, only read by humans) and then a `#` comment carrying the
+# DATE, the BLOCKER, and the change that will delete the line. Allowlists
+# shrink monotonically; a line whose KEY no longer corresponds to a live
+# violation is STALE and fails the gate.

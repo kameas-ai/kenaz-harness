@@ -94,6 +94,30 @@ dispatch_methods=$(
     | sort -u
 )
 
+# Discovery floor (Finding #74, CI-gate-hardening, 2026-09-14): checked
+# on the RAW strings, not on total_bindings/handled below — `echo "" |
+# wc -l` reports 1, not 0, so a counter derived that way can never
+# observe "zero found" even when discovery genuinely returned nothing.
+# This gate's own header (check-binding-names.sh cross-reference at
+# line 77) already documents a REAL incident where hardcoding the
+# receiver name silently reduced bindings_methods to zero; this floor
+# is what would have caught it directly instead of via a downstream
+# symptom.
+if [[ -z "$bindings_methods" ]]; then
+  echo "[serve-drift] FAIL: found zero exported *Bindings methods in ${BINDINGS_FILE}." >&2
+  echo "[serve-drift] This file is known to export dozens of RPC methods — finding none is" >&2
+  echo "[serve-drift] almost certainly a broken receiver-name/export-case pattern, not a" >&2
+  echo "[serve-drift] Bindings struct with no methods." >&2
+  exit 1
+fi
+if [[ -z "$dispatch_methods" ]]; then
+  echo "[serve-drift] FAIL: found zero case \"MethodName\": labels in ${DISPATCH_FILE}." >&2
+  echo "[serve-drift] dispatch()/handleWS() are known to switch on dozens of methods — finding" >&2
+  echo "[serve-drift] none is almost certainly a broken case-label pattern, not a served-mode" >&2
+  echo "[serve-drift] dispatcher that handles nothing." >&2
+  exit 1
+fi
+
 total_bindings=$(echo "$bindings_methods" | wc -l | tr -d ' ')
 handled=$(echo "$dispatch_methods" | wc -l | tr -d ' ')
 

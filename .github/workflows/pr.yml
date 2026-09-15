@@ -295,6 +295,21 @@ jobs:
         # it, so the regression it exists to prevent was uncaught.
         run: bash scripts/ci/check-cedar-gate-arguments.sh
 
+      - name: BSD/GNU grep-sed escape divergence guard (Finding #96)
+        # Added by the CI-gate-hardening sweep (2026-09-14). Gates are
+        # written and tested on macOS (BSD userland) and enforced HERE,
+        # on the Linux self-hosted runner (GNU userland). Two confirmed
+        # instances of a grep/sed pattern or replacement whose meaning
+        # silently diverges between the two: check-transport-parity.sh:92
+        # (a `\t` grep PATTERN that matched on BSD and matched nothing on
+        # GNU) and a bash-quoting bug in check-cedar-gate-arguments.sh's
+        # clause 4 that failed identically on both platforms but was
+        # masked by `|| true`. This gate is the tripwire that makes the
+        # CLASS — not just those two instances — impossible to
+        # reintroduce silently. Same precedent as the step immediately
+        # above: a gate with no workflow step is a gate that never runs.
+        run: bash scripts/ci/check-bsd-gnu-escape-divergence.sh
+
       - name: cedar engine singleton guard (I15)
         # Added by WP05 of consent-surfaces-truth-01PMTR01 (the hoist to
         # one shared *cedar.Engine per process). I13 checks the ARGUMENT

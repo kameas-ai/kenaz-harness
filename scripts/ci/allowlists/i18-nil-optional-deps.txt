@@ -13,11 +13,26 @@
 # same header for what this trigger-phrase design still cannot see (a
 # field with zero doc comment).
 #
-# Format: one line per violation, copied verbatim from the gate's
-# stderr, followed by a `#` comment carrying the DATE, the BLOCKER, and
-# the change that will delete the line. "We'll get to it" is not a
-# reason. Entries shrink monotonically — a line that no longer matches a
-# real violation is STALE and fails the gate.
+# Format (RE-KEYED 2026-09-14, Finding #92, CI-gate-hardening): one
+# FULLY-QUALIFIED SYMBOL per entry (pkgPath.Struct.Field) — this is what
+# the gate diffs against. It is followed by an auto-generated `# at
+# file:line: description` locator comment (copy it verbatim from the
+# gate's FAIL output; it is never compared, only read by humans) and then
+# a `#` comment carrying the DATE, the BLOCKER, and the change that will
+# delete the line. "We'll get to it" is not a reason. Entries shrink
+# monotonically — a line whose SYMBOL no longer corresponds to a real
+# violation is STALE and fails the gate.
+#
+# WHY RE-KEYED: this file was originally keyed by `file:line: description`
+# — see the AttachmentRegistry entry's own comment below (kept verbatim)
+# for a live example of the exact self-invalidation Finding #92 names: its
+# line moved 235 -> 250 during the release/v0.78.0 integration sweep with
+# nothing about the finding changing. Migrated to symbol keys the same way
+# and with the same lossless proof as i16-config-nil-coverage.txt (see
+# that file's header): checknilopts/main.go now derives the key from
+# go/types identity, not line text; re-running the gate immediately after
+# migration confirmed all 8 pre-existing entries carried forward with 0
+# unlisted / 0 stale.
 #
 # Calibration run 2026-09-10 (this gate's introduction): 33 optional-by-
 # doc-comment interface fields found under core/+cmd/, 32 already wired
@@ -69,7 +84,8 @@
 # unlisted — IDENTICAL to the first-round numbers above. No entry in this
 # file changed as a result of the second round.
 
-core/agentgraph/executor.go:250: Env.AttachmentRegistry (AttachmentRegistrar) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+github.com/kameas-ai/kenaz-harness/core/agentgraph.Env.AttachmentRegistry
+# at core/agentgraph/executor.go:250: Env.AttachmentRegistry (AttachmentRegistrar) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
 # 2026-09-10 — pre-existing gap, not introduced by this PR. Line updated
 # 235 -> 250 during the release/v0.78.0 integration sweep (2026-09-11):
 # other merged PRs added fields to agentgraph.Env above AttachmentRegistry
@@ -85,7 +101,8 @@ core/agentgraph/executor.go:250: Env.AttachmentRegistry (AttachmentRegistrar) is
 # should delete both this line and the wiring:deferred directive
 # together).
 
-core/fleet/audit_archive.go:70: AuditArchiverConfig.Poster (AuditHTTPPoster) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+github.com/kameas-ai/kenaz-harness/core/fleet.AuditArchiverConfig.Poster
+# at core/fleet/audit_archive.go:70: AuditArchiverConfig.Poster (AuditHTTPPoster) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
 # 2026-09-10 — found by the widened "if nil" trigger; not a capability
 # gap. The field's own doc comment says "This field is intended for
 # tests" — the real production posting path is Client (AuditArchiverConfig.
@@ -97,7 +114,55 @@ core/fleet/audit_archive.go:70: AuditArchiverConfig.Poster (AuditHTTPPoster) is 
 # posting path should wire Poster or delete this field + this line
 # together.
 
-core/tools/monitor/tool.go:160: Options.Offsets (OffsetStore) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat.Config.RiskGate
+# at core/rpc/views/agentgraph/chat/chat_runner.go:519: Config.RiskGate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-12 — DELIBERATE, and reversible in one line. risk-rated-autonomy-
+# 01PMRA01 WP01-WP04 merged with the wiring OFF: core/rpc/api.go sets
+# `RiskGate: nil` where the intended value is `secretGate` (the same live
+# Cedar engine SecretGate already uses). Blocker: layer 3 (Cedar
+# NotApplicable) resolves to Confirm, and until WP05's rater exists nothing
+# can resolve a below-threshold call back to Allow, so every unmatched
+# action asks. Measured against the real embedded policy set: built-in
+# kenaz__* tools still reach layer 2 Allow, but un-granted MCP tools
+# (filesystem__*, github__*, harness-self__*) move from silent allow to a
+# prompt. That is correct for an ATTENDED session; the blocker is
+# unattended, because core/toolloop/confirm.go:200 has no deadline and
+# kernel_tool_adapter.go says "Do not add a deadline here" (owner decision
+# 1) — so an autonomous unattended run would park forever on the first
+# un-granted MCP tool. WP07 exists to give layer-3 prompts their own
+# deadline. Owner: risk-rated-autonomy-01PMRA01. The change that deletes
+# this line: the PR landing WP05 + WP07, which flips api.go back to
+# `RiskGate: secretGate`. Full reasoning is duplicated at the wiring site.
+
+github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat.kernelToolAdapter.gate
+# at core/rpc/views/agentgraph/chat/kernel_tool_adapter.go:137: kernelToolAdapter.gate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-14 — CORRECTED. An earlier 2026-09-12 version of this entry said
+# "nil for exactly as long as Config.RiskGate is. Deleted by the same PR."
+# That was wrong, and the correction matters: this entry is STRUCTURAL, not
+# behavioural, so it does NOT clear when RiskGate flips to secretGate.
+#
+# The real reason the gate cannot see this field wired:
+# check-nil-optional-deps.sh's clause 2 only recognises EXPORTED With*/Set*
+# builder methods as production assignment sites. kernelToolAdapter's
+# builders are deliberately lowercase (withGate), so chat_runner.go's
+# `toolAdapter.withGate(r.cfg.RiskGate)` is invisible to it — the field is
+# assigned in production whenever RiskGate is non-nil, and the gate still
+# reports it unwired. Found by risk-rated-autonomy-01PMRA01's WP05-07 agent
+# while the flip was briefly live during review.
+#
+# So there are two separable things here, and only one of them is about
+# RiskGate: (a) this gate blind spot, which outlives the flip and is the
+# reason the line stays; (b) RiskGate's own current nil value, pending a
+# real measured median rater latency against a live profile — see the
+# Config.RiskGate entry and core/rpc/api.go's wiring-site comment.
+#
+# Blocker: the gate's lowercase-builder blind spot. Owner:
+# risk-rated-autonomy-01PMRA01. The change that deletes this line: teaching
+# checknilopts clause 2 to recognise unexported builder methods, NOT the
+# RiskGate flip.
+
+github.com/kameas-ai/kenaz-harness/core/tools/monitor.Options.Offsets
+# at core/tools/monitor/tool.go:160: Options.Offsets (OffsetStore) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
 # 2026-09-10 — genuine gap, low severity. core/rpc/builtins_wiring.go:409
 # (registerBuiltinTools' kenaz__monitor wiring, mission subagent-control-
 # and-background-tasks-01PMZB11 UNIT-5) omits Offsets; production always
@@ -119,7 +184,8 @@ core/tools/monitor/tool.go:160: Options.Offsets (OffsetStore) is documented opti
 # wire Offsets and delete this line in the same change, or explicitly
 # defer it again with a new date.
 
-core/tools/subagentdispatch/tool.go:179: Options.Tasks (TasksRegistry) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch.Options.Tasks
+# at core/tools/subagentdispatch/tool.go:179: Options.Tasks (TasksRegistry) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
 # 2026-09-10 — already deliberately unwired; the field's own doc comment
 # (tool.go:163-176) records why: UNIT-6 of subagent-control-and-
 # background-tasks-01PMZB11 moved task registration to the RunSpawner
@@ -137,7 +203,20 @@ core/tools/subagentdispatch/tool.go:179: Options.Tasks (TasksRegistry) is docume
 # it without first removing the run spawner's own registration. Owner:
 # unassigned (same as the field's own comment leaves it).
 
-core/update/bootswap/bootswap.go:70: Config.Relauncher (Relauncher) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+github.com/kameas-ai/kenaz-harness/core/update.Config.Swapper
+# at core/update/service.go:51: Config.Swapper (Swapper) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-10 — genuinely unwired, not a capability gap. core/rpc/api.go:
+# 2912's construction omits Swapper; production always uses
+# NewRealSwapper() (core/update/swap.go:45), which is the real
+# per-platform installer, not a stub — same shape as
+# fs.GateOptions.Prompter's NoOpPrompter default used to look safe until
+# it turned out to fail-closed-deny; verified here that NewRealSwapper
+# does the real work, it is not a deny-everything default. Blocker: none
+# — Swapper exists for core/update/service_test.go to inject a fake; no
+# product need for an alternate installer exists today. Owner: n/a.
+
+github.com/kameas-ai/kenaz-harness/core/update/bootswap.Config.Relauncher
+# at core/update/bootswap/bootswap.go:70: Config.Relauncher (Relauncher) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
 # 2026-09-10 — genuinely unwired, confirmed intentional. The one real
 # production call site is main.go:159 (bootswap.MaybeSwapAndRelaunch),
 # whose own adjacent comment says "The Relauncher is nil → real os.Exit
@@ -153,95 +232,4 @@ core/update/bootswap/bootswap.go:70: Config.Relauncher (Relauncher) is documente
 # header for this as a named, general limitation. Blocker: none — real
 # OS relaunch is the desired production behaviour; Relauncher exists so
 # bootswap_test.go can inject a fake. Owner: n/a.
-
-core/update/service.go:51: Config.Swapper (Swapper) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
-# 2026-09-10 — genuinely unwired, not a capability gap. core/rpc/api.go:
-# 2912's construction omits Swapper; production always uses
-# NewRealSwapper() (core/update/swap.go:45), which is the real
-# per-platform installer, not a stub — same shape as
-# fs.GateOptions.Prompter's NoOpPrompter default used to look safe until
-# it turned out to fail-closed-deny; verified here that NewRealSwapper
-# does the real work, it is not a deny-everything default. Blocker: none
-# — Swapper exists for core/update/service_test.go to inject a fake; no
-# product need for an alternate installer exists today. Owner: n/a.
-
-core/rpc/views/agentgraph/chat/kernel_tool_adapter.go:152: kernelToolAdapter.gate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
-# 2026-09-14 — a gate BLIND SPOT, independent of Config.RiskGate's
-# current value (which is nil as of this same date — see the entry
-# below and core/rpc/api.go's own comment at the RiskGate wiring site
-# for why: the offline-floor fix landed but a live-profile latency
-# measurement has not, so the flip is still pending). This entry exists
-# regardless of whether RiskGate is nil or secretGate, because the
-# reason it is unwired is STRUCTURAL, not behavioural — see below.
-#
-# Production data flow (true whenever Config.RiskGate IS non-nil, which
-# it was briefly during this same review round before being reverted):
-# chat_runner.go's StartStream calls
-# `toolAdapter.withGate(r.cfg.RiskGate)`, which — once RiskGate is
-# secretGate — is a REAL, reachable, non-nil call in production. Clause
-# 1 correctly does NOT flag chat.Config.RiskGate itself in that state
-# (a composite literal with a non-nil argument); only THIS downstream
-# field is ever reported, and for a reason unrelated to whether RiskGate
-# is currently nil.
-#
-# Why the gate still reports it: clause 2 (markAssignments' *ast.CallExpr
-# case, main.go ~line 799) recognises a wiring call ONLY when the method
-# name starts with the EXPORTED prefix "With" or "Set" (capital first
-# letter — `strings.HasPrefix(name, "With")`, case-sensitive). Every
-# builder method on kernelToolAdapter — withGate, withRater, withConfirm,
-# withAutonomy, withMoves, and so on — is deliberately lowercase:
-# kernelToolAdapter itself is an unexported, package-private type with no
-# external API surface (only *this* package's chat_runner.go ever
-# constructs and chains one), so exporting just withGate to satisfy this
-# gate would be inconsistent with every sibling method for no product
-# reason. Clause 3's setter-body exception (self.owner ==
-# kernelToolAdapter, RHS is the method's own parameter) correctly
-# excludes `a.gate = g` inside withGate's OWN body from counting as
-# evidence — that exception is doing its job here, not misfiring — which
-# leaves clause 2 as the only remaining path, and clause 2 cannot match a
-# lowercase name by construction.
-#
-# This is a real, general class the gate cannot see: any field wired
-# exclusively through an unexported with*/set*-prefixed builder method
-# will report the same false positive, on any type. It predates this
-# mission — the field was already allowlisted (with an inaccurate "clears
-# automatically" note) back when Config.RiskGate itself was nil, so
-# nobody had verified the assumption end-to-end until now. Fixing the
-# gate to also recognise a lowercase with*/set* prefix is the correct
-# long-term fix but is out of scope for this PR (risk-rated-autonomy-
-# 01PMRA01 WP05/WP06/WP07) — it is a change to a shared, carefully
-# calibrated cross-repo checker (scripts/ci/cmd/checknilopts/main.go) and
-# widening its recognition needs its own re-measurement pass across every
-# currently-allowlisted field, matching the discipline the 2026-09-10 and
-# PR #332 calibration rounds documented in this file's header already
-# used. Blocker: that re-measurement pass. Owner: whoever next touches
-# scripts/ci/cmd/checknilopts/main.go — extend clause 2 to accept a
-# lowercase "with"/"set" prefix (mirroring the exported case exactly,
-# including the lowerFirst fallback becoming a no-op for an
-# already-lowercase field name) and re-run the full calibration.
-
-core/rpc/views/agentgraph/chat/chat_runner.go:520: Config.RiskGate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
-# 2026-09-14 — DELIBERATE, and reversible in one line. Restored: this
-# entry existed from WP01-04 through v0.79.0, was deleted mid-review
-# when WP05+WP06+WP07 landed and this line briefly flipped to
-# `RiskGate: secretGate`, and is restored here because the SAME review
-# round's reviewer ruling held the flip back — see core/rpc/api.go's own
-# comment at the RiskGate wiring site for the complete, current
-# reasoning; this entry only summarizes it.
-#
-# Two things gate the flip, both required:
-#   (a) DONE (this PR): the offline-floor path
-#       (kernel_tool_adapter.go's resolveLayer3OfflineFloor) — true
-#       rater unreachability now degrades to WP06's family floor
-#       instead of falling through to the ordinary prompt, which
-#       combined with rung 5's unattended-denies-immediately would have
-#       turned an offline rater into "deny every un-granted MCP tool for
-#       the whole run" the moment this flipped on.
-#   (b) STILL OPEN: no real measured median added-latency against a
-#       live profile — this dev environment has no LLM credentials, so
-#       every WP05 test exercises a fake registry.
-#
-# Blocker: (b). Owner: risk-rated-autonomy-01PMRA01. The change that
-# deletes this line: whoever measures (b) against a real profile, in the
-# same change that flips this field to `secretGate`.
 
