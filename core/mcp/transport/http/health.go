@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -278,20 +279,35 @@ func (p *HealthProbe) Stop() {
 // supplied id source generates request ids so concurrent probes do
 // not collide on the same envelope id.
 //
-// The probe is intentionally minimal: it builds a Request envelope,
-// sends it, then drains exactly one response off the connection's
-// inbound queue. This works because the Connection's dispatch
-// goroutine pushes one response per Send. If the connection is
-// already busy with an in-flight tools/call (the toolloop's main
-// path), the probe-driven Recv may grab the call's response — the
-// caller is expected to serialise probe runs against application
-// traffic, which the Pool does by routing every response through a
-// shared Router (WP01's transport.Router).
+// dispatchMu, when non-nil, is locked for the full Send+Recv
+// round-trip — the SAME mutex http.Pool's serverEntry uses to
+// serialise toolsForEntry/Call against each other
+// (pool.go:399,447). Before finding #106, this probe was bound
+// against the bare *Connection with no lock at all: the probe
+// goroutine (HealthProbe's ticker) and a live tools/call could Send
+// concurrently, and since the HTTP transport's inbound queue is one
+// FIFO channel per connection with no per-caller routing, a probe
+// tick could pop a live tool call's response for itself (reporting
+// spurious success and starving the real caller, which then times
+// out) or hand the tool call goroutine the probe's own tools/list
+// payload as if it were the tool's result. This doc comment used to
+// claim the Pool "routes every response through a shared Router
+// (WP01's transport.Router)" — no such type exists anywhere in this
+// module (verified by grep); that sentence described a defense that
+// was never built. dispatchMu is the actual fix: passing nil (as the
+// package's own tests do, against an isolated Connection with no
+// concurrent traffic) preserves the pre-fix behaviour for that case
+// only.
 //
-// In test-mode the probe runs against an isolated Connection
-// instance so the response-snatching concern does not apply; the
-// production wiring routes through Router.
-func NewToolsListProbe(conn *Connection, idSource func() int64) func(ctx context.Context) error {
+// Even with dispatchMu held, a probe or call that gives up on
+// ctx.Done() before its Recv observes the reply leaves that reply on
+// the queue for whoever calls Recv next (Connection.Send spawns an
+// independent per-request dispatch goroutine that keeps running
+// after the caller stops waiting — see connection.go's Send/dispatch
+// doc comments). MatchesID below is what catches that: the probe
+// discards a mismatched envelope and fails cleanly rather than
+// reporting success on someone else's payload.
+func NewToolsListProbe(conn *Connection, idSource func() int64, dispatchMu *sync.Mutex) func(ctx context.Context) error {
 	if idSource == nil {
 		// Default: a per-probe atomic counter — every probe gets a
 		// unique id even across goroutines.
@@ -302,6 +318,10 @@ func NewToolsListProbe(conn *Connection, idSource func() int64) func(ctx context
 		}
 	}
 	return func(ctx context.Context) error {
+		if dispatchMu != nil {
+			dispatchMu.Lock()
+			defer dispatchMu.Unlock()
+		}
 		id := idSource()
 		req := transport.RequestEnvelope{
 			JSONRPC: transport.JSONRPCVersion,
@@ -321,6 +341,16 @@ func NewToolsListProbe(conn *Connection, idSource func() int64) func(ctx context
 		case res := <-respCh:
 			if res.err != nil {
 				return res.err
+			}
+			if !res.msg.MatchesID(id) {
+				// finding #106: a stale reply from an earlier,
+				// abandoned Send landed on our Recv instead of our
+				// own response. Fail the tick rather than accept it
+				// as either a false success or (worse) forward it
+				// anywhere — the connection is still serialised
+				// (dispatchMu), so the next tick's Recv gets a clean
+				// queue.
+				return fmt.Errorf("mcp: health probe response id mismatch (sent %d)", id)
 			}
 			if res.msg.Error != nil {
 				return res.msg.Error
