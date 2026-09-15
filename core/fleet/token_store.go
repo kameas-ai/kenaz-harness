@@ -9,8 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zalando/go-keyring"
-
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 )
 

@@ -1454,6 +1454,22 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"import _ \"github.com/kameas-ai/kenaz-harness/core/fleet\"\n",
 		},
 		{
+			// check-keyring-seam.sh (keyring-seam-01): only core/keyring/
+			// may import github.com/zalando/go-keyring directly. This is
+			// the exact shape all seven prior per-package MockInit patches
+			// grew from — a new file reaching around the seam and importing
+			// the vendor SDK itself, most recently core/rpc/views/catalog
+			// and core/rpc/views/contexts (PR #348). Planted in an isolated
+			// new package outside core/keyring/ entirely so it cannot
+			// collide with real production files.
+			name:       "keyring-seam/unauthorized-package-imports-go-keyring",
+			wantOutput: "core/sessions/zzgateprobekeyring",
+			gate:       "check-keyring-seam.sh",
+			file:       "core/sessions/zzgateprobekeyring/probe.go",
+			content: "package zzgateprobekeyring\n\n" +
+				"import _ \"github.com/zalando/go-keyring\"\n",
+		},
+		{
 			// check-no-cred-bytes-in-rpc.sh check 1: the literal `cred
 			// []byte` outside core/credstore/, core/secrets/, core/llm/
 			// and *_test.go files. Planted in a brand-new file under
