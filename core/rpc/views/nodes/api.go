@@ -152,10 +152,12 @@ type UserOverrideInfo struct {
 	SizeBytes int64 `json:"sizeBytes,omitempty"`
 }
 
-// DoctorReport summarises catalog health for the frontend NodesView
-// debug surface (WP08). Mirrors the Activities doctor pattern: each
-// counter is a non-negative int and the optional ErrorMessages slice
-// surfaces per-file parse failures recorded by the most-recent reload.
+// DoctorReport summarises catalog health for the node-override
+// diagnostics panel mounted on NodePalette.vue (mission
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP18). Mirrors
+// the Activities doctor pattern: each counter is a non-negative int
+// and the optional ErrorMessages slice surfaces per-file parse
+// failures recorded by the most-recent reload.
 //
 // HotReloadEnabled reflects the chassis flag; UserDir reports the
 // scanned path (empty when no DataDir is configured). LastReloadAt is
@@ -204,7 +206,8 @@ type NodesAPI interface {
 	// Doctor returns a one-shot summary of catalog health: shipped /
 	// user-override counts, last reload timestamp, hot-reload flag,
 	// and any per-file parse errors from the most-recent reload. The
-	// frontend NodesView debug panel renders this report so authors
-	// can diagnose override-not-applied issues without grep'ing logs.
+	// diagnostics panel on NodePalette.vue renders this report so
+	// authors can diagnose override-not-applied issues without
+	// grep'ing logs.
 	Doctor(ctx context.Context) (DoctorReport, error)
 }
