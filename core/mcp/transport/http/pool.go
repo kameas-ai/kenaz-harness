@@ -161,9 +161,15 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 		Period:    p.opts.PingPeriod,
 		Timeout:   p.opts.PingTimeout,
 		NewTicker: p.opts.NewTicker,
+		// finding #106: pass entry.dispatchMu so the probe's Send+Recv
+		// serialises against toolsForEntry/Call on this SAME
+		// connection (see NewToolsListProbe's doc comment). entry is
+		// already allocated above, so this closure-captures the
+		// pointer whose dispatchMu field toolsForEntry/Call lock at
+		// pool.go:399/447 today — same struct, not a second lock.
 		Probe: NewToolsListProbe(conn, func() int64 {
 			return p.idCounter.Add(1)
-		}),
+		}, &entry.dispatchMu),
 		OnFailure: func(reason string) {
 			p.opts.Logger.Warn("http.health.tripped", "server", spec.Name, "reason", reason)
 		},
@@ -412,6 +418,14 @@ func (p *Pool) toolsForEntry(ctx context.Context, entry *serverEntry) ([]coremcp
 	if err != nil {
 		return nil, err
 	}
+	if !msg.MatchesID(id) {
+		// finding #106: dispatchMu (held above) prevents a CONCURRENT
+		// Send from another caller, but not a STALE reply from an
+		// earlier caller that gave up on ctx.Done() before its own
+		// Recv observed this connection's queue — see
+		// NewToolsListProbe's doc comment for the full mechanism.
+		return nil, fmt.Errorf("http: tools/list response id mismatch (sent %d)", id)
+	}
 	if msg.Error != nil {
 		return nil, msg.Error
 	}
@@ -463,6 +477,10 @@ func (p *Pool) Call(ctx context.Context, server, tool string, args json.RawMessa
 	msg, err := recvWithCtx(ctx, entry.conn)
 	if err != nil {
 		return nil, err
+	}
+	if !msg.MatchesID(id) {
+		// finding #106: see toolsForEntry's identical check above.
+		return nil, fmt.Errorf("http: tools/call response id mismatch (sent %d)", id)
 	}
 	if msg.Error != nil {
 		return nil, msg.Error
