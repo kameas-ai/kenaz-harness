@@ -218,7 +218,7 @@ func run() error {
 	touchedNonNil := map[fieldKey]bool{}
 	scanCompositeLiterals(pkgs, targets, positional, constructedCount, touchedNonNil)
 
-	var tier1Violations []string
+	var tier1Violations []violation
 	tier1Candidates := 0
 	for _, st := range targets {
 		if constructedCount[st.owner.Obj()] == 0 {
@@ -227,28 +227,53 @@ func run() error {
 		if positional[st.owner.Obj()] {
 			continue // cannot attribute per-field coverage; see doc comment blind spot 1
 		}
+		pkgPath := st.owner.Obj().Pkg().Path()
 		for _, f := range st.fields {
 			tier1Candidates++
 			if touchedNonNil[fieldKey{st.owner.Obj(), f.name}] {
 				continue
 			}
-			tier1Violations = append(tier1Violations, fmt.Sprintf(
-				"%s:%d: %s.%s (%s) is never set to a non-nil value in any non-test composite literal under core/",
-				f.file, f.line, st.owner.Obj().Name(), f.name, f.kindDesc))
+			tier1Violations = append(tier1Violations, violation{
+				// KEY: fully-qualified symbol (pkgPath.Struct.Field) — see
+				// Finding #92 (CI-gate-hardening, 2026-09-14): a key that
+				// embeds a line number self-invalidates on ANY edit above
+				// the entry (the line moves, so the old key goes "stale"
+				// and the new line reports "unlisted" simultaneously, even
+				// though nothing about the finding changed). The struct's
+				// package path plus its (fixed, four-name) type name plus
+				// the field name is stable across unrelated edits anywhere
+				// else in the tree — only a rename of the struct/field/
+				// package invalidates it, which is exactly when the entry
+				// SHOULD be revisited.
+				key: fmt.Sprintf("%s.%s.%s", pkgPath, st.owner.Obj().Name(), f.name),
+				// DETAIL: locator + human description, printed to stdout
+				// and recorded as an auto-generated comment line in the
+				// allowlist — never part of the compared key, so it is
+				// free to go stale (a line number, a kind description)
+				// without breaking the match.
+				detail: fmt.Sprintf("%s:%d: %s.%s (%s) is never set to a non-nil value in any non-test composite literal under core/",
+					f.file, f.line, st.owner.Obj().Name(), f.name, f.kindDesc),
+			})
 		}
 	}
 
 	// ---- Tier 2: orphan With* injector ----
 	withFuncs := findWithFuncs(pkgs)
 	markCallers(pkgs, withFuncs)
-	var tier2Violations []string
+	var tier2Violations []violation
 	for _, wf := range withFuncs {
 		if wf.called {
 			continue
 		}
-		tier2Violations = append(tier2Violations, fmt.Sprintf(
-			"%s:%d: %s is never called by any non-test source under core/",
-			wf.file, wf.line, wf.qualifiedName))
+		tier2Violations = append(tier2Violations, violation{
+			// KEY: qualifiedName is already the fully-qualified symbol
+			// (pkgPath.FuncName or pkgPath.(Type).Method) — this was
+			// already computed for the OLD violation string, just never
+			// split out from the file:line locator glued in front of it.
+			key: wf.qualifiedName,
+			detail: fmt.Sprintf("%s:%d: %s is never called by any non-test source under core/",
+				wf.file, wf.line, wf.qualifiedName),
+		})
 	}
 
 	// ---- Tier 3: advisory-only, informational, never gates ----
@@ -262,21 +287,28 @@ func run() error {
 			"WithSQLClock), not a clean tree")
 	}
 
-	sort.Strings(tier1Violations)
-	sort.Strings(tier2Violations)
-	all := append(append([]string{}, tier1Violations...), tier2Violations...)
+	all := append(append([]violation{}, tier1Violations...), tier2Violations...)
+	sort.Slice(all, func(i, j int) bool { return all[i].key < all[j].key })
+	detailByKey := make(map[string]string, len(all))
+	allKeys := make([]string, 0, len(all))
+	for _, v := range all {
+		if _, dup := detailByKey[v.key]; !dup {
+			allKeys = append(allKeys, v.key)
+		}
+		detailByKey[v.key] = v.detail
+	}
 
 	allow, err := loadAllowlist(allowlistPath)
 	if err != nil {
 		return err
 	}
-	unlisted := diff(all, allow)
-	stale := diff(allow, all)
+	unlisted := diff(allKeys, allow)
+	stale := diff(allow, allKeys)
 
 	fmt.Printf("[config-nil-coverage] scanned %d Tier-1 field(s) across %d target struct type(s) and "+
 		"%d Tier-2 With*-function(s) under core/: %d violation(s) found (%d allowlisted, %d unlisted). "+
 		"%d Tier-3 advisory candidate(s) (informational only).\n",
-		tier1Candidates, len(targets), len(withFuncs), len(all), len(all)-len(unlisted), len(unlisted), len(tier3))
+		tier1Candidates, len(targets), len(withFuncs), len(allKeys), len(allKeys)-len(unlisted), len(unlisted), len(tier3))
 
 	if len(tier3) > 0 {
 		fmt.Println("[config-nil-coverage] Tier-3 advisory (string field whose zero value disables a " +
@@ -291,13 +323,18 @@ func run() error {
 	if len(unlisted) > 0 {
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "[config-nil-coverage] FAIL: unlisted violation(s), not in "+allowlistPath+":")
-		for _, v := range unlisted {
-			fmt.Fprintln(os.Stderr, "    "+v)
+		fmt.Fprintln(os.Stderr, "[config-nil-coverage] Paste the KEY line and the auto-generated locator comment")
+		fmt.Fprintln(os.Stderr, "[config-nil-coverage] directly into the allowlist (the key is what gates; the")
+		fmt.Fprintln(os.Stderr, "[config-nil-coverage] locator comment is for humans and may drift freely):")
+		for _, k := range unlisted {
+			fmt.Fprintln(os.Stderr, "    "+k)
+			fmt.Fprintln(os.Stderr, "    # at "+detailByKey[k])
 		}
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "[config-nil-coverage] Either wire a real production assignment (a composite-literal")
-		fmt.Fprintln(os.Stderr, "[config-nil-coverage] field, or a real call site for a With* function), or add a")
-		fmt.Fprintln(os.Stderr, "[config-nil-coverage] DATED line to "+allowlistPath+" naming the blocker and owner.")
+		fmt.Fprintln(os.Stderr, "[config-nil-coverage] field, or a real call site for a With* function), or add the")
+		fmt.Fprintln(os.Stderr, "[config-nil-coverage] lines above to "+allowlistPath+" with a DATED justification")
+		fmt.Fprintln(os.Stderr, "[config-nil-coverage] comment naming the blocker and owner.")
 		fail = true
 	}
 	if len(stale) > 0 {
@@ -315,6 +352,17 @@ func run() error {
 	}
 	fmt.Println("[config-nil-coverage] clean.")
 	return nil
+}
+
+// violation pairs a stable, symbol-qualified KEY (what the allowlist
+// matches against) with a human-readable DETAIL (a file:line locator plus
+// description, printed for humans and recorded as an auto-generated
+// comment — never compared). Splitting these apart is the Finding #92 fix:
+// see the KEY field comments at each construction site above for why a
+// line number cannot be part of the compared identity.
+type violation struct {
+	key    string
+	detail string
 }
 
 // ---------------------------------------------------------------------
