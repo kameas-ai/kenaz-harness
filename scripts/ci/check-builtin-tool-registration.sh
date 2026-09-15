@@ -142,6 +142,22 @@ done <<< "$pkgs"
 mcp_builtin_pkgs=$(find "$BUILTIN_MCP_ROOT" -mindepth 1 -maxdepth 1 -type d \
   ! -name "$BUILTIN_MCP_ROOT_EXCLUDE" | sort)
 
+# Discovery floor (Finding #74, CI-gate-hardening, 2026-09-14): unlike
+# the `decls` scan above (already floored at line 119), this candidate
+# set had no check that it found anything before feeding the
+# import-wiring loop below. A renamed BUILTIN_MCP_ROOT, a moved
+# exclude-directory convention, or every subpackage happening to share
+# the excluded name would make mcp_builtin_pkgs empty — and a `while
+# read` over an empty string silently produces zero FR-008 violations,
+# indistinguishable from a healthy, fully-imported tree.
+if [[ -z "$mcp_builtin_pkgs" ]]; then
+  echo "${GATE} FAIL: found zero subdirectories under ${BUILTIN_MCP_ROOT} (excluding ${BUILTIN_MCP_ROOT_EXCLUDE})." >&2
+  echo "${GATE} FR-008's package-level import check has nothing to inspect, which is" >&2
+  echo "${GATE} indistinguishable from passing. Either BUILTIN_MCP_ROOT moved or the" >&2
+  echo "${GATE} exclude-directory convention changed — update this script in the same commit." >&2
+  exit 1
+fi
+
 while IFS= read -r pkg; do
   [[ -z "$pkg" ]] && continue
   import_path="github.com/kameas-ai/kenaz-harness/${pkg}"
