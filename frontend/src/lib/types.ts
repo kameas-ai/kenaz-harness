@@ -3245,9 +3245,10 @@ export interface NodeUserOverrideInfo {
 }
 
 /**
- * NodeDoctorReport summarises catalog health for the NodesView debug
- * panel (mission agent-kernel-graph-node-catalog WP08). Counters are
- * non-negative ints; lastReloadAt is RFC3339Nano (empty before any
+ * NodeDoctorReport summarises catalog health for the node-override
+ * diagnostics panel mounted on NodePalette.vue (mission
+ * controls-and-readouts-that-tell-the-truth-01PMZ808 WP18). Counters
+ * are non-negative ints; lastReloadAt is RFC3339Nano (empty before any
  * reload). userOverrideErrors carries the per-file parse failures
  * recorded by the most-recent reload pass.
  */

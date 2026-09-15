@@ -2951,9 +2951,10 @@ export interface CompactionClient {
 /**
  * NodesClient — manifest-driven node catalog (mission
  * agent-kernel-graph-node-catalog; WP07). Backs WP06's NodePaletteTree
- * + NodeAttributeEditor; the dev-only ReloadOverrides path is also
- * exposed so the Settings panel can offer a "Reload node catalog"
- * doctor button.
+ * + NodeAttributeEditor; `reloadOverrides`/`listUserOverrides`/`doctor`
+ * back the node-override diagnostics panel mounted directly on
+ * NodePalette.vue (mission controls-and-readouts-that-tell-the-truth-01PMZ808
+ * WP18) — there is no standalone debug view for the node catalog.
  */
 export interface NodesClient {
   /** List every callable kind + archetype (palette tree source). */
@@ -2964,7 +2965,7 @@ export interface NodesClient {
   reloadOverrides(): Promise<NodeReloadResult>;
   /** Inspect the user-override directory; list each YAML's parse status. */
   listUserOverrides(): Promise<NodeUserOverrideInfo[]>;
-  /** Catalog health one-shot for the NodesView debug panel (WP08). */
+  /** Catalog health one-shot for the NodePalette.vue diagnostics panel. */
   doctor(): Promise<NodeDoctorReport>;
 }
 
