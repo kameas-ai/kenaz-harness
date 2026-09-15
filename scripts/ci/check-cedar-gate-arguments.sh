@@ -137,12 +137,26 @@ violations=""
 # was silenced by `gofmt` wrapping the exact call the gate was written
 # for (`cedar.NewLLMPolicyGuard(cedar.AllowAll{})`).
 # ---------------------------------------------------------------------------
+# KEYING (Finding #92, CI-gate-hardening, 2026-09-14): this clause used
+# to key on ${file}:${line} — the same self-invalidating shape i16/i18's
+# allowlists had to migrate away from (any edit that adds lines above a
+# hit shifts it, so the SAME violation reports "unlisted" at the new
+# line and "stale" at the old one simultaneously). Clause 1 has no
+# natural symbol to key on (it fires on a bare expression, not a named
+# declaration), so the key is ${file} plus the OFFENDING LINE'S OWN
+# TRIMMED TEXT instead of its line number — stable under any edit that
+# doesn't touch this exact call, and it doubles as a human-readable
+# locator (clauses 3/4/5 below carry no line number either, for the
+# same file-plus-description shape). This file's own header says
+# clause 1 must stay EMPTY, so this is a mechanism fix with nothing to
+# migrate, not a data migration.
 while IFS= read -r hit; do
   [[ -z "$hit" ]] && continue
   file="${hit%%:*}"
   rest="${hit#*:}"
-  line="${rest%%:*}"
-  violations="${violations}${file}:${line}: AllowAll consumed at the call (clause 1)"$'\n'
+  text="${rest#*:}"
+  trimmed="$(printf '%s' "$text" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+  violations="${violations}${file}: AllowAll consumed at the call: \`${trimmed}\` (clause 1)"$'\n'
 done < <(
   grep -rnE 'cedar\.AllowAll\{\}' --include='*.go' "$RPC_ROOT" 2>/dev/null \
     | grep -v '_test\.go' \
@@ -181,12 +195,18 @@ while IFS= read -r hit; do
   # A replacement is `name = <something other than AllowAll or nil>`
   # after this line. `g = nil` is not a replacement: a nil Gate is the
   # same unconditional permit AllowAll is.
+  # KEYING (Finding #92): ${line} is still needed HERE (the awk scan's
+  # own start point — genuinely positional, not an identity key) but is
+  # dropped from the violation string below in favor of ${file} +
+  # ${name} — the placeholder variable's own name is a stable, content-
+  # derived identifier a line number is not. See clause 1's comment
+  # above for the general rationale.
   if ! awk -v n="$name" -v start="$line" 'NR>start {
         pat = "^[[:space:]]*" n "[[:space:]]*=[^=]"
         nilpat = "^[[:space:]]*" n "[[:space:]]*=[[:space:]]*nil[[:space:]]*$"
         if ($0 ~ pat && $0 !~ /cedar\.AllowAll\{\}/ && $0 !~ nilpat) { found=1; exit }
       } END { exit !found }' "$file"; then
-    violations="${violations}${file}:${line}: '${name}' initialised to AllowAll and never replaced (clause 2)"$'\n'
+    violations="${violations}${file}: '${name}' initialised to AllowAll and never replaced (clause 2)"$'\n'
   fi
 done < <(
   grep -rnE '(var[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+cedar\.Gate[[:space:]]*=|[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:=)[[:space:]]*cedar\.AllowAll\{\}' \
@@ -326,8 +346,21 @@ with_gate_funcs=$(
     # "grep exits 1 on no match" trap clause 1's `|| true` already
     # guards against at the top level; it applies per-iteration here
     # because the loop, not just the substitution, is what set -e sees.
+    # DEFENSIVE HARDENING (Finding #96, CI-gate-hardening, 2026-09-14):
+    # this replacement used to spell the file/name separator as the
+    # two-character escape `\t` inside a double-quoted sed script. That
+    # was NOT today's live bug (verified: both BSD and GNU sed treat a
+    # literal `\t` in replacement text as a tab, a long-shipped
+    # extension both flavors happen to share — see the check-transport-
+    # parity.sh:92 header for the OPPOSITE case, `\t` in a grep PATTERN,
+    # where BSD and GNU truly disagree). But relying on an unspecified
+    # extension agreeing by coincidence is exactly the fragility this
+    # finding exists to eliminate, so this now emits a REAL tab byte via
+    # ANSI-C quoting ($'\t') instead of the two-character escape,
+    # removing the dependency entirely rather than trusting it to keep
+    # agreeing.
     { grep -nE '^func With[A-Za-z0-9_]+\([a-zA-Z_][a-zA-Z0-9_]*[[:space:]]+cedar\.Gate\)' "$f" \
-      | sed -nE "s#^[0-9]+:func (With[A-Za-z0-9_]+)\(.*#${f}\t\1#p"; } || true
+      | sed -nE "s#^[0-9]+:func (With[A-Za-z0-9_]+)\(.*#${f}"$'\t'"\1#p"; } || true
   done
 )
 
@@ -395,15 +428,77 @@ while IFS=$'\t' read -r file name; do
     # (that needs a Go AST tool, same caveat clause 2 carries), but it
     # closes the shape an adversary or a careless refactor actually
     # produces.
+    #
+    # BUG FOUND 2026-09-14 (Finding #96, CI-gate-hardening): the sed
+    # script below used to be DOUBLE-quoted —
+    # "s#.*\(([A-Za-z0-9_.]+)\($#\1#" — even though it references no
+    # shell variable. Inside bash double quotes, `$#` is not two
+    # literal characters; it is the SPECIAL PARAMETER expansion for "the
+    # number of positional parameters" (0 in this script), so bash
+    # silently rewrote the script bash hands to sed from
+    # `...+)\($#\1#` to `...+)\(0\1#` before sed ever saw it — one
+    # delimiter short, and with the `$` end-of-line anchor replaced by a
+    # literal "0". The resulting malformed script reliably fails on
+    # BOTH platforms (confirmed against this exact repository state):
+    # BSD/macOS sed reports "unescaped newline inside substitute
+    # pattern"; GNU/Linux sed reports "unterminated 's' command" — same
+    # root cause, different diagnostic text, because it is a BASH
+    # quoting defect that corrupts the script before either sed flavor
+    # ever parses it, not a genuine BSD-vs-GNU regex divergence (unlike
+    # the ALREADY-FIXED check-transport-parity.sh:92 instance, where
+    # BSD and GNU truly disagree on `\t` inside a grep -oE pattern).
+    # The trailing `|| true` on this pipeline then swallowed the error
+    # and left $callee empty, so the nested-call permit check below
+    # silently skipped — exactly the shape this clause's own comments
+    # above cite PR #302 for: `WithGate(helper())` where helper returns
+    # an unconditional cedar.AllowAll{} would sail through undetected,
+    # not because the DETECTION logic is wrong, but because it never
+    # ran. Reproduced live against this tree's actual
+    # `bundle.WithGate(a.cedarGate())` call site (core/rpc/api.go) —
+    # the callee-extraction step failed there today, on this checkout,
+    # before this fix.
+    #
+    # FIX: single-quote the sed script. It has no `${var}` to
+    # interpolate, so single-quoting is strictly safer here — it also
+    # forecloses the entire class of accidental bash special-parameter
+    # collisions ($#, $@, $?, $!, $$, $0-9, $*) for any FUTURE edit to
+    # this pattern, not just today's instance. See
+    # check-bsd-gnu-escape-divergence.sh (the Finding #96 meta-gate)
+    # for the automated check that a static, variable-free sed/grep
+    # script prefers single quotes for exactly this reason.
     callee=$(printf '%s' "$api_collapsed" \
       | grep -oE "${impalias}\.${name}\([A-Za-z0-9_.]+\(" \
-      | head -1 | sed -E "s#.*\(([A-Za-z0-9_.]+)\($#\1#" || true)
+      | head -1 | sed -E 's#.*\(([A-Za-z0-9_.]+)\($#\1#' || true)
     if [[ -n "$callee" ]]; then
       shortname="${callee##*.}"
       # Body of `func (recv) shortname(...) ... { ... }` up to the next
       # column-0 close brace, then look for an unconditional permit.
+      #
+      # SECOND BUG FOUND 2026-09-14 (Finding #96, CI-gate-hardening),
+      # independent of the sed fix above: the awk PATTERN string used to
+      # end in `"\("` — a single backslash before the literal paren
+      # inside an awk double-quoted string. `\(` is not one of awk's
+      # defined string escapes (only \\ \" \/ \a \b \f \n \r \t \v
+      # \ddd are), so its meaning for an UNRECOGNISED escape is
+      # implementation-defined. This platform's awk (BWK/"one true
+      # awk", confirmed via `awk --version`) silently DROPS the
+      # backslash, leaving a bare, unescaped `(` in the compiled
+      # regex — an unbalanced group-open that awk rejects outright
+      # ("illegal primary in regular expression ... at ... source line
+      # number 2"), sent to stderr and discarded by the `2>/dev/null`
+      # below, then $permit computed from EMPTY input: silently 0,
+      # no error visible anywhere, clause 4's whole nested-call-permit
+      # check permanently inert. This is the SAME shortname
+      # ("cedarGate") the real bundle.WithGate(a.cedarGate()) call site
+      # resolves to, so this bug alone — with no sed bug involved —
+      # was already enough to make PR #302's exact motivating shape
+      # undetectable. Fixed by doubling the backslash (`"\\("`), the
+      # portable way to put a literal backslash character into an awk
+      # string constant, so the regex engine receives a properly
+      # escaped literal paren regardless of how a given awk handles
+      # unrecognised single-backslash escapes.
       permit=$(awk -v fn="$shortname" '
-        $0 ~ ("^func .*[ \t(]" fn "\(") {inside=1}
+        $0 ~ ("^func .*[ \t(]" fn "\\(") {inside=1}
         inside {print}
         inside && /^}/ {exit}
       ' $(find core -name '*.go' ! -name '*_test.go') 2>/dev/null \
@@ -474,8 +569,10 @@ done <<< "$with_gate_funcs"
 # ---------------------------------------------------------------------------
 cedar_engine_witness_types_by_file=$(
   for f in $(find "$VIEWS_ROOT" -name '*.go' ! -name '*_test.go' | sort); do
+    # Same defensive hardening as the with_gate_funcs loop above: a real
+    # tab byte via ANSI-C quoting, not the two-character `\t` escape.
     grep -oE '^var _ [A-Za-z_][A-Za-z0-9_]* = \(\*cedar\.Engine\)\(nil\)' "$f" \
-      | sed -E "s#^var _ ([A-Za-z_][A-Za-z0-9_]*) =.*#${f}\t\1#" || true
+      | sed -E "s#^var _ ([A-Za-z_][A-Za-z0-9_]*) =.*#${f}"$'\t'"\1#" || true
   done
 )
 

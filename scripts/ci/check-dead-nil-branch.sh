@@ -31,6 +31,15 @@
 # contract as every other gate in this directory. Allowlists shrink
 # monotonically.
 #
+# ALLOWLIST KEYING (Finding #92, CI-gate-hardening, 2026-09-14): a local
+# variable has no package-level symbol, so entries are keyed by
+# `<enclosing-func-qualified-name>#<varName>` (an optional `#N` ordinal
+# suffix disambiguates two identically-named pairs in the same function —
+# rare, and absent from the ordinary case) rather than by file:line — a
+# line-number key self-invalidates on any unrelated edit that shifts
+# lines above the entry. File:line still appears, but only inside an
+# auto-generated `# at ...` locator comment, never compared.
+#
 # Exit codes:
 #   0 — every candidate has an intervening assignment or is allowlisted
 #   1 — the checker itself failed to build, load packages, or read the

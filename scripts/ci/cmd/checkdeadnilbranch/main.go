@@ -240,35 +240,48 @@ func run() error {
 			"checkdeadnilbranch, not a codebase that stopped using the idiom", scannedPkgs)
 	}
 
-	var violations []string
+	var violations []violation
 	for _, c := range candidates {
-		violations = append(violations, c.violationString())
+		violations = append(violations, violation{key: c.key(), detail: c.violationString()})
 	}
-	sort.Strings(violations)
+	sort.Slice(violations, func(i, j int) bool { return violations[i].key < violations[j].key })
+	detailByKey := make(map[string]string, len(violations))
+	keys := make([]string, 0, len(violations))
+	for _, v := range violations {
+		if _, dup := detailByKey[v.key]; !dup {
+			keys = append(keys, v.key)
+		}
+		detailByKey[v.key] = v.detail
+	}
 
 	allow, err := loadAllowlist(allowlistPath)
 	if err != nil {
 		return err
 	}
 
-	unlisted := diff(violations, allow)
-	stale := diff(allow, violations)
+	unlisted := diff(keys, allow)
+	stale := diff(allow, keys)
 
 	fmt.Printf("[dead-nil-branch] scanned %d package(s) under core/+cmd/, examined %d (var-decl, "+
 		"nil-check) candidate pair(s): %d statically-dead (%d allowlisted, %d unlisted).\n",
-		scannedPkgs, examined, len(violations), len(violations)-len(unlisted), len(unlisted))
+		scannedPkgs, examined, len(keys), len(keys)-len(unlisted), len(unlisted))
 
 	fail := false
 	if len(unlisted) > 0 {
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "[dead-nil-branch] FAIL: a nil-checked variable is provably nil at the check "+
 			"(zero-value var declaration, no assignment before the check, same block), not in "+allowlistPath+":")
-		for _, v := range unlisted {
-			fmt.Fprintln(os.Stderr, "    "+v)
+		fmt.Fprintln(os.Stderr, "[dead-nil-branch] Paste the KEY line and the auto-generated locator comment")
+		fmt.Fprintln(os.Stderr, "[dead-nil-branch] directly into the allowlist (the key is what gates; the")
+		fmt.Fprintln(os.Stderr, "[dead-nil-branch] locator comment is for humans and may drift freely):")
+		for _, k := range unlisted {
+			fmt.Fprintln(os.Stderr, "    "+k)
+			fmt.Fprintln(os.Stderr, "    # at "+detailByKey[k])
 		}
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "[dead-nil-branch] Either assign the variable a real value before the check, or")
-		fmt.Fprintln(os.Stderr, "[dead-nil-branch] add a DATED line to "+allowlistPath+" naming the blocker and owner.")
+		fmt.Fprintln(os.Stderr, "[dead-nil-branch] add the lines above to "+allowlistPath+" with a DATED")
+		fmt.Fprintln(os.Stderr, "[dead-nil-branch] justification comment naming the blocker and owner.")
 		fail = true
 	}
 	if len(stale) > 0 {
@@ -289,19 +302,53 @@ func run() error {
 	return nil
 }
 
-// candidate is one statically-dead (decl, check) pair.
+// candidate is one statically-dead (decl, check) pair. funcName and
+// ordinal are filled in by findCandidates' declWalkVisitor after
+// findInBlock returns — see key()'s doc comment for why.
 type candidate struct {
 	varName   string
 	declFile  string
 	declLine  int
 	checkFile string
 	checkLine int
+	funcName  string // qualified name of the innermost enclosing named function
+	ordinal   int    // 0 for the first (funcName, varName) pair seen, 1 for a second, etc.
 }
 
 func (c *candidate) violationString() string {
 	return fmt.Sprintf("%s:%d: %s is declared with its zero value here and checked `!= nil` at %s:%d "+
 		"with no intervening assignment — that branch is statically dead",
 		c.declFile, c.declLine, c.varName, c.checkFile, c.checkLine)
+}
+
+// keyBase is (funcName, varName) without the disambiguating ordinal —
+// used only to COUNT occurrences during the walk (see declWalkVisitor's
+// keyOrdinal map); key() below is the actual allowlist-facing string.
+func (c *candidate) keyBase() string {
+	return c.funcName + "#" + c.varName
+}
+
+// key returns the stable identity this violation is keyed by in the
+// allowlist: the innermost enclosing named function's fully-qualified
+// name plus the dead-checked variable's own name — see Finding #92
+// (CI-gate-hardening, 2026-09-14). A LOCAL variable has no package-level
+// symbol of its own, so unlike checkconfig/checknilopts's struct-field
+// keys, this key is (enclosing function, local name) rather than a
+// single exported identifier — but it is still independent of both
+// declLine and checkLine, so an edit anywhere else in the file (or
+// anywhere else in the SAME function, as long as it doesn't reorder
+// same-named (decl, check) pairs relative to each other) cannot shift
+// it. The ordinal suffix (",#1", ",#2", ...) only appears when the same
+// (function, varName) pair occurs more than once — e.g. the same zero-
+// value var name declared and dead-checked in two sibling blocks of one
+// function — which the ordinary case (ordinal 0) renders as a bare,
+// unsuffixed key so today's expected shape is unaffected by this rare
+// disambiguation path.
+func (c *candidate) key() string {
+	if c.ordinal == 0 {
+		return c.keyBase()
+	}
+	return fmt.Sprintf("%s#%d", c.keyBase(), c.ordinal)
 }
 
 // findCandidates walks every block statement in every loaded package's
@@ -317,28 +364,96 @@ func (c *candidate) violationString() string {
 func findCandidates(pkgs []*packages.Package) ([]candidate, int, error) {
 	var out []candidate
 	examined := 0
+	// keyOrdinal disambiguates two candidates that would otherwise
+	// produce the identical (enclosingFunc, varName) key — e.g. the same
+	// zero-value var name declared and dead-checked twice in two
+	// sibling blocks of the same function. Keyed by the UNSUFFIXED
+	// key string; see candidate.key()'s doc comment.
+	keyOrdinal := map[string]int{}
 	var walkErr error
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		if walkErr != nil || p.TypesInfo == nil || !strings.HasPrefix(p.PkgPath, modulePrefix) {
 			return
 		}
 		for _, file := range p.Syntax {
-			ast.Inspect(file, func(n ast.Node) bool {
-				block, ok := n.(*ast.BlockStmt)
-				if !ok {
-					return true
-				}
-				violations, blockExamined := findInBlock(block, p, p.Fset)
-				out = append(out, violations...)
-				examined += blockExamined
-				return true
-			})
+			ast.Walk(&declWalkVisitor{
+				p: p, fset: p.Fset, out: &out, examined: &examined, keyOrdinal: keyOrdinal,
+			}, file)
 		}
 	})
 	if walkErr != nil {
 		return nil, 0, walkErr
 	}
 	return out, examined, nil
+}
+
+// declWalkVisitor threads the QUALIFIED NAME of the innermost enclosing
+// named function through the walk — see candidate.key()'s doc comment
+// for why: a (var-decl, nil-check) pair's stable identity is
+// (enclosing function, variable name), not (file, line). Every
+// *ast.BlockStmt found (function bodies AND every nested block, matching
+// the original ast.Inspect-based walk's coverage) is still handed to
+// findInBlock exactly as before; only the enclosing-function bookkeeping
+// is new.
+type declWalkVisitor struct {
+	p          *packages.Package
+	fset       *token.FileSet
+	funcName   string // "" outside any function (package-level, e.g. var-decl init blocks — none expected, but not assumed impossible)
+	out        *[]candidate
+	examined   *int
+	keyOrdinal map[string]int
+}
+
+func (v *declWalkVisitor) Visit(n ast.Node) ast.Visitor {
+	switch node := n.(type) {
+	case *ast.FuncDecl:
+		return &declWalkVisitor{
+			p: v.p, fset: v.fset, funcName: qualifiedFuncName(v.p, node),
+			out: v.out, examined: v.examined, keyOrdinal: v.keyOrdinal,
+		}
+	case *ast.FuncLit:
+		// A closure has no name of its own — inherit the nearest named
+		// enclosing function's qualified name unchanged, the same
+		// "thread through, don't reset" posture checknilopts's
+		// assignVisitor uses for the analogous case (see that file's
+		// *ast.FuncLit doc comment for the general rationale: a bare
+		// reset here would make a (decl, check) pair one syntactic
+		// closure-nesting layer removable from its stable key, same
+		// shape as the escape that PR #332's fourth review round
+		// closed for a different gate).
+		return v
+	case *ast.BlockStmt:
+		violations, blockExamined := findInBlock(node, v.p, v.fset)
+		for i := range violations {
+			violations[i].funcName = v.funcName
+			base := violations[i].keyBase()
+			ord := v.keyOrdinal[base]
+			violations[i].ordinal = ord
+			v.keyOrdinal[base] = ord + 1
+		}
+		*v.out = append(*v.out, violations...)
+		*v.examined += blockExamined
+	}
+	return v
+}
+
+// qualifiedFuncName returns decl's fully-qualified name
+// (pkgPath.FuncName, or pkgPath.(*Type).Method / pkgPath.Type.Method for
+// a method) — the same derivation checkconfig/main.go's findWithFuncs
+// uses for its own Tier-2 symbol keys. A plain (receiver-less) function
+// with an empty decl.Name (impossible in valid Go, guarded anyway) falls
+// back to "<anonymous>".
+func qualifiedFuncName(p *packages.Package, decl *ast.FuncDecl) string {
+	if decl.Name == nil {
+		return p.PkgPath + ".<anonymous>"
+	}
+	name := p.PkgPath + "." + decl.Name.Name
+	if decl.Recv != nil && len(decl.Recv.List) == 1 {
+		if rt := p.TypesInfo.TypeOf(decl.Recv.List[0].Type); rt != nil {
+			name = p.PkgPath + ".(" + types.TypeString(rt, nil) + ")." + decl.Name.Name
+		}
+	}
+	return name
 }
 
 // findInBlock finds every statically-dead (decl, check) pair whose
@@ -585,6 +700,15 @@ func loadAllowlist(path string) ([]string, error) {
 		out = append(out, trimmed)
 	}
 	return out, nil
+}
+
+// violation pairs a stable KEY (compared against the allowlist) with a
+// human-readable DETAIL (file:line locator + description, printed and
+// recorded as an auto-generated comment, never compared) — see
+// checkconfig/main.go's identical type for the shared rationale.
+type violation struct {
+	key    string
+	detail string
 }
 
 // diff returns elements of a not present in b (set difference), sorted.

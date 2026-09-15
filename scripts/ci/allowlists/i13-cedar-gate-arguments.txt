@@ -9,6 +9,18 @@
 # followed by a `#` comment carrying the DATE, the BLOCKER, and the change
 # that will delete the line. "We'll get to it" is not a reason.
 #
+# KEYING (Finding #92, CI-gate-hardening, 2026-09-14): every clause's key
+# is file-based (clauses 3/4/5: file + field/option name) or file-plus-
+# content-based (clauses 1/2: file + the offending text/variable name,
+# neither of which is a stable symbol). NONE embed a line number — a
+# line-number key self-invalidates on any unrelated edit that shifts
+# lines above the entry (see i16-config-nil-coverage.txt's header for
+# the incident history that motivated auditing every allowlist in this
+# directory for this class). Clauses 1 and 2 used to be file:line-keyed;
+# fixed in the same commit that audited this file, with nothing to
+# migrate since both clauses have been empty since this gate's
+# introduction (see the note below).
+#
 # Entries shrink monotonically. An entry that is no longer a violation is
 # STALE and fails the gate — deleting the line is the required follow-up
 # when the site is wired.
