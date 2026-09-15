@@ -1886,16 +1886,18 @@ export namespace contexts {
 	    accepted_nodes: number;
 	    accepted_edges: number;
 	    conflicts: fleet.ContextPushConflict[];
-	
+	    effective_layer: string;
+
 	    static createFrom(source: any = {}) {
 	        return new ContextPublishResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.accepted_nodes = source["accepted_nodes"];
 	        this.accepted_edges = source["accepted_edges"];
 	        this.conflicts = this.convertValues(source["conflicts"], fleet.ContextPushConflict);
+	        this.effective_layer = source["effective_layer"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
