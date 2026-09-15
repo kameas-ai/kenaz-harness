@@ -227,16 +227,46 @@ describe('UserMenu', () => {
     expect(signOut).toHaveBeenCalledOnce();
   });
 
+  // ── Poll cadence (finding #98 / enroll-storm) ───────────────────────────
+  //
+  // Regression pin for the 15s → 5min widen. Each tick is a full
+  // POST /api/v1/enroll round trip (fleetRefreshIdentity), not a cheap
+  // liveness check, so firing it every 15s is the root cause of the
+  // measured ~1 enroll/1.4s production rate. This test fails without the
+  // fix: at the old 15s cadence, advancing 4 minutes 59 seconds would have
+  // produced 20 calls (19 ticks + the mount-time call), not 1.
+  it('does not re-hit fleetRefreshIdentity before the 5-minute mark', async () => {
+    const client = buildSignedInClient();
+    const refreshSpy = client.settings.fleetRefreshIdentity as unknown as ReturnType<typeof vi.fn>;
+
+    mountUserMenu(client);
+    await flushPromises();
+    expect(refreshSpy).toHaveBeenCalledTimes(1); // mount-time call only
+
+    // Just under the poll interval: still only the mount-time call.
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 - 1000);
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+
+    // Crossing the 5-minute mark fires exactly one more.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refreshSpy).toHaveBeenCalledTimes(2);
+  });
+
   // ── Poll stop-vs-backoff (fleet-enroll-not-provisioned) ────────────────
   //
   // fleetSignedIn() is token-expiry based, so it keeps reporting true even
   // when enroll has never succeeded (SaveTokens persists before enroll
   // runs — core/rpc/views/settings/fleet.go FleetSignIn). Before this fix,
-  // the 15s interval below hit /api/v1/enroll forever with zero backoff,
+  // the poll interval below hit /api/v1/enroll forever with zero backoff,
   // 403ing every time, confirmed in production as 60+ consecutive
   // fleet.rpc.enroll.start/.failed pairs. These tests assert the call
   // count itself stops growing — the observable defect — not just that
   // an error was logged.
+  //
+  // POLL_MS mirrors UserMenu.vue's IDENTITY_POLL_MS (5 minutes — widened
+  // from 15s in finding #98, 2026-09-14: the enroll-storm fix).
+
+  const POLL_MS = 5 * 60 * 1000;
 
   it('stops polling after a terminal user_not_provisioned error', async () => {
     const client = createFakeHarnessClient({
@@ -266,7 +296,7 @@ describe('UserMenu', () => {
     // Several intervals' worth of time pass. Before this fix, each one
     // would have re-hit fleetRefreshIdentity (-> /api/v1/enroll) with no
     // backoff; the call count must stay frozen at 1 forever instead.
-    await vi.advanceTimersByTimeAsync(15000 * 5);
+    await vi.advanceTimersByTimeAsync(POLL_MS * 5);
     expect(refreshSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -289,13 +319,13 @@ describe('UserMenu', () => {
     await flushPromises();
     expect(refreshSpy).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(15000);
+    await vi.advanceTimersByTimeAsync(POLL_MS);
     const callsAfterFirstTick = refreshSpy.mock.calls.length;
     expect(callsAfterFirstTick).toBeGreaterThanOrEqual(2);
 
     // A network blip must keep retrying — the poll only stops for the
     // terminal user_not_provisioned condition.
-    await vi.advanceTimersByTimeAsync(15000 * 3);
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3);
     expect(refreshSpy.mock.calls.length).toBeGreaterThan(callsAfterFirstTick);
   });
 });
