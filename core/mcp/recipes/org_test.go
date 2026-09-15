@@ -12,6 +12,14 @@ import (
 // preserving everything else (DisplayName, Category, EnvKeys, ...) from
 // whichever source already defines that recipe ID — the org admin doesn't
 // have to re-declare a recipe from scratch to add an org client_id.
+//
+// PrimaryAuth is asserted as PrimaryAuthBrowserOAuthPKCE, not the wire
+// literal "oauth" the entry sets: that literal is spec.md §3.1's own
+// example value, and copying it straight through used to land every
+// org-provisioned OAuth recipe on SignInRecipe's unconditional E-006
+// fail-closed arm despite carrying a perfectly good client id (WP03 —
+// see TestApplyProvisionedMCP_PrimaryAuthOAuthResolvesToWorkingArm below
+// for the SignInRecipe-level proof).
 func TestApplyProvisionedMCP_OverridesExistingRecipe(t *testing.T) {
 	mc := recipes.NewMergedCatalog(
 		func() []recipes.Recipe {
@@ -45,8 +53,10 @@ func TestApplyProvisionedMCP_OverridesExistingRecipe(t *testing.T) {
 	if r.Source != recipes.SourceOrg {
 		t.Errorf("Source = %q, want org", r.Source)
 	}
-	// Overridden fields.
-	if r.Transport != "http" || r.URL != "https://mcp.slack.com" || r.PrimaryAuth != "oauth" {
+	// Overridden fields. PrimaryAuth is remapped from the wire literal
+	// "oauth" to the working browser_oauth_pkce arm (WP03) — see the
+	// doc comment above.
+	if r.Transport != "http" || r.URL != "https://mcp.slack.com" || r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
 		t.Errorf("override fields not applied: transport=%q url=%q primary_auth=%q", r.Transport, r.URL, r.PrimaryAuth)
 	}
 	if r.Auth == nil || r.Auth.ClientID != "org-public-client-id" {
@@ -110,6 +120,57 @@ func TestApplyProvisionedMCP_NilCatalogIsAnError(t *testing.T) {
 	errs := recipes.ApplyProvisionedMCP(nil, []recipes.ProvisionedMCPEntry{{RecipeID: "x"}})
 	if len(errs) != 1 {
 		t.Fatalf("errs = %v, want exactly 1 (nil catalog)", errs)
+	}
+}
+
+// TestApplyProvisionedMCP_DefaultPrimaryAuthAlsoResolvesToWorkingArm proves
+// the same WP03 fix applies to an org entry that leaves primary_auth unset
+// entirely (not just the spec's literal "oauth" example): before the fix,
+// the un-set-primary_auth default ALSO landed on the dead recipes.PrimaryAuthOAuth
+// arm the instant a client id was present, which was the more common case
+// (most org admins never set primary_auth explicitly — the field exists to
+// let it be overridden, not required).
+func TestApplyProvisionedMCP_DefaultPrimaryAuthAlsoResolvesToWorkingArm(t *testing.T) {
+	mc := recipes.NewMergedCatalog(nil, nil, nil)
+	errs := recipes.ApplyProvisionedMCP(mc, []recipes.ProvisionedMCPEntry{{
+		RecipeID:      "github",
+		URL:           "https://mcp.github.example.com",
+		OAuthClientID: "org-public-client-id",
+	}})
+	if len(errs) != 0 {
+		t.Fatalf("errs = %v, want none", errs)
+	}
+	r, ok := mc.Get("github")
+	if !ok {
+		t.Fatal("Get(github) not found after apply")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want %q (mutation: reverting to the old PrimaryAuthOAuth default must fail this)",
+			r.PrimaryAuth, recipes.PrimaryAuthBrowserOAuthPKCE)
+	}
+}
+
+// TestApplyProvisionedMCP_ExplicitNonOAuthPrimaryAuthIsLeftAlone proves the
+// WP03 remap is scoped to the "oauth"/unset case only: an org admin who
+// deliberately names a different working arm (e.g. browser_oauth_dcr) is
+// not silently overridden.
+func TestApplyProvisionedMCP_ExplicitNonOAuthPrimaryAuthIsLeftAlone(t *testing.T) {
+	mc := recipes.NewMergedCatalog(nil, nil, nil)
+	errs := recipes.ApplyProvisionedMCP(mc, []recipes.ProvisionedMCPEntry{{
+		RecipeID:      "vercel",
+		URL:           "https://mcp.vercel.example.com",
+		PrimaryAuth:   "browser_oauth_dcr",
+		OAuthClientID: "org-public-client-id",
+	}})
+	if len(errs) != 0 {
+		t.Fatalf("errs = %v, want none", errs)
+	}
+	r, ok := mc.Get("vercel")
+	if !ok {
+		t.Fatal("Get(vercel) not found after apply")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want the org-declared %q left untouched", r.PrimaryAuth, recipes.PrimaryAuthBrowserOAuthDCR)
 	}
 }
 

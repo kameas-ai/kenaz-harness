@@ -116,8 +116,29 @@ func ApplyProvisionedMCP(cat *MergedCatalog, entries []ProvisionedMCPEntry) []er
 				ClientID: e.OAuthClientID,
 				Scopes:   e.OAuthScopes,
 			}
-			if r.PrimaryAuth == "" {
-				r.PrimaryAuth = PrimaryAuthOAuth
+			// An org-provisioned client_id always resolves to the
+			// browser PKCE grant (SignInRecipe's
+			// PrimaryAuthBrowserOAuthPKCE arm), which is wired
+			// end-to-end for any non-empty client id.
+			//
+			// The wire-level primary_auth:"oauth" (spec.md section 3.1's
+			// own example payload, and this function's own default when
+			// the field is left empty) is a generic "this connects via
+			// OAuth" hint, not the internal recipes.PrimaryAuthOAuth arm.
+			// That enum value names something narrower and worse:
+			// SignInRecipe (core/rpc/views/tools/oauth.go) treats it as
+			// an unconditional E-006 fail-closed arm reserved for the six
+			// shipped recipes that have neither a client id nor a
+			// DCR/device-code path. Copying the wire string through
+			// unmapped made every org-provisioned OAuth recipe --
+			// including the spec's own example -- resolve to that dead
+			// arm despite carrying a perfectly good client id, so a
+			// fleet-provisioned "Connect" button always errored.
+			// Anything else the org explicitly names (device_code, keys,
+			// none, browser_oauth_dcr) is left alone: those are
+			// deliberate, working dispositions in their own right.
+			if r.PrimaryAuth == "" || r.PrimaryAuth == PrimaryAuthOAuth {
+				r.PrimaryAuth = PrimaryAuthBrowserOAuthPKCE
 			}
 		}
 		r.Source = SourceOrg
