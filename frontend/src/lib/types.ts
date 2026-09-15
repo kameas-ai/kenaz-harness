@@ -626,6 +626,15 @@ export interface ContextPublishResult {
   accepted_nodes: number;
   accepted_edges: number;
   conflicts: ContextPushConflict[];
+  /**
+   * The layer the entry actually published to — "team" or "org". Can
+   * differ from the request's `layer`: a "team" request with no team_id
+   * falls back to "org" (finding #97 — THROWAWAY until fleet's default
+   * "everyone" team ships, see core/rpc/views/contexts/impl.go). Always
+   * use this, never the request layer, when telling the user where the
+   * entry went.
+   */
+  effective_layer: 'team' | 'org';
 }
 
 export interface ContextPromoteResult {

@@ -64,6 +64,7 @@ function provide(opts: {
         accepted_nodes: 1,
         accepted_edges: 0,
         conflicts: [],
+        effective_layer: _req.layer,
       })),
       promote:
         opts.promoteSpy ??
@@ -480,7 +481,15 @@ describe('ContextsView', () => {
       await flushPromises();
       const dialog = w.find('[data-testid=context-publish-confirm-dialog]');
       expect(dialog.exists()).toBe(true);
-      expect(dialog.text()).toContain('Share with your team?');
+      expect(dialog.text()).toContain('Share this entry?');
+      // The layer choice is explicit — both "team" and the deliberate
+      // "org" option are offered (finding #97), defaulting to "team".
+      expect(dialog.find('[data-testid=context-publish-layer-team]').exists()).toBe(true);
+      expect(dialog.find('[data-testid=context-publish-layer-org]').exists()).toBe(true);
+      expect(
+        (dialog.find('[data-testid=context-publish-layer-team]').element as HTMLInputElement)
+          .checked,
+      ).toBe(true);
       expect(dialog.text()).toContain('visible to everyone in your organisation');
     });
 
@@ -495,6 +504,7 @@ describe('ContextsView', () => {
         accepted_nodes: 1,
         accepted_edges: 0,
         conflicts: [],
+        effective_layer: _req.layer,
       }));
       const { client } = provide({
         tree,
@@ -531,6 +541,7 @@ describe('ContextsView', () => {
         accepted_nodes: 1,
         accepted_edges: 0,
         conflicts: [],
+        effective_layer: _req.layer,
       }));
       const { client } = provide({
         tree,
@@ -558,6 +569,92 @@ describe('ContextsView', () => {
       // Result strip shown.
       expect(w.find('[data-testid=context-publish-result]').exists()).toBe(true);
       expect(w.find('[data-testid=context-publish-result]').text()).toContain('Published');
+    });
+
+    it('publishes org-wide when the user explicitly picks the org layer (finding #97)', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'policy.md', path: 'policy.md', kind: 'file' }],
+      };
+      const publishSpy = vi.fn(async (_req: ContextPublishRequest) => ({
+        accepted_nodes: 1,
+        accepted_edges: 0,
+        conflicts: [],
+        effective_layer: _req.layer,
+      }));
+      const { client } = provide({
+        tree,
+        files: { 'policy.md': '# Org policy' },
+        syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+        publishSpy,
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      await w.find('[data-testid="context-node-policy.md"]').trigger('click');
+      await flushPromises();
+      await w.find('[data-testid=context-publish-btn]').trigger('click');
+      await flushPromises();
+      // Deliberately pick "org" instead of the default "team".
+      await w.find('[data-testid=context-publish-layer-org]').setValue(true);
+      await w.find('[data-testid=context-publish-confirm-ok]').trigger('click');
+      await flushPromises();
+
+      expect(publishSpy).toHaveBeenCalledOnce();
+      const req = publishSpy.mock.calls[0]![0];
+      expect(req.layer).toBe('org');
+      // No team picker exists yet — team_id must never be sent.
+      expect(req.team_id).toBeUndefined();
+      expect(w.find('[data-testid=context-publish-result]').text()).toContain(
+        'Published to your organisation',
+      );
+    });
+
+    it('honestly reports a team-request-that-fell-back-to-org, not a silent team share', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'note.md', path: 'note.md', kind: 'file' }],
+      };
+      // Simulates the backend fallback (finding #97): the request asked
+      // for "team" but the server had no team_id to honour it, so it
+      // published at "org" instead and says so via effective_layer.
+      const publishSpy = vi.fn(async (_req: ContextPublishRequest) => ({
+        accepted_nodes: 1,
+        accepted_edges: 0,
+        conflicts: [],
+        effective_layer: 'org' as const,
+      }));
+      const { client } = provide({
+        tree,
+        files: { 'note.md': '# note' },
+        syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+        publishSpy,
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      await w.find('[data-testid="context-node-note.md"]').trigger('click');
+      await flushPromises();
+      await w.find('[data-testid=context-publish-btn]').trigger('click');
+      await flushPromises();
+      // Leave the default "team" choice selected, then confirm.
+      await w.find('[data-testid=context-publish-confirm-ok]').trigger('click');
+      await flushPromises();
+
+      const req = publishSpy.mock.calls[0]![0];
+      expect(req.layer).toBe('team');
+      const resultText = w.find('[data-testid=context-publish-result]').text();
+      expect(resultText).toContain('Published org-wide');
+      expect(resultText).toContain("team sync isn't available yet");
+      // Must NOT claim it went only to the team — that's the exact lie
+      // this fix exists to prevent.
+      expect(resultText).not.toContain('Published to your team');
     });
 
     it('shows sync pull error in status strip', async () => {
