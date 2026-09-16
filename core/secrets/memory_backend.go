@@ -8,16 +8,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
 	"github.com/kameas-ai/kenaz-harness/core/secrets/registry"
 	"github.com/kameas-ai/kenaz-harness/core/secrets/secret"
-	"github.com/zalando/go-keyring"
 )
 
 // keyringService is the namespace under which the harness writes
-// keychain credentials. zalando/go-keyring routes to the per-OS
-// secure store: macOS Keychain, Windows Credential Manager, libsecret
-// on Linux. A single namespace makes auditing + manual cleanup easy.
+// keychain credentials, via core/keyring — the single seam onto the
+// per-OS secure store: macOS Keychain, Windows Credential Manager,
+// libsecret on Linux. A single namespace makes auditing + manual cleanup
+// easy.
 const keyringService = "kenaz-harness"
 
 // legacyKeyringService is the previous (misspelled) namespace. Reads fall

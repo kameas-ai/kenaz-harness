@@ -14,6 +14,16 @@
  * Filters: kind (all / workflow / agent_pack / bundle / skill) + visibility +
  * free-text search on slug / description.
  *
+ * Every card also gets a "Withdraw" action (fleet-enforcement-truth-01PMZ505
+ * WP11, register C-3/C-8): removes the item from the org catalog listing
+ * entirely, distinct from Uninstall (which only removes the caller's local
+ * copy). The server enforces the authorization rule (owner or fleet admin) —
+ * CatalogItemView carries no publisher identity for the harness to evaluate
+ * itself, so the action is shown on every item, unconditionally, and the
+ * server's answer (including a 403 → "not the owner or an admin", never a
+ * subscription-tier message) is reported as-is. Confirm-guarded, with copy
+ * distinct from Uninstall's (AC-021).
+ *
  * (fleet-share-and-sync-01NDFSEX14 WP03; fleet-skills-sync-01NDFSEX18 WP04)
  */
 import { ref, computed, onMounted } from 'vue';
@@ -114,6 +124,38 @@ async function uninstall(item: CatalogItemView) {
 
 async function applyFilters() {
   await loadItems();
+}
+
+// ── withdraw (fleet-enforcement-truth-01PMZ505 WP11) ───────────────────────
+const pendingWithdraw = ref<CatalogItemView | null>(null);
+const withdrawBusy = ref(false);
+const withdrawError = ref('');
+
+function promptWithdraw(item: CatalogItemView) {
+  pendingWithdraw.value = item;
+  withdrawError.value = '';
+}
+
+function cancelWithdraw() {
+  pendingWithdraw.value = null;
+  withdrawError.value = '';
+}
+
+async function confirmWithdraw() {
+  const item = pendingWithdraw.value;
+  if (!item) return;
+  withdrawBusy.value = true;
+  withdrawError.value = '';
+  try {
+    await client.catalog.unpublish(item.id);
+    pendingWithdraw.value = null;
+    pushToast(`Withdrawn from catalog: ${item.slug} v${item.version}`);
+    await loadItems();
+  } catch (err) {
+    withdrawError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    withdrawBusy.value = false;
+  }
 }
 </script>
 
@@ -272,34 +314,96 @@ async function applyFilters() {
             {{ item.description || 'No description.' }}
           </p>
 
-          <!-- Footer: visibility + action -->
+          <!-- Footer: visibility + actions -->
           <div class="flex items-center justify-between gap-2">
             <span class="font-ui text-[10px] text-ink-subtle" data-testid="item-visibility">
               {{ item.visibility }}
             </span>
-            <button
-              v-if="!item.installed"
-              type="button"
-              class="h-6 rounded-sm bg-accent px-3 font-ui text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
-              :disabled="busyIds.has(item.id)"
-              :data-testid="`item-install-btn-${item.slug}`"
-              @click="install(item)"
-            >
-              {{ busyIds.has(item.id) ? 'Installing…' : 'Install' }}
-            </button>
-            <button
-              v-else
-              type="button"
-              class="h-6 rounded-sm border border-border-muted px-3 font-ui text-xs text-ink-muted hover:bg-surface-2 disabled:opacity-50"
-              :disabled="busyIds.has(item.id)"
-              :data-testid="`item-uninstall-btn-${item.slug}`"
-              @click="uninstall(item)"
-            >
-              {{ busyIds.has(item.id) ? 'Removing…' : 'Uninstall' }}
-            </button>
+            <div class="flex items-center gap-1.5">
+              <button
+                type="button"
+                class="h-6 rounded-sm border border-signal-danger px-2 font-ui text-[11px] text-signal-danger hover:bg-surface-2 disabled:opacity-50"
+                :disabled="busyIds.has(item.id)"
+                :data-testid="`item-withdraw-btn-${item.slug}`"
+                @click="promptWithdraw(item)"
+              >
+                Withdraw
+              </button>
+              <button
+                v-if="!item.installed"
+                type="button"
+                class="h-6 rounded-sm bg-accent px-3 font-ui text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+                :disabled="busyIds.has(item.id)"
+                :data-testid="`item-install-btn-${item.slug}`"
+                @click="install(item)"
+              >
+                {{ busyIds.has(item.id) ? 'Installing…' : 'Install' }}
+              </button>
+              <button
+                v-else
+                type="button"
+                class="h-6 rounded-sm border border-border-muted px-3 font-ui text-xs text-ink-muted hover:bg-surface-2 disabled:opacity-50"
+                :disabled="busyIds.has(item.id)"
+                :data-testid="`item-uninstall-btn-${item.slug}`"
+                @click="uninstall(item)"
+              >
+                {{ busyIds.has(item.id) ? 'Removing…' : 'Uninstall' }}
+              </button>
+            </div>
           </div>
         </li>
       </ul>
     </template>
+
+    <!-- Withdraw confirm modal -->
+    <div
+      v-if="pendingWithdraw !== null"
+      class="fixed inset-0 z-50 flex items-center justify-center"
+      role="dialog"
+      aria-modal="true"
+      data-testid="withdraw-confirm-modal"
+    >
+      <div class="absolute inset-0 bg-modal-overlay" @click="cancelWithdraw" />
+      <div
+        class="relative z-10 w-[440px] max-w-[90vw] rounded-md border border-border-muted bg-surface-0 shadow-lg p-5"
+      >
+        <h2 class="font-ui text-base font-semibold text-ink">
+          Withdraw "{{ pendingWithdraw.slug }}"?
+        </h2>
+        <p class="mt-2 font-ui text-xs text-ink-muted" data-testid="withdraw-confirm-copy">
+          This removes the item from the org catalog listing entirely —
+          other members will no longer be able to find or install it. This is
+          different from Uninstall, which only removes your own local copy
+          and leaves the org listing untouched.
+        </p>
+        <div
+          v-if="withdrawError"
+          class="mt-2 text-xs text-signal-danger font-ui"
+          role="alert"
+          data-testid="withdraw-error"
+        >
+          {{ withdrawError }}
+        </div>
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            class="font-ui text-xs px-3 py-1.5 text-ink-dim hover:text-ink"
+            data-testid="withdraw-cancel"
+            @click="cancelWithdraw"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="font-ui text-xs px-3 py-1.5 rounded-sm border border-signal-danger text-signal-danger hover:bg-surface-2 disabled:opacity-50"
+            :disabled="withdrawBusy"
+            data-testid="withdraw-confirm"
+            @click="confirmWithdraw"
+          >
+            {{ withdrawBusy ? 'Withdrawing…' : 'Withdraw' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

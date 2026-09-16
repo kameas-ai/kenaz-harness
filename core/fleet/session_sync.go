@@ -20,9 +20,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zalando/go-keyring"
-
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 )

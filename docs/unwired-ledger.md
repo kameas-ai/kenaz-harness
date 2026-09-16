@@ -476,9 +476,47 @@ retention backend) already resolved more completely than the spec's own
 | §1.13/§1.14 served-mode token invalidation + sign-out ledger event (WP14) | wire `Invalidate`/`NotifyOn401` at a real 401-observing call site; add `LedgerEmitter.EmitSessionLifecycle`-shaped method; wire both entry points | **Not wired — built this pass, with one honest gap.** New `On401 func()` hook threaded through `core/mcp.ServerSpec` → both `transport/http` and `transport/sse` `Spec` → their `dispatch`/GET/POST paths (the only place a served-mode OAuth connector's 401 is actually observable — the token is handed to a spawned subprocess's own HTTP calls, which the harness cannot see). Supervisor wires `spec.On401 = func(){ tokens.Invalidate(id) }` for OAuth connectors. `LedgerEmitter.EmitSessionLifecycle(event string)` added (the missing `func(string)` shape); both `main.go` and `cmd/harness-served/main.go` now construct their `authbroker.Session` with `WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle)`. **`Session.NotifyOn401` is NOT wired** — see "Escalated, not guessed" below; it is a materially different, deeper finding than the spec anticipated. | Mutation-proven at two layers: `TestConnectionOn401_Fires`/`_DoesNotFireOn500` (http+sse transport level, real httptest 401/500) and `TestSupervisor_OAuthConnector_On401InvalidatesCachedToken` (supervisor level). `main.go`/`cmd/harness-served/main.go` wiring is READ-verified only (package `main`, no test harness). |
 | §1.15 ACP peer registry nil secrets backend (WP15) | wire consumer or record; escalate secrets backend (E-008); dated justification for `DefaultRegistry` | **Escalated, not guessed — per spec's own explicit instruction ("do not fix this by passing a non-nil backend to make the linter quiet").** `core/acp/events` (the package `peers.NoopEmitter`'s own doc names as owning "the real wiring") **does not exist anywhere in the repo** — confirmed no directory, no second `AuthEventEmitter` implementer. Recorded in-code at `api.go`'s `acpReg := acppeers.NewRegistry(...)` construction site (both nils explained) and at `DefaultRegistry()`'s declaration (`wiring:deferred`, dated 2026-09-12, owner alec, distinct from `AN-10` per C-10 — `DefaultRegistry` has zero callers repo-wide and cannot itself produce the nil-secrets defect). | Read-verified (repo-wide grep for `PeerAuthAttempted`, `core/acp/events`). **E-008 (secrets backend product-scoping question) remains genuinely open — flagged for owner alec, no default assumed.** |
 
-**Duplicate-finding note preserved from the first pass**: `fleet-cedar-
-engine-never-wired` and `cedar-bundle-engine-never-set` are the same
-defect (§1.1); both read as closed by the above.
+### 2026-09-15 (fleet-enforcement-truth-01PMZ505, WP05 follow-up — CORRECTION to the 2026-09-12 entry above, finding #103) · the §1.3 and §1.8 "applyRetentionConfig deleted" claims were both false
+
+**The 2026-09-12 entry above is preserved verbatim, uncorrected, above this
+note — this is the correction, not a rewrite of that entry.** Its §1.3 row's
+"This pass" cell states *"Deleted the two remaining lies (AC-007):
+`applyRetentionConfig` (`core/fleet/audit_retention.go`, zero callers, fed a
+`Bundle.audit_local_retention_days` field that has never existed) and its two
+false doc comments."* Its §1.8 row states *"`applyRetentionConfig`
+**deleted** (see §1.3 row)."* **Neither was true.** An independent audit on
+2026-09-14 re-read the tree and found the function still present, unchanged,
+with the same zero non-test callers it had before that pass claimed to
+remove it — `git log --oneline --follow -- core/fleet/audit_retention.go`
+shows exactly two commits touching the file, `8d96d337` (original WP04 add)
+and `b11f5223` (a squash merge that also added it); no commit ever deleted
+it. The false claim was written twice in the same sweep pass (§1.3's prose
+and §1.8's cross-reference to it), which is why it is being corrected in two
+places here rather than one.
+
+**Deleted for real on 2026-09-15** (fleet-enforcement-truth-01PMZ505 WP05
+follow-up commit, this pass): the function body, its two false doc comments
+(the file header's bundle-config claim and the function's own "Used by the
+composite ConfigApplier" claim), and the `encoding/json` import that only it
+used. Positive no-consumer proof, re-run after the deletion:
+`grep -rn 'applyRetentionConfig' core/` and
+`grep -rn 'audit_local_retention_days' core/` both return zero hits (exit 1);
+`go build ./core/...` is clean. `Bundle` (`core/fleet/bundle.go:42`–`:82`)
+was re-confirmed to carry no such field. `core/rpc/wp_pi_test.go`'s WP05
+persistence-integrity note, which had independently repeated the same false
+"already deleted" claim in its own prose, was corrected in the same commit —
+without naming the deleted symbol by its literal identifier, since AC-007's
+grep is over all of `core/` including test-file comments.
+
+**Why the earlier claims were premature, not malicious:** the 2026-09-12
+pass's own "What was RUN" ledger section (below) shows it verified the
+*sibling* findings in this same table by running tests, but for §1.3/§1.8 it
+appears to have read the *intended* diff (or an equivalent change made in a
+sibling worktree during the same campaign) rather than re-reading the merged
+file on the branch it actually recorded against. This is exactly the failure
+mode CLAUDE.md's citation discipline exists to catch, and it reached the
+ledger anyway — recorded here as finding #103's disposition, not swept under
+the correction.
 
 **Frontend-binding deferral (WP06, WP09, WP11) — one blocker, three
 findings.** All three new RPC surfaces (`Compliance_SkipToID`,
@@ -520,12 +558,11 @@ names explicitly.
 - **The three fleet audit kinds with zero emit call sites**
   (`KindFleetConfigApplied`/`KindFleetConfigSignatureRejected`/
   `KindFleetConfigPartialFailure`) — **already recorded above** (2026-09-12,
-  `01NORGX01` WP02 triage entry) as "Owner: unassigned. Blocker: threading
-  an audit emitter through `ConfigPoller`". This mission's spec never
-  named these three kinds as one of its fourteen findings; they were
-  flagged as an adjacent fact for this pass to consider and are recorded
-  here as explicitly NOT this mission's to fix, matching the existing
-  entry's scoping rather than duplicating it.
+  `01NORGX01` WP02 triage entry). **UPDATE (2026-09-15, `01NORGX01`
+  WP05):** `KindFleetConfigApplied` is now wired (see the updated entry
+  above) — this mission's own FR-010 is met for the section it owns. The
+  other two kinds remain open, owner alec, same `ConfigPoller`-plumbing
+  blocker.
 - **`config_pull.go`'s stale header claiming a `bundle.json` disk cache**
   — likewise already recorded in the `01NORGX01` entry above; not
   re-fixed here for the same cross-cutting-architecture reason that entry
@@ -4040,7 +4077,38 @@ here because they are also `RegisterDeferred`-shaped gaps this sweep found
 but did not fix (both predate this mission and are cross-cutting to
 `fleet-config-pull-01NDFSEX10`, not `01NORGX01`-specific):**
 
-1. `audit.KindFleetConfigApplied`, `KindFleetConfigSignatureRejected`, and
+1. **UPDATE (2026-09-15, `01NORGX01` WP05):** `KindFleetConfigApplied` is
+   now wired — `compositeConfigApplier.ApplyBundle`
+   (`core/rpc/views/settings/fleet.go`) emits it directly on a fully-clean
+   apply, via a new `auditEmitter` field on `fleetState` +
+   `SetAuditEmitter`, wired from `core/rpc/api.go` reusing the same
+   `fleetAuditEmitter` bridge instance already constructed for the
+   catalog/sync views (no new construction). The payload
+   (`FleetConfigAppliedPayload`) was extended with `OrgID`/`OrgName` (read
+   best-effort from the on-disk `fleet.Identity` cache) and
+   `ProvisionedRecipeIDs`, closing this mission's FR-010 ("naming the org,
+   the recipe/provider ids, and the bundle_id") for the one section this
+   mission owns. Pinned by
+   `core/rpc/views/settings/fleet_wp05_audit_test.go`. The emission point
+   turned out to be `compositeConfigApplier.ApplyBundle` itself, not
+   `ConfigPoller` — every recipe/provider id needed for the payload is
+   already local to that function, so this did NOT require the
+   constructor-signature change originally assumed below; only
+   `ConfigPoller`-level signals (signature rejection, which section failed)
+   still need that plumbing.
+   
+   **Still open, same as before:** `KindFleetConfigSignatureRejected` (needs
+   `ConfigPoller.poll()`'s signature-verify-failure branch, before
+   `ApplyBundle` is ever called) and `KindFleetConfigPartialFailure` (needs
+   per-section failure attribution — today's `errs []error` slice carries
+   section names only inside free-text error strings, not a structured
+   tag). Owner: alec. Blocker: threading an audit emitter through
+   `ConfigPoller` for the signature-rejection case, plus a section-tagged
+   error type for the partial-failure case (cross-cutting to
+   `fleet-config-pull-01NDFSEX10`, not `01NORGX01`-specific — same
+   reasoning as the original entry below).
+   
+   Original entry (2026-09-12), preserved for history: `audit.KindFleetConfigApplied`, `KindFleetConfigSignatureRejected`, and
    `KindFleetConfigPartialFailure` (`core/context/audit/audit.go:265-286`,
    payload structs at `:1345-1381`) are declared with full payload types
    and privacy-invariant doc comments but have **zero emit call sites

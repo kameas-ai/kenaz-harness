@@ -267,7 +267,8 @@ func TestListUserOverridesEmptyDir(t *testing.T) {
 
 // TestDoctorReportsCounters asserts that Doctor() returns the catalog
 // header counters and the configured user-dir / hot-reload flag. This
-// is the WP08 surface backing the frontend NodesView debug panel.
+// backs the node-override diagnostics panel on NodePalette.vue (mission
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP18).
 func TestDoctorReportsCounters(t *testing.T) {
 	t.Parallel()
 	mgr := nodesview.NewManager(nodesview.ManagerConfig{

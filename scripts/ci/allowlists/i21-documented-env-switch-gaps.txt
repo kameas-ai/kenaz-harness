@@ -1,0 +1,17 @@
+# I21 — documented env-var values a `switch` silently absorbs into
+# `default:` (model-settings-reach-the-model-01PMZ101 WP12/WP14, spec §7
+# G-6).
+#
+# Enforced by scripts/ci/check-env-switch-coverage.sh /
+# scripts/ci/cmd/checkenvswitch. The confirmed instance of this class —
+# core/llm/capabilities/cache.go's HARNESS_LLM_CAPABILITY_CACHE
+# documenting "sqlite" as a value while DefaultCache's switch had no
+# `case "sqlite":` arm, silently degrading to MemoryCache — is FIXED as
+# of this gate's introduction (2026-09-15): the case now exists.
+#
+# EMPTY, AND THAT IS THE POINT as of this gate's introduction.
+#
+# Format: one FULLY-QUALIFIED KEY per line — `<constName>#<value>` —
+# followed by a `#` comment naming the DATE, the BLOCKER, and the OWNER.
+# Allowlists shrink monotonically (CLAUDE.md); an entry that no longer
+# corresponds to a live violation is STALE and fails the gate.

@@ -52,6 +52,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/llm/cost"
@@ -147,7 +148,6 @@ import (
 	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 	wfcatalogpkg "github.com/kameas-ai/kenaz-harness/core/workflows/catalog"
 	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
-	"github.com/zalando/go-keyring"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -526,7 +526,26 @@ type API struct {
 	// is disabled at boot (HARNESS_COMPACTION=off or no session store).
 	compactionLLM   *compactionwiring.LLMCaller
 	compactionAudit *compactionwiring.AuditEmitter
-	convMgr         *coreconv.Manager
+	// autotitleLLM is the SAME *autotitlewiring.LLMCaller instance
+	// newLLMStack constructs for the chat runner's automatic post-run
+	// auto-title trigger (chatAutoTitleGen), held here so
+	// CompactionOverhead() can also read its Overhead() tally
+	// (model-settings-reach-the-model-01PMZ101 WP07). Before this WP,
+	// autotitlewiring.LLMCaller.Overhead() had zero non-test callers —
+	// the auto-title cost was accumulated by recordOverhead on every
+	// call and then discarded, falsifying the type's own doc comment
+	// ("so the rpc layer can surface it in the same per-session cost
+	// panel"). nil when no LLM registry is wired (stack.reg == nil).
+	//
+	// Scoping note: two OTHER *autotitlewiring.LLMCaller instances exist
+	// in production (the manual "Suggest Title" RPC path in New(), and
+	// the context-bootstrap model completer, which reuses this adapter
+	// type for an unrelated feature). Neither is held here — the manual
+	// path is a secondary, rarely-invoked surface and the context-
+	// bootstrap reuse isn't semantically "auto-title" cost at all.
+	// Folding those in is future work, not a silent omission.
+	autotitleLLM *autotitlewiring.LLMCaller
+	convMgr      *coreconv.Manager
 	branchesAPI     branchesview.BranchesAPI
 	// branchSeam is the SAME BranchSeamAdapter instance
 	// newGraphManagerWithDeps builds as EnvDeps.Branch for ForkNode /
@@ -1034,24 +1053,20 @@ func (a *API) SetContext(ctx context.Context) {
 	//
 	// Not started under `go test`, for the same reason SetFleetClient does
 	// not start its pollers: BootstrapLockdownStatus -> Client.Get ->
-	// Client.do -> fleet.LoadTokens -> keyring.Get, and go-keyring's MOCK
-	// provider (installed process-wide by testmain_test.go's keyring.MockInit)
-	// mutates a bare map[string]map[string]string with no mutex. Any
-	// background goroutine that reaches the keyring therefore races any
-	// sibling test's keyring.Set -- which is what the "views/sites keyring
-	// flake" always was. The independent review of the CapabilityPoller fix
-	// reproduced the race through THIS call site against the already-fixed
-	// poller, so this is a second live instance, not a hypothetical.
+	// Client.do -> fleet.LoadTokens -> keyring.Get is a real network call,
+	// and background network workers do not run under `go test` regardless
+	// of the keyring question.
 	//
-	// This guard is a mitigation, not the fix. LoadTokens has ~16 non-test
-	// call sites and is hit by EVERY fleet HTTP request via Client.do, so
-	// guarding call sites one at a time does not close the class -- see the
-	// scar at contextbootstrap_wiring.go:337 for a third instance. The real
-	// fix is a single serialised keyring seam plus a gate forbidding direct
-	// go-keyring imports outside it; go-keyring exposes no way to install a
-	// thread-safe provider (`provider` is package-private and MockInit is
-	// the only door), so it cannot be fixed upstream-side from here.
-	// Tracked as its own mission.
+	// The keyring-race half of this comment's original rationale (go-keyring's
+	// MOCK provider mutates a bare map[string]map[string]string with no
+	// mutex, so any background goroutine reaching it raced any sibling
+	// test's keyring.Set/keychainSet -- the "views/sites keyring flake" and
+	// the CapabilityPoller race were both this) is now fixed structurally by
+	// core/keyring, the single seam every keyring caller routes through:
+	// every Get/Set/Delete takes core/keyring's package-level mutex, and
+	// scripts/ci/check-keyring-seam.sh forbids any other file under core/ or
+	// cmd/ from importing zalando/go-keyring directly. This guard stays for
+	// the network-worker reason above, independent of that fix.
 	//
 	// The under-test check is flag.Lookup("test.v"), NOT testing.Testing(),
 	// and that is deliberate: scripts/ci/cmd/checknilopts's
@@ -2410,6 +2425,9 @@ func New(c *core.Core, opts ...Option) *API {
 	// gives CompactionOverhead() something to read.
 	a.compactionLLM = stack.compactionLLM
 	a.compactionAudit = stack.compactionAudit
+	// model-settings-reach-the-model-01PMZ101 WP07: same pattern as the
+	// compaction pair above, for the chat runner's auto-title caller.
+	a.autotitleLLM = stack.autotitleLLM
 	// CK-09 (chat-turn-integrity-01PMZ606 WP13): capture the sweep
 	// scheduler newLLMStack already started so Shutdown can Stop() it.
 	a.compactionScheduler = stack.compactionScheduler
@@ -3750,6 +3768,15 @@ func New(c *core.Core, opts ...Option) *API {
 			flDataDir = dataDir
 		}
 		flAudit := &fleetAuditEmitter{impl: a.auditImpl}
+
+		// fleet-org-config-inheritance-01NORGX01 WP05 (FR-010): the same
+		// bridge instance also backs compositeConfigApplier's
+		// fleet.config.applied event — no separate construction needed,
+		// this is exactly the interface shape settings.auditEmitter wants
+		// (EmitFleetEvent(ctx, kind, payload) error).
+		if a.settingsImpl != nil {
+			a.settingsImpl.SetAuditEmitter(flAudit)
+		}
 
 		// Catalog (WP02)
 		var catalogSigner *corefleet.DeviceSigner // kept for SkillDeps wiring below
@@ -5398,6 +5425,14 @@ type llmStack struct {
 	// layer queries when surfacing recent compaction events to the
 	// frontend. nil when compaction is disabled.
 	compactionAudit *compactionwiring.AuditEmitter
+	// autotitleLLM is the *autotitlewiring.LLMCaller the chat runner's
+	// automatic post-run auto-title trigger uses (chatAutoTitleGen,
+	// below). Held on the stack, mirroring compactionLLM immediately
+	// above, so New() can copy it onto the API struct and
+	// CompactionOverhead() can read its Overhead() tally
+	// (model-settings-reach-the-model-01PMZ101 WP07). nil when reg ==
+	// nil (no LLM registry wired).
+	autotitleLLM *autotitlewiring.LLMCaller
 	// chatRunner is the kernel-driven entry point that powers the
 	// chat path. Held on the stack so the rpc.New caller can wire a
 	// ResumeStarter onto the SessionsAPI
@@ -5600,12 +5635,20 @@ func newLLMStack(
 	// WP14 / FR-017, review finding B3). Without this, every production
 	// registry.New call site passed no Cache:, so DefaultCache(nil) at
 	// registry.go:98-104 could never select the SQLite path even with
-	// HARNESS_LLM_CAPABILITY_CACHE=sqlite set — it always degraded to
-	// MemoryCache, leaving the provider_capabilities table (migration
-	// sessions/0329, shipped in v0.63.0) permanently unwritten in every
-	// shipped binary. Same nil-on-test-chassis degrade as `db` above —
-	// DefaultCache(nil) still returns a safe in-process MemoryCache when
-	// no real storage.DB is available.
+	// HARNESS_LLM_CAPABILITY_CACHE=sqlite set. That structural blocker
+	// was fixed here; a SEPARATE gap survived it (2026-08-25 unwired-
+	// sweep finding, recorded in wp_pi_persistence_integrity_z101_
+	// unit9_test.go): nothing in this repo ever SET
+	// HARNESS_LLM_CAPABILITY_CACHE=sqlite, so DefaultCache's own default
+	// (unset -> MemoryCache, unconditionally) still left the
+	// provider_capabilities table (migration sessions/0329, shipped in
+	// v0.63.0) permanently empty in every shipped binary regardless of
+	// this call site passing a real `db`. CORRECTED (WP12 finding,
+	// 2026-09-15): capabilities.DefaultCache's own default now prefers
+	// SQLiteCache whenever db != nil — see that function's doc comment.
+	// Passing `db` here (rather than leaving Cache unset) is still what
+	// makes the persistent path reachable at all; the nil-core test
+	// chassis passes db == nil and still gets a safe MemoryCache.
 	// Audit: structured-output-is-reachable-01PMZE14 WP06. structuredAudit
 	// is a Shape-1 bridge (acpAuditBridge, already used for
 	// KindMCPHealthChanged and several other kinds — see this
@@ -5951,6 +5994,12 @@ func newLLMStack(
 	// Build the autotitle generator for the chat runner's post-run trigger.
 	// Uses the same registry + profile resolver pattern as the sessions API.
 	var chatAutoTitleGen chat.AutoTitleGenerator
+	// autotitleLLMCaller is the same *autotitlewiring.LLMCaller assigned
+	// to chatAutoTitleGen below, hoisted out of the if-block (which is
+	// its own scope) so it can be returned on llmStack and eventually
+	// read by CompactionOverhead() (model-settings-reach-the-model-
+	// 01PMZ101 WP07).
+	var autotitleLLMCaller *autotitlewiring.LLMCaller
 	if reg != nil {
 		capturedStore := store
 		llmCaller := autotitlewiring.NewLLMCaller(reg,
@@ -5968,6 +6017,7 @@ func newLLMStack(
 			}),
 		)
 		chatAutoTitleGen = autotitle.New(llmCaller)
+		autotitleLLMCaller = llmCaller
 	}
 
 	// Build the risk-rating LLM caller for risk-rated-autonomy-01PMRA01
@@ -6135,6 +6185,7 @@ func newLLMStack(
 		compactionScheduler: sweepScheduler,
 		compactionLLM:       compactionLLM,
 		compactionAudit:     compactionAudit,
+		autotitleLLM:        autotitleLLMCaller,
 		chatRunner:          chatRunner,
 		historyAdapter:      historyAdapter,
 		wrappedPool:         wrappedPool,
@@ -9033,8 +9084,8 @@ func (p *registryProber) Probe(ctx context.Context, profile corellm.ProviderProf
 }
 
 // keychainWriter implements llm.KeychainWriter by storing the
-// plaintext in the OS keychain (zalando/go-keyring routes to macOS
-// Keychain, Windows Credential Manager, or libsecret on Linux) AND
+// plaintext in the OS keychain (via core/keyring, the single seam onto
+// macOS Keychain, Windows Credential Manager, or libsecret on Linux) AND
 // in the shared in-memory backend so the credref resolver can read
 // it without an OS-keychain round-trip mid-session.
 //
@@ -9278,6 +9329,16 @@ func (a *API) AppInfo(ctx context.Context) (AppInfo, error) {
 // not redesigning it (both compactionLLM and compactionAudit were
 // already constructed and held on the rpc stack before this WP; nothing
 // after newLLMStack returned ever called them).
+//
+// AutoTitle* fields (model-settings-reach-the-model-01PMZ101 WP07) carry
+// the SAME kind of running tally for the auto-title LLM caller
+// (core/sessions/autotitle/wiring/llm.go's OverheadTotals), reusing this
+// struct/RPC rather than adding a parallel binding: both readouts feed
+// the same SessionsView cost panel, and WP07's own task description
+// already coupled "auto-title and compaction overhead reach the cost
+// panel" as one unit. Before this WP, autotitlewiring.LLMCaller.Overhead()
+// had zero non-test callers — recordOverhead ran on every auto-title
+// call and the tally was accumulated, then discarded.
 type CompactionOverheadInfo struct {
 	// Total / Currency / Calls / IndeterminateCalls / InputTokens /
 	// OutputTokens mirror compactionwiring.OverheadTotals field-for-field
@@ -9295,37 +9356,62 @@ type CompactionOverheadInfo struct {
 	// caller (the other half of CK-08's "registered, never consumed"
 	// finding: the 256-entry ring accumulated for nobody).
 	RecentTiers []string `json:"recentTiers,omitempty"`
+	// AutoTitleTotal / AutoTitleCurrency / AutoTitleCalls /
+	// AutoTitleIndeterminateCalls / AutoTitleInputTokens /
+	// AutoTitleOutputTokens mirror autotitlewiring.OverheadTotals
+	// field-for-field — the running tally of every auto-title-driven LLM
+	// call this process has issued since boot, from the chat runner's
+	// automatic post-run trigger specifically (see autotitleLLM's doc
+	// comment on the API struct for the scoping decision).
+	AutoTitleTotal              float64 `json:"autoTitleTotal"`
+	AutoTitleCurrency           string  `json:"autoTitleCurrency,omitempty"`
+	AutoTitleCalls              int     `json:"autoTitleCalls"`
+	AutoTitleIndeterminateCalls int     `json:"autoTitleIndeterminateCalls"`
+	AutoTitleInputTokens        int     `json:"autoTitleInputTokens"`
+	AutoTitleOutputTokens       int     `json:"autoTitleOutputTokens"`
 }
 
 // CompactionOverhead implements HarnessAPI. Returns the zero value (not
-// an error) when compaction was disabled at boot — matching
-// buildCompactionWiring's own degrade contract, not a fault condition
-// this RPC should surface as one.
+// an error) when both compaction and auto-title were disabled at boot —
+// matching buildCompactionWiring's own degrade contract, not a fault
+// condition this RPC should surface as one. The compaction half and the
+// auto-title half (model-settings-reach-the-model-01PMZ101 WP07) are
+// populated independently — one being disabled must not suppress the
+// other's totals.
 func (a *API) CompactionOverhead(_ context.Context) (CompactionOverheadInfo, error) {
-	if a == nil || a.compactionLLM == nil {
-		return CompactionOverheadInfo{}, nil
-	}
-	totals := a.compactionLLM.Overhead()
-	out := CompactionOverheadInfo{
-		Total:              totals.Total,
-		Currency:           totals.Currency,
-		Calls:              totals.Calls,
-		IndeterminateCalls: totals.IndeterminateCalls,
-		InputTokens:        totals.InputTokens,
-		OutputTokens:       totals.OutputTokens,
-	}
-	if a.compactionAudit == nil {
+	var out CompactionOverheadInfo
+	if a == nil {
 		return out, nil
 	}
-	for _, ev := range a.compactionAudit.Recent(5) {
-		if ev.Kind != contextaudit.KindSessionCompacted {
-			continue
+	if a.compactionLLM != nil {
+		totals := a.compactionLLM.Overhead()
+		out.Total = totals.Total
+		out.Currency = totals.Currency
+		out.Calls = totals.Calls
+		out.IndeterminateCalls = totals.IndeterminateCalls
+		out.InputTokens = totals.InputTokens
+		out.OutputTokens = totals.OutputTokens
+		if a.compactionAudit != nil {
+			for _, ev := range a.compactionAudit.Recent(5) {
+				if ev.Kind != contextaudit.KindSessionCompacted {
+					continue
+				}
+				var payload contextaudit.SessionCompactedPayload
+				if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+					continue
+				}
+				out.RecentTiers = append(out.RecentTiers, payload.AggressivenessTier)
+			}
 		}
-		var payload contextaudit.SessionCompactedPayload
-		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
-			continue
-		}
-		out.RecentTiers = append(out.RecentTiers, payload.AggressivenessTier)
+	}
+	if a.autotitleLLM != nil {
+		at := a.autotitleLLM.Overhead()
+		out.AutoTitleTotal = at.Total
+		out.AutoTitleCurrency = at.Currency
+		out.AutoTitleCalls = at.Calls
+		out.AutoTitleIndeterminateCalls = at.IndeterminateCalls
+		out.AutoTitleInputTokens = at.InputTokens
+		out.AutoTitleOutputTokens = at.OutputTokens
 	}
 	return out, nil
 }
