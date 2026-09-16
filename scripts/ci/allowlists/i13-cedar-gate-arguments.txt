@@ -57,3 +57,13 @@ core/rpc/views/agentgraph/chat/chat_runner.go: Config.RiskGate is never assigned
 # Owner: risk-rated-autonomy-01PMRA01. The change that deletes this
 # line: whoever measures the latency, in the same change that flips
 # RiskGate to `secretGate`.
+#
+# UPDATED 2026-09-15 (WP05-WP10 finishing pass): measured. Twice, against
+# the real "openrouter-4-models" dev profile, end to end through
+# risk.LLMRater.Rate with model selection routed through
+# risk.ResolveRaterModel (resolves to openrouter -> qwen/qwen-2.5-7b-
+# instruct, the shipped default) — median 320.4ms then 359.5ms across two
+# 15-call runs. Both exceed the mission brief's ~300ms escalation bound,
+# so the blocker does NOT clear and this line stays. See core/rpc/api.go's
+# wiring-site comment for the full numbers and the re-measurement
+# condition.

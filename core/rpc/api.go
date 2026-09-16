@@ -7248,39 +7248,50 @@ func buildChatRunner(
 		//       distinctly rather than folded into a reused
 		//       rater-failed path.
 		//
-		//   (b) STILL OPEN, UPDATED 2026-09-15: a rating-model setting now
-		//       exists (Settings.RiskRaterModel,
-		//       core/policy/risk.ResolveRaterModel's three-rung ladder)
-		//       and a 234-call/9-model benchmark of record is vendored at
-		//       core/policy/risk/data/rater_benchmark.json — but that
-		//       benchmark measured MODEL quality/latency/reliability
-		//       across candidate rating models, not the end-to-end
-		//       added-latency-per-tool-call this condition is actually
-		//       about. It DOES fix the specific defect that produced the
-		//       original 38.5%-reliability number (the resolver falling
-		//       back to profiles[0].Model, i.e. the user's reasoning chat
-		//       model, instead of a small fast one) — the shipped default
-		//       (openrouter -> qwen/qwen-2.5-7b-instruct, 467.9ms median)
-		//       is ~16x faster than the reasoning control it replaces.
-		//       Still no real measured median ADDED latency against a
-		//       LIVE profile with this default wired end-to-end through
-		//       the actual tool-dispatch path (every WP05 test exercises
-		//       a fake LLMRegistry — an honest escalation, not a
-		//       shortcut). Re-measurement against the shipped default is
-		//       a separate, coordinator-owned step. Escalate above
-		//       ~300ms median rather than flipping quietly (mission
-		//       brief's own instruction). Whoever measures this against a
-		//       real profile: record the number in this comment (or a
-		//       replacement of it) in the same change that flips
-		//       RiskGate.
+		//   (b) STILL OPEN, RE-MEASURED 2026-09-15 (WP05-WP10 finishing
+		//       pass) — and it STAYS open: a rating-model setting exists
+		//       (Settings.RiskRaterModel, core/policy/risk.
+		//       ResolveRaterModel's three-rung ladder) and this pass ran
+		//       the harness at /private/tmp/claude-501/.../scratchpad/
+		//       rater-latency/main.go (a `go run` binary against the
+		//       owner's real dev profile — never `go test`, per the
+		//       keyring-seam constraint) fixed to route model selection
+		//       through risk.ResolveRaterModel instead of its original
+		//       profiles[0].Model shortcut (that shortcut is exactly the
+		//       defect (b) used to describe: it measured "aion-labs/
+		//       aion-2.0", the reasoning CHAT model, at a 3.9s median /
+		//       47% failure rate — not the shipped rating default at
+		//       all). Fixed and re-run TWICE against the real
+		//       "openrouter-4-models" profile, 15 measured calls each
+		//       (2 warmups excluded per run), rung=provider_default
+		//       resolving to openrouter -> qwen/qwen-2.5-7b-instruct both
+		//       times:
+		//
+		//         run 1: 15/15 succeeded, median 320.4ms, p90 381.4ms, max 629.6ms
+		//         run 2: 15/15 succeeded, median 359.5ms, p90 410.1ms, max 800.4ms
+		//
+		//       Both medians are ABOVE the ~300ms escalation bound
+		//       (mission brief's own instruction: "escalate above ~300ms
+		//       median on a cache miss rather than shipping quietly").
+		//       This is a REAL number against the shipped default model
+		//       on a live profile, end to end through risk.LLMRater.Rate
+		//       — not a benchmark-of-record proxy, not a fake registry.
+		//       The verdict is: measured, and it does not clear the bar.
+		//       RiskGate stays nil. Re-measure again once either (i) a
+		//       faster provider default is benchmarked and adopted for
+		//       openrouter, or (ii) the owner revises the 300ms bound
+		//       with the tradeoff in view (a rated tool call adds a
+		//       real ~320-360ms to every uncached, unmatched dispatch at
+		//       the tiers where the rater fires).
 		//
 		// Flip this to `secretGate` — the SAME live Cedar engine as
 		// SecretGate immediately above — only once (b) is done; (a) is
-		// now done. Do not flip on (a) alone. Owner: risk-rated-
-		// autonomy-01PMRA01. The RiskRater field below is left wired
-		// regardless (harmless while RiskGate is nil — rung 0 nil-checks
-		// the GATE, not the rater, before consulting either; see
-		// kernel_tool_adapter.go's `if a.gate != nil` guard), so no
+		// done, (b) is measured and still blocking. Do not flip while
+		// (b)'s measured median stays at or above ~300ms. Owner: risk-
+		// rated-autonomy-01PMRA01. The RiskRater field below is left
+		// wired regardless (harmless while RiskGate is nil — rung 0
+		// nil-checks the GATE, not the rater, before consulting either;
+		// see kernel_tool_adapter.go's `if a.gate != nil` guard), so no
 		// production behaviour differs from pre-WP05 today: the whole
 		// rung is still a no-op end to end until RiskGate itself is
 		// non-nil.
