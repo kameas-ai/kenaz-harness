@@ -111,12 +111,35 @@ violations=0
 for tag in "${TAGS[@]}"; do
   # Extract this one case's block: from its `case "tag":` line to the
   # next `case ` or `default:` line (or end of body).
-  block="$(echo "$BODY" | awk -v t="\"$tag\":" '
-    $0 ~ ("case " t) { grabbing=1; next }
-    grabbing && /^\tcase "|^\tdefault:/ { grabbing=0 }
-    grabbing { print }
-  ')"
-  if ! echo "$block" | grep -q '\.CloseOne(ctx, id)'; then
+  #
+  # PORTABILITY (2026-09-15, third divergence in this gate): this used to
+  # be an awk program fed via `echo "$BODY"`. On the Linux CI runner the
+  # `inprocess` case (the switch's last) extracted as empty while macOS
+  # extracted it correctly — same tree, opposite verdicts, the exact
+  # platform-split shape finding #96 documents. Root cause not worth
+  # adjudicating between awk dialects and echo's backslash handling:
+  # the extraction is now grep -n line arithmetic + sed over
+  # POSIX [[:blank:]] classes, and printf instead of echo, so there is
+  # no dialect-divergent construct left to disagree.
+  # Every no-match-capable grep below carries `|| true`: under
+  # `set -euo pipefail` a zero-match grep otherwise kills the whole
+  # script mid-loop with NO output — the last case has no successor, so
+  # the next-case lookup legitimately matches nothing on every run.
+  # Same class check-broker-topic-consumers.sh already fixed.
+  case_start=$(printf '%s\n' "$BODY" | { /usr/bin/grep -nF "case \"$tag\":" || true; } | head -1 | cut -d: -f1)
+  if [[ -z "$case_start" ]]; then
+    echo "${GATE} FAIL: could not locate case \"$tag\" in closeOneByTag's body (extraction bug, not a parity verdict)." >&2
+    violations=1
+    continue
+  fi
+  next_rel=$(printf '%s\n' "$BODY" | tail -n "+$((case_start + 1))" \
+    | { /usr/bin/grep -nE '^[[:blank:]]*(case "|default:)' || true; } | head -1 | cut -d: -f1)
+  if [[ -n "$next_rel" ]]; then
+    block=$(printf '%s\n' "$BODY" | sed -n "$((case_start + 1)),$((case_start + next_rel - 1))p")
+  else
+    block=$(printf '%s\n' "$BODY" | sed -n "$((case_start + 1)),\$p")
+  fi
+  if ! printf '%s\n' "$block" | grep -q '\.CloseOne(ctx, id)'; then
     echo "${GATE} FAIL: case \"${tag}\" in closeOneByTag has no real .CloseOne(ctx, id) call —" >&2
     echo "${GATE} it is comment-only, empty, or dispatches something else. This is exactly the" >&2
     echo "${GATE} pre-UNIT-6 http/sse shape: a registered arm that reports success (via the" >&2
