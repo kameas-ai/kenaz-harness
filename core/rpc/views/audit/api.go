@@ -17,6 +17,45 @@ type Entry struct {
 	Category  string `json:"category"`
 	Subject   string `json:"subject"`
 	Trailing  string `json:"trailing,omitempty"`
+
+	// ToolConfirmDecision is populated ONLY for a Subject ==
+	// "tool.confirm_decision" entry (risk-rated-autonomy-01PMRA01
+	// WP10) — every other kind leaves it nil, unchanged from this
+	// package's pre-existing "Entry carries only kind + category +
+	// trailing" invariant (see this file's package doc comment history
+	// in impl.go). The bridge that populates it
+	// (core/rpc/api.go's confirmAuditEmitter) decodes the already
+	// privacy-reviewed contextaudit.ToolConfirmDecisionPayload — a type
+	// whose own doc comment guarantees "no argument values, no args
+	// summary, no tool output" — so widening THIS ONE kind's exposure
+	// does not reopen the general redaction invariant for every other
+	// audit kind.
+	ToolConfirmDecision *ToolConfirmDecisionDetail `json:"tool_confirm_decision,omitempty"`
+}
+
+// ToolConfirmDecisionDetail is the audit-view-facing projection of
+// contextaudit.ToolConfirmDecisionPayload (risk-rated-autonomy-01PMRA01
+// WP10's acceptance criterion: "audit view shows the deciding layer, and
+// for layer 3 the model + prompt_version + cache hit"). Deliberately
+// narrower than the full payload: SessionID/CallID/BatchID are omitted
+// here (cross-referenced elsewhere in the audit UI, not needed to
+// explain WHY a decision fired) — Server/Tool/Family/Reason/Score/Tier
+// are kept because they are exactly the "why" a reviewer needs, and the
+// source payload already guarantees they carry no argument values.
+type ToolConfirmDecisionDetail struct {
+	Server        string `json:"server,omitempty"`
+	Tool          string `json:"tool,omitempty"`
+	Family        string `json:"family,omitempty"`
+	Path          string `json:"path,omitempty"`
+	Layer         int    `json:"layer,omitempty"`
+	Threshold     int    `json:"threshold,omitempty"`
+	Approved      bool   `json:"approved"`
+	Reason        string `json:"reason,omitempty"`
+	Score         int    `json:"score,omitempty"`
+	Tier          string `json:"tier,omitempty"`
+	Model         string `json:"model,omitempty"`
+	PromptVersion string `json:"prompt_version,omitempty"`
+	CacheHit      bool   `json:"cache_hit,omitempty"`
 }
 
 // Filter is a structured filter for ListEntries.

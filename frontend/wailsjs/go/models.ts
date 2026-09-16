@@ -747,18 +747,55 @@ export namespace attachments {
 }
 
 export namespace audit {
-	
+
+	export class ToolConfirmDecisionDetail {
+	    server?: string;
+	    tool?: string;
+	    family?: string;
+	    path?: string;
+	    layer?: number;
+	    threshold?: number;
+	    approved: boolean;
+	    reason?: string;
+	    score?: number;
+	    tier?: string;
+	    model?: string;
+	    prompt_version?: string;
+	    cache_hit?: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ToolConfirmDecisionDetail(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.server = source["server"];
+	        this.tool = source["tool"];
+	        this.family = source["family"];
+	        this.path = source["path"];
+	        this.layer = source["layer"];
+	        this.threshold = source["threshold"];
+	        this.approved = source["approved"];
+	        this.reason = source["reason"];
+	        this.score = source["score"];
+	        this.tier = source["tier"];
+	        this.model = source["model"];
+	        this.prompt_version = source["prompt_version"];
+	        this.cache_hit = source["cache_hit"];
+	    }
+	}
 	export class Entry {
 	    id: string;
 	    timestamp: string;
 	    category: string;
 	    subject: string;
 	    trailing?: string;
-	
+	    tool_confirm_decision?: ToolConfirmDecisionDetail;
+
 	    static createFrom(source: any = {}) {
 	        return new Entry(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -766,7 +803,26 @@ export namespace audit {
 	        this.category = source["category"];
 	        this.subject = source["subject"];
 	        this.trailing = source["trailing"];
+	        this.tool_confirm_decision = this.convertValues(source["tool_confirm_decision"], ToolConfirmDecisionDetail);
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class Filter {
 	    categories?: string[];
@@ -7715,11 +7771,16 @@ export namespace toolloop {
 	    tool: string;
 	    args_summary: string;
 	    reason?: string;
-	
+	    has_risk_rating?: boolean;
+	    risk_score?: number;
+	    risk_tier?: string;
+	    risk_threshold?: number;
+	    risk_rationale?: string;
+
 	    static createFrom(source: any = {}) {
 	        return new ConfirmRequest(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.session_id = source["session_id"];
@@ -7729,6 +7790,11 @@ export namespace toolloop {
 	        this.tool = source["tool"];
 	        this.args_summary = source["args_summary"];
 	        this.reason = source["reason"];
+	        this.has_risk_rating = source["has_risk_rating"];
+	        this.risk_score = source["risk_score"];
+	        this.risk_tier = source["risk_tier"];
+	        this.risk_threshold = source["risk_threshold"];
+	        this.risk_rationale = source["risk_rationale"];
 	    }
 	}
 	export class permRule {

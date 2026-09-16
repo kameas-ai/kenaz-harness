@@ -199,6 +199,28 @@ function isForeign(sessionID: string): boolean {
 }
 
 /**
+ * Tailwind classes per risk.BandFor tier name (owner decision 3: named
+ * bands over a bare number). Unrecognised/missing tiers fall back to the
+ * neutral border — never to a "safe-looking" color, since an unknown
+ * tier string is a rendering gap, not evidence of low risk.
+ */
+function riskTierClass(tier: string | undefined): string {
+  switch (tier) {
+    case 'low':
+      return 'border-border-muted text-ink-subtle';
+    case 'moderate':
+      return 'border-accent-hairline text-accent';
+    case 'elevated':
+      return 'border-signal-warn/60 text-signal-warn';
+    case 'high':
+    case 'critical':
+      return 'border-signal-warn bg-signal-warn/10 text-signal-warn';
+    default:
+      return 'border-border-muted text-ink-muted';
+  }
+}
+
+/**
  * Fetch display names for any parked session we cannot yet name. One
  * list call covers every row; failures are silent because the fallback
  * (a short id) is already a correct label.
@@ -539,6 +561,36 @@ defineExpose({
                 class="mt-1 font-ui text-[11px] text-ink-subtle"
               >
                 {{ row.reason }}
+              </div>
+              <!-- risk-rated-autonomy-01PMRA01 WP10: score/tier/threshold
+                   only when this prompt was risk-rated (layer 3 with an
+                   actual rating) — a legacy confirm_each prompt has
+                   nothing to show here. -->
+              <div
+                v-if="row.has_risk_rating"
+                class="mt-1.5 flex flex-wrap items-center gap-1.5"
+                :data-testid="`confirm-tool-risk-${row.call_id}`"
+              >
+                <span
+                  class="rounded-sm border px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.12em]"
+                  :class="riskTierClass(row.risk_tier)"
+                  :data-testid="`confirm-tool-risk-tier-${row.call_id}`"
+                >
+                  {{ row.risk_tier ?? 'unknown' }} risk · {{ row.risk_score }}/100
+                </span>
+                <span
+                  v-if="row.risk_threshold !== undefined"
+                  class="font-ui text-[10px] text-ink-subtle"
+                >
+                  threshold {{ row.risk_threshold }}
+                </span>
+                <span
+                  v-if="row.risk_rationale"
+                  class="w-full font-ui text-[11px] text-ink-subtle"
+                  :data-testid="`confirm-tool-risk-rationale-${row.call_id}`"
+                >
+                  {{ row.risk_rationale }}
+                </span>
               </div>
             </div>
           </div>

@@ -9888,12 +9888,19 @@ func (s *cedarToolGrantStore) GrantID(server, tool string) string {
 // confirm-each decision trail (confirm-each-enforcement-01PMAG05 WP05 /
 // FR-007), forwarding into the rpc/views/audit ring buffer.
 //
-// Privacy: the payload bytes are NOT copied into the ring entry. The
-// entry carries the kind and a byte count, matching lockdownAuditEmitter
-// — the ConfirmDecision payload is already redaction-safe by
-// construction (no argument values), but the ring surface is rendered in
-// the Settings audit panel and there is no reason to widen what it
-// shows beyond what the other emitters show.
+// Privacy: the payload bytes are NOT copied into the ring entry as raw
+// JSON. The entry carries the kind and a byte count for every OTHER
+// confirm-decision kind, matching lockdownAuditEmitter.
+//
+// risk-rated-autonomy-01PMRA01 WP10 widens exactly ONE kind,
+// KindToolConfirmDecision: the audit view's stated acceptance criterion
+// ("shows the deciding layer, and for layer 3 the model + prompt_version
+// + cache hit") cannot be met from a byte count. This is safe to widen
+// because contextaudit.ToolConfirmDecisionPayload's own doc comment
+// already guarantees the payload carries "no argument values, no args
+// summary, no tool output" — decoding it here does not reintroduce
+// anything the source type did not already promise was absent. Every
+// other kind this emitter sees is UNCHANGED (still byte-count-only).
 type confirmAuditEmitter struct {
 	impl *audit.API
 }
@@ -9902,13 +9909,34 @@ func (e confirmAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) erro
 	if e.impl == nil {
 		return nil
 	}
-	e.impl.Push(audit.Entry{
+	entry := audit.Entry{
 		ID:        fmt.Sprintf("tool-confirm-%d", ev.TS.UnixNano()),
 		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
 		Category:  "PERMISSION",
 		Subject:   string(ev.Kind),
 		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
-	})
+	}
+	if ev.Kind == contextaudit.KindToolConfirmDecision {
+		var p contextaudit.ToolConfirmDecisionPayload
+		if err := json.Unmarshal(ev.Payload, &p); err == nil {
+			entry.ToolConfirmDecision = &audit.ToolConfirmDecisionDetail{
+				Server:        p.Server,
+				Tool:          p.Tool,
+				Family:        p.Family,
+				Path:          string(p.Path),
+				Layer:         p.Layer,
+				Threshold:     p.Threshold,
+				Approved:      p.Approved,
+				Reason:        p.Reason,
+				Score:         p.Score,
+				Tier:          p.Tier,
+				Model:         p.Model,
+				PromptVersion: p.PromptVersion,
+				CacheHit:      p.CacheHit,
+			}
+		}
+	}
+	e.impl.Push(entry)
 	return nil
 }
 
