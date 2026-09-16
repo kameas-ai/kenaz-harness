@@ -32,14 +32,21 @@ and the capabilities-cache wiring all changed code, not schema. The
 
 ## The property this snapshot actually proves
 
-**Tag `v0.81.0`'s `Open()` reads a `v0.80.1` database and mutates
-nothing.** The capabilities-cache change in this release is the reason
-that is worth proving rather than assuming: `DefaultCache` now takes the
-SQLite backend in production for the first time since v0.72, so `Open()`
-under the new code touches a table lineage (`llm_capabilities`) that the
-previous release's production path never exercised. A byte-identical
-round-trip is positive evidence that first-touch is read-compatible and
-non-destructive against a really-shipped schema.
+**Migration-selection stability, and only that.** Tag `v0.81.0`'s
+`Open()` reads a `v0.80.1` database, selects zero pending migrations,
+and mutates nothing — the ledger stays at 58 rows and the dump
+round-trips byte-identically.
+
+**What it does NOT prove** (corrected after review of PR #351 — the
+first draft overclaimed): nothing about the capabilities cache. This
+release wires `DefaultCache` to the SQLite backend (`provider_capabilities`,
+migration `sessions/0329`) in production for the first time since v0.72,
+but the snapshot generator (`scripts/ci/upgrade-snapshot/generator_main.go`,
+`runReplay`) calls only `storagesqlite.Open` and dumps — it never
+constructs `DefaultCache` or calls `SQLiteCache.Get`/`Put`, which are
+wired solely in `core/rpc/api.go`'s production stack. The cache's first
+real production read/write against a shipped schema is unexercised by
+this artifact; if that needs evidence, it needs its own test.
 
 The zero-delta also keeps the chain honest: `check-upgrade-snapshot-present.sh`
 requires max(snapshot) ≥ max(tag), and a "no migrations this release"
