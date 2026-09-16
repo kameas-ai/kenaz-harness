@@ -10,6 +10,15 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/units"
 )
 
+// optInPusher is the subset of *corefleet.TelemetryOptInPusher that Impl
+// needs to push a consent tier's implied per-class opt-ins
+// (corefleet.TierOptInUpdates) to the fleet store. Defined as an interface
+// so impl_test.go can substitute a fake instead of spinning up a real fleet
+// HTTP server for every SetTelemetryConsent test.
+type optInPusher interface {
+	Push(ctx context.Context, level corefleet.ConsentLevel) error
+}
+
 // Impl implements FleetAPI backed by core/fleet.TelemetryConsent and the
 // Phase-3 unit-collaboration plumbing (units.Manager + corefleet.UnitSyncer).
 //
@@ -18,6 +27,13 @@ import (
 // gracefully rather than panicking.
 type Impl struct {
 	Consent *corefleet.TelemetryConsent
+
+	// OptIns pushes the per-class opt-in vector a consent tier implies
+	// (corefleet.TierOptInUpdates) to the fleet store whenever the tier
+	// changes — see SetTelemetryConsent. Nil on the test chassis / OSS
+	// build / fleet-disabled path, in which case SetTelemetryConsent stays
+	// local-only (unchanged pre-fix behaviour).
+	OptIns optInPusher
 
 	// Units is the fleet-free unified Unit store (resolution + enshrine live
 	// here). Nil on the test chassis.
@@ -42,9 +58,31 @@ func (f *Impl) GetTelemetryConsent(_ context.Context) (string, error) {
 	return string(f.Consent.EffectiveLevel()), nil
 }
 
-// SetTelemetryConsent validates the level string and delegates to
-// TelemetryConsent.SetLevel, which enforces tier gating.
-func (f *Impl) SetTelemetryConsent(_ context.Context, level string) error {
+// SetTelemetryConsent validates the level string, delegates to
+// TelemetryConsent.SetLevel (which enforces tier gating and is the LOCAL,
+// offline-first source of truth for the consent level), and then pushes the
+// per-class opt-in vector that level implies to the fleet store.
+//
+// # Failure semantics (owner ruling 2026-09-16)
+//
+// The local tier save always happens first and is unaffected by anything
+// below it: this is an offline-first app, and the consent gate itself must
+// never depend on a network round trip. Once SetLevel succeeds:
+//
+//   - fleet unreachable/disabled (corefleet.ErrFleetDisabled, e.g. signed
+//     out or OSS build): treated as "nothing to push right now", not an
+//     error — returns nil. TelemetryOptInPusher's own confirmed-state stays
+//     untouched, so a later Reconcile (fleetEnroll, on next app start) or a
+//     later tier change will retry once fleet becomes reachable.
+//   - any other push failure (offline, 5xx, capability-gated, ...): SURFACED
+//     as a returned error, wrapping the underlying failure, so the caller
+//     (FleetTelemetryPanel.vue's saveConsent, via the existing errorMsg
+//     display) sees it — silently dropping this under a different name is
+//     the exact bug class this fix exists to end. The tier itself is still
+//     saved; retry is durable (TelemetryOptInPusher persists the mismatch to
+//     disk) via the same two triggers: the next tier change, or the next app
+//     start (fleetEnroll calls Reconcile).
+func (f *Impl) SetTelemetryConsent(ctx context.Context, level string) error {
 	cl := corefleet.ConsentLevel(level)
 	switch cl {
 	case corefleet.ConsentNone, corefleet.ConsentAggregate, corefleet.ConsentFull:
@@ -52,7 +90,23 @@ func (f *Impl) SetTelemetryConsent(_ context.Context, level string) error {
 	default:
 		return fmt.Errorf("unknown consent level %q; must be one of none, aggregate, full", level)
 	}
-	return f.Consent.SetLevel(cl)
+	if err := f.Consent.SetLevel(cl); err != nil {
+		// Tier-gating error (e.g. ErrTierInsufficient): local state is
+		// unchanged, nothing to push.
+		return err
+	}
+	if f.OptIns == nil {
+		return nil // no fleet client wired — local-only path, unchanged behaviour
+	}
+	if err := f.OptIns.Push(ctx, cl); err != nil {
+		if errors.Is(err, corefleet.ErrFleetDisabled) {
+			return nil
+		}
+		return fmt.Errorf(
+			"telemetry tier %q saved locally, but syncing per-class opt-ins to fleet failed "+
+				"(will retry at the next tier change or app start): %w", level, err)
+	}
+	return nil
 }
 
 // ── Phase-3 unit collaboration ──────────────────────────────────────────────

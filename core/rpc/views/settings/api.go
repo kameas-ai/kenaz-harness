@@ -148,12 +148,50 @@ type Settings struct {
 
 	// ── WP08 — Universal permission dials ──────────────────────────────
 
-	// PermissionMode controls the global permission posture for all
-	// four resource families (bash, filesystem, credential, tool).
-	// One of: "strict", "normal" (default, empty==normal), "permissive".
-	// "strict"     — every call prompts regardless of saved policies.
-	// "normal"     — prompts only for NotApplicable Cedar decisions.
-	// "permissive" — all non-dangerous ops permitted without prompt.
+	// PermissionMode is the coarse, user-facing preset for
+	// risk-rated-autonomy-01PMRA01's per-call Cedar/risk gate
+	// (core/policy/cedar's ThreeLayerResolve). One of: "strict",
+	// "normal" (default, empty==normal), "permissive". core/rpc/api.go's
+	// foldPermissionModeIntoGlobal maps each value onto the global
+	// autonomy layer's KnobRiskThreshold override
+	// (permissionModeRiskThreshold: strict=0, normal=40, permissive=80 —
+	// the same numbers as three rungs of the autonomy tier ladder,
+	// core/autonomy/presets.go) which
+	// chat.kernelToolAdapter.resolveConfirmEach's rung 0 then threads
+	// into ThreeLayerResolve on every tool dispatch:
+	//
+	//   - An explicit Cedar forbid always denies and an explicit Cedar
+	//     permit always allows, REGARDLESS of PermissionMode — this
+	//     dial only governs what happens when Cedar has no opinion
+	//     (layer 3).
+	//   - "strict"     — every layer-3 dispatch prompts; the risk rater
+	//     is never even called (FR-008).
+	//   - "normal"     — a layer-3 dispatch the rater scores below 40
+	//     auto-allows; 40 and above (which includes every
+	//     destructive/unclassifiable-tool call, per the family floor in
+	//     core/policy/risk/floor.go) still prompts.
+	//   - "permissive" — same shape as "normal" but with the ceiling
+	//     raised to 80 (autonomy.TierAutonomous's own value); the
+	//     family floor (81) still holds, so a destructive or
+	//     unclassifiable-tool call prompts under every mode.
+	//
+	// Precedence: this dial WRITES the global autonomy layer's
+	// KnobRiskThreshold override, but ONLY when no layer — session,
+	// project, OR global — already has an explicit RiskThreshold
+	// override OR a tier Level set at all (autonomy.Resolve,
+	// core/autonomy/resolve.go's resolveKnob, checks Overrides across
+	// all three layers BEFORE checking any layer's Level, so a
+	// global-layer Overrides write would otherwise silently outrank an
+	// explicit session- or project-scoped tier pick, not just a
+	// global one — this is why the guard inspects all three layers'
+	// Overrides AND Level, not only the global layer's Overrides). Any
+	// one of those six slots being populated means the user (or a
+	// panel acting for them, e.g. AutonomyPanel.vue's tier picker,
+	// which persists a bare Level with empty Overrides) has already
+	// made an explicit choice, and this coarse dial must defer to it.
+	// See foldPermissionModeIntoGlobal's doc comment (core/rpc/api.go)
+	// for the full rule, documented at both sites per owner ruling
+	// (permission-mode-wiring, 2026-09-16).
 	// UI: stern confirm dialog when switching to "permissive".
 	PermissionMode string `json:"permissionMode,omitempty"`
 
