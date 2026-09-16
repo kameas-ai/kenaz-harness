@@ -5970,25 +5970,52 @@ func newLLMStack(
 		chatAutoTitleGen = autotitle.New(llmCaller)
 	}
 
-	// Build the risk-rating LLM caller for risk-rated-autonomy-01PMRA01
-	// WP05. Same registry + profile-resolver-with-store-fallback pattern
-	// as chatAutoTitleGen immediately above: no dedicated "risk rating
-	// model" setting exists yet, so the resolver falls back to the
-	// first configured profile, same as auto-title's own fallback. nil
-	// reg (no registry wired — the nil-core test chassis) leaves
+	// Build the risk-rating LLM caller for risk-rated-autonomy-01PMRA01.
+	// Model selection now resolves through risk.ResolveRaterModel's
+	// three-rung ladder (owner ruling 3, 2026-09-15) instead of the
+	// profiles[0].Model shortcut this originally shipped with in WP05.
+	// That shortcut was a real defect, not a stopgap detail: profiles[0]
+	// is whatever the user configured as their CHAT model — commonly a
+	// large reasoning model — not a small fast rating model, and the
+	// benchmark of record (task #109, 234 calls / 9 models, vendored at
+	// core/policy/risk/data/rater_benchmark.json) measured exactly that
+	// class of model (the "aion-2.0" reasoning control) at a 7.6s
+	// median latency and only 38.5% reliability inside the rater's 5s
+	// timeout budget — i.e. it silently degraded most ratings into
+	// timeouts. The new Settings.RiskRaterModel field lets an operator
+	// pick explicitly (rung a: risk.RungExplicitSetting); absent that, a
+	// per-provider small-model default is tried (rung b:
+	// risk.RungProviderDefault — e.g. openrouter ->
+	// qwen/qwen-2.5-7b-instruct); absent THAT, any available model on
+	// any configured profile is the last resort (rung c:
+	// risk.RungAnyAvailable, the historical fallback) so the rater
+	// always constructs. ResolveRaterModel logs which rung decided with
+	// distinct slog fields on every call — see its doc comment. nil reg
+	// (no registry wired — the nil-core test chassis) leaves
 	// chatRiskRater nil, which leaves rung 0's layer-3 branch at the
 	// WP02/WP03 stub via kernelToolAdapter's own nil-rater guard.
 	var chatRiskRater risk.RiskRater
 	if reg != nil {
 		capturedRaterStore := store
 		chatRiskRater = risk.NewLLMRater(reg, func(_ context.Context) (string, string, bool) {
-			if capturedRaterStore != nil {
-				profs, perr := capturedRaterStore.List()
-				if perr == nil && len(profs) > 0 {
-					return profs[0].ID, profs[0].Model, true
+			if capturedRaterStore == nil {
+				return "", "", false
+			}
+			profs, perr := capturedRaterStore.List()
+			if perr != nil || len(profs) == 0 {
+				return "", "", false
+			}
+			var setting risk.RaterModelSetting
+			if settingsImpl != nil && settingsImpl.Store() != nil {
+				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
+					setting = risk.RaterModelSetting{
+						ProviderID: s.RiskRaterModel.ProviderID,
+						ModelID:    s.RiskRaterModel.ModelID,
+					}
 				}
 			}
-			return "", "", false
+			profileID, model, _, ok := risk.ResolveRaterModel(setting, profs)
+			return profileID, model, ok
 		})
 	}
 
@@ -7170,16 +7197,29 @@ func buildChatRunner(
 		//       distinctly rather than folded into a reused
 		//       rater-failed path.
 		//
-		//   (b) STILL OPEN: no real measured median added-latency
-		//       against a LIVE profile. This environment had no LLM
-		//       credentials/network access, so every WP05 test exercises
+		//   (b) STILL OPEN, UPDATED 2026-09-15: a rating-model setting now
+		//       exists (Settings.RiskRaterModel,
+		//       core/policy/risk.ResolveRaterModel's three-rung ladder)
+		//       and a 234-call/9-model benchmark of record is vendored at
+		//       core/policy/risk/data/rater_benchmark.json — but that
+		//       benchmark measured MODEL quality/latency/reliability
+		//       across candidate rating models, not the end-to-end
+		//       added-latency-per-tool-call this condition is actually
+		//       about. It DOES fix the specific defect that produced the
+		//       original 38.5%-reliability number (the resolver falling
+		//       back to profiles[0].Model, i.e. the user's reasoning chat
+		//       model, instead of a small fast one) — the shipped default
+		//       (openrouter -> qwen/qwen-2.5-7b-instruct, 467.9ms median)
+		//       is ~16x faster than the reasoning control it replaces.
+		//       Still no real measured median ADDED latency against a
+		//       LIVE profile with this default wired end-to-end through
+		//       the actual tool-dispatch path (every WP05 test exercises
 		//       a fake LLMRegistry — an honest escalation, not a
-		//       shortcut, but it leaves an UNMEASURED network call on
-		//       the tool-dispatch critical path for every un-granted MCP
-		//       tool once this flips. Escalate above ~300ms median
-		//       rather than flipping quietly (mission brief's own
-		//       instruction). Whoever measures this against a real
-		//       profile: record the number in this comment (or a
+		//       shortcut). Re-measurement against the shipped default is
+		//       a separate, coordinator-owned step. Escalate above
+		//       ~300ms median rather than flipping quietly (mission
+		//       brief's own instruction). Whoever measures this against a
+		//       real profile: record the number in this comment (or a
 		//       replacement of it) in the same change that flips
 		//       RiskGate.
 		//

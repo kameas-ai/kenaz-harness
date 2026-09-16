@@ -10,6 +10,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 )
 
 // Settings is the persisted UI state shape (plan §5.5). lastRoute drives
@@ -347,6 +348,34 @@ type Settings struct {
 	// settings), so the global autonomy layer rides on top of the
 	// existing settings.json round-trip rather than its own migration.
 	Autonomy json.RawMessage `json:"autonomy,omitempty"`
+
+	// RiskRaterModel is the user's explicit (provider, model) choice for
+	// risk-rated-autonomy-01PMRA01's layer-3 rating call — the model
+	// that scores a Cedar-NotApplicable tool dispatch 0-100 against the
+	// tier's threshold. Empty (the zero value) means "no explicit
+	// choice": core/policy/risk.ResolveRaterModel falls back to a
+	// per-provider-kind default (e.g. openrouter ->
+	// qwen/qwen-2.5-7b-instruct), and if that is unavailable too, to any
+	// available model on any configured profile, so the rater always
+	// constructs (owner ruling 3, 2026-09-15). This field is the FIRST
+	// rung of that ladder: set-and-available on its profile wins over
+	// every other rung.
+	//
+	// Wire shape mirrors ProviderProfileRef (same type as
+	// CompactionModel / BranchAdvisorDefaultModel above) — a provider ID
+	// with no matching profile, or a model not in that profile's
+	// AvailableModels(), is NOT an error: ResolveRaterModel logs the
+	// miss and falls through to the next rung rather than surfacing a
+	// broken rater.
+	//
+	// This field replaces the WP05 defect: the risk rater's resolver
+	// used to unconditionally fall back to profiles[0].Model — the
+	// user's configured CHAT model, commonly a large reasoning model —
+	// which the 2026-09-15 benchmark (task #109, 234 calls / 9 models;
+	// vendored at core/policy/risk/data/rater_benchmark.json) measured
+	// at a 7.6s median latency and only 38.5% reliability inside the
+	// rater's 5s timeout budget.
+	RiskRaterModel ProviderProfileRef `json:"riskRaterModel,omitempty"`
 
 	// ── Auto-update dials (auto-update-v0.4.0 WP05) ─────────────────────
 	//
@@ -1496,6 +1525,12 @@ type SettingsAPI interface {
 	// SetChatCustomInstructions persists the chat custom-instructions text.
 	// An empty string clears the user layer.
 	SetChatCustomInstructions(ctx context.Context, text string) error
+
+	// GetRiskRaterBenchmark returns the vendored risk-rater model
+	// comparison (risk-rated-autonomy-01PMRA01, owner ruling 2026-09-15)
+	// the Settings picker UI renders alongside each candidate rating
+	// model. Static data, not a Settings.json read.
+	GetRiskRaterBenchmark(ctx context.Context) (risk.RiskRaterBenchmark, error)
 
 	// GetMemoryNarrativeEnabled returns whether the narrative layer is
 	// enabled in Settings (additional env-var gate applies). Default

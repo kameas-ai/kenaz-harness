@@ -26,6 +26,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
@@ -1666,6 +1667,17 @@ func (a *API) GetChatCustomInstructions(_ context.Context) (string, error) {
 // SetChatCustomInstructions persists the chat custom-instructions text.
 func (a *API) SetChatCustomInstructions(_ context.Context, text string) error {
 	return a.store.SaveChatCustomInstructions(text)
+}
+
+// GetRiskRaterBenchmark returns the vendored risk-rater model comparison
+// (owner ruling 2026-09-15, mission risk-rated-autonomy-01PMRA01, task
+// #109: 234 calls / 9 models) that the Settings picker UI renders
+// alongside each candidate rating model. Static data — parsed fresh from
+// the embedded core/policy/risk/data/rater_benchmark.json on every call,
+// same "cheap and always fresh, no store dependency" shape as
+// Compaction.GetTierExplain.
+func (a *API) GetRiskRaterBenchmark(_ context.Context) (risk.RiskRaterBenchmark, error) {
+	return risk.Benchmark()
 }
 
 // GetMemoryNarrativeEnabled returns the narrative-layer opt-in.
