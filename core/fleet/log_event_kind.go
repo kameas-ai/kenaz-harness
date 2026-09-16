@@ -164,6 +164,30 @@ func CeilingLogEventKinds() []string {
 	return out
 }
 
+// CeilingClasses returns the distinct telemetry classes named by the
+// compiled ceiling, sorted. This is the class set the tier→opt-ins mapping
+// in telemetry_tier_optins.go writes to — see TierOptInUpdates.
+//
+// Deliberately narrower than fleet.KnownTelemetryClasses (telemetry_optins.go):
+// two of the seven classes fleet's opt-in store recognises
+// (harness.diagnostics, sigil.heuristics) have no kind mapped to them in the
+// vendored table today, so no per-class opt-in of theirs could gate anything
+// via LogKindsAdmittedBy. Scoping the tier mapping to this function, rather
+// than the full known-classes list, keeps the mapping honest about what it
+// actually controls.
+func CeilingClasses() []string {
+	seen := make(map[string]struct{}, len(logKindCeiling))
+	for _, class := range logKindCeiling {
+		seen[class] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for class := range seen {
+		out = append(out, class)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ── The runtime intersection ─────────────────────────────────────────────────
 
 // LogKindsAdmittedBy computes what may actually leave the process:

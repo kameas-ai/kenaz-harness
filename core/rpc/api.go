@@ -3696,7 +3696,35 @@ func New(c *core.Core, opts ...Option) *API {
 			logging.L().Warn("fleet.consent.init.failed", "err", err)
 			tc, _ = corefleet.NewTelemetryConsent(os.TempDir(), tierReader)
 		}
-		a.fleetAPI = &fleetview.Impl{Consent: tc}
+
+		// Wire the tier→opt-ins pusher (fleet telemetry tier fix): picking a
+		// consent tier now writes the per-class opt-in vector it implies
+		// (corefleet.TierOptInUpdates) to the fleet store, closing the gap
+		// where SetFleetTelemetryConsent only ever persisted the LOCAL tier
+		// and LogKindsAdmittedBy's fleet-side opt-in snapshot stayed empty
+		// forever. The client accessor is lazy (mirrors tierReader above):
+		// settingsImpl.SetFleetClient already ran earlier in this
+		// constructor, but reading it through a closure rather than a
+		// snapshot means a later re-login/client swap is picked up too.
+		optInPusher := corefleet.NewTelemetryOptInPusher(c.DataDir(), func() *corefleet.Client {
+			if a.settingsImpl == nil {
+				return nil
+			}
+			return a.settingsImpl.FleetClientForBootstrap()
+		})
+		a.fleetAPI = &fleetview.Impl{Consent: tc, OptIns: optInPusher}
+		if settingsImpl != nil {
+			// The "next app start" half of the retry contract: fleetEnroll
+			// calls Reconcile against this same pusher instance.
+			settingsImpl.SetTelemetryOptInPusher(optInPusher)
+			// Feed a successful push straight into the OTLP log lane's
+			// narrowing snapshot + settings-layer cache, without a redundant
+			// GET round trip (AdoptTelemetryOptIns mirrors the tail of
+			// refreshTelemetryOptIns).
+			optInPusher.SetOnPushed(func(items []corefleet.TelemetryOptInItem) {
+				settingsImpl.AdoptTelemetryOptIns(items)
+			})
+		}
 
 		// Wire the fleet OTLP export pipeline (harness-fleet-otlp-export-01NTLMEX01).
 		//
