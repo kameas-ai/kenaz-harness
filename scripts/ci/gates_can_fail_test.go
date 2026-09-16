@@ -4176,6 +4176,47 @@ forbid (
 				".cedar file, not just unmatchable ones.\noutput:\n%s", out)
 		}
 	})
+
+	// Second negative control: risk-rated-autonomy-01PMRA01 WP09 found
+	// (and this same change fixed) a real false-positive in
+	// checkpolicymatch itself — core/policy/cedar/engine.go declares TWO
+	// CtxKey* constants with the identical Cedar string value "tool_name"
+	// (CtxKeyToolName and CtxKeySecretToolName, lines 581 and 608).
+	// parseFamilyContext/scanGoSources used to build their goName->value
+	// lookup by INVERTING parseConstBlock's value-keyed map, which
+	// silently drops one of the two names on any such collision — here,
+	// it dropped CtxKeyToolName, so the gate reported
+	// `Action::"use_tool"` / `context.tool_name` as never populated even
+	// though populateFamilyContext's `case ActionUseTool:` block ensures
+	// it on every dispatch. Uses the exact action/resource/context triple
+	// (use_tool / Tool / tool_name) risk-rated-autonomy-01PMRA01's
+	// tool-dispatch-never-allow-recommended.cedar relies on.
+	t.Run("well-formed-rule-with-colliding-ctxkey-value-does-not-fire", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "policy", "cedar", "policies", "zz_gate_probe_toolname.cedar")
+		content := `// zz_gate_probe_toolname.cedar — negative control pinning the
+// CtxKeyToolName/CtxKeySecretToolName same-value collision fix
+// (risk-rated-autonomy-01PMRA01 WP09). use_tool / Tool / tool_name is
+// the exact triple populateFamilyContext's ActionUseTool case ensures.
+forbid (
+    principal == User::"local",
+    action == Action::"use_tool",
+    resource is Tool
+) when {
+    context.tool_name like "*zz_gate_probe*"
+};
+`
+		cleanup := plant(t, probePath, content, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-shipped-policy-matchable.sh", root)
+		if code != 0 {
+			t.Fatalf("check-shipped-policy-matchable.sh flagged a well-formed rule using "+
+				"Action::\"use_tool\" / resource is Tool / context.tool_name — populateFamilyContext's "+
+				"ActionUseTool case does populate tool_name (core/policy/cedar/engine.go:709), but a "+
+				"same-Cedar-string-value collision with CtxKeySecretToolName (both equal \"tool_name\") "+
+				"used to make the gate's own goName->value lookup silently drop that binding.\noutput:\n%s", out)
+		}
+	})
 }
 
 // TestDeadNilBranchGate_PlantedDeclNilCheckFires is
