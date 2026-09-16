@@ -1887,11 +1887,11 @@ export namespace contexts {
 	    accepted_edges: number;
 	    conflicts: fleet.ContextPushConflict[];
 	    effective_layer: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ContextPublishResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.accepted_nodes = source["accepted_nodes"];
@@ -5871,6 +5871,12 @@ export namespace rpc {
 	    inputTokens: number;
 	    outputTokens: number;
 	    recentTiers?: string[];
+	    autoTitleTotal: number;
+	    autoTitleCurrency?: string;
+	    autoTitleCalls: number;
+	    autoTitleIndeterminateCalls: number;
+	    autoTitleInputTokens: number;
+	    autoTitleOutputTokens: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new CompactionOverheadInfo(source);
@@ -5885,6 +5891,12 @@ export namespace rpc {
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
 	        this.recentTiers = source["recentTiers"];
+	        this.autoTitleTotal = source["autoTitleTotal"];
+	        this.autoTitleCurrency = source["autoTitleCurrency"];
+	        this.autoTitleCalls = source["autoTitleCalls"];
+	        this.autoTitleIndeterminateCalls = source["autoTitleIndeterminateCalls"];
+	        this.autoTitleInputTokens = source["autoTitleInputTokens"];
+	        this.autoTitleOutputTokens = source["autoTitleOutputTokens"];
 	    }
 	}
 	export class EmbedderConfigResult {

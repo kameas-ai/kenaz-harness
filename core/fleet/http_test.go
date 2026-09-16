@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zalando/go-keyring"
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 )
 
 // stubTokens installs a fake token set in the OS keychain for testing.

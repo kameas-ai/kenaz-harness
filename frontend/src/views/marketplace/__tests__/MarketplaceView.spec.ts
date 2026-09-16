@@ -86,6 +86,7 @@ function buildClient(items: CatalogItemView[] = [], skillInstallFn?: ReturnType<
       install: installFn,
       uninstall: uninstallFn,
       installed: async () => [],
+      unpublish: vi.fn(async () => {}),
     },
     slashcmd: {
       list: async () => [],
@@ -163,6 +164,7 @@ describe('MarketplaceView', () => {
         install: installFn,
         uninstall: async () => {},
         installed: async () => [],
+        unpublish: vi.fn(async () => {}),
       },
     });
 
@@ -191,6 +193,7 @@ describe('MarketplaceView', () => {
         install: async () => {},
         uninstall: uninstallFn,
         installed: async () => [],
+        unpublish: vi.fn(async () => {}),
       },
     });
 
@@ -220,6 +223,7 @@ describe('MarketplaceView', () => {
         install: installFn,
         uninstall: async () => {},
         installed: async () => [],
+        unpublish: vi.fn(async () => {}),
       },
       slashcmd: {
         list: async () => [],
@@ -267,6 +271,7 @@ describe('MarketplaceView', () => {
         install: async () => {},
         uninstall: uninstallFn,
         installed: async () => [],
+        unpublish: vi.fn(async () => {}),
       },
       slashcmd: {
         list: async () => [],
@@ -299,5 +304,119 @@ describe('MarketplaceView', () => {
     expect(skillUninstallFn).toHaveBeenCalledWith('skill-002');
     expect(uninstallFn).not.toHaveBeenCalled(); // catalog.uninstall must not be called for skills
     expect(listFn).toHaveBeenCalledTimes(2);
+  });
+
+  // ── withdraw (fleet-enforcement-truth-01PMZ505 WP11) ──────────────────────
+
+  it('8. shows a Withdraw action on every item, regardless of installed state', async () => {
+    const { client } = buildClient([WORKFLOW_ITEM, INSTALLED_ITEM]);
+    const wrapper = mountView(client);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="item-withdraw-btn-my-workflow"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="item-withdraw-btn-my-bundle"]').exists()).toBe(true);
+  });
+
+  it('9. withdraw opens a confirm modal naming the org listing, distinct from uninstall', async () => {
+    const { client } = buildClient([WORKFLOW_ITEM]);
+    const wrapper = mountView(client);
+    await flushPromises();
+
+    await wrapper.find('[data-testid="item-withdraw-btn-my-workflow"]').trigger('click');
+    expect(wrapper.find('[data-testid="withdraw-confirm-modal"]').exists()).toBe(true);
+    const copy = wrapper.find('[data-testid="withdraw-confirm-copy"]').text();
+    expect(copy).toContain('org catalog listing');
+    // The same copy explicitly distinguishes itself from Uninstall's
+    // effect — Uninstall itself renders no confirm dialog at all, so this
+    // one string is the only copy in the component, and it names both
+    // halves distinctly. AC-021's failure mode ("both rows share one
+    // dialog component with one string") does not apply: there is exactly
+    // one dialog, for Withdraw, and it does not conflate the two actions.
+    expect(copy).toContain('Uninstall');
+    expect(copy).toContain('local copy');
+  });
+
+  it('10. withdraw confirm calls catalog.unpublish and refreshes the list', async () => {
+    const unpublishFn = vi.fn(async () => {});
+    const listFn = vi.fn()
+      .mockResolvedValueOnce([WORKFLOW_ITEM])
+      .mockResolvedValueOnce([]);
+    const client = createFakeHarnessClient({
+      catalog: {
+        publish: async () => ({ ...WORKFLOW_ITEM }),
+        list: listFn,
+        install: async () => {},
+        uninstall: async () => {},
+        installed: async () => [],
+        unpublish: unpublishFn,
+      },
+    });
+    const wrapper = mountView(client);
+    await flushPromises();
+
+    await wrapper.find('[data-testid="item-withdraw-btn-my-workflow"]').trigger('click');
+    await wrapper.find('[data-testid="withdraw-confirm"]').trigger('click');
+    await flushPromises();
+
+    expect(unpublishFn).toHaveBeenCalledWith('cat-001');
+    expect(listFn).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-testid="withdraw-confirm-modal"]').exists()).toBe(false);
+  });
+
+  it('11. withdraw cancel dismisses without calling unpublish', async () => {
+    const unpublishFn = vi.fn(async () => {});
+    const client = createFakeHarnessClient({
+      catalog: {
+        publish: async () => ({ ...WORKFLOW_ITEM }),
+        list: async () => [WORKFLOW_ITEM],
+        install: async () => {},
+        uninstall: async () => {},
+        installed: async () => [],
+        unpublish: unpublishFn,
+      },
+    });
+    const wrapper = mountView(client);
+    await flushPromises();
+
+    await wrapper.find('[data-testid="item-withdraw-btn-my-workflow"]').trigger('click');
+    await wrapper.find('[data-testid="withdraw-cancel"]').trigger('click');
+    expect(unpublishFn).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="withdraw-confirm-modal"]').exists()).toBe(false);
+  });
+
+  it('12. AC-020(b): a 403 on withdraw surfaces a forbidden error, never a tier message', async () => {
+    // Mirrors the server mapping fixed in core/fleet/catalog.go WP11:
+    // ErrCatalogForbidden's rendered text names ownership, not subscription
+    // tier. This is a mutation-check on the UI's error passthrough — a
+    // regression that swallowed the error and showed a generic "failed"
+    // string, or one that re-introduced a tier-flavoured message, fails
+    // this assertion.
+    const unpublishFn = vi.fn(async () => {
+      throw new Error("fleet/catalog: not the item's owner or a fleet admin");
+    });
+    const client = createFakeHarnessClient({
+      catalog: {
+        publish: async () => ({ ...WORKFLOW_ITEM }),
+        list: async () => [WORKFLOW_ITEM],
+        install: async () => {},
+        uninstall: async () => {},
+        installed: async () => [],
+        unpublish: unpublishFn,
+      },
+    });
+    const wrapper = mountView(client);
+    await flushPromises();
+
+    await wrapper.find('[data-testid="item-withdraw-btn-my-workflow"]').trigger('click');
+    await wrapper.find('[data-testid="withdraw-confirm"]').trigger('click');
+    await flushPromises();
+
+    const err = wrapper.find('[data-testid="withdraw-error"]');
+    expect(err.exists()).toBe(true);
+    expect(err.text()).toContain("not the item's owner or a fleet admin");
+    expect(err.text().toLowerCase()).not.toContain('tier');
+    expect(err.text().toLowerCase()).not.toContain('subscription');
+    // Modal stays open on failure so the user can retry or cancel.
+    expect(wrapper.find('[data-testid="withdraw-confirm-modal"]').exists()).toBe(true);
   });
 });

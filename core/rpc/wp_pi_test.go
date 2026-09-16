@@ -36,11 +36,14 @@
 //     disk state at all.
 //   - WP15 (ACP registry) — no code change beyond comments; no
 //     persistence surface.
-//   - WP05 (retention honesty) — the only production edit was DELETING
-//     `applyRetentionConfig`, an unreachable function whose own
-//     signature never touched storage (it operated on an in-memory
-//     *AuditRetentionSweeper argument, never a store). No persistence
-//     surface removed or added.
+//   - WP05 (retention honesty) — the only production edit was deleting
+//     the dead bundle-config-apply helper in core/fleet/audit_retention.go
+//     (a zero-caller function whose own signature never touched storage —
+//     it operated on an in-memory *AuditRetentionSweeper argument, never a
+//     store). No persistence surface removed or added. (Prior revisions of
+//     this comment and docs/unwired-ledger.md §1.3/§1.8 claimed this
+//     deletion had already happened; it had not — see the fix commit that
+//     corrected both.)
 //   - **WP12 (sync push-path honesty, `Accent` removal) — THE ONE
 //     PERSISTENCE-BEARING SURFACE IN THIS PASS.** `uiThemeKind`'s Apply
 //     closure ends in `store.SaveAll(s)` — a real settings.json write.

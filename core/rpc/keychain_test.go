@@ -12,7 +12,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zalando/go-keyring"
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 )
 
 // TestKeychainDelete_NotFoundIsSilent asserts that ErrNotFound from a delete

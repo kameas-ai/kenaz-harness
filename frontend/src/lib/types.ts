@@ -884,6 +884,11 @@ export interface WindowSize {
  * process's lifetime, not per session — see the Go-side doc comment for
  * why. `calls === 0` means "no compaction has run since this process
  * started," not "this session never compacted."
+ *
+ * The autoTitle* fields (model-settings-reach-the-model-01PMZ101 WP07)
+ * carry the SAME kind of running tally for the auto-title LLM caller,
+ * reusing this type/RPC rather than adding a parallel binding — both
+ * readouts feed the same cost panel.
  */
 export interface CompactionOverheadInfo {
   total: number;
@@ -894,6 +899,16 @@ export interface CompactionOverheadInfo {
   outputTokens: number;
   /** Aggressiveness tier of up to the last 5 successful compactions, oldest first. */
   recentTiers?: string[];
+  // Optional (rather than mirroring the compaction fields' required-ness)
+  // so the many pre-existing compactionOverhead() test fixtures that
+  // predate WP07 keep type-checking without every one of them being
+  // touched; SessionsView.vue treats a missing value as 0/absent.
+  autoTitleTotal?: number;
+  autoTitleCurrency?: string;
+  autoTitleCalls?: number;
+  autoTitleIndeterminateCalls?: number;
+  autoTitleInputTokens?: number;
+  autoTitleOutputTokens?: number;
 }
 
 export interface Settings {
@@ -3245,9 +3260,10 @@ export interface NodeUserOverrideInfo {
 }
 
 /**
- * NodeDoctorReport summarises catalog health for the NodesView debug
- * panel (mission agent-kernel-graph-node-catalog WP08). Counters are
- * non-negative ints; lastReloadAt is RFC3339Nano (empty before any
+ * NodeDoctorReport summarises catalog health for the node-override
+ * diagnostics panel mounted on NodePalette.vue (mission
+ * controls-and-readouts-that-tell-the-truth-01PMZ808 WP18). Counters
+ * are non-negative ints; lastReloadAt is RFC3339Nano (empty before any
  * reload). userOverrideErrors carries the per-file parse failures
  * recorded by the most-recent reload pass.
  */
@@ -4583,6 +4599,20 @@ export interface SiteSummary {
   status: string;
   /** RFC3339; absent/zero for never-deployed. */
   deployedAt?: string;
+}
+
+/**
+ * SiteEnvEntry — one declared env var NAME + metadata for a site
+ * (fleet-enforcement-truth-01PMZ505 WP09). Never carries a value —
+ * Sites_EnvList is read-only over names; Sites_EnvSet is the only way to
+ * set one, and it is write-only (core/fleet/sites.go's SiteEnvEntry doc:
+ * "Values are never returned"). Mirrors core/rpc/views/sites.SiteEnvEntry.
+ */
+export interface SiteEnvEntry {
+  name: string;
+  description?: string;
+  /** RFC3339; absent/zero when never set. */
+  setAt?: string;
 }
 
 /**

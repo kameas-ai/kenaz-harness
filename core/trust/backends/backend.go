@@ -5,9 +5,13 @@
 // # Charter boundary (DIRECTIVE_001 / C-001)
 //
 // This file imports nothing platform- or vendor-specific. Each backend
-// lives in its own subpackage and may import its own SDK (zalando/go-keyring,
-// aws-sdk-go-v2, go-piv/piv-go, miekg/pkcs11). No file outside
-// core/trust/backends/<kind>/ may import a backend SDK.
+// lives in its own subpackage and may import its own SDK (aws-sdk-go-v2,
+// go-piv/piv-go, miekg/pkcs11). No file outside core/trust/backends/<kind>/
+// may import a backend SDK. The one exception: an eventual oskeychain
+// backend does NOT get to import zalando/go-keyring directly — that
+// vendor SDK has its own single-seam rule (core/keyring,
+// scripts/ci/check-keyring-seam.sh) that supersedes this package's
+// per-backend-subpackage carve-out; route through core/keyring instead.
 package backends
 
 import (

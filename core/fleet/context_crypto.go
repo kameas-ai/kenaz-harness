@@ -27,10 +27,10 @@ import (
 	"io"
 	"strings"
 
-	"github.com/zalando/go-keyring"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 )

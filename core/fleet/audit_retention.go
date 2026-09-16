@@ -9,15 +9,19 @@
 // they are old (FR-006). The sweep deletes at most 1000 rows per pass to
 // bound I/O spikes (NFR-005).
 //
-// The retention window is configurable via fleet.audit_local_retention_days
-// (delivered by the fleet config bundle; falls back to the default 90d).
+// The retention window is set locally via SetRetentionDays (falls back to
+// the default 90d). There is no fleet-config-bundle section for it — see
+// fleet-enforcement-truth-01PMZ505 WP05: an earlier revision of this file
+// claimed one, naming a bundle JSON key and a helper that would apply it
+// to the sweeper, but Bundle (core/fleet/bundle.go) never carried such a
+// field and the helper had zero callers. Deleted 2026-09-15; see
+// docs/unwired-ledger.md §1.3/§1.8.
 //
 // (fleet-audit-archival-01NDFSEX13 WP04)
 package fleet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -257,21 +261,4 @@ func (m *MemoryRetentionBackend) Rows() []AuditRetentionRow {
 	out := make([]AuditRetentionRow, len(m.rows))
 	copy(out, m.rows)
 	return out
-}
-
-// applyRetentionConfig applies a fleet config bundle section
-// "audit_local_retention_days" key to the sweeper. Used by the
-// composite ConfigApplier in settings/fleet.go.
-func applyRetentionConfig(sweeper *AuditRetentionSweeper, raw json.RawMessage) error {
-	if sweeper == nil || len(raw) == 0 {
-		return nil
-	}
-	var days int
-	if err := json.Unmarshal(raw, &days); err != nil {
-		return fmt.Errorf("fleet/audit_retention: parse audit_local_retention_days: %w", err)
-	}
-	if days > 0 {
-		sweeper.SetRetentionDays(days)
-	}
-	return nil
 }

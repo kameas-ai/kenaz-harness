@@ -1516,16 +1516,33 @@ type AuditBulkPurgeBlockedByPolicyPayload struct {
 // FleetConfigAppliedPayload is the audit payload for KindFleetConfigApplied.
 //
 // Privacy invariant: no bundle contents (cedar rules, weight URLs, model IDs)
-// are recorded — only the bundle_id, issuance time, and which sections were
-// present in the bundle.
+// are recorded — only the bundle_id, issuance time, which sections were
+// present, org identity, and the org-provisioned recipe ids that were
+// installed. ProvisionedRecipeIDs are identifiers the org itself declared
+// (spec.md fleet-org-config-inheritance-01NORGX01 §3.1's recipe_id), never
+// secret material.
 type FleetConfigAppliedPayload struct {
 	// BundleID is the bundle_id of the applied bundle.
 	BundleID int64 `json:"bundle_id"`
 	// IssuedAt is the server-side issuance time of the applied bundle.
 	IssuedAt time.Time `json:"issued_at"`
 	// Sections is the list of non-empty sections that were present:
-	// "cedar_delta", "mcp_allowlist", "model_prefs", "kameas_ml_weight_urls".
+	// "cedar_delta", "mcp_allowlist", "model_prefs",
+	// "kameas_ml_weight_urls", "provisioned_mcp", "mandated_skills",
+	// "org_config".
 	Sections []string `json:"sections"`
+	// OrgID / OrgName name the org this bundle was pulled for (fleet-org-
+	// config-inheritance-01NORGX01 WP05, FR-010), read from the cached
+	// fleet.Identity at apply time. Both are empty when no identity is
+	// cached yet (e.g. the first bundle applied before FleetSignIn's
+	// enroll response has been persisted).
+	OrgID   string `json:"org_id,omitempty"`
+	OrgName string `json:"org_name,omitempty"`
+	// ProvisionedRecipeIDs lists the recipe_ids from the bundle's
+	// provisioned_mcp section that were installed as org-managed recipes
+	// on this apply (FR-010's "naming... the recipe/provider ids"). Empty
+	// when the bundle carried no provisioned_mcp section.
+	ProvisionedRecipeIDs []string `json:"provisioned_recipe_ids,omitempty"`
 }
 
 // FleetConfigSignatureRejectedPayload is the audit payload for

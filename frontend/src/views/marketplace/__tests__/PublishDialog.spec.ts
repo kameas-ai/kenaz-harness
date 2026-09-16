@@ -42,6 +42,7 @@ function buildClient(publishFn = vi.fn(async () => PUBLISHED_ITEM)) {
         install: async () => {},
         uninstall: async () => {},
         installed: async () => [],
+        unpublish: async () => {},
       },
     }),
     publishFn,

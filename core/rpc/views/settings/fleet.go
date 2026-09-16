@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
@@ -20,6 +21,16 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
+
+// auditEmitter is the minimal interface compositeConfigApplier needs to
+// record config-bundle-applied audit events (fleet-org-config-inheritance-
+// 01NORGX01 WP05, FR-010). Mirrors the identical small local interface
+// declared by core/rpc/views/catalog and core/rpc/views/cedar — each view
+// package declares its own copy rather than depending on a shared emitter
+// type, so this is consistent with the existing pattern, not a new one.
+type auditEmitter interface {
+	EmitFleetEvent(ctx context.Context, kind contextaudit.Kind, payload any) error
+}
 
 // fleetState holds the fleet client, dataDir, capability poller, config
 // poller, and the emergency-lockdown watcher
@@ -89,6 +100,15 @@ type fleetState struct {
 	// error rather than a silently-discarded org config (same posture as
 	// the cedar_delta / mandated_skills "ref not wired" branches below).
 	mcpCatalog *recipes.MergedCatalog
+
+	// auditEmitter is wired at SetAuditEmitter time (fleet-org-config-
+	// inheritance-01NORGX01 WP05, FR-010). Used by compositeConfigApplier
+	// to record a fleet.config.applied event naming the bundle_id, org,
+	// and provisioned recipe ids after a fully-clean ApplyBundle. nil
+	// means audit events are silently dropped — the rpc.New(nil) test
+	// harness path and any build where SetAuditEmitter is never called
+	// (mirrors every other optional Set* field on this struct).
+	auditEmitter auditEmitter
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -279,6 +299,22 @@ func (a *API) SetMCPCatalog(cat *recipes.MergedCatalog) {
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
 	a.fleet.mcpCatalog = cat
+}
+
+// SetAuditEmitter wires the audit emitter into the fleet state so
+// compositeConfigApplier can record a fleet.config.applied event on every
+// fully-clean ApplyBundle (fleet-org-config-inheritance-01NORGX01 WP05,
+// FR-010). Call anywhere relative to SetFleetClient — ApplyBundle reads
+// a.state.auditEmitter fresh (under a.state.mu) on every call, same
+// posture as SetCedarEngine. Safe to skip: nil means the event is never
+// emitted (the pre-WP05 state for every build that predates this wiring).
+func (a *API) SetAuditEmitter(em auditEmitter) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.auditEmitter = em
 }
 
 // SetSyncKindRegistry wires the SyncKind registry into the fleet state so
@@ -844,6 +880,12 @@ type compositeConfigApplier struct {
 
 func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundle) []error {
 	var errs []error
+	// provisionedRecipeIDs accumulates the bundle's declared provisioned_mcp
+	// recipe_ids for the closing audit event (WP05, FR-010) — populated in
+	// the Provisioned MCP block below regardless of whether mcpCatalog is
+	// wired, since these are the ids the ORG named in the bundle, not
+	// necessarily every one that successfully installed.
+	var provisionedRecipeIDs []string
 
 	// Cedar delta.
 	//
@@ -910,6 +952,11 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	// not an error: there is nothing to apply either way, and erroring on
 	// every bundle for a fleet-disabled/test harness that never carries
 	// provisioned_mcp would fail every apply for no operational reason.
+	for _, e := range b.ProvisionedMCP {
+		if e.RecipeID != "" {
+			provisionedRecipeIDs = append(provisionedRecipeIDs, e.RecipeID)
+		}
+	}
 	if a.state.mcpCatalog != nil {
 		converted := make([]recipes.ProvisionedMCPEntry, 0, len(b.ProvisionedMCP))
 		for _, e := range b.ProvisionedMCP {
@@ -1040,8 +1087,82 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 		}
 	}
 
+	// Audit (fleet-org-config-inheritance-01NORGX01 WP05, FR-010): record a
+	// fleet.config.applied event naming the bundle_id, org, sections
+	// present, and any provisioned recipe ids — but only on a FULLY clean
+	// apply. KindFleetConfigApplied's own doc is explicit that it "fires
+	// after a fleet config bundle has been fully verified and all sections
+	// applied successfully"; a partial-failure bundle does not get to claim
+	// that here (KindFleetConfigPartialFailure is the correct kind for that
+	// case, and remains unwired — see docs/unwired-ledger.md).
+	if len(errs) == 0 {
+		a.emitConfigApplied(ctx, b, provisionedRecipeIDs)
+	}
+
 	// Return all errors (FR-012). An empty slice means full success.
 	return errs
+}
+
+// emitConfigApplied records KindFleetConfigApplied for a fully-clean
+// ApplyBundle (fleet-org-config-inheritance-01NORGX01 WP05, FR-010). No-op
+// when no emitter is wired (nil is the default, safe posture — mirrors
+// every other optional dependency on fleetState).
+//
+// Org identity is read best-effort from the on-disk fleet.Identity cache
+// (populated at enroll/sign-in time); a missing or unreadable cache simply
+// leaves OrgID/OrgName empty rather than failing the emission — this event
+// is a record of what was applied, not a gate on applying it.
+func (a *compositeConfigApplier) emitConfigApplied(ctx context.Context, b *fleet.Bundle, provisionedRecipeIDs []string) {
+	a.state.mu.RLock()
+	emitter := a.state.auditEmitter
+	dataDir := a.state.dataDir
+	a.state.mu.RUnlock()
+	if emitter == nil {
+		return
+	}
+
+	var sections []string
+	if len(b.CedarDelta) > 0 {
+		sections = append(sections, "cedar_delta")
+	}
+	if b.MCPAllowlist != nil {
+		sections = append(sections, "mcp_allowlist")
+	}
+	if b.ModelPrefs != nil {
+		sections = append(sections, "model_prefs")
+	}
+	if len(b.KameasMLWeightURLs) > 0 {
+		sections = append(sections, "kameas_ml_weight_urls")
+	}
+	if len(b.ProvisionedMCP) > 0 {
+		sections = append(sections, "provisioned_mcp")
+	}
+	if len(b.MandatedSkills) > 0 {
+		sections = append(sections, "mandated_skills")
+	}
+	if len(b.OrgConfig) > 0 {
+		sections = append(sections, "org_config")
+	}
+
+	var orgID, orgName string
+	if dataDir != "" {
+		if id, err := fleet.LoadIdentity(dataDir); err == nil {
+			orgID = id.OrgID
+			orgName = id.OrgName
+		}
+	}
+
+	payload := contextaudit.FleetConfigAppliedPayload{
+		BundleID:             b.BundleID,
+		IssuedAt:             b.IssuedAt,
+		Sections:             sections,
+		OrgID:                orgID,
+		OrgName:              orgName,
+		ProvisionedRecipeIDs: provisionedRecipeIDs,
+	}
+	if err := emitter.EmitFleetEvent(ctx, contextaudit.KindFleetConfigApplied, payload); err != nil {
+		logging.L().Warn("fleet.config.applied.audit_emit_failed", "err", err.Error())
+	}
 }
 
 // LockdownStatusView is the wire shape returned by FleetLockdownStatus.
