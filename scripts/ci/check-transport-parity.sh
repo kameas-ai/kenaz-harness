@@ -139,7 +139,14 @@ for tag in "${TAGS[@]}"; do
   else
     block=$(printf '%s\n' "$BODY" | sed -n "$((case_start + 1)),\$p")
   fi
-  if ! printf '%s\n' "$block" | grep -q '\.CloseOne(ctx, id)'; then
+  # FOURTH divergence in this gate (2026-09-16, and the reason PR #354
+  # failed on a tree that passed twice before): `grep -q` exits the
+  # moment it matches, so printf can take SIGPIPE mid-write; under
+  # pipefail the pipeline then reports 141 EVEN THOUGH grep matched,
+  # and the FAIL branch prints a case body that visibly contains the
+  # "missing" call. Timing-dependent, hence flaky. A bash substring
+  # test has no processes and no pipe — nothing left to race.
+  if [[ "$block" != *'.CloseOne(ctx, id)'* ]]; then
     echo "${GATE} FAIL: case \"${tag}\" in closeOneByTag has no real .CloseOne(ctx, id) call —" >&2
     echo "${GATE} it is comment-only, empty, or dispatches something else. This is exactly the" >&2
     echo "${GATE} pre-UNIT-6 http/sse shape: a registered arm that reports success (via the" >&2
