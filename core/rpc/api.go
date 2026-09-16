@@ -6576,6 +6576,102 @@ func resolveAutonomyKnobsWithSettingsFallback(global, project, session autonomy.
 	return autonomy.Resolve(global, project, session)
 }
 
+// permissionModeRiskThreshold maps Settings.PermissionMode's three
+// coarse presets ("strict" / "normal" / "permissive" — see that
+// field's doc comment in core/rpc/views/settings/api.go) onto
+// risk-rated-autonomy-01PMRA01's numeric autonomy.KnobRiskThreshold
+// dial (0-100; higher = more permissive, per
+// core/policy/cedar/risk_layer.go's ThreeLayerResolve: a layer-3
+// rating strictly below the threshold auto-allows, at/above it
+// confirms).
+//
+// The three values are deliberately identical to three rungs of the
+// existing five-tier autonomy ladder (core/autonomy/presets.go) rather
+// than new numbers, so PermissionMode reuses machinery that is already
+// exercised, audited and gate-checked instead of inventing a second
+// ladder:
+//
+//   - "strict"     -> 0  (autonomy.TierStrict's value). Every
+//     layer-3 dispatch confirms and the rater is bypassed entirely
+//     (FR-008) — matches the old doc comment's "every call prompts".
+//   - "normal"     -> 40 (autonomy.TierDefault's value). Low-risk
+//     layer-3 calls auto-allow; anything the rater scores at or above
+//     40 (which includes every destructive/unknown-family call, per
+//     the family floor below) still confirms.
+//   - "permissive" -> 80 (autonomy.TierAutonomous's value — the
+//     ceiling. NEVER raise this: scripts/ci/check-risk-gate-decides.sh
+//     enforces that core/policy/risk/floor.go's familyFloorScore (81)
+//     sits strictly above TierAutonomous's threshold so a floored
+//     destructive/unknown-family score can never auto-allow at any
+//     tier; a PermissionMode value above 80 would need that gate
+//     extended in the same commit, which is why this function is the
+//     one place in the codebase that turns a Settings string into a
+//     RiskThreshold int).
+//
+// ok is false for "" and any unrecognised value (EffectivePermissionMode
+// already normalises persisted garbage to "normal" before this
+// function ever sees it, but the empty string still needs to mean "no
+// preset chosen" here, not "apply normal's 40" — see
+// foldPermissionModeIntoGlobal's doc comment for why that distinction
+// matters).
+func permissionModeRiskThreshold(mode string) (int, bool) {
+	switch mode {
+	case "strict":
+		return 0, true
+	case "normal":
+		return 40, true
+	case "permissive":
+		return 80, true
+	default:
+		return 0, false
+	}
+}
+
+// foldPermissionModeIntoGlobal folds Settings.PermissionMode's derived
+// RiskThreshold (permissionModeRiskThreshold) into the global autonomy
+// layer's Overrides map — the same shape
+// resolveAutonomyKnobsWithSettingsFallback already uses to fold the
+// legacy MaxIterations setting in, and the same precedence rule:
+//
+//   - No global-layer RiskThreshold override yet -> PermissionMode
+//     WRITES one. This is the coarse, user-facing dial taking effect
+//     with nothing more specific configured.
+//   - A global-layer RiskThreshold override already present (set via
+//     the Autonomy Dials panel, autonomy-knobs-live-01PMAG02's more
+//     granular per-knob control) -> left untouched. The more specific
+//     control wins, exactly as the MaxIterations fold-in already
+//     documents.
+//   - Project/session RiskThreshold overrides are untouched by this
+//     function entirely (it only ever writes to the GLOBAL layer), so
+//     autonomy.Resolve's normal downstream-first precedence
+//     (session -> project -> global) still lets a project or session
+//     override beat PermissionMode's global-layer value, same as any
+//     other knob.
+//
+// This is the explicit precedence documented at both sites per the
+// owner's ruling: see autonomy.KnobRiskThreshold's doc comment
+// (core/autonomy/knobs.go) and Settings.PermissionMode's doc comment
+// (core/rpc/views/settings/api.go) for the other half.
+//
+// mode == "" or unrecognised is a no-op (permissionModeRiskThreshold's
+// ok=false) so a fresh install with no PermissionMode ever persisted
+// cannot silently downgrade a project/session RiskThreshold override
+// that predates this wiring.
+func foldPermissionModeIntoGlobal(global autonomy.Layer, mode string) autonomy.Layer {
+	threshold, ok := permissionModeRiskThreshold(mode)
+	if !ok {
+		return global
+	}
+	if _, exists := global.Overrides[autonomy.KnobRiskThreshold]; exists {
+		return global
+	}
+	if global.Overrides == nil {
+		global.Overrides = map[autonomy.Knob]any{}
+	}
+	global.Overrides[autonomy.KnobRiskThreshold] = threshold
+	return global
+}
+
 // computeAutonomyKnobs resolves the three-layer autonomy chain
 // (global from Settings, project + session from c's managers) for the
 // given sessionID and folds in the legacy max-turns fallback. Pulled
@@ -6592,6 +6688,16 @@ func computeAutonomyKnobs(ctx context.Context, sessionID string, c *core.Core, s
 	if settingsImpl != nil {
 		if g, gerr := settingsImpl.LoadAutonomyProfile(ctx); gerr == nil {
 			global = g
+		}
+		// permission-mode-wiring (owner ruling, 2026-09-16): fold
+		// Settings.PermissionMode's coarse preset into the global
+		// autonomy layer's RiskThreshold override. See
+		// foldPermissionModeIntoGlobal's doc comment for the
+		// precedence rule against an explicit autonomy-panel override.
+		if store := settingsImpl.Store(); store != nil {
+			if mode, merr := store.LoadPermissionMode(); merr == nil {
+				global = foldPermissionModeIntoGlobal(global, mode)
+			}
 		}
 	}
 	if c != nil && sessionID != "" {

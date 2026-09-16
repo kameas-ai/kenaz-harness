@@ -300,32 +300,32 @@ func init() {
 
 	// ── Permission / Cedar dials ─────────────────────────────────────
 	//
-	// PermissionMode was drafted as Register with a description claiming
-	// it gates bash/filesystem/credential/tool authorization. Verified
-	// against the live tree before landing (not just against its own doc
-	// comment, which is what made the claim wrong in the first place):
-	// EffectivePermissionMode()'s only non-test callers are
-	// FileStore.LoadPermissionMode / memoryStore.LoadPermissionMode,
-	// whose only caller in turn is the Settings_GetPermissionMode
-	// binding — the value round-trips to PermissionDialsPanel.vue and
-	// nothing in core/ branches on it. docs/unwired-ledger.md's
-	// "2026-08-14 · Settings fields that are stored, bound, and inert"
-	// entry recorded this independently and escalated it as G-4
-	// (docs/escalation-register-2026-08-19.md Part 8, ruling F-1),
-	// noting it must be ruled together with X-2/B-4 since the documented
-	// "every call prompts" semantics IS the per-call tool authorization
-	// those already ruled wire. Deferred, not falsely registered as
-	// covered — the exact self-catch this WP's own quality bar demands.
-	knobcoverage.RegisterDeferred[settings.Settings](
+	// PermissionMode WAS deferred (G-4, docs/escalation-register-
+	// 2026-08-19.md Part 8 ruling F-1: "must be ruled together with
+	// X-2/B-4" — the per-call Cedar/risk tool-authorization wiring).
+	// That wiring has since landed (risk-rated-autonomy-01PMRA01's
+	// three-layer cedar.ThreeLayerResolve gate, v0.82.0) and F-1's
+	// condition is now satisfied: owner ruling (permission-mode-wiring,
+	// 2026-09-16) wires PermissionMode onto it rather than deleting it.
+	// core/rpc/api.go's foldPermissionModeIntoGlobal folds
+	// permissionModeRiskThreshold(mode) into the global autonomy layer's
+	// KnobRiskThreshold override (unless a more specific autonomy-panel
+	// override already exists there); computeAutonomyKnobs calls it on
+	// every chat turn before resolveAutonomyKnobsWithSettingsFallback.
+	// From there the existing, already-registered RiskThreshold consumer
+	// (chat.kernelToolAdapter.resolveConfirmEach rung 0 +
+	// cedar.ThreeLayerResolve, see kernel_tool_adapter.go's init())
+	// takes over — this registration does not duplicate that one; it
+	// records the NEW path a value can take to reach it.
+	knobcoverage.Register[settings.Settings](
 		"PermissionMode",
-		"NOT wired: EffectivePermissionMode()'s only callers are the two "+
-			"store Load accessors, whose only caller is the "+
-			"Settings_GetPermissionMode binding — a pure read/round-trip "+
-			"to PermissionDialsPanel.vue with no branch anywhere in core/. "+
-			"Escalated as G-4 (docs/escalation-register-2026-08-19.md "+
-			"Part 8, ruling F-1); must be ruled together with X-2/B-4. "+
-			"docs/unwired-ledger.md's 2026-08-14 'stored, bound, and "+
-			"inert' entry. Owner: alec.",
+		"core/rpc/api.go foldPermissionModeIntoGlobal (called from "+
+			"computeAutonomyKnobs) folds this into the global autonomy "+
+			"layer's KnobRiskThreshold override, which "+
+			"chat.kernelToolAdapter.resolveConfirmEach rung 0 reads and "+
+			"threads into cedar.ThreeLayerResolve (risk-rated-autonomy-"+
+			"01PMRA01). Behavioral proof: "+
+			"core/rpc/views/agentgraph/chat/permission_mode_wiring_test.go.",
 	)
 	knobcoverage.Register[settings.Settings](
 		"PermissionCacheDangerousOps",
