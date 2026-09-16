@@ -50,6 +50,14 @@ func TestResolveFleetConfig_ConcurrentCallers_CollapseToOneFetch(t *testing.T) {
 
 	dataDir := t.TempDir()
 
+	// The config cache is package-global and keyed by server URL. httptest
+	// ports are reused within a package run (observed on the Linux CI
+	// runner, PR #354): a prior test's still-fresh cache entry for this
+	// reused port makes the first Resolve return the DEAD server's config
+	// with zero fetches, throwing off this test's fetch count. Start from
+	// a clean slate for our key.
+	fleet.InvalidateFleetConfig(dataDir, srv.URL)
+
 	const concurrency = 10
 	var wg sync.WaitGroup
 	wg.Add(concurrency)
@@ -102,6 +110,14 @@ func TestResolveFleetConfig_SequentialCallers_RefetchesAfterInvalidate(t *testin
 	defer srv.Close()
 
 	dataDir := t.TempDir()
+
+	// The config cache is package-global and keyed by server URL. httptest
+	// ports are reused within a package run (observed on the Linux CI
+	// runner, PR #354): a prior test's still-fresh cache entry for this
+	// reused port makes the first Resolve return the DEAD server's config
+	// with zero fetches, throwing off this test's fetch count. Start from
+	// a clean slate for our key.
+	fleet.InvalidateFleetConfig(dataDir, srv.URL)
 
 	if _, err := fleet.ResolveFleetConfig(t.Context(), dataDir, srv.URL); err != nil {
 		t.Fatalf("first ResolveFleetConfig: %v", err)
