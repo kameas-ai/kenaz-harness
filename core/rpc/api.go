@@ -7276,30 +7276,36 @@ func buildChatRunner(
 		//       This is a REAL number against the shipped default model
 		//       on a live profile, end to end through risk.LLMRater.Rate
 		//       — not a benchmark-of-record proxy, not a fake registry.
-		//       The verdict is: measured, and it does not clear the bar.
-		//       RiskGate stays nil. Re-measure again once either (i) a
-		//       faster provider default is benchmarked and adopted for
-		//       openrouter, or (ii) the owner revises the 300ms bound
-		//       with the tradeoff in view (a rated tool call adds a
-		//       real ~320-360ms to every uncached, unmatched dispatch at
-		//       the tiers where the rater fires).
+		//       The verdict was: measured, and it did not clear the bar.
 		//
-		// Flip this to `secretGate` — the SAME live Cedar engine as
-		// SecretGate immediately above — only once (b) is done; (a) is
-		// done, (b) is measured and still blocking. Do not flip while
-		// (b)'s measured median stays at or above ~300ms. Owner: risk-
-		// rated-autonomy-01PMRA01. The RiskRater field below is left
-		// wired regardless (harmless while RiskGate is nil — rung 0
-		// nil-checks the GATE, not the rater, before consulting either;
-		// see kernel_tool_adapter.go's `if a.gate != nil` guard), so no
-		// production behaviour differs from pre-WP05 today: the whole
-		// rung is still a no-op end to end until RiskGate itself is
-		// non-nil.
-		RiskGate: nil,
+		//   OWNER RULING, 2026-09-15 (same day, supersedes the ~300ms
+		//   bound above rather than pretending it was always met): the
+		//   320.4ms / 359.5ms measured medians are ACCEPTED. Rationale:
+		//   the rater only ever fires on an un-granted MCP tool inside a
+		//   long-running agentic task — that population is exactly the
+		//   one where a few hundred extra milliseconds on an uncached,
+		//   unmatched dispatch is immaterial next to the tool call and
+		//   model turn it gates. RiskGate flips to `secretGate` in THIS
+		//   change. The measurement history above is kept verbatim
+		//   (not deleted) so a future reader can see the actual number
+		//   that was accepted and why, rather than inferring "it must
+		//   have been under 300ms" from a flipped gate with no trail.
+		//   If a future measurement regresses materially past ~360ms
+		//   (e.g. a provider-side slowdown, or the default model
+		//   changing), re-open this decision rather than assuming the
+		//   2026-09-15 ruling still applies at a different number.
+		//
+		// (a) is done (offline-floor path, above). (b) is measured,
+		// reported, and the owner accepted the number — see the ruling
+		// immediately above. Owner: risk-rated-autonomy-01PMRA01.
+		RiskGate: secretGate,
 		// risk-rated-autonomy-01PMRA01 WP05: the LLM rater, built in
 		// newLLMStack alongside chatAutoTitleGen and threaded in as the
-		// riskRater parameter above. Inert while RiskGate (above) is nil
-		// — see that field's comment.
+		// riskRater parameter above. Live now that RiskGate (above) is
+		// non-nil — layer 3 (Cedar NotApplicable) will actually consult
+		// this rater instead of always resolving to the WP02/WP03 stub.
+		// See RiskGate's own comment for the 2026-09-15 owner ruling
+		// that accepted the measured latency and enabled this path.
 		RiskRater: riskRater,
 	})
 	if err != nil {
