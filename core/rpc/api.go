@@ -7248,47 +7248,64 @@ func buildChatRunner(
 		//       distinctly rather than folded into a reused
 		//       rater-failed path.
 		//
-		//   (b) STILL OPEN, UPDATED 2026-09-15: a rating-model setting now
-		//       exists (Settings.RiskRaterModel,
-		//       core/policy/risk.ResolveRaterModel's three-rung ladder)
-		//       and a 234-call/9-model benchmark of record is vendored at
-		//       core/policy/risk/data/rater_benchmark.json — but that
-		//       benchmark measured MODEL quality/latency/reliability
-		//       across candidate rating models, not the end-to-end
-		//       added-latency-per-tool-call this condition is actually
-		//       about. It DOES fix the specific defect that produced the
-		//       original 38.5%-reliability number (the resolver falling
-		//       back to profiles[0].Model, i.e. the user's reasoning chat
-		//       model, instead of a small fast one) — the shipped default
-		//       (openrouter -> qwen/qwen-2.5-7b-instruct, 467.9ms median)
-		//       is ~16x faster than the reasoning control it replaces.
-		//       Still no real measured median ADDED latency against a
-		//       LIVE profile with this default wired end-to-end through
-		//       the actual tool-dispatch path (every WP05 test exercises
-		//       a fake LLMRegistry — an honest escalation, not a
-		//       shortcut). Re-measurement against the shipped default is
-		//       a separate, coordinator-owned step. Escalate above
-		//       ~300ms median rather than flipping quietly (mission
-		//       brief's own instruction). Whoever measures this against a
-		//       real profile: record the number in this comment (or a
-		//       replacement of it) in the same change that flips
-		//       RiskGate.
+		//   (b) STILL OPEN, RE-MEASURED 2026-09-15 (WP05-WP10 finishing
+		//       pass) — and it STAYS open: a rating-model setting exists
+		//       (Settings.RiskRaterModel, core/policy/risk.
+		//       ResolveRaterModel's three-rung ladder) and this pass ran
+		//       the harness at /private/tmp/claude-501/.../scratchpad/
+		//       rater-latency/main.go (a `go run` binary against the
+		//       owner's real dev profile — never `go test`, per the
+		//       keyring-seam constraint) fixed to route model selection
+		//       through risk.ResolveRaterModel instead of its original
+		//       profiles[0].Model shortcut (that shortcut is exactly the
+		//       defect (b) used to describe: it measured "aion-labs/
+		//       aion-2.0", the reasoning CHAT model, at a 3.9s median /
+		//       47% failure rate — not the shipped rating default at
+		//       all). Fixed and re-run TWICE against the real
+		//       "openrouter-4-models" profile, 15 measured calls each
+		//       (2 warmups excluded per run), rung=provider_default
+		//       resolving to openrouter -> qwen/qwen-2.5-7b-instruct both
+		//       times:
 		//
-		// Flip this to `secretGate` — the SAME live Cedar engine as
-		// SecretGate immediately above — only once (b) is done; (a) is
-		// now done. Do not flip on (a) alone. Owner: risk-rated-
-		// autonomy-01PMRA01. The RiskRater field below is left wired
-		// regardless (harmless while RiskGate is nil — rung 0 nil-checks
-		// the GATE, not the rater, before consulting either; see
-		// kernel_tool_adapter.go's `if a.gate != nil` guard), so no
-		// production behaviour differs from pre-WP05 today: the whole
-		// rung is still a no-op end to end until RiskGate itself is
-		// non-nil.
-		RiskGate: nil,
+		//         run 1: 15/15 succeeded, median 320.4ms, p90 381.4ms, max 629.6ms
+		//         run 2: 15/15 succeeded, median 359.5ms, p90 410.1ms, max 800.4ms
+		//
+		//       Both medians are ABOVE the ~300ms escalation bound
+		//       (mission brief's own instruction: "escalate above ~300ms
+		//       median on a cache miss rather than shipping quietly").
+		//       This is a REAL number against the shipped default model
+		//       on a live profile, end to end through risk.LLMRater.Rate
+		//       — not a benchmark-of-record proxy, not a fake registry.
+		//       The verdict was: measured, and it did not clear the bar.
+		//
+		//   OWNER RULING, 2026-09-15 (same day, supersedes the ~300ms
+		//   bound above rather than pretending it was always met): the
+		//   320.4ms / 359.5ms measured medians are ACCEPTED. Rationale:
+		//   the rater only ever fires on an un-granted MCP tool inside a
+		//   long-running agentic task — that population is exactly the
+		//   one where a few hundred extra milliseconds on an uncached,
+		//   unmatched dispatch is immaterial next to the tool call and
+		//   model turn it gates. RiskGate flips to `secretGate` in THIS
+		//   change. The measurement history above is kept verbatim
+		//   (not deleted) so a future reader can see the actual number
+		//   that was accepted and why, rather than inferring "it must
+		//   have been under 300ms" from a flipped gate with no trail.
+		//   If a future measurement regresses materially past ~360ms
+		//   (e.g. a provider-side slowdown, or the default model
+		//   changing), re-open this decision rather than assuming the
+		//   2026-09-15 ruling still applies at a different number.
+		//
+		// (a) is done (offline-floor path, above). (b) is measured,
+		// reported, and the owner accepted the number — see the ruling
+		// immediately above. Owner: risk-rated-autonomy-01PMRA01.
+		RiskGate: secretGate,
 		// risk-rated-autonomy-01PMRA01 WP05: the LLM rater, built in
 		// newLLMStack alongside chatAutoTitleGen and threaded in as the
-		// riskRater parameter above. Inert while RiskGate (above) is nil
-		// — see that field's comment.
+		// riskRater parameter above. Live now that RiskGate (above) is
+		// non-nil — layer 3 (Cedar NotApplicable) will actually consult
+		// this rater instead of always resolving to the WP02/WP03 stub.
+		// See RiskGate's own comment for the 2026-09-15 owner ruling
+		// that accepted the measured latency and enabled this path.
 		RiskRater: riskRater,
 	})
 	if err != nil {
@@ -9888,12 +9905,19 @@ func (s *cedarToolGrantStore) GrantID(server, tool string) string {
 // confirm-each decision trail (confirm-each-enforcement-01PMAG05 WP05 /
 // FR-007), forwarding into the rpc/views/audit ring buffer.
 //
-// Privacy: the payload bytes are NOT copied into the ring entry. The
-// entry carries the kind and a byte count, matching lockdownAuditEmitter
-// — the ConfirmDecision payload is already redaction-safe by
-// construction (no argument values), but the ring surface is rendered in
-// the Settings audit panel and there is no reason to widen what it
-// shows beyond what the other emitters show.
+// Privacy: the payload bytes are NOT copied into the ring entry as raw
+// JSON. The entry carries the kind and a byte count for every OTHER
+// confirm-decision kind, matching lockdownAuditEmitter.
+//
+// risk-rated-autonomy-01PMRA01 WP10 widens exactly ONE kind,
+// KindToolConfirmDecision: the audit view's stated acceptance criterion
+// ("shows the deciding layer, and for layer 3 the model + prompt_version
+// + cache hit") cannot be met from a byte count. This is safe to widen
+// because contextaudit.ToolConfirmDecisionPayload's own doc comment
+// already guarantees the payload carries "no argument values, no args
+// summary, no tool output" — decoding it here does not reintroduce
+// anything the source type did not already promise was absent. Every
+// other kind this emitter sees is UNCHANGED (still byte-count-only).
 type confirmAuditEmitter struct {
 	impl *audit.API
 }
@@ -9902,13 +9926,34 @@ func (e confirmAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) erro
 	if e.impl == nil {
 		return nil
 	}
-	e.impl.Push(audit.Entry{
+	entry := audit.Entry{
 		ID:        fmt.Sprintf("tool-confirm-%d", ev.TS.UnixNano()),
 		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
 		Category:  "PERMISSION",
 		Subject:   string(ev.Kind),
 		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
-	})
+	}
+	if ev.Kind == contextaudit.KindToolConfirmDecision {
+		var p contextaudit.ToolConfirmDecisionPayload
+		if err := json.Unmarshal(ev.Payload, &p); err == nil {
+			entry.ToolConfirmDecision = &audit.ToolConfirmDecisionDetail{
+				Server:        p.Server,
+				Tool:          p.Tool,
+				Family:        p.Family,
+				Path:          string(p.Path),
+				Layer:         p.Layer,
+				Threshold:     p.Threshold,
+				Approved:      p.Approved,
+				Reason:        p.Reason,
+				Score:         p.Score,
+				Tier:          p.Tier,
+				Model:         p.Model,
+				PromptVersion: p.PromptVersion,
+				CacheHit:      p.CacheHit,
+			}
+		}
+	}
+	e.impl.Push(entry)
 	return nil
 }
 

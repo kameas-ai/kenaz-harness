@@ -33,27 +33,13 @@
 # One entry below is a DELIBERATE, dated exception to that otherwise-
 # empty state.
 
-core/rpc/views/agentgraph/chat/chat_runner.go: Config.RiskGate is never assigned a non-nil gate in core/rpc/api.go's chat.Config literal — the zero value is a nil gate, i.e. unconditional permit (clause 3)
-# 2026-09-14 — DELIBERATE, and the gate's clause-3 inference is
-# conservative rather than exactly right here, same as the identical
-# entry this mission carried from 2026-09-12 through most of this same
-# review round (restored after a brief flip to secretGate was held back
-# — see core/rpc/api.go's own comment at the RiskGate wiring site and
-# scripts/ci/allowlists/i18-nil-optional-deps.txt for the complete,
-# current reasoning).
-#
-# Why this is NOT an unconditional permit in behaviour: the consumer
-# nil-checks BEFORE calling. kernel_tool_adapter.go's resolveConfirmEach
-# opens rung 0 with `if a.gate != nil`, so a nil gate skips rung 0
-# entirely and rungs 1-5 decide exactly as they did before WP02 existed.
-# Nothing becomes more permissive than the pre-mission tree.
-# (ThreeLayerResolve DOES map a nil Gate to AllowAll{}, which is what
-# clause 3 keys on — but that function is unreachable from this call
-# site while the field is nil.)
-#
-# Blocker: a real measured median added-latency against a live profile
-# — the offline-floor path that used to be the other blocker
-# (kernel_tool_adapter.go's resolveLayer3OfflineFloor) is now done.
-# Owner: risk-rated-autonomy-01PMRA01. The change that deletes this
-# line: whoever measures the latency, in the same change that flips
-# RiskGate to `secretGate`.
+# DELETED 2026-09-15 (owner ruling, WP05-WP10 finishing pass): the entry
+# that lived here (core/rpc/views/agentgraph/chat/chat_runner.go's
+# Config.RiskGate, clause 3) is gone because the site is now genuinely
+# wired — core/rpc/api.go sets `RiskGate: secretGate`, not because the
+# allowlist grew to hide it. The owner accepted the measured 320.4ms /
+# 359.5ms medians (see core/rpc/api.go's RiskGate wiring-site comment for
+# the full ruling and numbers) and the flip landed in the same change
+# that deletes this line. check-cedar-gate-arguments.sh now reports this
+# site clean because clause 3 no longer matches a nil literal, not
+# because of a listed exception.

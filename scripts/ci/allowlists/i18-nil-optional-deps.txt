@@ -114,25 +114,15 @@ github.com/kameas-ai/kenaz-harness/core/fleet.AuditArchiverConfig.Poster
 # posting path should wire Poster or delete this field + this line
 # together.
 
-github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat.Config.RiskGate
-# at core/rpc/views/agentgraph/chat/chat_runner.go:519: Config.RiskGate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
-# 2026-09-12 — DELIBERATE, and reversible in one line. risk-rated-autonomy-
-# 01PMRA01 WP01-WP04 merged with the wiring OFF: core/rpc/api.go sets
-# `RiskGate: nil` where the intended value is `secretGate` (the same live
-# Cedar engine SecretGate already uses). Blocker: layer 3 (Cedar
-# NotApplicable) resolves to Confirm, and until WP05's rater exists nothing
-# can resolve a below-threshold call back to Allow, so every unmatched
-# action asks. Measured against the real embedded policy set: built-in
-# kenaz__* tools still reach layer 2 Allow, but un-granted MCP tools
-# (filesystem__*, github__*, harness-self__*) move from silent allow to a
-# prompt. That is correct for an ATTENDED session; the blocker is
-# unattended, because core/toolloop/confirm.go:200 has no deadline and
-# kernel_tool_adapter.go says "Do not add a deadline here" (owner decision
-# 1) — so an autonomous unattended run would park forever on the first
-# un-granted MCP tool. WP07 exists to give layer-3 prompts their own
-# deadline. Owner: risk-rated-autonomy-01PMRA01. The change that deletes
-# this line: the PR landing WP05 + WP07, which flips api.go back to
-# `RiskGate: secretGate`. Full reasoning is duplicated at the wiring site.
+# DELETED 2026-09-15 (owner ruling, WP05-WP10 finishing pass): the entry
+# that lived here (Config.RiskGate, chat_runner.go:519) is gone because
+# core/rpc/api.go now assigns `RiskGate: secretGate` in production — a
+# real non-nil value, not an allowlisted gap. The owner accepted the
+# measured 320.4ms / 359.5ms medians against the shipped default model
+# (see core/rpc/api.go's RiskGate wiring-site comment for the full ruling
+# and numbers) and the flip landed in the same change that deletes this
+# line. check-nil-optional-deps.sh now reports this field wired because
+# it IS wired, not because of a listed exception.
 
 github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat.kernelToolAdapter.gate
 # at core/rpc/views/agentgraph/chat/kernel_tool_adapter.go:137: kernelToolAdapter.gate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
@@ -152,14 +142,18 @@ github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat.kernelToolAdap
 #
 # So there are two separable things here, and only one of them is about
 # RiskGate: (a) this gate blind spot, which outlives the flip and is the
-# reason the line stays; (b) RiskGate's own current nil value, pending a
-# real measured median rater latency against a live profile — see the
-# Config.RiskGate entry and core/rpc/api.go's wiring-site comment.
+# reason the line stays; (b) RiskGate's own value — UPDATED 2026-09-15:
+# the owner accepted the measured 320.4ms/359.5ms medians and RiskGate is
+# now `secretGate` in production. (b) is resolved and its own allowlist
+# entry (which lived immediately above this one) is deleted; THIS entry
+# stays regardless, because it was never about (b) — see core/rpc/api.go's
+# wiring-site comment for the full ruling.
 #
 # Blocker: the gate's lowercase-builder blind spot. Owner:
 # risk-rated-autonomy-01PMRA01. The change that deletes this line: teaching
 # checknilopts clause 2 to recognise unexported builder methods, NOT the
-# RiskGate flip.
+# RiskGate flip (that already happened and did not clear this line, as
+# predicted above).
 
 github.com/kameas-ai/kenaz-harness/core/tools/monitor.Options.Offsets
 # at core/tools/monitor/tool.go:160: Options.Offsets (OffsetStore) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value

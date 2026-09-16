@@ -204,6 +204,7 @@ func (r *LLMRater) Rate(ctx context.Context, tool, normalizedArgs string, sessCt
 		promptVersion: llmRaterPromptVersion,
 	}
 	if cached, ok := r.cache.get(key); ok {
+		cached.CacheHit = true
 		return cached, nil
 	}
 

@@ -107,6 +107,31 @@ type ConfirmRequest struct {
 	// Reason is the permission resolver's reason string for the
 	// confirm_each verdict, when it supplied one.
 	Reason string `json:"reason,omitempty"`
+
+	// ── risk-rated-autonomy-01PMRA01 WP10 ──────────────────────────────
+	//
+	// HasRiskRating is true only when this prompt originated from layer
+	// 3 (a Cedar-unmatched action a rating resolver evaluated) AND a
+	// score was actually produced — never for a legacy rung-6 prompt
+	// (layer 0) or a layer-3 prompt reached with threshold<=0 / no rater
+	// wired (FR-008's skip case never calls a rater, so there is nothing
+	// to show). The frontend must gate on this flag rather than on
+	// RiskScore != 0, because 0 is itself a valid (very low) score.
+	HasRiskRating bool `json:"has_risk_rating,omitempty"`
+	// RiskScore is the FLOORED score compared against RiskThreshold —
+	// the same value audit.ToolConfirmDecisionPayload.Score records.
+	RiskScore int `json:"risk_score,omitempty"`
+	// RiskTier is risk.BandFor(RiskScore)'s named band, owner decision 3.
+	RiskTier string `json:"risk_tier,omitempty"`
+	// RiskThreshold is the resolved autonomy.ResolvedKnobs.RiskThreshold
+	// this score was compared against.
+	RiskThreshold int `json:"risk_threshold,omitempty"`
+	// RiskRationale is the rater's own short justification (Rating.
+	// Rationale), or the offline-floor's synthetic reason when no live
+	// rater was consulted. Untrusted-but-informational, same caveat as
+	// risk.Rating.Rationale's doc comment: model output, never rendered
+	// as an instruction.
+	RiskRationale string `json:"risk_rationale,omitempty"`
 }
 
 // ConfirmDecision is the user's answer to one parked call.

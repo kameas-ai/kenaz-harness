@@ -638,7 +638,7 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 			if a.rater != nil && threshold > 0 {
 				return a.resolveLayer3Rating(ctx, call, server, tool, family, threshold)
 			}
-			return a.promptConfirmEach(ctx, call, server, tool, d.Reason, family, 3, threshold)
+			return a.promptConfirmEach(ctx, call, server, tool, d.Reason, family, 3, threshold, nil)
 		}
 	}
 
@@ -762,7 +762,27 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 	}
 
 	// 6. Prompt.
-	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 0, 0)
+	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 0, 0, nil)
+}
+
+// riskPromptDetail carries risk-rated-autonomy-01PMRA01 WP10's
+// structured score/tier/model/prompt-version/cache-hit detail from
+// wherever a rating (live or offline-floor) was computed through to
+// both the audit record and the confirm-each prompt itself. A nil
+// *riskPromptDetail means "not a risk-rated layer-3 prompt" — the
+// legacy rung-6 call (layer 0) and the WP02/WP03 always-confirm stub
+// (no rater wired / threshold<=0) both pass nil, and every consumer
+// (auditConfirm call sites, promptConfirmEach's ConfirmRequest
+// construction) must treat nil as "omit these fields" rather than
+// synthesizing a zero score — 0 is itself a valid (very low) score and
+// must never be confused with "no rating was computed."
+type riskPromptDetail struct {
+	Score         int
+	Tier          string
+	Model         string
+	PromptVersion string
+	CacheHit      bool
+	Rationale     string
 }
 
 // resolveLayer3Rating is rung 0's WP05 extension: a rater is wired and
@@ -788,7 +808,11 @@ func (a *kernelToolAdapter) resolveLayer3Rating(
 			return a.resolveLayer3OfflineFloor(ctx, call, server, tool, family, threshold, rerr)
 		}
 		reason := fmt.Sprintf("layer 3: risk rater failed (%s); asking", rerr.Error())
-		return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold)
+		// No riskPromptDetail: a transient/malformed rater failure never
+		// produced a usable score (rating is the zero value here), so
+		// there is nothing structured to show — only the prompt's
+		// generic "why" applies.
+		return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold, nil)
 	}
 
 	// WP06: the family floor the rater cannot lower a score past. Applied
@@ -796,24 +820,38 @@ func (a *kernelToolAdapter) resolveLayer3Rating(
 	// validated — a successful prompt-injection attack against the
 	// rater's own prompt still cannot escape it.
 	floored := risk.ApplyFamilyFloor(family, rating.Score)
+	tier := string(risk.BandFor(floored))
 
 	if floored < threshold {
 		a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
-			SessionID: a.sessionID,
-			Server:    server,
-			Tool:      tool,
-			Family:    family,
-			Path:      audit.ToolConfirmPathLayer3RaterAllow,
-			Layer:     3,
-			Threshold: threshold,
-			Approved:  true,
-			Reason:    fmt.Sprintf("risk rating %d (floored %d) below threshold %d: %s", rating.Score, floored, threshold, rating.Rationale),
+			SessionID:     a.sessionID,
+			Server:        server,
+			Tool:          tool,
+			Family:        family,
+			Path:          audit.ToolConfirmPathLayer3RaterAllow,
+			Layer:         3,
+			Threshold:     threshold,
+			Approved:      true,
+			Reason:        fmt.Sprintf("risk rating %d (floored %d) below threshold %d: %s", rating.Score, floored, threshold, rating.Rationale),
+			Score:         floored,
+			Tier:          tier,
+			Model:         rating.Model,
+			PromptVersion: rating.PromptVersion,
+			CacheHit:      rating.CacheHit,
 		})
 		return coreag.ToolResult{}, true, nil
 	}
 
 	reason := fmt.Sprintf("layer 3: risk rating %d (floored %d) at/above threshold %d: %s", rating.Score, floored, threshold, rating.Rationale)
-	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold)
+	detail := &riskPromptDetail{
+		Score:         floored,
+		Tier:          tier,
+		Model:         rating.Model,
+		PromptVersion: rating.PromptVersion,
+		CacheHit:      rating.CacheHit,
+		Rationale:     rating.Rationale,
+	}
+	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold, detail)
 }
 
 // resolveLayer3OfflineFloor is spec.md FR-004's amendment (lines
@@ -851,6 +889,7 @@ func (a *kernelToolAdapter) resolveLayer3OfflineFloor(
 	// reusing it here means the offline floor can never drift from the
 	// online floor's own value.
 	offlineScore := risk.ApplyFamilyFloor(family, 0)
+	tier := string(risk.BandFor(offlineScore))
 	approved := offlineScore < threshold
 
 	reason := fmt.Sprintf(
@@ -867,12 +906,21 @@ func (a *kernelToolAdapter) resolveLayer3OfflineFloor(
 		Threshold: threshold,
 		Approved:  approved,
 		Reason:    reason,
+		// Score/Tier only — Model/PromptVersion/CacheHit stay zero: no
+		// live rater was consulted, per this function's own doc comment.
+		Score: offlineScore,
+		Tier:  tier,
 	})
 
 	if approved {
 		return coreag.ToolResult{}, true, nil
 	}
-	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold)
+	detail := &riskPromptDetail{
+		Score:     offlineScore,
+		Tier:      tier,
+		Rationale: reason,
+	}
+	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold, detail)
 }
 
 // promptConfirmEach parks the call on the confirm bus and blocks until
@@ -913,6 +961,7 @@ func (a *kernelToolAdapter) promptConfirmEach(
 	call coreag.ToolCall,
 	server, tool, reason, family string,
 	layer, threshold int,
+	riskDetail *riskPromptDetail,
 ) (coreag.ToolResult, bool, error) {
 	// WP07 refinement: a layer-3 prompt reached under an UNATTENDED run
 	// posture denies IMMEDIATELY rather than waiting out
@@ -930,7 +979,7 @@ func (a *kernelToolAdapter) promptConfirmEach(
 	// just reached from the layer-3 entry point instead.
 	if layer == 3 && runposture.IsUnattended(ctx) {
 		unattendedReason := "unattended run (scheduled dispatch): a layer-3 risk-rated prompt denies immediately, same as an organic confirm_each verdict (no wait — nobody is present to answer)"
-		a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+		payload := audit.ToolConfirmDecisionPayload{
 			SessionID: a.sessionID,
 			Server:    server,
 			Tool:      tool,
@@ -940,7 +989,15 @@ func (a *kernelToolAdapter) promptConfirmEach(
 			Threshold: threshold,
 			Approved:  false,
 			Reason:    unattendedReason,
-		})
+		}
+		if riskDetail != nil {
+			payload.Score = riskDetail.Score
+			payload.Tier = riskDetail.Tier
+			payload.Model = riskDetail.Model
+			payload.PromptVersion = riskDetail.PromptVersion
+			payload.CacheHit = riskDetail.CacheHit
+		}
+		a.auditConfirm(ctx, payload)
 		return coreag.ToolResult{
 			Content: fmt.Sprintf("tool %q denied: %s", call.Name, unattendedReason),
 			IsError: true,
@@ -961,6 +1018,13 @@ func (a *kernelToolAdapter) promptConfirmEach(
 		// Structural description only — never raw argument values.
 		ArgsSummary: toolloop.SummarizeArgs(call.Args),
 		Reason:      reason,
+	}
+	if riskDetail != nil {
+		req.HasRiskRating = true
+		req.RiskScore = riskDetail.Score
+		req.RiskTier = riskDetail.Tier
+		req.RiskThreshold = threshold
+		req.RiskRationale = riskDetail.Rationale
 	}
 
 	waitCtx := ctx
@@ -988,7 +1052,7 @@ func (a *kernelToolAdapter) promptConfirmEach(
 				d = defaultLayer3PromptTimeout
 			}
 			timeoutReason := fmt.Sprintf("no confirmation received within %s; risk-rated layer-3 prompts deny on deadline rather than parking indefinitely", d)
-			a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+			payload := audit.ToolConfirmDecisionPayload{
 				SessionID: a.sessionID,
 				CallID:    req.CallID,
 				BatchID:   req.BatchID,
@@ -1000,7 +1064,15 @@ func (a *kernelToolAdapter) promptConfirmEach(
 				Threshold: threshold,
 				Approved:  false,
 				Reason:    timeoutReason,
-			})
+			}
+			if riskDetail != nil {
+				payload.Score = riskDetail.Score
+				payload.Tier = riskDetail.Tier
+				payload.Model = riskDetail.Model
+				payload.PromptVersion = riskDetail.PromptVersion
+				payload.CacheHit = riskDetail.CacheHit
+			}
+			a.auditConfirm(ctx, payload)
 			return coreag.ToolResult{
 				Content: fmt.Sprintf("tool %q denied: %s", call.Name, timeoutReason),
 				IsError: true,

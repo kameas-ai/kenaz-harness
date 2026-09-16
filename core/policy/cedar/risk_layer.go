@@ -73,11 +73,14 @@ func ThreeLayerResolve(
 			d.Reason = "layer 2: permit policy matched"
 		}
 		return d
-	default:
+	case NotApplicable, Confirm:
 		// Layer 3: Cedar had no opinion (NotApplicable), or — if a
 		// future Gate implementation ever returns Confirm itself, which
 		// none does today — that too lands here rather than falling
-		// through to an implicit allow.
+		// through to an implicit allow. Spelled out explicitly (rather
+		// than via `default:`) so scripts/ci/check-risk-gate-decides.sh
+		// (WP08) can verify this switch handles Confirm without relying
+		// on an unlabelled default arm to happen to do the safe thing.
 		d.Outcome = Confirm
 		if threshold <= 0 {
 			// FR-008 + FR-003 (strict tier, threshold 0): the rater must
@@ -98,6 +101,21 @@ func ThreeLayerResolve(
 			// allow.
 			d.Reason = "layer 3: no Cedar policy matched; pending the caller's rating (WP05) — asking"
 		}
+		return d
+	default:
+		// Defensive only: Outcome's four `iota` values (Allow, Deny,
+		// NotApplicable, Confirm — types.go) are exhaustively listed
+		// above; a well-behaved Gate can never produce anything else.
+		// The compiler cannot see that exhaustiveness from a plain
+		// switch, so this arm exists to satisfy control-flow analysis
+		// (a missing return here is a compile error) — it is placed
+		// AFTER an explicit `case NotApplicable, Confirm:` already
+		// covers the real safe-direction requirement, so it is
+		// unreachable in practice, not a second copy of the fail-open
+		// hole this function exists to close. Same safe direction if it
+		// were ever somehow reached: Confirm, never Allow.
+		d.Outcome = Confirm
+		d.Reason = "layer 3: unrecognised Outcome value from Gate.Evaluate; asking (fail-closed)"
 		return d
 	}
 }

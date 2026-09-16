@@ -209,13 +209,27 @@ func run() error {
 			"gate malfunction", typesGoPath)
 	}
 
-	ctxKeyByGoName := parseConstBlock(string(engineSrc), `CtxKey\w+`)
-	familyEnsuredKeys, err := parseFamilyContext(string(engineSrc), ctxKeyByGoName)
+	// ctxValueByGoName is the goName->value direction, parsed directly
+	// from source rather than by inverting ctxKeyByGoName (which is
+	// keyed by VALUE and therefore silently drops one side of any two Go
+	// constants that happen to share the same Cedar string value — e.g.
+	// CtxKeyToolName and CtxKeySecretToolName both equal "tool_name",
+	// core/policy/cedar/engine.go:581,608. Inverting the value-keyed map
+	// collapses that pair to whichever name the source-order regex scan
+	// visited last (CtxKeySecretToolName), so a later lookup for
+	// "CtxKeyToolName" — the name populateFamilyContext's ActionUseTool
+	// case actually calls ensure() with — silently misses, and this gate
+	// reports a real, populated context key (tool_name, for use_tool
+	// dispatch) as unmatched. Go const names within one block are always
+	// unique (a duplicate is a compile error), so keying by goName here
+	// is collision-free regardless of how many names share a value.
+	ctxValueByGoName := parseConstBlockGoNameToValue(string(engineSrc), `CtxKey\w+`)
+	familyEnsuredKeys, err := parseFamilyContext(string(engineSrc), ctxValueByGoName)
 	if err != nil {
 		return err
 	}
 
-	deriv, err := scanGoSources(scanDirs, uidEntityForFunc, ctxKeyByGoName)
+	deriv, err := scanGoSources(scanDirs, uidEntityForFunc, ctxValueByGoName)
 	if err != nil {
 		return err
 	}
@@ -363,6 +377,28 @@ func parseConstBlock(src string, namePattern string) map[string]string {
 	return out
 }
 
+// parseConstBlockGoNameToValue is parseConstBlock's mirror, keyed by the
+// Go constant NAME rather than by its Cedar string VALUE. Go identifiers
+// within one const block are always unique (a duplicate name is a
+// compile error), so this mapping never loses information the way
+// inverting parseConstBlock's value-keyed map would when two constants
+// happen to share the same string value — e.g. core/policy/cedar/
+// engine.go's CtxKeyToolName and CtxKeySecretToolName both equal
+// "tool_name" (lines 581 and 608): a value-keyed map can only remember
+// ONE of the two Go names for that shared value, silently dropping
+// whichever one the source-order scan visited first. Every caller that
+// needs "given this Go name, what Cedar string does it hold" (as
+// opposed to "given this Cedar string, some Go name that holds it")
+// must use this function, not invert parseConstBlock's map.
+func parseConstBlockGoNameToValue(src string, namePattern string) map[string]string {
+	re := regexp.MustCompile(`(?m)^\s*(` + namePattern + `)\s*=\s*"([^"]*)"`)
+	out := map[string]string{}
+	for _, m := range re.FindAllStringSubmatch(src, -1) {
+		out[m[1]] = m[2] // Go const name -> value
+	}
+	return out
+}
+
 // parseUIDBuilders finds every `func <Name>UID(...) cedar.EntityUID { ...
 // }` in types.go and records which EntityType* constant its body passes
 // to NewEntityUID. Brace-counted rather than regexp-bounded because
@@ -426,12 +462,7 @@ func parseUIDBuilders(src string, entityByString map[string]string) (map[string]
 // next `case`/`default`/closing brace), every `ensure(CtxKey<K>` /
 // `ensureBool(CtxKey<K>` reference contributes CtxKey<K>'s string value
 // to every action named in that case's label list.
-func parseFamilyContext(engineSrc string, ctxKeyByGoName map[string]string) (map[string]map[string]bool, error) {
-	ctxValueByGoName := map[string]string{} // invert ctxKeyByGoName (value->goName) back to goName->value
-	for value, goName := range ctxKeyByGoName {
-		ctxValueByGoName[goName] = value
-	}
-
+func parseFamilyContext(engineSrc string, ctxValueByGoName map[string]string) (map[string]map[string]bool, error) {
 	const marker = "func populateFamilyContext("
 	idx := strings.Index(engineSrc, marker)
 	if idx < 0 {
@@ -559,12 +590,7 @@ type funcInfo struct {
 // no key name literally), so the real key literals live in the CALLING
 // function's own body — exactly where pass 1 already looks. No widening
 // is needed for that leg, and none is applied.
-func scanGoSources(dirs []string, uidEntityForFunc map[string]string, ctxKeyByGoName map[string]string) (*derived, error) {
-	ctxValueByGoName := map[string]string{}
-	for value, goName := range ctxKeyByGoName {
-		ctxValueByGoName[goName] = value
-	}
-
+func scanGoSources(dirs []string, uidEntityForFunc map[string]string, ctxValueByGoName map[string]string) (*derived, error) {
 	actionIdentRe := regexp.MustCompile(`\bAction\w+\b`)
 	ctxKeyIdentRe := regexp.MustCompile(`\bCtxKey\w+\b`)
 	// Two map-key literal shapes coexist in this codebase:

@@ -193,17 +193,6 @@ github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat.Config.Clock
 # at core/rpc/views/agentgraph/chat/chat_runner.go:443: Config.Clock (func) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat.Config.RiskGate
-# at core/rpc/views/agentgraph/chat/chat_runner.go:519: Config.RiskGate (interface) is never set to a non-nil value in any non-test composite literal under core/
-# 2026-09-12 — DELIBERATE. Same finding as the i18 entry for this field;
-# see scripts/ci/allowlists/i18-nil-optional-deps.txt for the full
-# measurement and the re-enable condition. Short version: rung 0 of
-# resolveConfirmEach is merged but switched off in core/rpc/api.go
-# (`RiskGate: nil`) because layer 3 asks about every un-granted MCP tool
-# and there is no prompt deadline yet, so an unattended autonomous run
-# would park forever. Owner: risk-rated-autonomy-01PMRA01. Deleted by the
-# PR landing WP05 (the rater) + WP07 (the unattended deadline).
-
 github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat.Config.SecretAuditEmitter
 # at core/rpc/views/agentgraph/chat/chat_runner.go:532: Config.SecretAuditEmitter (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
