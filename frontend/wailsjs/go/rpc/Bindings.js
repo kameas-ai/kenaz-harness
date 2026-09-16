@@ -1398,6 +1398,10 @@ export function Settings_GetPermissionsMigrationToastShown() {
   return window['go']['rpc']['Bindings']['Settings_GetPermissionsMigrationToastShown']();
 }
 
+export function Settings_GetRiskRaterBenchmark() {
+  return window['go']['rpc']['Bindings']['Settings_GetRiskRaterBenchmark']();
+}
+
 export function Settings_GetSaveArtifactEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetSaveArtifactEnabled']();
 }

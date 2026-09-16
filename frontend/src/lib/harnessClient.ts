@@ -131,6 +131,7 @@ import type {
   CompactionManualResult,
   CompactionScopeKey,
   CompactionTierExplain,
+  RiskRaterBenchmark,
   Branch,
   BranchCreateOptions,
   BranchStatusInfo,
@@ -547,6 +548,10 @@ interface WailsBindingsLike {
   Settings_GetEmbedderConfig(): Promise<EmbedderConfigResult>;
   /** Persists the embedder provider selection and optional model override. */
   Settings_SetEmbedderConfig(profileID: string, modelOverride: string): Promise<void>;
+  /** Returns the vendored risk-rater model comparison
+   * (risk-rated-autonomy-01PMRA01, owner ruling 2026-09-15) the
+   * risk-rater-model picker renders alongside each candidate model. */
+  Settings_GetRiskRaterBenchmark(): Promise<RiskRaterBenchmark>;
   // per-message-token-meter-01KR3PQR
   Settings_GetShowPerMessageTokenMeter(): Promise<boolean>;
   Settings_SetShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
@@ -2389,6 +2394,14 @@ export interface SettingsClient {
   getChatCustomInstructions(): Promise<string>;
   /** Persist the user's chat custom-instructions text (empty clears it). */
   setChatCustomInstructions(text: string): Promise<void>;
+
+  /**
+   * Returns the vendored risk-rater model comparison
+   * (risk-rated-autonomy-01PMRA01, owner ruling 2026-09-15: 234 calls /
+   * 9 models) the risk-rater-model picker renders alongside each
+   * candidate model. Static reference data — fetch once per view mount.
+   */
+  getRiskRaterBenchmark(): Promise<RiskRaterBenchmark>;
 
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   /** Read the audit-log retention strategy and window. */
@@ -4251,6 +4264,7 @@ export function createHarnessClient(): HarnessClient {
       setAutoTitleEnabled: (enabled) => b().Settings_SetAutoTitleEnabled(enabled),
       getChatCustomInstructions: () => b().Settings_GetChatCustomInstructions(),
       setChatCustomInstructions: (text) => b().Settings_SetChatCustomInstructions(text),
+      getRiskRaterBenchmark: () => b().Settings_GetRiskRaterBenchmark(),
       // audit-log-enhancement-01KX5R8F WP07
       getAuditSettings: () => b().Settings_GetAuditSettings(),
       setAuditSettings: (s) => b().Settings_SetAuditSettings(s),
@@ -5616,6 +5630,37 @@ export function createFakeHarnessClient(
       setAutoTitleEnabled: noop,
       getChatCustomInstructions: async () => '',
       setChatCustomInstructions: noop,
+      // risk-rated-autonomy-01PMRA01: a small representative fixture, not
+      // the full 9-model vendored table — one benchmarked row (the
+      // openrouter default) so picker tests can assert real numbers
+      // render, plus enough shape to exercise the "unbenchmarked" badge
+      // path for any model id the fixture doesn't cover.
+      getRiskRaterBenchmark: async () => ({
+        provenance: {
+          benchmark_date: '2026-09-15',
+          calls: 234,
+          method: 'fake-client fixture — see core/policy/risk/data/rater_benchmark.json for the real vendored data',
+        },
+        models: [
+          {
+            id: 'qwen/qwen-2.5-7b-instruct',
+            label: 'Qwen 2.5 7B Instruct',
+            measured_via: 'openrouter',
+            data_available: true,
+            bands_exact: 4,
+            bands_adjacent: 1,
+            bands_miss: 0,
+            injection_raw_score: 100,
+            injection_raw_note: '',
+            reliability_5s_pct: 96.2,
+            reliability_30s_pct: 100.0,
+            median_latency_ms: 467.9,
+            p90_latency_ms: 851.7,
+            cost_per_rating_usd: 0.0000592,
+            notes: 'openrouter provider default (owner ruling 3, 2026-09-15).',
+          },
+        ],
+      }),
       // audit-log-enhancement-01KX5R8F WP07; retention_enforced added by
       // audit-that-tells-the-truth-01PMZA10 UNIT-4 (spec D-8) — the fake
       // reports false, matching the honest pre-UNIT-8 default the real

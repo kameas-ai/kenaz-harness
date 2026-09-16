@@ -5745,8 +5745,105 @@ export namespace recipes {
 
 }
 
+export namespace risk {
+
+	export class BenchmarkProvenance {
+	    benchmark_date: string;
+	    calls: number;
+	    method: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkProvenance(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.benchmark_date = source["benchmark_date"];
+	        this.calls = source["calls"];
+	        this.method = source["method"];
+	    }
+	}
+	export class BenchmarkModelRow {
+	    id: string;
+	    label: string;
+	    measured_via: string;
+	    approximate_for_direct_provider?: boolean;
+	    aliases?: string[];
+	    data_available: boolean;
+	    bands_exact: number;
+	    bands_adjacent: number;
+	    bands_miss: number;
+	    injection_raw_score?: number;
+	    injection_raw_note: string;
+	    reliability_5s_pct: number;
+	    reliability_30s_pct: number;
+	    median_latency_ms: number;
+	    p90_latency_ms: number;
+	    cost_per_rating_usd: number;
+	    notes: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkModelRow(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.measured_via = source["measured_via"];
+	        this.approximate_for_direct_provider = source["approximate_for_direct_provider"];
+	        this.aliases = source["aliases"];
+	        this.data_available = source["data_available"];
+	        this.bands_exact = source["bands_exact"];
+	        this.bands_adjacent = source["bands_adjacent"];
+	        this.bands_miss = source["bands_miss"];
+	        this.injection_raw_score = source["injection_raw_score"];
+	        this.injection_raw_note = source["injection_raw_note"];
+	        this.reliability_5s_pct = source["reliability_5s_pct"];
+	        this.reliability_30s_pct = source["reliability_30s_pct"];
+	        this.median_latency_ms = source["median_latency_ms"];
+	        this.p90_latency_ms = source["p90_latency_ms"];
+	        this.cost_per_rating_usd = source["cost_per_rating_usd"];
+	        this.notes = source["notes"];
+	    }
+	}
+	export class RiskRaterBenchmark {
+	    provenance: BenchmarkProvenance;
+	    models: BenchmarkModelRow[];
+
+	    static createFrom(source: any = {}) {
+	        return new RiskRaterBenchmark(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provenance = this.convertValues(source["provenance"], BenchmarkProvenance);
+	        this.models = this.convertValues(source["models"], BenchmarkModelRow);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace rpc {
-	
+
 	export class WindowSize {
 	    width: number;
 	    height: number;
