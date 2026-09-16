@@ -176,14 +176,21 @@ type Settings struct {
 	//     unclassifiable-tool call prompts under every mode.
 	//
 	// Precedence: this dial WRITES the global autonomy layer's
-	// KnobRiskThreshold override. It never overrides a MORE SPECIFIC
-	// override already present at that layer (set via the Autonomy
-	// Dials panel), and it never reaches into the project/session
-	// layers at all — a project or session RiskThreshold override still
-	// wins over this dial per autonomy.Resolve's normal
-	// session->project->global precedence. See
-	// foldPermissionModeIntoGlobal's doc comment (core/rpc/api.go) for
-	// the full rule, documented at both sites per owner ruling
+	// KnobRiskThreshold override, but ONLY when no layer — session,
+	// project, OR global — already has an explicit RiskThreshold
+	// override OR a tier Level set at all (autonomy.Resolve,
+	// core/autonomy/resolve.go's resolveKnob, checks Overrides across
+	// all three layers BEFORE checking any layer's Level, so a
+	// global-layer Overrides write would otherwise silently outrank an
+	// explicit session- or project-scoped tier pick, not just a
+	// global one — this is why the guard inspects all three layers'
+	// Overrides AND Level, not only the global layer's Overrides). Any
+	// one of those six slots being populated means the user (or a
+	// panel acting for them, e.g. AutonomyPanel.vue's tier picker,
+	// which persists a bare Level with empty Overrides) has already
+	// made an explicit choice, and this coarse dial must defer to it.
+	// See foldPermissionModeIntoGlobal's doc comment (core/rpc/api.go)
+	// for the full rule, documented at both sites per owner ruling
 	// (permission-mode-wiring, 2026-09-16).
 	// UI: stern confirm dialog when switching to "permissive".
 	PermissionMode string `json:"permissionMode,omitempty"`

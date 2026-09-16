@@ -6627,26 +6627,89 @@ func permissionModeRiskThreshold(mode string) (int, bool) {
 	}
 }
 
+// autonomyResolutionHasExplicitRiskThresholdChoice reports whether
+// autonomy.Resolve's resolveKnob (core/autonomy/resolve.go:164-187)
+// would already resolve KnobRiskThreshold from a real per-layer choice
+// — before PermissionMode's fold ever gets a vote.
+//
+// resolveKnob's actual seven-slot precedence order (resolve.go:165-186)
+// is NOT "one layer's Overrides, then that layer's Level" — it is two
+// full passes across all three layers:
+//
+//	Pass 1 (resolve.go:165-174): session.Overrides[k], then
+//	        project.Overrides[k], then global.Overrides[k].
+//	Pass 2 (resolve.go:175-184): session.Level, then project.Level,
+//	        then global.Level.
+//	Pass 3 (resolve.go:185-186): the TierDefault fallback.
+//
+// foldPermissionModeIntoGlobal writes into the GLOBAL layer's
+// Overrides map, which Pass 1 checks at resolve.go:172-174 — the LAST
+// slot of Pass 1, but still strictly ahead of EVERY slot in Pass 2,
+// including session.Level (resolve.go:176-178) and project.Level
+// (resolve.go:179-181). So an unguarded global.Overrides write does
+// not just outrank a global-layer Level choice (the case the first cut
+// of this function guarded); it would ALSO silently outrank an
+// explicit SESSION- or PROJECT-scoped tier pick made through
+// AutonomyPanel.vue's primary interaction (setTier(), which persists a
+// bare {Level: t, Overrides: {}} — Overrides deliberately empty). That
+// is the exact bug a live scratch reproduction caught: a global
+// Layer{Level: &TierAutonomous, Overrides: {}} with PermissionMode
+// left at its default resolved to RiskThreshold=40 (PermissionMode's
+// "normal") instead of 80 (the user's explicit Autonomous choice),
+// because the old guard only ever inspected global.Overrides and
+// global.Level never entered its check at all — and the same failure
+// mode reaches session/project Level choices too, via the Pass-1/
+// Pass-2 ordering above, once the fold is allowed to fire regardless
+// of what's set elsewhere.
+//
+// The correct guard is therefore: PermissionMode may only write when
+// NONE of the six higher-or-equal-precedence slots above the
+// TierDefault fallback are already populated — i.e. no layer has an
+// explicit RiskThreshold override AND no layer has a Level set at
+// all. Any one of those six being present means resolveKnob would
+// already resolve RiskThreshold from a real choice before ever
+// reaching Pass 3, so PermissionMode (which is only meant to stand in
+// for the TierDefault fallback with a user-facing coarse preset) must
+// defer.
+func autonomyResolutionHasExplicitRiskThresholdChoice(global, project, session autonomy.Layer) bool {
+	if _, ok := session.Overrides[autonomy.KnobRiskThreshold]; ok {
+		return true
+	}
+	if _, ok := project.Overrides[autonomy.KnobRiskThreshold]; ok {
+		return true
+	}
+	if _, ok := global.Overrides[autonomy.KnobRiskThreshold]; ok {
+		return true
+	}
+	if session.Level != nil {
+		return true
+	}
+	if project.Level != nil {
+		return true
+	}
+	if global.Level != nil {
+		return true
+	}
+	return false
+}
+
 // foldPermissionModeIntoGlobal folds Settings.PermissionMode's derived
 // RiskThreshold (permissionModeRiskThreshold) into the global autonomy
-// layer's Overrides map — the same shape
-// resolveAutonomyKnobsWithSettingsFallback already uses to fold the
-// legacy MaxIterations setting in, and the same precedence rule:
+// layer's Overrides map — but ONLY when
+// autonomyResolutionHasExplicitRiskThresholdChoice(global, project,
+// session) is false, i.e. no layer (session, project, OR global) has
+// an explicit RiskThreshold override or a Level set at all. See that
+// function's doc comment for the full resolve.go-cited precedence
+// analysis; the short version:
 //
-//   - No global-layer RiskThreshold override yet -> PermissionMode
-//     WRITES one. This is the coarse, user-facing dial taking effect
-//     with nothing more specific configured.
-//   - A global-layer RiskThreshold override already present (set via
-//     the Autonomy Dials panel, autonomy-knobs-live-01PMAG02's more
-//     granular per-knob control) -> left untouched. The more specific
-//     control wins, exactly as the MaxIterations fold-in already
-//     documents.
-//   - Project/session RiskThreshold overrides are untouched by this
-//     function entirely (it only ever writes to the GLOBAL layer), so
-//     autonomy.Resolve's normal downstream-first precedence
-//     (session -> project -> global) still lets a project or session
-//     override beat PermissionMode's global-layer value, same as any
-//     other knob.
+//   - Nothing set anywhere -> PermissionMode WRITES the global
+//     override. This is the coarse, user-facing dial taking effect
+//     with nothing more specific configured — functionally standing
+//     in for the TierDefault fallback (resolve.go:185-186).
+//   - Any explicit RiskThreshold override or Level at ANY layer
+//     (session, project, or global) -> left untouched. The more
+//     specific control wins, exactly as the MaxIterations fold-in
+//     documents for its own knob.
 //
 // This is the explicit precedence documented at both sites per the
 // owner's ruling: see autonomy.KnobRiskThreshold's doc comment
@@ -6656,13 +6719,18 @@ func permissionModeRiskThreshold(mode string) (int, bool) {
 // mode == "" or unrecognised is a no-op (permissionModeRiskThreshold's
 // ok=false) so a fresh install with no PermissionMode ever persisted
 // cannot silently downgrade a project/session RiskThreshold override
-// that predates this wiring.
-func foldPermissionModeIntoGlobal(global autonomy.Layer, mode string) autonomy.Layer {
+// or Level choice that predates this wiring.
+//
+// project and session must be the SAME layers computeAutonomyKnobs is
+// about to resolve against — this function must run after they are
+// loaded, not before, or the guard is checking stale (zero-value)
+// layers and the whole point of this function is defeated.
+func foldPermissionModeIntoGlobal(global, project, session autonomy.Layer, mode string) autonomy.Layer {
 	threshold, ok := permissionModeRiskThreshold(mode)
 	if !ok {
 		return global
 	}
-	if _, exists := global.Overrides[autonomy.KnobRiskThreshold]; exists {
+	if autonomyResolutionHasExplicitRiskThresholdChoice(global, project, session) {
 		return global
 	}
 	if global.Overrides == nil {
@@ -6689,16 +6757,6 @@ func computeAutonomyKnobs(ctx context.Context, sessionID string, c *core.Core, s
 		if g, gerr := settingsImpl.LoadAutonomyProfile(ctx); gerr == nil {
 			global = g
 		}
-		// permission-mode-wiring (owner ruling, 2026-09-16): fold
-		// Settings.PermissionMode's coarse preset into the global
-		// autonomy layer's RiskThreshold override. See
-		// foldPermissionModeIntoGlobal's doc comment for the
-		// precedence rule against an explicit autonomy-panel override.
-		if store := settingsImpl.Store(); store != nil {
-			if mode, merr := store.LoadPermissionMode(); merr == nil {
-				global = foldPermissionModeIntoGlobal(global, mode)
-			}
-		}
 	}
 	if c != nil && sessionID != "" {
 		if sm := c.SessionManager(); sm != nil {
@@ -6712,6 +6770,22 @@ func computeAutonomyKnobs(ctx context.Context, sessionID string, c *core.Core, s
 						project = p
 					}
 				}
+			}
+		}
+	}
+	// permission-mode-wiring (owner ruling, 2026-09-16): fold
+	// Settings.PermissionMode's coarse preset into the global autonomy
+	// layer's RiskThreshold override — AFTER project and session are
+	// loaded above, not before, so
+	// autonomyResolutionHasExplicitRiskThresholdChoice sees the real
+	// layers rather than their zero values. See
+	// foldPermissionModeIntoGlobal's doc comment for the full
+	// precedence rule (an explicit RiskThreshold override OR a Level
+	// choice at ANY of the three layers wins over PermissionMode).
+	if settingsImpl != nil {
+		if store := settingsImpl.Store(); store != nil {
+			if mode, merr := store.LoadPermissionMode(); merr == nil {
+				global = foldPermissionModeIntoGlobal(global, project, session, mode)
 			}
 		}
 	}
