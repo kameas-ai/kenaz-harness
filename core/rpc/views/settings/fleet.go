@@ -84,6 +84,16 @@ type fleetState struct {
 	// enroll. nil before the first successful fetch.
 	telemetryOptIns []fleet.TelemetryOptInItem
 
+	// optInPusher pushes the per-class opt-in vector a consent tier implies
+	// (fleet.TierOptInUpdates) to the fleet store, wired via
+	// SetTelemetryOptInPusher. Used here only to retry a push that failed in
+	// a previous session — the "next app start" half of its retry contract
+	// (see fleetEnroll). The tier-change half is handled directly by
+	// core/rpc/views/fleet.Impl.SetTelemetryConsent, which holds its own
+	// reference to the same pusher. nil on the test chassis / fleet-disabled
+	// path.
+	optInPusher *fleet.TelemetryOptInPusher
+
 	// syncKindRegistry is the SyncKind registry wired at SetSyncKindRegistry
 	// time (fleet-generic-sync-framework-01NSYNC02 WP02). Used by the
 	// composite ConfigApplier to dispatch a bundle's org_config keyed
@@ -261,6 +271,61 @@ func (a *API) SetFleetOTLPPipeline(
 	a.fleet.telemetryRes = startupRes
 	a.fleet.tpFunc = tpFunc
 	a.fleet.consent = consent
+}
+
+// SetTelemetryOptInPusher wires the tier→opt-ins pusher (fleet telemetry
+// tier fix, core/fleet/telemetry_optins_pusher.go) so fleetEnroll can retry,
+// at the next app start, a push that failed (or was never attempted, e.g.
+// fleet was unreachable) in a previous session. Called from rpc.New()
+// alongside the fleetview.Impl construction that holds the same pusher for
+// the "next tier change" half of the retry contract.
+func (a *API) SetTelemetryOptInPusher(p *fleet.TelemetryOptInPusher) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.optInPusher = p
+}
+
+// AdoptTelemetryOptIns caches an already-known per-class opt-in snapshot —
+// e.g. one TelemetryOptInPusher just confirmed pushing — and feeds it to the
+// OTLP log lane's narrowing snapshot, without a redundant GET round trip to
+// the fleet store. Mirrors the tail of refreshTelemetryOptIns (cache +
+// pipeline.SetTelemetryOptIns) but skips the fetch. Safe to call with nil
+// items (e.g. to clear).
+func (a *API) AdoptTelemetryOptIns(items []fleet.TelemetryOptInItem) {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	a.fleet.telemetryOptIns = items
+	pipeline := a.fleet.otlpPipeline
+	a.fleet.mu.Unlock()
+	if pipeline != nil {
+		pipeline.SetTelemetryOptIns(items)
+	}
+}
+
+// retryPendingTelemetryOptInPush re-attempts a tier-implied opt-in push that
+// failed (or was skipped, e.g. fleet unreachable) in a previous session —
+// the "next app start" half of TelemetryOptInPusher's retry contract. Called
+// from fleetEnroll. Best-effort: errors are logged, not returned, so a
+// pending sync issue never blocks sign-in/enroll.
+func (a *API) retryPendingTelemetryOptInPush(ctx context.Context) {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	pusher := a.fleet.optInPusher
+	consent := a.fleet.consent
+	a.fleet.mu.RUnlock()
+	if pusher == nil || consent == nil {
+		return
+	}
+	if err := pusher.Reconcile(ctx, consent.Level()); err != nil {
+		logging.L().Debug("fleet.telemetry_optins.reconcile.failed", "err", err.Error())
+	}
 }
 
 // SetSkillRefs wires the fleet-skill store and slash registry into the fleet
@@ -610,6 +675,13 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	// is best-effort and consent-gated: it caches the fleet-resolved opt-ins
 	// but never relaxes the TelemetryConsent.EffectiveLevel export gate.
 	a.refreshTelemetryOptIns(ctx)
+
+	// Retry a tier-implied opt-in push that failed (or was never attempted)
+	// in a previous session — the "next app start" half of
+	// TelemetryOptInPusher's retry contract (fleet telemetry tier fix). Runs
+	// after the GET above so a successful push's onPushed callback is the
+	// last writer of the local cache, not the (possibly stale) GET.
+	a.retryPendingTelemetryOptInPush(ctx)
 
 	return fleetIdentityToView(id), nil
 }
