@@ -26,6 +26,7 @@ import type {
   WireSessionKnobs,
   Session,
   SiteSummary,
+  SiteEnvEntry,
   Project,
   Provider,
   AddProviderInput,
@@ -947,6 +948,13 @@ interface WailsBindingsLike {
   Catalog_Uninstall(kind: string, catalogID: string, version: string): Promise<void>;
   /** List all catalog items currently installed in the local DataDir. */
   Catalog_Installed(): Promise<CatalogItemView[]>;
+  /**
+   * Withdraws catalogID from the org listing (fleet-enforcement-truth-01PMZ505
+   * WP11). Distinct from Catalog_Uninstall, which only removes the local
+   * copy. The server enforces "owner or fleet admin only"; a 403 surfaces
+   * as a forbidden error, not a subscription-tier error.
+   */
+  Catalog_Unpublish(catalogID: string): Promise<void>;
 
   // ── Sync (fleet-share-and-sync-01NDFSEX14 WP05) ───────────────────────────
   /** Enable or disable sync for a category. On enable, triggers an immediate push. */
@@ -990,6 +998,15 @@ interface WailsBindingsLike {
   Sites_Status(site: string): Promise<SiteSummary>;
   Sites_Logs(site: string, tailLines: number): Promise<string>;
   Sites_Delete(site: string): Promise<void>;
+  /**
+   * Sets one or more declared environment variable values for site
+   * (fleet-enforcement-truth-01PMZ505 WP09). Write-only — values are never
+   * returned by Sites_EnvList. This is the ONLY way secrets reach a site;
+   * they must never ride in a deploy/manifest payload.
+   */
+  Sites_EnvSet(site: string, vars: Record<string, string>): Promise<void>;
+  /** Returns declared env var names + metadata for site. Never returns a value. */
+  Sites_EnvList(site: string): Promise<import('./types').SiteEnvEntry[]>;
   // ── plan-mode-posture-01KZNP3F WP06 — plan approval actions ─────────────
   Planmode_Approve(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
   Planmode_Discard(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
@@ -1027,6 +1044,8 @@ interface WailsBindingsLike {
   Compliance_Status(): Promise<ComplianceStatus>;
   Compliance_ArchiveNow(): Promise<void>;
   Compliance_SetRetention(days: number): Promise<void>;
+  // fleet-enforcement-truth-01PMZ505 WP06.
+  Compliance_SkipToID(toID: string): Promise<void>;
 }
 
 
@@ -3585,6 +3604,17 @@ export interface CatalogClient {
    * broken.
    */
   installed(): Promise<CatalogItemView[]>;
+  /**
+   * Withdraws catalogID from the org listing (fleet-enforcement-truth-01PMZ505
+   * WP11). Distinct from uninstall(), which only removes the local copy.
+   * The server enforces the authorization rule (owner or fleet admin) —
+   * the harness has no publisher identity on the wire to evaluate it
+   * itself, so this shows the action on every listed item, sends the
+   * request, and reports the server's answer. A 403 surfaces as a
+   * forbidden error, distinct from the subscription-tier error used
+   * elsewhere in this client.
+   */
+  unpublish(catalogID: string): Promise<void>;
 }
 
 // ── Sync client (fleet-share-and-sync-01NDFSEX14 WP05) ──────────────────────
@@ -3634,6 +3664,15 @@ export interface SitesClient {
   logs(site: string, tailLines: number): Promise<string>;
   /** Delete a site and all its deployments. */
   delete(site: string): Promise<void>;
+  /**
+   * Sets one or more declared environment variable values for site
+   * (fleet-enforcement-truth-01PMZ505 WP09). Write-only: values are
+   * accepted here and never surfaced by envList(). This is the ONLY way
+   * secrets reach a site — they must never ride in a deploy manifest.
+   */
+  envSet(site: string, vars: Record<string, string>): Promise<void>;
+  /** Returns declared env var names + metadata for site. Never returns a value. */
+  envList(site: string): Promise<SiteEnvEntry[]>;
 }
 
 // ── Compliance client (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
@@ -3645,6 +3684,13 @@ export interface ComplianceClient {
   archiveNow(): Promise<void>;
   /** Update the local audit retention window. Days must be 30 | 60 | 90 | 365. */
   setRetention(days: number): Promise<void>;
+  /**
+   * Operator recovery action after a hash-chain break: manually advances
+   * the archiver's cursor to toID, clearing the halt so archiveNow() can
+   * proceed again (fleet-enforcement-truth-01PMZ505 WP06). Rejects when
+   * the capability is not enabled or the archiver is not wired.
+   */
+  skipToId(toID: string): Promise<void>;
 }
 
 export interface HarnessClient {
@@ -4569,6 +4615,8 @@ export function createHarnessClient(): HarnessClient {
       install: (catalogID, version) => b().Catalog_Install(catalogID, version),
       uninstall: (kind, catalogID, version) => b().Catalog_Uninstall(kind, catalogID, version),
       installed: () => b().Catalog_Installed(),
+      // fleet-enforcement-truth-01PMZ505 WP11.
+      unpublish: (catalogID) => b().Catalog_Unpublish(catalogID),
     },
     // ── Sync (fleet-share-and-sync-01NDFSEX14 WP05) ────────────────────────
     sync: {
@@ -4589,12 +4637,17 @@ export function createHarnessClient(): HarnessClient {
       status: (site) => b().Sites_Status(site),
       logs: (site, tailLines) => b().Sites_Logs(site, tailLines),
       delete: (site) => b().Sites_Delete(site),
+      // fleet-enforcement-truth-01PMZ505 WP09.
+      envSet: (site, vars) => b().Sites_EnvSet(site, vars),
+      envList: (site) => b().Sites_EnvList(site),
     },
     // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
     compliance: {
       status: () => b().Compliance_Status(),
       archiveNow: () => b().Compliance_ArchiveNow(),
       setRetention: (days) => b().Compliance_SetRetention(days),
+      // fleet-enforcement-truth-01PMZ505 WP06.
+      skipToId: (toID) => b().Compliance_SkipToID(toID),
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: () => b().Unit_SyncStatus(),
@@ -6324,6 +6377,8 @@ export function createFakeHarnessClient(
       install: noop,
       uninstall: noop,
       installed: async () => [],
+      // fleet-enforcement-truth-01PMZ505 WP11.
+      unpublish: noop,
     },
     sync: {
       toggle: noop,
@@ -6351,6 +6406,9 @@ export function createFakeHarnessClient(
       }),
       logs: async () => '',
       delete: noop,
+      // fleet-enforcement-truth-01PMZ505 WP09.
+      envSet: noop,
+      envList: async () => [],
     },
     // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
     compliance: {
@@ -6364,6 +6422,8 @@ export function createFakeHarnessClient(
       }),
       archiveNow: noop,
       setRetention: noop,
+      // fleet-enforcement-truth-01PMZ505 WP06.
+      skipToId: noop,
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: async (): Promise<import('./types').UnitSyncStatusView> => ({

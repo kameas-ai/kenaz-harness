@@ -4602,6 +4602,20 @@ export interface SiteSummary {
 }
 
 /**
+ * SiteEnvEntry — one declared env var NAME + metadata for a site
+ * (fleet-enforcement-truth-01PMZ505 WP09). Never carries a value —
+ * Sites_EnvList is read-only over names; Sites_EnvSet is the only way to
+ * set one, and it is write-only (core/fleet/sites.go's SiteEnvEntry doc:
+ * "Values are never returned"). Mirrors core/rpc/views/sites.SiteEnvEntry.
+ */
+export interface SiteEnvEntry {
+  name: string;
+  description?: string;
+  /** RFC3339; absent/zero when never set. */
+  setAt?: string;
+}
+
+/**
  * DeployProgressEvent — emitted on the "sites:deploy:progress" topic
  * while Sites_Deploy is running. Mirrors core/rpc/views/sites.DeployProgressEvent.
  */

@@ -6,7 +6,11 @@
  * count, retention window selector (30 / 60 / 90 / 365 days), and an
  * "Archive now" trigger. When CapAuditLogImmuDB is inactive (enabled=false),
  * a gating notice replaces the controls. A red banner appears when a hash-
- * chain continuity break has been detected (archival halted until resolved).
+ * chain continuity break has been detected (archival halted until resolved),
+ * with an operator "skip to id" recovery control inside it
+ * (fleet-enforcement-truth-01PMZ505 WP06 — before this, the banner told the
+ * user to "contact your administrator to advance the cursor," and the
+ * administrator had no control that did so).
  *
  * (fleet-audit-archival-01NDFSEX13 WP06)
  */
@@ -24,6 +28,11 @@ const archiving = ref(false);
 const archiveError = ref('');
 const retentionSaving = ref(false);
 const retentionError = ref('');
+
+// fleet-enforcement-truth-01PMZ505 WP06 — chain-break recovery.
+const skipToIdInput = ref('');
+const skipping = ref(false);
+const skipError = ref('');
 
 // ── Load ────────────────────────────────────────────────────────────────────
 
@@ -81,6 +90,22 @@ async function archiveNow() {
     archiveError.value = String(err);
   } finally {
     archiving.value = false;
+  }
+}
+
+async function skipToId() {
+  const toID = skipToIdInput.value.trim();
+  if (!toID) return;
+  skipping.value = true;
+  skipError.value = '';
+  try {
+    await client.compliance.skipToId(toID);
+    skipToIdInput.value = '';
+    await loadStatus();
+  } catch (err) {
+    skipError.value = String(err);
+  } finally {
+    skipping.value = false;
   }
 }
 
@@ -147,6 +172,28 @@ async function setRetention(days: number) {
         since the last successful flush. Review
         <code>fleet.audit_chain_break</code> events in the audit log, then
         contact your administrator to advance the cursor past the break point.
+      </p>
+      <div class="flex items-center gap-2 pt-1" data-testid="compliance-skip-to-id-control">
+        <input
+          v-model="skipToIdInput"
+          type="text"
+          placeholder="Event id to skip to…"
+          class="flex-1 px-2 py-1 text-xs font-mono rounded border border-signal-danger bg-surface-0 text-ink"
+          data-testid="compliance-skip-to-id-input"
+          :disabled="skipping"
+        />
+        <button
+          type="button"
+          class="px-2 py-1 text-[11px] rounded border border-signal-danger text-signal-danger hover:bg-surface-2 disabled:opacity-50"
+          data-testid="compliance-skip-to-id-btn"
+          :disabled="skipping || !skipToIdInput.trim()"
+          @click="skipToId"
+        >
+          {{ skipping ? 'Skipping…' : 'Skip to id' }}
+        </button>
+      </div>
+      <p v-if="skipError" class="text-xs text-signal-danger" data-testid="compliance-skip-to-id-error">
+        {{ skipError }}
       </p>
     </div>
 
