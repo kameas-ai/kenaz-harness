@@ -37,6 +37,15 @@ type Rating struct {
 	// together — WP05's cache key includes this field for exactly that
 	// reason.
 	PromptVersion string
+	// CacheHit is true when this Rating was served from the
+	// session-scoped rating cache rather than a fresh model call
+	// (FR-007's "whether the value was served from cache" audit
+	// requirement). Set by the RiskRater implementation on return, never
+	// by the cache itself — LLMRater.Rate stamps it false on a fresh
+	// compute (the zero value already means this) and true on a cache
+	// hit, on a COPY of the cached value, so the cache's own stored
+	// entry is never mutated by a later reader.
+	CacheHit bool
 }
 
 // SessionContext is the narrow, additive session-scoped context a
