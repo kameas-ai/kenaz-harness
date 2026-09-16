@@ -181,7 +181,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 188 entries.
+# 189 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -388,6 +388,7 @@
 "Settings_GetChatCustomInstructions"
 "Settings_GetEmbedderConfig"
 "Settings_GetMaxGeneratedImageBytes"
+"Settings_GetRiskRaterBenchmark"
 "Settings_GetShowPerMessageTokenMeter"
 "Settings_SetAutoCaptureGeneratedImages"
 "Settings_SetAutoResumeOnKeyRotation"

@@ -18,6 +18,7 @@ import (
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
@@ -1459,6 +1460,14 @@ func (b *Bindings) Settings_GetChatCustomInstructions() (string, error) {
 // text. An empty string clears the user layer.
 func (b *Bindings) Settings_SetChatCustomInstructions(text string) error {
 	return b.api.Settings().SetChatCustomInstructions(b.ctx(), text)
+}
+
+// Settings_GetRiskRaterBenchmark returns the vendored risk-rater model
+// comparison (risk-rated-autonomy-01PMRA01, owner ruling 2026-09-15) the
+// Settings picker UI renders alongside each candidate rating model.
+func (b *Bindings) Settings_GetRiskRaterBenchmark() (risk.RiskRaterBenchmark, error) {
+	defer sentry.WrapBinding("Settings_GetRiskRaterBenchmark")()
+	return b.api.Settings().GetRiskRaterBenchmark(b.ctx())
 }
 
 // EmbedderConfigResult is the wire shape returned by
