@@ -336,6 +336,18 @@ Per-symbol justifications stay with their gate in
 
 ---
 
+## Merge gates key on paths, not branch names
+
+Owner policy (2026-09-15, finding #100). A merge gate written as "the
+`feature/X` -> `main` PR is blocked until ..." is unenforceable: the sites
+release gate (9 verification WPs, all still NOT RUN) was bypassed when the
+same feature reached `main` via a different PR, and nothing fired. A gate
+that must bind names the **code paths it protects** (files, packages,
+bindings), so it fires however the change arrives. When writing a
+release-gate into a spec, state it as "changes touching `core/x/**` /
+binding family `Y_*` require ..." and, where mechanically checkable, back
+it with a `scripts/ci/check-*.sh` gate + planted proof rather than prose.
+
 ## Mission system (kitty-specs/)
 
 Each feature is a *mission* under `kitty-specs/<slug>-<ULID>/`:
