@@ -37,6 +37,7 @@ import {onboarding} from '../models';
 import {permissions} from '../models';
 import {planmode} from '../models';
 import {policy} from '../models';
+import {risk} from '../models';
 import {projects} from '../models';
 import {autonomy} from '../models';
 import {scheduledchat} from '../models';
@@ -756,6 +757,8 @@ export function Settings_GetPermissionCacheDangerousOps():Promise<boolean>;
 export function Settings_GetPermissionMode():Promise<string>;
 
 export function Settings_GetPermissionsMigrationToastShown():Promise<boolean>;
+
+export function Settings_GetRiskRaterBenchmark():Promise<risk.RiskRaterBenchmark>;
 
 export function Settings_GetSaveArtifactEnabled():Promise<boolean>;
 

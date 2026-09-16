@@ -46,6 +46,7 @@ import CompliancePanel from '@/views/settings/CompliancePanel.vue';
 import CrashReportingPanel from '@/views/settings/CrashReportingPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import BranchAdvisorSettings from '@/components/settings/BranchAdvisorSettings.vue';
+import RiskRaterModelPicker from '@/components/settings/RiskRaterModelPicker.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import { runAsyncAction } from '@/composables/useAsyncAction';
@@ -1952,6 +1953,9 @@ onMounted(() => {
           </div>
         </div>
       </section>
+
+      <!-- risk-rated-autonomy-01PMRA01 owner ruling 1 (2026-09-15) — risk-rater model picker. -->
+      <RiskRaterModelPicker />
 
       <section data-testid="cost-notifications-section">
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">

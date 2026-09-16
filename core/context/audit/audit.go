@@ -834,6 +834,41 @@ type ToolConfirmDecisionPayload struct {
 	// "dismissed", "headless policy: deny", the resolver's reason). Not
 	// free-form user input and never tool arguments.
 	Reason string `json:"reason,omitempty"`
+
+	// ── risk-rated-autonomy-01PMRA01 WP10: structured layer-3 detail ──
+	//
+	// Score/Tier/Model/PromptVersion/CacheHit are populated ONLY for a
+	// Layer==3 decision that consulted a real or offline-floor rating
+	// (ToolConfirmPathLayer3RaterAllow, ToolConfirmPathLayer3Confirm
+	// routed via a rating, ToolConfirmPathLayer3Timeout when it followed
+	// a rating, and ToolConfirmPathLayer3OfflineFloor). Every other path
+	// leaves them at their zero value. Kept as separate typed fields
+	// rather than parsed out of Reason's free text so the audit VIEW can
+	// render them without re-deriving structure from a string built for
+	// a tool-error message.
+	//
+	// Privacy: same invariant as the rest of this payload (no argument
+	// values, no args summary, no tool output) — Score is the rater's
+	// numeric judgment, Model/PromptVersion identify WHICH rater
+	// produced it, and neither ever carries call content.
+
+	// Score is the FLOORED score (post risk.ApplyFamilyFloor) that was
+	// actually compared against Threshold — the number that determined
+	// the outcome, not necessarily the rater's raw output.
+	Score int `json:"score,omitempty"`
+	// Tier is risk.BandFor(Score)'s named band ("low".."critical"),
+	// mirroring owner decision 3: humans reviewing the trail want a
+	// word, not just a number.
+	Tier string `json:"tier,omitempty"`
+	// Model is the rater model id that produced Score, empty when Score
+	// came from the offline floor (no live model was consulted).
+	Model string `json:"model,omitempty"`
+	// PromptVersion identifies the rater system-prompt fixture in force,
+	// empty when Score came from the offline floor.
+	PromptVersion string `json:"prompt_version,omitempty"`
+	// CacheHit is true when Score came from the session-scoped rating
+	// cache rather than a fresh model call (FR-007).
+	CacheHit bool `json:"cache_hit,omitempty"`
 }
 
 // ToolConfirmGrantWrittenPayload is the KindToolConfirmGrantWritten

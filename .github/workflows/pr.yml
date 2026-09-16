@@ -244,6 +244,15 @@ jobs:
         # see core/wiring/knobcoverage's package doc for the contract.
         run: bash scripts/ci/check-knob-coverage.sh
 
+      - name: risk-gate-decides guard
+        # WP08 (risk-rated-autonomy-01PMRA01): fails the build when the
+        # risk gate cannot decide — every cedar.Outcome switch that
+        # branches on Allow/Deny must also handle Confirm explicitly, the
+        # RiskThreshold knob keeps its real consumer, and the family
+        # floor stays strictly above the autonomous tier's threshold. See
+        # scripts/ci/cmd/checkriskgatedecides/main.go's package doc.
+        run: bash scripts/ci/check-risk-gate-decides.sh
+
       - name: structured-output-row-parity guard
         # A capability row cannot silently desynchronize from its own
         # wire-encoding (structured-output-is-reachable-01PMZE14

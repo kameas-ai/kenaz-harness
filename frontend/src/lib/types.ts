@@ -735,6 +735,30 @@ export interface AuditEntry {
   category: string;
   subject: string;
   trailing?: string;
+  /**
+   * risk-rated-autonomy-01PMRA01 WP10: populated ONLY when subject is
+   * "tool.confirm_decision" — every other kind leaves this undefined,
+   * unchanged from the pre-WP10 "kind + category + trailing only"
+   * projection every other audit kind still gets.
+   */
+  tool_confirm_decision?: ToolConfirmDecisionDetail;
+}
+
+/** ToolConfirmDecisionDetail — mirrors core/rpc/views/audit.ToolConfirmDecisionDetail 1:1. */
+export interface ToolConfirmDecisionDetail {
+  server?: string;
+  tool?: string;
+  family?: string;
+  path?: string;
+  layer?: number;
+  threshold?: number;
+  approved: boolean;
+  reason?: string;
+  score?: number;
+  tier?: string;
+  model?: string;
+  prompt_version?: string;
+  cache_hit?: boolean;
 }
 
 export interface AuditFilter {
@@ -1070,6 +1094,16 @@ export interface Settings {
    * docs/unwired-ledger.md for why it is not wired.
    */
   branchAdvisorDefaultModel?: ProviderProfileRef;
+
+  /**
+   * Explicit (provider, model) choice for risk-rated-autonomy-01PMRA01's
+   * layer-3 rating call. Empty == no explicit choice: the backend's
+   * three-rung ladder (core/policy/risk.ResolveRaterModel) falls back to
+   * a per-provider default, then to any available model, so the rater
+   * always constructs (owner ruling 3, 2026-09-15). See
+   * RiskRaterBenchmark for the per-model data the picker renders.
+   */
+  riskRaterModel?: ProviderProfileRef;
   /**
    * User-overridden keyboard shortcut bindings. Map of shortcut id
    * (e.g. 'chat.send') → canonical binding string (e.g. 'Cmd+Shift+Enter').
@@ -1373,6 +1407,22 @@ export interface ToolConfirmPending {
   args_summary: string;
   /** The permission resolver's reason for the confirm_each verdict. */
   reason?: string;
+
+  /**
+   * risk-rated-autonomy-01PMRA01 WP10: true only when this prompt came
+   * from layer 3 (a Cedar-unmatched action a risk rating evaluated) AND
+   * a score was actually produced. Gate rendering on this flag, not on
+   * `risk_score !== 0` — 0 is itself a valid (very low) score.
+   */
+  has_risk_rating?: boolean;
+  /** The floored score compared against risk_threshold. */
+  risk_score?: number;
+  /** Named band (risk.BandFor): "low" | "moderate" | "elevated" | "high" | "critical". */
+  risk_tier?: string;
+  /** The resolved autonomy RiskThreshold this score was compared against. */
+  risk_threshold?: number;
+  /** The rater's own short justification, or the offline-floor's reason. */
+  risk_rationale?: string;
 }
 
 export type Theme = 'light' | 'dark' | 'system';
@@ -3436,6 +3486,56 @@ export interface CompactionTierExplain {
 export interface ProviderProfileRef {
   providerId?: string;
   modelId?: string;
+}
+
+/**
+ * RiskRaterBenchmarkProvenance — how/when the vendored risk-rater model
+ * comparison (risk-rated-autonomy-01PMRA01, owner ruling 2026-09-15) was
+ * collected. Rendered in the picker so a reader never has to take the
+ * numbers on faith.
+ */
+export interface RiskRaterBenchmarkProvenance {
+  benchmark_date: string;
+  calls: number;
+  method: string;
+}
+
+/**
+ * RiskRaterBenchmarkModel — one measured model's risk-rater performance,
+ * mirroring core/policy/risk.BenchmarkModelRow. A model with NO matching
+ * row here is "unbenchmarked" — the picker must render an explicit badge
+ * for that case, never a blank cell (the silent-lie rule).
+ */
+export interface RiskRaterBenchmarkModel {
+  id: string;
+  label: string;
+  measured_via: string;
+  approximate_for_direct_provider?: boolean;
+  aliases?: string[];
+  data_available: boolean;
+  bands_exact: number;
+  bands_adjacent: number;
+  bands_miss: number;
+  /** null when the model's injection-fixture response failed to parse
+   * (see injection_raw_note for why) — never coerced to 0. */
+  injection_raw_score: number | null;
+  injection_raw_note: string;
+  reliability_5s_pct: number;
+  reliability_30s_pct: number;
+  median_latency_ms: number;
+  p90_latency_ms: number;
+  cost_per_rating_usd: number;
+  notes: string;
+}
+
+/**
+ * RiskRaterBenchmark — the full vendored comparison returned by
+ * Settings_GetRiskRaterBenchmark(). Static reference data; fetched once
+ * per Settings view mount, same pattern as compaction.getTierExplain().
+ */
+export interface RiskRaterBenchmark {
+  provenance: RiskRaterBenchmarkProvenance;
+  models: RiskRaterBenchmarkModel[];
 }
 
 // ── conversation branches (agent-kernel-graph; Bundle B WP07/08) ──────

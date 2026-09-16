@@ -246,6 +246,19 @@ func init() {
 			"the global layer folded into every session's resolved "+
 			"autonomy knobs (autonomy-dial-01KR3M2A WP02).",
 	)
+	knobcoverage.Register[settings.Settings](
+		"RiskRaterModel",
+		"risk-rated-autonomy-01PMRA01 owner ruling 3 (2026-09-15): "+
+			"core/rpc/api.go's newLLMStack builds the chatRiskRater "+
+			"ProfileResolver closure by reading this field on every rating "+
+			"call and feeding it, plus the live personal.Store profile "+
+			"list, into risk.ResolveRaterModel — rung a (explicit setting) "+
+			"of the three-rung resolution ladder. Replaces the WP05 "+
+			"defect where the resolver fell back unconditionally to "+
+			"profiles[0].Model (the user's chat model, not a rating "+
+			"model). Settings UI: SettingsView.vue's risk-rater-model "+
+			"section, mirroring CompactionModel's picker pattern.",
+	)
 
 	// ── Compaction dials ─────────────────────────────────────────────
 	knobcoverage.Register[settings.Settings](

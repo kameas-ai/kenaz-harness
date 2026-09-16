@@ -238,6 +238,10 @@ type auditPersistedPayload struct {
 	Category string `json:"category"`
 	Subject  string `json:"subject"`
 	Trailing string `json:"trailing,omitempty"`
+	// ToolConfirmDecision round-trips Entry.ToolConfirmDecision (WP10) —
+	// still nothing beyond what Entry itself already carries; see that
+	// field's own doc comment for why this one kind is widened.
+	ToolConfirmDecision *ToolConfirmDecisionDetail `json:"tool_confirm_decision,omitempty"`
 }
 
 // rowFromEntry converts an Entry into a log.Row shaped for
@@ -255,9 +259,10 @@ func rowFromEntry(entry Entry) eventlog.Row {
 		ts = time.Now().UTC()
 	}
 	payload, _ := json.Marshal(auditPersistedPayload{
-		Category: entry.Category,
-		Subject:  entry.Subject,
-		Trailing: entry.Trailing,
+		Category:            entry.Category,
+		Subject:             entry.Subject,
+		Trailing:            entry.Trailing,
+		ToolConfirmDecision: entry.ToolConfirmDecision,
 	})
 	return eventlog.Row{
 		EventID:   entry.ID,
@@ -289,11 +294,12 @@ func entryFromRow(row eventlog.Row) Entry {
 		category = categoryForKind(event.Kind(row.Kind))
 	}
 	return Entry{
-		ID:        row.EventID,
-		Timestamp: row.EmittedAt.UTC().Format(time.RFC3339Nano),
-		Category:  category,
-		Subject:   subject,
-		Trailing:  decoded.Trailing,
+		ID:                  row.EventID,
+		Timestamp:           row.EmittedAt.UTC().Format(time.RFC3339Nano),
+		Category:            category,
+		Subject:             subject,
+		Trailing:            decoded.Trailing,
+		ToolConfirmDecision: decoded.ToolConfirmDecision,
 	}
 }
 

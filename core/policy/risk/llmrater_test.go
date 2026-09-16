@@ -144,8 +144,15 @@ func TestLLMRater_CacheHit(t *testing.T) {
 	if reg.callCount() != 1 {
 		t.Fatalf("registry called %d times for two identical dispatches, want 1 (cache should have hit)", reg.callCount())
 	}
+	if r1.CacheHit {
+		t.Errorf("first Rate() reported CacheHit=true; it was the fresh compute")
+	}
+	if !r2.CacheHit {
+		t.Errorf("second Rate() reported CacheHit=false; it should have been served from cache")
+	}
+	r2.CacheHit = r1.CacheHit // the only field the two are allowed to differ on.
 	if r1 != r2 {
-		t.Errorf("cached rating differs: %+v vs %+v", r1, r2)
+		t.Errorf("cached rating differs beyond CacheHit: %+v vs %+v", r1, r2)
 	}
 }
 

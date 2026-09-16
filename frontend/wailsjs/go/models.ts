@@ -747,18 +747,55 @@ export namespace attachments {
 }
 
 export namespace audit {
-	
+
+	export class ToolConfirmDecisionDetail {
+	    server?: string;
+	    tool?: string;
+	    family?: string;
+	    path?: string;
+	    layer?: number;
+	    threshold?: number;
+	    approved: boolean;
+	    reason?: string;
+	    score?: number;
+	    tier?: string;
+	    model?: string;
+	    prompt_version?: string;
+	    cache_hit?: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ToolConfirmDecisionDetail(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.server = source["server"];
+	        this.tool = source["tool"];
+	        this.family = source["family"];
+	        this.path = source["path"];
+	        this.layer = source["layer"];
+	        this.threshold = source["threshold"];
+	        this.approved = source["approved"];
+	        this.reason = source["reason"];
+	        this.score = source["score"];
+	        this.tier = source["tier"];
+	        this.model = source["model"];
+	        this.prompt_version = source["prompt_version"];
+	        this.cache_hit = source["cache_hit"];
+	    }
+	}
 	export class Entry {
 	    id: string;
 	    timestamp: string;
 	    category: string;
 	    subject: string;
 	    trailing?: string;
-	
+	    tool_confirm_decision?: ToolConfirmDecisionDetail;
+
 	    static createFrom(source: any = {}) {
 	        return new Entry(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -766,7 +803,26 @@ export namespace audit {
 	        this.category = source["category"];
 	        this.subject = source["subject"];
 	        this.trailing = source["trailing"];
+	        this.tool_confirm_decision = this.convertValues(source["tool_confirm_decision"], ToolConfirmDecisionDetail);
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class Filter {
 	    categories?: string[];
@@ -5745,8 +5801,105 @@ export namespace recipes {
 
 }
 
+export namespace risk {
+
+	export class BenchmarkProvenance {
+	    benchmark_date: string;
+	    calls: number;
+	    method: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkProvenance(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.benchmark_date = source["benchmark_date"];
+	        this.calls = source["calls"];
+	        this.method = source["method"];
+	    }
+	}
+	export class BenchmarkModelRow {
+	    id: string;
+	    label: string;
+	    measured_via: string;
+	    approximate_for_direct_provider?: boolean;
+	    aliases?: string[];
+	    data_available: boolean;
+	    bands_exact: number;
+	    bands_adjacent: number;
+	    bands_miss: number;
+	    injection_raw_score?: number;
+	    injection_raw_note: string;
+	    reliability_5s_pct: number;
+	    reliability_30s_pct: number;
+	    median_latency_ms: number;
+	    p90_latency_ms: number;
+	    cost_per_rating_usd: number;
+	    notes: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkModelRow(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.measured_via = source["measured_via"];
+	        this.approximate_for_direct_provider = source["approximate_for_direct_provider"];
+	        this.aliases = source["aliases"];
+	        this.data_available = source["data_available"];
+	        this.bands_exact = source["bands_exact"];
+	        this.bands_adjacent = source["bands_adjacent"];
+	        this.bands_miss = source["bands_miss"];
+	        this.injection_raw_score = source["injection_raw_score"];
+	        this.injection_raw_note = source["injection_raw_note"];
+	        this.reliability_5s_pct = source["reliability_5s_pct"];
+	        this.reliability_30s_pct = source["reliability_30s_pct"];
+	        this.median_latency_ms = source["median_latency_ms"];
+	        this.p90_latency_ms = source["p90_latency_ms"];
+	        this.cost_per_rating_usd = source["cost_per_rating_usd"];
+	        this.notes = source["notes"];
+	    }
+	}
+	export class RiskRaterBenchmark {
+	    provenance: BenchmarkProvenance;
+	    models: BenchmarkModelRow[];
+
+	    static createFrom(source: any = {}) {
+	        return new RiskRaterBenchmark(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provenance = this.convertValues(source["provenance"], BenchmarkProvenance);
+	        this.models = this.convertValues(source["models"], BenchmarkModelRow);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace rpc {
-	
+
 	export class WindowSize {
 	    width: number;
 	    height: number;
@@ -7618,11 +7771,16 @@ export namespace toolloop {
 	    tool: string;
 	    args_summary: string;
 	    reason?: string;
-	
+	    has_risk_rating?: boolean;
+	    risk_score?: number;
+	    risk_tier?: string;
+	    risk_threshold?: number;
+	    risk_rationale?: string;
+
 	    static createFrom(source: any = {}) {
 	        return new ConfirmRequest(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.session_id = source["session_id"];
@@ -7632,6 +7790,11 @@ export namespace toolloop {
 	        this.tool = source["tool"];
 	        this.args_summary = source["args_summary"];
 	        this.reason = source["reason"];
+	        this.has_risk_rating = source["has_risk_rating"];
+	        this.risk_score = source["risk_score"];
+	        this.risk_tier = source["risk_tier"];
+	        this.risk_threshold = source["risk_threshold"];
+	        this.risk_rationale = source["risk_rationale"];
 	    }
 	}
 	export class permRule {
