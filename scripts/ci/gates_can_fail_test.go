@@ -159,6 +159,13 @@ var cwdSensitiveGates = []string{
 	// lib/ci-gate.sh (BASH_SOURCE[0] self-location) before this line
 	// existed to catch a regression; added here so it stays caught.
 	"check-dead-nil-branch.sh",
+
+	// check-risk-gate-decides.sh (WP08, risk-rated-autonomy-01PMRA01):
+	// sources lib/ci-gate.sh like every gate in this list, and delegates
+	// to a `go run` invocation whose own repoRoot() falls back to
+	// os.Getwd() if `git rev-parse --show-toplevel` fails — the same
+	// class every other entry here was added to catch.
+	"check-risk-gate-decides.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -4471,5 +4478,130 @@ func TestAdapterCatalogParityGate_CleanOnUnmutatedTree(t *testing.T) {
 	if strings.Contains(out, "0 registered kinds") || strings.Contains(out, "0 catalog files") {
 		t.Fatalf("gate reports zero adapters or zero catalog files — this is the discovery-floor "+
 			"failure mode (a broken scan reporting a false clean), not a real pass:\n%s", out)
+	}
+}
+
+// TestRiskGateDecidesGate_PlantedMissingConfirmCaseFires is the planted-
+// violation proof for check-risk-gate-decides.sh (WP08, risk-rated-
+// autonomy-01PMRA01), anchored to CONTENT rather than file order or line
+// number (finding #67): it removes the `case cedar.Confirm:` arm from
+// core/tools/bash/bash.go's real switch on dec.Outcome via the tool's own
+// RISK_GATE_DECIDES_OVERLAY mechanism, so the real file is never touched.
+// A switch that still branches on Allow and Deny but no longer names
+// Confirm explicitly is exactly the fail-open shape one layer up this
+// gate exists to catch.
+func TestRiskGateDecidesGate_PlantedMissingConfirmCaseFires(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "tools", "bash", "bash.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+
+	const anchor = "\tcase cedar.Confirm:\n"
+	if !strings.Contains(string(orig), anchor) {
+		t.Fatalf("expected `case cedar.Confirm:` line not found in bash.go — the switch shape may have " +
+			"moved; update this test and the gate together")
+	}
+	// Replace the case label with an equivalent-looking but non-matching
+	// comment line so brace-matching still succeeds (the block's total
+	// line count and structure are otherwise unchanged) while the
+	// `\bConfirm\b` case-value scan the gate runs no longer finds it.
+	mutated := strings.Replace(string(orig), anchor, "\t// case cedar.Confirm: removed by planted-violation test\n", 1)
+
+	scratch := t.TempDir()
+	scratchImpl := filepath.Join(scratch, "bash_zz_gate_probe.go")
+	if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing scratch mutated bash.go: %v", err)
+	}
+	overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		t.Fatalf("marshalling overlay: %v", err)
+	}
+	overlayPath := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+		t.Fatalf("writing overlay.json: %v", err)
+	}
+
+	// No defer/restore anywhere in this test: implPath is never written.
+	code, out := runGateEnv(t, "check-risk-gate-decides.sh", root, map[string]string{
+		"RISK_GATE_DECIDES_OVERLAY": overlayPath,
+	})
+	if code == 0 {
+		t.Fatalf("check-risk-gate-decides.sh exited 0 with bash.go's `case cedar.Confirm:` removed from "+
+			"its Outcome switch (which still branches on Allow and Deny) — the gate cannot fail.\n"+
+			"output:\n%s", out)
+	}
+	if !strings.Contains(out, "bash.go") || !strings.Contains(out, "Confirm") {
+		t.Fatalf("gate failed, but its output does not name both bash.go and Confirm (a broken/unrelated "+
+			"failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestRiskGateDecidesGate_PlantedFamilyFloorBelowThresholdFires is the
+// second planted-violation proof: the family floor dropped to (or below)
+// the autonomous tier's threshold, via the same overlay mechanism against
+// core/policy/risk/floor.go.
+func TestRiskGateDecidesGate_PlantedFamilyFloorBelowThresholdFires(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "policy", "risk", "floor.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+
+	const anchor = "const familyFloorScore = 81"
+	if !strings.Contains(string(orig), anchor) {
+		t.Fatalf("expected `const familyFloorScore = 81` not found in floor.go — the constant's value or " +
+			"shape may have moved; update this test and the gate together")
+	}
+	mutated := strings.Replace(string(orig), anchor, "const familyFloorScore = 50", 1)
+
+	scratch := t.TempDir()
+	scratchImpl := filepath.Join(scratch, "floor_zz_gate_probe.go")
+	if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing scratch mutated floor.go: %v", err)
+	}
+	overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		t.Fatalf("marshalling overlay: %v", err)
+	}
+	overlayPath := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+		t.Fatalf("writing overlay.json: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-risk-gate-decides.sh", root, map[string]string{
+		"RISK_GATE_DECIDES_OVERLAY": overlayPath,
+	})
+	if code == 0 {
+		t.Fatalf("check-risk-gate-decides.sh exited 0 with familyFloorScore dropped to 50 (below the "+
+			"autonomous tier's threshold of 80) — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "50") || !strings.Contains(out, "80") {
+		t.Fatalf("gate failed, but its output does not name both the planted floor value (50) and the "+
+			"autonomous threshold (80):\n%s", out)
+	}
+}
+
+// TestRiskGateDecidesGate_CleanOnUnmutatedTree pins the negative control:
+// the real, unmutated tree must pass with a positive discovery count
+// printed (not a vacuous "found nothing" pass).
+func TestRiskGateDecidesGate_CleanOnUnmutatedTree(t *testing.T) {
+	root := repoRoot(t)
+	code, out := runGate(t, "check-risk-gate-decides.sh", root)
+	if code != 0 {
+		t.Fatalf("check-risk-gate-decides.sh exited %d on the unmutated tree:\n%s", code, out)
+	}
+	if !strings.Contains(out, "clean") {
+		t.Fatalf("check-risk-gate-decides.sh exited 0 but did not print \"clean\":\n%s", out)
+	}
+	if strings.Contains(out, "0 qualifying Outcome switch") {
+		t.Fatalf("gate reports zero qualifying Outcome switches — this is the discovery-floor failure "+
+			"mode (a broken scan reporting a false clean), not a real pass:\n%s", out)
 	}
 }
