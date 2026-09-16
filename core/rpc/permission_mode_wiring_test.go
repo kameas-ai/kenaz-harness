@@ -72,12 +72,13 @@ func TestPermissionModeRiskThreshold_Mapping(t *testing.T) {
 }
 
 // TestFoldPermissionModeIntoGlobal_WritesWhenNoOverride pins the
-// primary case: a global layer with no explicit RiskThreshold override
-// gets one written from the PermissionMode preset.
+// primary case: no layer has an explicit RiskThreshold override or a
+// Level set at all, so PermissionMode's preset gets written onto the
+// global layer.
 func TestFoldPermissionModeIntoGlobal_WritesWhenNoOverride(t *testing.T) {
 	t.Parallel()
 
-	got := foldPermissionModeIntoGlobal(autonomy.Layer{}, "strict")
+	got := foldPermissionModeIntoGlobal(autonomy.Layer{}, autonomy.Layer{}, autonomy.Layer{}, "strict")
 	v, ok := got.Overrides[autonomy.KnobRiskThreshold]
 	if !ok {
 		t.Fatal("foldPermissionModeIntoGlobal did not write a RiskThreshold override")
@@ -96,10 +97,67 @@ func TestFoldPermissionModeIntoGlobal_MoreSpecificOverrideWins(t *testing.T) {
 	t.Parallel()
 
 	global := autonomy.Layer{Overrides: map[autonomy.Knob]any{autonomy.KnobRiskThreshold: 55}}
-	got := foldPermissionModeIntoGlobal(global, "strict") // strict would write 0
+	got := foldPermissionModeIntoGlobal(global, autonomy.Layer{}, autonomy.Layer{}, "strict") // strict would write 0
 	if v := got.Overrides[autonomy.KnobRiskThreshold]; v != 55 {
 		t.Fatalf("RiskThreshold override = %v, want 55 (the pre-existing, more specific override) — "+
 			"PermissionMode must not clobber an explicit autonomy-panel override", v)
+	}
+}
+
+// TestFoldPermissionModeIntoGlobal_GlobalLevelWins is the reviewer's
+// confirmed reproduction of the blocking defect: AutonomyPanel.vue's
+// primary interaction (setTier(), frontend/src/views/settings/
+// AutonomyPanel.vue:172-181) persists a bare {Level: t, Overrides: {}}
+// — an explicit tier CHOICE with no per-knob override at all. The
+// pre-fix guard only ever inspected global.Overrides, so it never saw
+// this choice and clobbered it with PermissionMode's own value.
+func TestFoldPermissionModeIntoGlobal_GlobalLevelWins(t *testing.T) {
+	t.Parallel()
+
+	tier := autonomy.TierAutonomous // RiskThreshold preset == 80
+	global := autonomy.Layer{Level: &tier, Overrides: map[autonomy.Knob]any{}}
+	got := foldPermissionModeIntoGlobal(global, autonomy.Layer{}, autonomy.Layer{}, "normal") // normal would write 40
+	if _, exists := got.Overrides[autonomy.KnobRiskThreshold]; exists {
+		t.Fatalf("foldPermissionModeIntoGlobal wrote a RiskThreshold override (%v) over an explicit global Level choice (TierAutonomous) — "+
+			"resolve.go's Pass 1 (session/project/global Overrides) runs entirely before Pass 2 (any layer's Level), "+
+			"so this write would have silently outranked the user's own tier pick",
+			got.Overrides[autonomy.KnobRiskThreshold])
+	}
+}
+
+// TestFoldPermissionModeIntoGlobal_SessionLevelWins proves the guard
+// covers more than the global layer: resolve.go's resolveKnob checks
+// global.Overrides (Pass 1, resolve.go:172-174) BEFORE session.Level
+// (Pass 2, resolve.go:176-178), so an unguarded write into
+// global.Overrides would outrank an explicit SESSION-scoped tier
+// choice too, not just a global one.
+func TestFoldPermissionModeIntoGlobal_SessionLevelWins(t *testing.T) {
+	t.Parallel()
+
+	tier := autonomy.TierStrict // RiskThreshold preset == 0
+	session := autonomy.Layer{Level: &tier}
+	got := foldPermissionModeIntoGlobal(autonomy.Layer{}, autonomy.Layer{}, session, "permissive") // permissive would write 80
+	if _, exists := got.Overrides[autonomy.KnobRiskThreshold]; exists {
+		t.Fatalf("foldPermissionModeIntoGlobal wrote a global RiskThreshold override (%v) despite an explicit SESSION Level choice — "+
+			"a global.Overrides write outranks session.Level in resolve.go's precedence, so this must be a no-op",
+			got.Overrides[autonomy.KnobRiskThreshold])
+	}
+}
+
+// TestFoldPermissionModeIntoGlobal_ProjectLevelWins is
+// SessionLevelWins's sibling for the project layer — resolve.go checks
+// global.Overrides (Pass 1) before project.Level (Pass 2,
+// resolve.go:179-181) too.
+func TestFoldPermissionModeIntoGlobal_ProjectLevelWins(t *testing.T) {
+	t.Parallel()
+
+	tier := autonomy.TierBold // RiskThreshold preset == 60
+	project := autonomy.Layer{Level: &tier}
+	got := foldPermissionModeIntoGlobal(autonomy.Layer{}, project, autonomy.Layer{}, "strict") // strict would write 0
+	if _, exists := got.Overrides[autonomy.KnobRiskThreshold]; exists {
+		t.Fatalf("foldPermissionModeIntoGlobal wrote a global RiskThreshold override (%v) despite an explicit PROJECT Level choice — "+
+			"a global.Overrides write outranks project.Level in resolve.go's precedence, so this must be a no-op",
+			got.Overrides[autonomy.KnobRiskThreshold])
 	}
 }
 
@@ -112,7 +170,7 @@ func TestFoldPermissionModeIntoGlobal_EmptyOrUnknownIsNoOp(t *testing.T) {
 	t.Parallel()
 
 	for _, mode := range []string{"", "bogus"} {
-		got := foldPermissionModeIntoGlobal(autonomy.Layer{}, mode)
+		got := foldPermissionModeIntoGlobal(autonomy.Layer{}, autonomy.Layer{}, autonomy.Layer{}, mode)
 		if got.Overrides != nil {
 			t.Errorf("foldPermissionModeIntoGlobal(mode=%q) wrote overrides %v, want nil (no-op)", mode, got.Overrides)
 		}
@@ -198,5 +256,139 @@ func TestComputeAutonomyKnobs_ExplicitAutonomyOverrideBeatsPermissionMode(t *tes
 		t.Fatalf("RiskThreshold = %d, want 65 (the explicit Autonomy Dials panel override) — "+
 			"PermissionMode=\"strict\" must not clobber a more specific global-layer override",
 			got.RiskThreshold)
+	}
+}
+
+// TestComputeAutonomyKnobs_GlobalLevelBeatsPermissionMode is the
+// reviewer's confirmed live reproduction of the blocking defect,
+// pinned end to end through the real production call path
+// (computeAutonomyKnobs, core/rpc/api.go). AutonomyPanel.vue's PRIMARY
+// interaction — setTier(), frontend/src/views/settings/
+// AutonomyPanel.vue:172-181, the isCustom===false branch — persists
+// exactly {Level: t, Overrides: {}}. With PermissionMode left at its
+// untouched default ("normal", which EffectivePermissionMode
+// normalises empty/unset to), the pre-fix guard only ever inspected
+// global.Overrides (empty here), folded in normal's 40, and
+// resolveKnob's Pass 1 (resolve.go:172-174) returned that 40 from
+// SourceGlobal BEFORE Pass 2 ever got to read global.Level
+// (resolve.go:182-184) — silently overriding the user's explicit
+// Autonomous (80) choice. Must fail on the pre-fix code.
+func TestComputeAutonomyKnobs_GlobalLevelBeatsPermissionMode(t *testing.T) {
+	sandboxUserConfigDir(t)
+
+	dataDir := t.TempDir()
+	c, err := core.New(core.Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	store := newTestStore(t)
+	api := New(c, WithSettingsStore(store))
+	t.Cleanup(api.Shutdown)
+
+	ctx := context.Background()
+
+	// PermissionMode is deliberately left untouched (defaults to
+	// "normal") — the panel's tier pick is the only explicit choice.
+	tier := autonomy.TierAutonomous
+	if err := store.SaveAutonomyProfile(autonomy.Layer{Level: &tier, Overrides: map[autonomy.Knob]any{}}); err != nil {
+		t.Fatalf("SaveAutonomyProfile: %v", err)
+	}
+
+	got := computeAutonomyKnobs(ctx, "", api.core, api.settingsImpl)
+	if got.RiskThreshold != 80 {
+		t.Fatalf("RiskThreshold = %d, want 80 (TierAutonomous, the user's explicit global tier choice) — "+
+			"PermissionMode's untouched default (\"normal\" -> 40) must not clobber a Level-only autonomy choice",
+			got.RiskThreshold)
+	}
+	if src := got.SourceTrace[autonomy.KnobRiskThreshold]; src != autonomy.SourceGlobal {
+		t.Errorf("SourceTrace[RiskThreshold] = %v, want SourceGlobal (from the Level preset, not an override)", src)
+	}
+}
+
+// TestComputeAutonomyKnobs_SessionLevelBeatsPermissionMode proves the
+// fix covers the session layer too: computeAutonomyKnobs must not let
+// PermissionMode's global-layer fold outrank an explicit session-scoped
+// tier choice. Must fail on the pre-fix code (which would fold
+// permissive's 80 into global.Overrides, and resolve.go's Pass 1
+// checks global.Overrides before Pass 2 ever reads session.Level).
+func TestComputeAutonomyKnobs_SessionLevelBeatsPermissionMode(t *testing.T) {
+	sandboxUserConfigDir(t)
+
+	dataDir := t.TempDir()
+	c, err := core.New(core.Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	store := newTestStore(t)
+	api := New(c, WithSettingsStore(store))
+	t.Cleanup(api.Shutdown)
+
+	ctx := context.Background()
+
+	if err := store.SavePermissionMode("permissive"); err != nil {
+		t.Fatalf("SavePermissionMode: %v", err)
+	}
+
+	rec, err := c.SessionManager().Create(ctx, "permmode-session-level")
+	if err != nil {
+		t.Fatalf("session create: %v", err)
+	}
+	tier := autonomy.TierStrict // RiskThreshold preset == 0
+	if err := c.SessionManager().SetAutonomyProfile(ctx, rec.ID, autonomy.Layer{Level: &tier}); err != nil {
+		t.Fatalf("SetAutonomyProfile (session): %v", err)
+	}
+
+	got := computeAutonomyKnobs(ctx, rec.ID, api.core, api.settingsImpl)
+	if got.RiskThreshold != 0 {
+		t.Fatalf("RiskThreshold = %d, want 0 (TierStrict, the session's explicit tier choice) — "+
+			"PermissionMode=\"permissive\" must not clobber a session-scoped Level choice",
+			got.RiskThreshold)
+	}
+	if src := got.SourceTrace[autonomy.KnobRiskThreshold]; src != autonomy.SourceSession {
+		t.Errorf("SourceTrace[RiskThreshold] = %v, want SourceSession", src)
+	}
+}
+
+// TestComputeAutonomyKnobs_ProjectLevelBeatsPermissionMode is
+// SessionLevelBeatsPermissionMode's sibling for the project layer.
+func TestComputeAutonomyKnobs_ProjectLevelBeatsPermissionMode(t *testing.T) {
+	sandboxUserConfigDir(t)
+
+	dataDir := t.TempDir()
+	c, err := core.New(core.Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	store := newTestStore(t)
+	api := New(c, WithSettingsStore(store))
+	t.Cleanup(api.Shutdown)
+
+	ctx := context.Background()
+
+	if err := store.SavePermissionMode("strict"); err != nil {
+		t.Fatalf("SavePermissionMode: %v", err)
+	}
+
+	proj, err := c.ProjectManager().Create(ctx, "permmode-project-level", "")
+	if err != nil {
+		t.Fatalf("project create: %v", err)
+	}
+	tier := autonomy.TierBold // RiskThreshold preset == 60
+	if err := c.ProjectManager().SetAutonomyProfile(ctx, proj.ID, autonomy.Layer{Level: &tier}); err != nil {
+		t.Fatalf("SetAutonomyProfile (project): %v", err)
+	}
+	rec, err := c.SessionManager().CreateInProject(ctx, "permmode-project-level-sess", &proj.ID)
+	if err != nil {
+		t.Fatalf("session create: %v", err)
+	}
+
+	got := computeAutonomyKnobs(ctx, rec.ID, api.core, api.settingsImpl)
+	if got.RiskThreshold != 60 {
+		t.Fatalf("RiskThreshold = %d, want 60 (TierBold, the project's explicit tier choice) — "+
+			"PermissionMode=\"strict\" must not clobber a project-scoped Level choice",
+			got.RiskThreshold)
+	}
+	if src := got.SourceTrace[autonomy.KnobRiskThreshold]; src != autonomy.SourceProject {
+		t.Errorf("SourceTrace[RiskThreshold] = %v, want SourceProject", src)
 	}
 }

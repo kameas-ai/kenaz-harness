@@ -230,3 +230,64 @@ func TestPermissionMode_Permissive_HighRiskAllowsButFamilyFloorHolds(t *testing.
 		}
 	})
 }
+
+// TestPermissionMode_Paired_StrictConfirmsNormalAllows is the code
+// reviewer's minor ask: pin, in ONE test, that the exact same tool
+// call rated the exact same (low) risk score confirms under
+// PermissionMode=strict and allows without a prompt under
+// PermissionMode=normal — the mode is the only thing that differs
+// between the two subtests, making its effect visible side by side
+// rather than only inferable across separate test functions.
+func TestPermissionMode_Paired_StrictConfirmsNormalAllows(t *testing.T) {
+	t.Parallel()
+
+	run := func(t *testing.T, riskThreshold int) (prompted bool, raterCalls int) {
+		t.Helper()
+
+		pool := &staticToolPool{server: "myserver", tool: "read_file"}
+		perms := &recordingPermResolver{
+			verdict: PermVerdict{Server: "myserver", Tool: "read_file", Policy: "confirm_each"},
+		}
+		knobs := autonomy.ResolvedKnobs{RiskThreshold: riskThreshold}
+
+		var promptedFlag bool
+		bus := newAutoApproveBus(&promptedFlag)
+		engine := realEmptyCedarEngine(t)
+		// The SAME scripted score (10) for both runs — only the
+		// threshold (i.e. only PermissionMode) differs.
+		rater := risk.NewFakeRater().ScriptDefault(risk.Rating{Score: 10, Rationale: "a plain read"})
+
+		adapter := newKernelToolAdapter(pool, perms, "sess-permmode-paired").withConfirm(bus)
+		adapter.withAutonomy(func(context.Context, string) autonomy.ResolvedKnobs { return knobs })
+		adapter.withGate(engine)
+		adapter.withRater(rater)
+
+		result, err := adapter.Call(context.Background(), makeCall("myserver", "read_file"))
+		if err != nil {
+			t.Fatalf("Call: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("result.IsError = true; content = %q", result.Content)
+		}
+		return promptedFlag, rater.CallCount()
+	}
+
+	t.Run("strict_confirms", func(t *testing.T) {
+		t.Parallel()
+		prompted, _ := run(t, 0) // PermissionMode="strict"
+		if !prompted {
+			t.Fatal("PermissionMode=strict must confirm even a low-risk (score 10) call")
+		}
+	})
+
+	t.Run("normal_allows", func(t *testing.T) {
+		t.Parallel()
+		prompted, calls := run(t, 40) // PermissionMode="normal"
+		if prompted {
+			t.Fatal("PermissionMode=normal must allow the SAME low-risk (score 10 < 40) call without prompting")
+		}
+		if calls != 1 {
+			t.Fatalf("rater called %d times, want 1", calls)
+		}
+	})
+}
