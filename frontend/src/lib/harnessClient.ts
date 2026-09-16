@@ -5161,6 +5161,11 @@ export function createFakeHarnessClient(
       indeterminateCalls: 0,
       inputTokens: 0,
       outputTokens: 0,
+      autoTitleTotal: 0,
+      autoTitleCalls: 0,
+      autoTitleIndeterminateCalls: 0,
+      autoTitleInputTokens: 0,
+      autoTitleOutputTokens: 0,
     }),
     openExternalURL: () => {
       // No-op in fake; tests assert the call shape via vi.fn() seeds.

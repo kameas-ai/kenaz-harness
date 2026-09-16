@@ -4309,3 +4309,167 @@ func zzGateProbeOptionalDep(opts zzGateProbeOptionalDepArgs, posture ZzGateProbe
 			"be candidates:\n%s", out)
 	}
 }
+
+// TestAdapterCatalogParityGate_PlantedLiteralRegistrationFires is the
+// planted-violation proof for check-adapter-catalog-parity.sh (G-1,
+// model-settings-reach-the-model-01PMZ101 WP12). It reproduces the
+// EXACT shape spec §7 G-1 names as the canonical plant: a new registered
+// adapter kind with no capability-catalog entry whatsoever
+// (`r.adapters["zz-gate-probe"] = openai.New()`) — the same defect
+// class as this mission's own motivating P0 (azure-openai / custom-
+// openai registered with no catalog entry), just via the literal-string
+// registration shape rather than the `<pkg>.Kind` shape every real
+// registration in registry.go uses today. Uses the tool's own
+// ADAPTER_CATALOG_OVERLAY mechanism (same pattern as checknilopts's
+// NIL_OPTIONAL_DEPS_OVERLAY) so registry.go is never actually written —
+// kill-safe, no defer/restore needed.
+func TestAdapterCatalogParityGate_PlantedLiteralRegistrationFires(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "llm", "registry", "registry.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+
+	const anchor = "\tif oa := ollama.New(); oa != nil {\n\t\tr.adapters[ollama.Kind] = oa\n\t}\n"
+	if !strings.Contains(string(orig), anchor) {
+		t.Fatalf("expected ollama registration block not found in registry.go — the registration " +
+			"shape may have moved; update this test and the gate together")
+	}
+	const probe = "\tr.adapters[\"zz-gate-probe\"] = openai.New()\n"
+	mutated := strings.Replace(string(orig), anchor, anchor+probe, 1)
+
+	scratch := t.TempDir()
+	scratchImpl := filepath.Join(scratch, "registry_zz_gate_probe.go")
+	if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing scratch mutated registry.go: %v", err)
+	}
+	overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		t.Fatalf("marshalling overlay: %v", err)
+	}
+	overlayPath := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+		t.Fatalf("writing overlay.json: %v", err)
+	}
+
+	// No defer/restore anywhere in this test: implPath is never written.
+	// A kill at any point leaves nothing but an OS-cleaned scratch dir.
+	code, out := runGateEnv(t, "check-adapter-catalog-parity.sh", root, map[string]string{
+		"ADAPTER_CATALOG_OVERLAY": overlayPath,
+	})
+	if code == 0 {
+		t.Fatalf("check-adapter-catalog-parity.sh exited 0 with a planted adapter kind "+
+			"(\"zz-gate-probe\") registered with NO capability-catalog entry and no alias — "+
+			"the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "zz-gate-probe") {
+		t.Fatalf("gate failed, but its output does not mention zz-gate-probe "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+	if strings.Contains(out, "azure-openai") || strings.Contains(out, "custom-openai") {
+		t.Fatalf("gate flagged azure-openai or custom-openai, both of which DO resolve via "+
+			"the alias table / their own catalog file — the gate cannot tell a real registration "+
+			"from a planted one:\n%s", out)
+	}
+}
+
+// TestEnvSwitchCoverageGate_PlantedMissingCaseFires is the planted-
+// violation proof for check-env-switch-coverage.sh (G-6, model-
+// settings-reach-the-model-01PMZ101 WP12/WP14). It reproduces the
+// EXACT historical shape: EnvCapabilityCache's doc comment documents
+// "sqlite" as a value while the switch that reads it has no `case
+// "sqlite":` arm, so the documented value silently falls through to
+// `default:`. Uses the tool's own ENV_SWITCH_OVERLAY mechanism so
+// cache.go is never actually written — kill-safe, no defer/restore
+// needed.
+func TestEnvSwitchCoverageGate_PlantedMissingCaseFires(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "llm", "capabilities", "cache.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+
+	const anchor = "\tcase \"sqlite\":\n" +
+		"\t\tif db != nil {\n" +
+		"\t\t\treturn NewSQLiteCache(db)\n" +
+		"\t\t}\n" +
+		"\t\tlogging.L().Warn(\"llm.capability_cache.sqlite_unavailable\",\n" +
+		"\t\t\t\"reason\", \"HARNESS_LLM_CAPABILITY_CACHE=sqlite but no storage.DB handle was supplied; falling back to MemoryCache\")\n" +
+		"\t\treturn NewMemoryCache()\n"
+	if !strings.Contains(string(orig), anchor) {
+		t.Fatalf("expected `case \"sqlite\":` block not found in cache.go — the switch shape may " +
+			"have moved; update this test and the gate together")
+	}
+	mutated := strings.Replace(string(orig), anchor, "", 1)
+
+	scratch := t.TempDir()
+	scratchImpl := filepath.Join(scratch, "cache_zz_gate_probe.go")
+	if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing scratch mutated cache.go: %v", err)
+	}
+	overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		t.Fatalf("marshalling overlay: %v", err)
+	}
+	overlayPath := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+		t.Fatalf("writing overlay.json: %v", err)
+	}
+
+	// No defer/restore anywhere in this test: implPath is never written.
+	code, out := runGateEnv(t, "check-env-switch-coverage.sh", root, map[string]string{
+		"ENV_SWITCH_OVERLAY": overlayPath,
+	})
+	if code == 0 {
+		t.Fatalf("check-env-switch-coverage.sh exited 0 with the \"sqlite\" case removed from "+
+			"EnvCapabilityCache's switch while the doc comment still documents it — the gate "+
+			"cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "sqlite") || !strings.Contains(out, "EnvCapabilityCache") {
+		t.Fatalf("gate failed, but its output does not name both \"sqlite\" and EnvCapabilityCache "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestEnvSwitchCoverageGate_CleanOnUnmutatedTree pins the negative
+// control: the real, unmutated tree must pass with a positive discovery
+// count printed (not a vacuous "found nothing" pass).
+func TestEnvSwitchCoverageGate_CleanOnUnmutatedTree(t *testing.T) {
+	root := repoRoot(t)
+	code, out := runGate(t, "check-env-switch-coverage.sh", root)
+	if code != 0 {
+		t.Fatalf("check-env-switch-coverage.sh exited %d on the unmutated tree:\n%s", code, out)
+	}
+	if !strings.Contains(out, "clean") {
+		t.Fatalf("check-env-switch-coverage.sh exited 0 but did not print \"clean\":\n%s", out)
+	}
+	if strings.Contains(out, "0 documented env constant") {
+		t.Fatalf("gate reports zero documented env constants found — this is the discovery-floor "+
+			"failure mode (a broken scan reporting a false clean), not a real pass:\n%s", out)
+	}
+}
+
+// TestAdapterCatalogParityGate_CleanOnUnmutatedTree pins the negative
+// control: the real, unmutated tree must pass with a positive discovery
+// count printed (not a vacuous "found nothing" pass — see the tool's own
+// discovery-floor design).
+func TestAdapterCatalogParityGate_CleanOnUnmutatedTree(t *testing.T) {
+	root := repoRoot(t)
+	code, out := runGate(t, "check-adapter-catalog-parity.sh", root)
+	if code != 0 {
+		t.Fatalf("check-adapter-catalog-parity.sh exited %d on the unmutated tree:\n%s", code, out)
+	}
+	if !strings.Contains(out, "clean") {
+		t.Fatalf("check-adapter-catalog-parity.sh exited 0 but did not print \"clean\":\n%s", out)
+	}
+	if strings.Contains(out, "0 registered kinds") || strings.Contains(out, "0 catalog files") {
+		t.Fatalf("gate reports zero adapters or zero catalog files — this is the discovery-floor "+
+			"failure mode (a broken scan reporting a false clean), not a real pass:\n%s", out)
+	}
+}

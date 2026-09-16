@@ -1086,12 +1086,28 @@ const compactionOverheadVisible = computed(
   () => compactionOverheadCalls.value > 0,
 );
 
+// Auto-title overhead surface (model-settings-reach-the-model-01PMZ101
+// WP07). Same process-wide, not-per-session shape as the compaction
+// readout immediately above — both are projected off the SAME
+// CompactionOverheadInfo response (core/rpc.API.CompactionOverhead),
+// which is why they share refreshCompactionOverhead() below rather than
+// each polling its own RPC.
+const autoTitleOverheadUSD = ref<number>(0);
+const autoTitleOverheadCalls = ref<number>(0);
+const autoTitleOverheadIndeterminate = ref<number>(0);
+const autoTitleOverheadVisible = computed(
+  () => autoTitleOverheadCalls.value > 0,
+);
+
 async function refreshCompactionOverhead() {
   try {
     const overhead = await client.compactionOverhead();
     compactionOverheadUSD.value = overhead.total;
     compactionOverheadCalls.value = overhead.calls;
     compactionOverheadIndeterminate.value = overhead.indeterminateCalls;
+    autoTitleOverheadUSD.value = overhead.autoTitleTotal ?? 0;
+    autoTitleOverheadCalls.value = overhead.autoTitleCalls ?? 0;
+    autoTitleOverheadIndeterminate.value = overhead.autoTitleIndeterminateCalls ?? 0;
   } catch {
     // Soft-fail: leave the hidden default in place, matching
     // refreshCompactionSettings' existing soft-fail convention below.
@@ -1906,6 +1922,24 @@ async function onShared() {
             <span class="text-ink font-mono">{{ compactionOverheadCalls }}</span>
             {{ compactionOverheadCalls === 1 ? 'compaction' : 'compactions' }}
           </span>
+          <!-- Auto-title overhead readout (model-settings-reach-the-model-
+               01PMZ101 WP07). Same process-wide-not-per-session shape as
+               the compaction row above; hidden until at least one
+               auto-title call has run anywhere in this process. -->
+          <span
+            v-if="autoTitleOverheadVisible"
+            class="ml-auto px-3 py-1 font-ui text-[11px] tracking-[0.05em] text-ink-muted"
+            data-testid="autotitle-overhead-line"
+            :title="`Running total across this app session; not specific to the conversation you're viewing.${autoTitleOverheadIndeterminate > 0 ? ` ${autoTitleOverheadIndeterminate} call(s) had no matching price entry and are excluded from the dollar total.` : ''}`"
+          >
+            Auto-title overhead:
+            <span class="text-ink font-mono">
+              ${{ autoTitleOverheadUSD.toFixed(2) }}
+            </span>
+            across
+            <span class="text-ink font-mono">{{ autoTitleOverheadCalls }}</span>
+            {{ autoTitleOverheadCalls === 1 ? 'call' : 'calls' }}
+          </span>
           <!-- Show full history toggle (compaction-strategy-ui WP07).
                Per-session UI state (NOT persisted) — flips the
                scrollback fetch between listMessagesActive (default,
@@ -1916,7 +1950,7 @@ async function onShared() {
             type="button"
             class="px-3 py-1 rounded-sm font-ui text-[11px] uppercase tracking-[0.18em] border"
             :class="[
-              compactionOverheadVisible ? '' : 'ml-auto',
+              compactionOverheadVisible || autoTitleOverheadVisible ? '' : 'ml-auto',
               session.showFullHistory.value
                 ? 'border-accent text-accent bg-surface-1'
                 : 'border-border-muted text-ink-muted hover:text-ink hover:bg-surface-2',

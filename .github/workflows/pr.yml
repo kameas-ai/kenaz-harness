@@ -258,6 +258,34 @@ jobs:
         # the script's header for the full per-kind boundary.
         run: bash scripts/ci/check-structured-output-row-parity.sh
 
+      - name: adapter-catalog-parity guard (G-1)
+        # model-settings-reach-the-model-01PMZ101 WP12, spec §7 G-1. Every
+        # registered ProviderAdapter kind (core/llm/registry/registry.go)
+        # must resolve to a core/llm/capabilities/data/*.yaml entry
+        # (directly or via loader.go's providerAlias table), and every
+        # catalog file must be reachable from a registered kind — checked
+        # in BOTH directions. This is the gate that would have caught this
+        # mission's own motivating P0 (azure-openai and custom-openai were
+        # registered with no catalog entry, so every tool-bearing request
+        # was silently refused) — its absence reproduces roadmap finding
+        # P-7, a landed banner claiming a test that does not exist. See
+        # scripts/ci/cmd/checkadaptercatalog/main.go's header for the full
+        # design, including how the three conditionally-registered
+        # adapter kinds (behind runtime feature flags) are handled.
+        run: bash scripts/ci/check-adapter-catalog-parity.sh
+
+      - name: env-switch-coverage guard (G-6)
+        # model-settings-reach-the-model-01PMZ101 WP12/WP14, spec §7 G-6.
+        # A doc comment that documents an env-var VALUE (`Values: "a" |
+        # "b" | "c"`) while the switch that reads it has no matching
+        # `case` silently swallows that value into `default:` — exactly
+        # what happened to HARNESS_LLM_CAPABILITY_CACHE=sqlite before
+        # WP14 (documented, unimplemented; the capability probe cache's
+        # SQLite backend was unreachable in every install that believed
+        # the doc comment). See scripts/ci/cmd/checkenvswitch/main.go's
+        # header for the same-file scope this gate deliberately states.
+        run: bash scripts/ci/check-env-switch-coverage.sh
+
       - name: bindings-name guard
         run: bash scripts/ci/check-binding-names.sh
 

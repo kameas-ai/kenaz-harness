@@ -36,6 +36,23 @@ entries:
     field: ProfileID
     adapter: bedrock
     unsupported: "internal routing key — never sent on the wire"
+  # azure-openai / custom-openai (model-settings-reach-the-model-01PMZ101
+  # WP12, G-3): inScopeAdapters widened to include the two adapters this
+  # same mission's WP02/WP03/WP08 built full tool/image/reasoning wire
+  # parity for. "adapter:" here is the registered Kind string
+  # (core/llm/azure.Kind / core/llm/custom.Kind), not the package
+  # directory name — collectTestFunctions' adapterDirs maps this back to
+  # core/llm/azure and core/llm/custom respectively. gemini and ollama
+  # are NOT widened in — see this file's closing comment for the dated
+  # scoping decision.
+  - struct: GenerationRequest
+    field: ProfileID
+    adapter: azure-openai
+    unsupported: "internal routing key — never sent on the wire"
+  - struct: GenerationRequest
+    field: ProfileID
+    adapter: custom-openai
+    unsupported: "internal routing key — never sent on the wire"
 
   # Model — per-request model override; verified via URL path or request body
   - struct: GenerationRequest
@@ -54,6 +71,17 @@ entries:
     field: Model
     adapter: bedrock
     tests: [TestBedrockAdapter_ModelOverride_ModelSerialized]
+  - struct: GenerationRequest
+    field: Model
+    adapter: azure-openai
+    # Azure resolves the model via the deployment name in the URL path,
+    # not a "model" body field — this is the deployment-resolution
+    # equivalent of a model override.
+    tests: [TestAdapter_Stream_DeploymentURL_FromRegistry]
+  - struct: GenerationRequest
+    field: Model
+    adapter: custom-openai
+    tests: [TestStreamWireShape]
 
   # System — top-level system prompt
   - struct: GenerationRequest
@@ -72,6 +100,14 @@ entries:
     field: System
     adapter: bedrock
     tests: [TestBedrockAdapter_SystemPrompt_SystemSerialized]
+  - struct: GenerationRequest
+    field: System
+    adapter: azure-openai
+    unsupported: "Per-adapter wire-shape test pending. Serialized by the same shared encoder (openaiwire.BuildRequestBody, WP03) already covered for openai's System entry above; no azure-specific test yet."
+  - struct: GenerationRequest
+    field: System
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. Serialized by the same shared encoder (openaiwire.BuildRequestBody, WP03) already covered for openai's System entry above; no custom-openai-specific test yet."
 
   # Messages — conversation history
   - struct: GenerationRequest
@@ -90,6 +126,14 @@ entries:
     field: Messages
     adapter: bedrock
     tests: [TestBedrockAdapter_History_MessagesSerialized]
+  - struct: GenerationRequest
+    field: Messages
+    adapter: azure-openai
+    tests: [TestBuildRequestBody_ToolCallRoundTrip]
+  - struct: GenerationRequest
+    field: Messages
+    adapter: custom-openai
+    tests: [TestBuildRequestBody_ToolCallRoundTrip]
 
   # Tools — tool specs
   - struct: GenerationRequest
@@ -108,6 +152,14 @@ entries:
     field: Tools
     adapter: bedrock
     tests: [TestBedrockAdapter_Tools_ToolsSerialized]
+  - struct: GenerationRequest
+    field: Tools
+    adapter: azure-openai
+    unsupported: "Per-adapter wire-shape test pending. Tool DEFINITIONS are serialized by the same shared encoder already covered for openai's Tools entry above (TestBuildRequestBody_ToolCallRoundTrip covers tool_use/tool_result CONTENT round-tripping via Messages, not the Tools catalog itself); no azure-specific Tools-catalog test yet."
+  - struct: GenerationRequest
+    field: Tools
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. Same gap as azure-openai above — TestBuildRequestBody_ToolCallRoundTrip covers Messages' tool content, not the Tools catalog itself."
 
   # Attachments — multimodal inputs
   - struct: GenerationRequest
@@ -126,6 +178,14 @@ entries:
     field: Attachments
     adapter: bedrock
     tests: [TestBedrockAdapter_Attachments_AttachmentsSerialized]
+  - struct: GenerationRequest
+    field: Attachments
+    adapter: azure-openai
+    tests: [TestBuildRequestBody_ImageRoundTrip]
+  - struct: GenerationRequest
+    field: Attachments
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. custom-openai.yaml defaults image_input: false (WP02) — no adapter-level attachment-serialization test exists for this baseline. A per-endpoint override is CapabilityHints (E-004), out of scope for this field."
 
   # JSONMode — legacy JSON-mode flag
   - struct: GenerationRequest
@@ -155,6 +215,14 @@ entries:
     field: JSONMode
     adapter: gemini
     tests: [TestJSONModeSpec_Schema_NoLongerDiscarded]
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: azure-openai
+    unsupported: "Per-adapter wire-shape test pending. WP03 hazard 3 (AC-019) notes applyJSONMode is now reachable through the shared encoder for this adapter; no azure-specific test asserts the emitted body shape yet."
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. Same WP03 hazard as azure-openai above; custom-openai.yaml sets json_mode: false by default (WP02) and no test asserts the gate/encoder interaction yet."
 
   # ImageOutput — request-side opt-in for image generation
   # (multimodal-io-extended-01KQ8TD2). Per-adapter wire-shape coverage
@@ -182,6 +250,14 @@ entries:
     field: ImageOutput
     adapter: bedrock
     unsupported: "Per-adapter wire-shape test pending. Image-gen routes through dedicated bedrock-runtime invoke (Titan Image, Stable Diffusion); chat-completion translator currently capability-gates. Integration coverage: core/llm/multimodal_out_integration_test.go."
+  - struct: GenerationRequest
+    field: ImageOutput
+    adapter: azure-openai
+    unsupported: "Per-adapter wire-shape test pending. Image-gen routes through a dedicated Azure OpenAI DALL-E deployment; chat-completion translator currently capability-gates. Integration coverage: core/llm/multimodal_out_integration_test.go."
+  - struct: GenerationRequest
+    field: ImageOutput
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. custom-openai.yaml sets image_output: false by default (WP02) — an arbitrary OpenAI-compatible endpoint's image-gen surface, if any, is not modeled."
 
   # Reasoning — extended thinking / reasoning tokens
   - struct: GenerationRequest
@@ -200,6 +276,18 @@ entries:
     field: Reasoning
     adapter: bedrock
     unsupported: "Bedrock does not expose a top-level reasoning flag in the SDK input shape"
+  - struct: GenerationRequest
+    field: Reasoning
+    adapter: azure-openai
+    # WP08 (spec D-14): azure's req.Reasoning -> reasoning_effort mapping
+    # moved into the shared openaiwire encoder; these three tests drive
+    # azure's own Stream() end to end and assert the mapped value lands
+    # on the wire.
+    tests: [TestReasoning_RequestBody_High, TestReasoning_RequestBody_Medium, TestReasoning_RequestBody_Low]
+  - struct: GenerationRequest
+    field: Reasoning
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. WP08 wires req.Reasoning -> reasoning_effort through the same shared openaiwire encoder custom-openai routes through (WP03), but no custom-specific test asserts it yet — custom-openai.yaml also sets reasoning: false by default (WP02), so the gate refuses before this would matter for the static baseline."
 
   # ResponseFormat — structured output / grammar constraints
   - struct: GenerationRequest
@@ -230,6 +318,14 @@ entries:
     field: ResponseFormat
     adapter: gemini
     tests: [TestResponseFormat_JSONSchema_CarriesMimeTypeAndSchema, TestResponseFormat_Json_MimeTypeOnlyNoSchema, TestResponseFormat_Grammar_ReturnsTypedError]
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: azure-openai
+    unsupported: "Per-adapter wire-shape test pending. WP03 hazard 3 (AC-019) notes applyResponseFormat is now reachable through the shared encoder for this adapter; no azure-specific test asserts the emitted body shape yet."
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. custom-openai.yaml sets structured_output: false by default (WP02); the shared encoder reaches this adapter (WP03) but no custom-specific test asserts the gate/encoder interaction yet."
 
   # Params — provider-specific knobs (temperature, top_p, max_tokens, etc.)
   - struct: GenerationRequest
@@ -248,6 +344,14 @@ entries:
     field: Params
     adapter: bedrock
     tests: [TestBedrockAdapter_Params_ParamsSerialized]
+  - struct: GenerationRequest
+    field: Params
+    adapter: azure-openai
+    tests: [TestKnobs_RequestBody_SeedAndParallelToolCalls]
+  - struct: GenerationRequest
+    field: Params
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. Serialized by the same shared encoder already covered for openai's Params entry above; no custom-openai-specific test yet."
 
   # RetryOverride — consumed by registry middleware, not adapters
   - struct: GenerationRequest
@@ -266,6 +370,14 @@ entries:
     field: RetryOverride
     adapter: bedrock
     unsupported: "consumed by registry retry middleware before reaching the adapter"
+  - struct: GenerationRequest
+    field: RetryOverride
+    adapter: azure-openai
+    unsupported: "consumed by registry retry middleware before reaching the adapter"
+  - struct: GenerationRequest
+    field: RetryOverride
+    adapter: custom-openai
+    unsupported: "consumed by registry retry middleware before reaching the adapter"
 
   # SessionID — internal session tracking; never sent on the wire
   - struct: GenerationRequest
@@ -283,6 +395,14 @@ entries:
   - struct: GenerationRequest
     field: SessionID
     adapter: bedrock
+    unsupported: "internal session tracking — never sent on the wire"
+  - struct: GenerationRequest
+    field: SessionID
+    adapter: azure-openai
+    unsupported: "internal session tracking — never sent on the wire"
+  - struct: GenerationRequest
+    field: SessionID
+    adapter: custom-openai
     unsupported: "internal session tracking — never sent on the wire"
 
   # StopSequences — typed top-level field (model-request-path-live-01PMDL01
@@ -303,6 +423,14 @@ entries:
     field: StopSequences
     adapter: bedrock
     tests: [TestBedrockAdapter_StopSequences_StopSequencesSerialized]
+  - struct: GenerationRequest
+    field: StopSequences
+    adapter: azure-openai
+    tests: [TestKnobs_RequestBody_StopSequences]
+  - struct: GenerationRequest
+    field: StopSequences
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. Serialized by the same shared encoder already covered for openai's StopSequences entry above; no custom-openai-specific test yet."
 
   # ============================================================
   # Response fields
@@ -325,6 +453,14 @@ entries:
     field: Content
     adapter: bedrock
     tests: [TestBedrockAdapter_ChatDefault_ResponseParsed]
+  - struct: Response
+    field: Content
+    adapter: azure-openai
+    tests: [TestIntegration_ChatStream]
+  - struct: Response
+    field: Content
+    adapter: custom-openai
+    tests: [TestStreamWireShape]
 
   # ToolCalls — assembled tool invocations
   - struct: Response
@@ -343,6 +479,14 @@ entries:
     field: ToolCalls
     adapter: bedrock
     tests: [TestBedrockAdapter_ToolCall_ToolCallsParsed]
+  - struct: Response
+    field: ToolCalls
+    adapter: azure-openai
+    tests: [TestIntegration_ToolCallStream]
+  - struct: Response
+    field: ToolCalls
+    adapter: custom-openai
+    tests: [TestStreamEmbeddedToolCallExtraction]
 
   # Reasoning — reasoning / thinking blocks
   - struct: Response
@@ -361,6 +505,14 @@ entries:
     field: Reasoning
     adapter: bedrock
     unsupported: "Bedrock does not return structured reasoning blocks in the generic SDK shape"
+  - struct: Response
+    field: Reasoning
+    adapter: azure-openai
+    unsupported: "Azure o1-style models do not return structured reasoning content in the response — TestReasoning_SSEParse_o1 confirms only text content + usage are populated, no reasoning blocks."
+  - struct: Response
+    field: Reasoning
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. No custom-openai test drives a reasoning-enabled request through to Response parsing yet; custom-openai.yaml also sets reasoning: false by default (WP02)."
 
   # FinishReason
   - struct: Response
@@ -379,6 +531,14 @@ entries:
     field: FinishReason
     adapter: bedrock
     tests: [TestBedrockAdapter_ChatDefault_ResponseParsed]
+  - struct: Response
+    field: FinishReason
+    adapter: azure-openai
+    tests: [TestIntegration_ChatStream]
+  - struct: Response
+    field: FinishReason
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. TestStreamWireShape confirms the round trip completes but does not assert the specific FinishReason value yet."
 
   # Usage — token accounting
   - struct: Response
@@ -397,6 +557,14 @@ entries:
     field: Usage
     adapter: bedrock
     tests: [TestBedrockAdapter_Usage_UsageParsed]
+  - struct: Response
+    field: Usage
+    adapter: azure-openai
+    tests: [TestIntegration_ChatStream]
+  - struct: Response
+    field: Usage
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. No custom-openai test asserts resp.Usage values yet."
 
   # Cost — populated by registry CostReducer middleware, not adapters
   - struct: Response
@@ -414,6 +582,14 @@ entries:
   - struct: Response
     field: Cost
     adapter: bedrock
+    unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
+  - struct: Response
+    field: Cost
+    adapter: azure-openai
+    unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
+  - struct: Response
+    field: Cost
+    adapter: custom-openai
     unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
 
   # Attempts — set by registry retry middleware
@@ -433,6 +609,14 @@ entries:
     field: Attempts
     adapter: bedrock
     unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
+  - struct: Response
+    field: Attempts
+    adapter: azure-openai
+    unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
+  - struct: Response
+    field: Attempts
+    adapter: custom-openai
+    unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
 
   # SnapshotID — eval system field; never returned by adapters
   - struct: Response
@@ -450,6 +634,14 @@ entries:
   - struct: Response
     field: SnapshotID
     adapter: bedrock
+    unsupported: "eval system field; never returned by the adapter"
+  - struct: Response
+    field: SnapshotID
+    adapter: azure-openai
+    unsupported: "eval system field; never returned by the adapter"
+  - struct: Response
+    field: SnapshotID
+    adapter: custom-openai
     unsupported: "eval system field; never returned by the adapter"
 
   # ============================================================
@@ -473,6 +665,14 @@ entries:
     field: Kind
     adapter: bedrock
     tests: [TestBedrockAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Kind
+    adapter: azure-openai
+    tests: [TestIntegration_ChatStream]
+  - struct: StreamEvent
+    field: Kind
+    adapter: custom-openai
+    tests: [TestStreamWireShape]
 
   # Text — text delta on kind=text events
   - struct: StreamEvent
@@ -491,6 +691,14 @@ entries:
     field: Text
     adapter: bedrock
     tests: [TestBedrockAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Text
+    adapter: azure-openai
+    tests: [TestIntegration_ChatStream]
+  - struct: StreamEvent
+    field: Text
+    adapter: custom-openai
+    tests: [TestStreamWireShape]
 
   # Tool — accumulated tool_use record on kind=tool events
   - struct: StreamEvent
@@ -509,6 +717,14 @@ entries:
     field: Tool
     adapter: bedrock
     tests: [TestBedrockAdapter_StreamedToolCalls_ToolCallsParsed]
+  - struct: StreamEvent
+    field: Tool
+    adapter: azure-openai
+    tests: [TestIntegration_ToolCallStream]
+  - struct: StreamEvent
+    field: Tool
+    adapter: custom-openai
+    tests: [TestStreamEmbeddedToolCallExtraction]
 
   # Reasoning — reasoning frame on kind=reasoning events
   - struct: StreamEvent
@@ -527,6 +743,14 @@ entries:
     field: Reasoning
     adapter: bedrock
     unsupported: "Bedrock does not emit structured reasoning events via the generic runtime SDK"
+  - struct: StreamEvent
+    field: Reasoning
+    adapter: azure-openai
+    unsupported: "Azure o1-style models do not emit a structured reasoning stream event — TestReasoning_SSEParse_o1 confirms only text content + usage deltas arrive."
+  - struct: StreamEvent
+    field: Reasoning
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. No custom-openai test drives a reasoning-enabled request through the stream yet; custom-openai.yaml also sets reasoning: false by default (WP02)."
 
   # Usage — token snapshot on kind=usage events
   - struct: StreamEvent
@@ -545,6 +769,14 @@ entries:
     field: Usage
     adapter: bedrock
     tests: [TestBedrockAdapter_Usage_UsageParsed]
+  - struct: StreamEvent
+    field: Usage
+    adapter: azure-openai
+    tests: [TestIntegration_ChatStream]
+  - struct: StreamEvent
+    field: Usage
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. No custom-openai test asserts a StreamEvent usage frame yet."
 
   # Finish — finish reason string on kind=finish events
   - struct: StreamEvent
@@ -563,6 +795,14 @@ entries:
     field: Finish
     adapter: bedrock
     tests: [TestBedrockAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Finish
+    adapter: azure-openai
+    tests: [TestIntegration_ChatStream]
+  - struct: StreamEvent
+    field: Finish
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. TestStreamWireShape confirms the round trip completes but does not assert a Finish event value yet."
 
   # Err — error message on kind=error events
   - struct: StreamEvent
@@ -581,6 +821,14 @@ entries:
     field: Err
     adapter: bedrock
     tests: [TestBedrockAdapter_Err_ErrParsed]
+  - struct: StreamEvent
+    field: Err
+    adapter: azure-openai
+    tests: [TestAdapter_Stream_401_ErrAuth, TestAdapter_Stream_5xx_ErrTransient]
+  - struct: StreamEvent
+    field: Err
+    adapter: custom-openai
+    unsupported: "Per-adapter wire-shape test pending. No custom-openai test asserts classifyStatus's typed-error mapping on Stream() itself yet (probe_test.go's TestProbeAuthFailureAbortsProbe covers the WP14 capability probe path, not this one)."
 
   # Raw — opaque raw SSE frame bytes; optional pass-through; not emitted by production pump
   - struct: StreamEvent
@@ -598,6 +846,14 @@ entries:
   - struct: StreamEvent
     field: Raw
     adapter: bedrock
+    unsupported: "raw pass-through field; not emitted by production pump"
+  - struct: StreamEvent
+    field: Raw
+    adapter: azure-openai
+    unsupported: "raw pass-through field; not emitted by production pump"
+  - struct: StreamEvent
+    field: Raw
+    adapter: custom-openai
     unsupported: "raw pass-through field; not emitted by production pump"
 
   # GeneratedImage — payload for StreamGeneratedImage events
@@ -621,3 +877,39 @@ entries:
     field: GeneratedImage
     adapter: bedrock
     unsupported: "Per-adapter parse test pending. Image-gen routes through bedrock-runtime invoke (Titan Image multi-image, Stable Diffusion). Integration coverage: TestOnGeneratedImage_TitanImage_MultiImage in core/llm/multimodal_out_integration_test.go."
+  - struct: StreamEvent
+    field: GeneratedImage
+    adapter: azure-openai
+    unsupported: "Per-adapter parse test pending. Image-gen responses arrive through a dedicated Azure OpenAI DALL-E deployment, not chat-completion SSE. Integration coverage: core/llm/multimodal_out_integration_test.go."
+  - struct: StreamEvent
+    field: GeneratedImage
+    adapter: custom-openai
+    unsupported: "custom-openai.yaml sets image_output: false by default (WP02) — an arbitrary OpenAI-compatible endpoint's image-gen surface, if any, is not modeled."
+
+  # ============================================================
+  # Adapter-set scoping (model-settings-reach-the-model-01PMZ101 WP12, G-3)
+  # ============================================================
+  #
+  # inScopeAdapters (registry_completeness_test.go) was widened from
+  # {anthropic, openai, openrouter, bedrock} to also include azure-openai
+  # and custom-openai — the two adapters THIS mission's WP02/WP03/WP08
+  # built full tool-calling/image/reasoning-budget wire parity for, with
+  # real per-field tests backing every entry added above (or an honest
+  # "Per-adapter wire-shape test pending" where coverage genuinely
+  # doesn't exist yet — never a fabricated claim of capability).
+  #
+  # gemini and ollama are DELIBERATELY NOT included in inScopeAdapters,
+  # dated 2026-09-15:
+  #   - gemini already has a partial, explicitly-scoped exclusion
+  #     rationale from structured-output-is-reachable-01PMZE14 WP05 (see
+  #     the JSONMode/ResponseFormat gemini rows above) — widening it
+  #     into full per-field parity here would require the SAME kind of
+  #     full per-field audit this WP12 landing did for azure/custom, and
+  #     that audit was not performed for gemini.
+  #   - ollama (WP13, landed v0.72.0) has zero entries in this registry
+  #     at all — it was never audited against GenerationRequest /
+  #     Response / StreamEvent field-by-field.
+  #   Blocker: a dedicated per-field wire-shape audit for gemini and
+  #   ollama, of the same shape this WP12 landing did for azure/custom.
+  #   Owner: next unwired-sweep or a dedicated coverage-audit WP —
+  #   tracked, not silently dropped.

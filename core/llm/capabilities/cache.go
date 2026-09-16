@@ -18,7 +18,12 @@ const (
 	cacheTTL = 7 * 24 * time.Hour
 
 	// EnvCapabilityCache is the env var that selects the cache backend.
-	// Values: "sqlite" | "memory" | "off". Default is "memory".
+	// Values: "sqlite" | "memory" | "off". Default (unset): "sqlite" when
+	// a real storage.DB handle is available to DefaultCache, "memory"
+	// otherwise (model-settings-reach-the-model-01PMZ101 WP12 correction,
+	// 2026-09-15 — see DefaultCache's own doc comment for why the
+	// previous "unset = memory, always" default left the persistent
+	// backend unreachable in every shipped binary).
 	EnvCapabilityCache = "HARNESS_LLM_CAPABILITY_CACHE"
 )
 
@@ -47,7 +52,8 @@ type cacheEntry struct {
 }
 
 // MemoryCache is a lightweight in-process cache backed by a sync.Map.
-// It is the default when HARNESS_LLM_CAPABILITY_CACHE is unset or "memory".
+// It is the default when HARNESS_LLM_CAPABILITY_CACHE="memory", and the
+// degrade path when it is unset/"sqlite" but no storage.DB is available.
 type MemoryCache struct {
 	mu      sync.RWMutex
 	entries map[string]cacheEntry // key = profileID + "\x00" + modelID
@@ -146,23 +152,52 @@ func (NullCache) Invalidate(_ context.Context, _ string) error    { return nil }
 func (NullCache) InvalidateSchemaVersion(_ context.Context) error { return nil }
 
 // DefaultCache returns the cache selected by HARNESS_LLM_CAPABILITY_CACHE.
-// "off" → NullCache; "memory" or unset → MemoryCache; "sqlite" →
-// SQLiteCache over db (model-settings-reach-the-model-01PMZ101 WP14 /
-// re-derivation finding R-4: the previous version of this function
-// documented "sqlite" as a value and silently fell through to
-// MemoryCache for it — the exact "documented value a switch absorbs
-// into default:" class G-6 exists to catch).
+// "off" → NullCache; "sqlite" (or unset, when db is available) →
+// SQLiteCache over db; "memory" → MemoryCache always; unset with no db
+// → MemoryCache.
+//
+// CORRECTED (model-settings-reach-the-model-01PMZ101 WP14 / WP12 finding,
+// 2026-09-15): this function used to document "sqlite" as a value and
+// silently fall through to MemoryCache for it (R-4, the exact
+// "documented value a switch absorbs into default:" class G-6 exists to
+// catch) — that half was fixed by adding the "sqlite" case below. A
+// SEPARATE, subtler defect survived that fix: even after "sqlite" was a
+// real case, nothing in production ever SET
+// HARNESS_LLM_CAPABILITY_CACHE=sqlite (no launcher, no default Settings
+// value, no packaging script — verified by repo-wide search), so the
+// real backend was still never selected in any shipped binary — the
+// registered kind existed, the case existed, and the env var that would
+// have chosen it was simply never set. core/llm/
+// wp_pi_persistence_integrity_z101_unit9_test.go's own "Correction
+// (2026-08-25, Finding 6...)" section recorded this exact gap and
+// explicitly left the decision to an owner ruling: "Whether to flip the
+// default is an owner decision, not this test file's to make."
+//
+// That decision is made HERE: now that the SQLite backend is real (this
+// package) and its table ships in every install (migration
+// sessions/0329, registered since v0.63.0), the PERSISTENT backend is
+// the correct default whenever a real db handle is available — an
+// operator opting OUT (testing, or a deliberate no-persistence choice)
+// still can via the explicit "memory" value. This flips the true
+// default from "always MemoryCache" to "SQLiteCache when db != nil,
+// MemoryCache otherwise" — no launcher/packaging change is required
+// because the production call site (core/rpc/api.go's newLLMStack)
+// already passes a real db unconditionally.
 //
 // db is the harness's unified storage handle (core/storage.DB); pass
 // nil when no DB is available (e.g. the nil-core test chassis) — DB
 // construction is the caller's job (see core/rpc's newLLMStack), this
-// function only selects among cache STRATEGIES. "sqlite" with a nil db
-// degrades to MemoryCache rather than panicking on first use, logged so
-// the gap is visible instead of silently losing persistence.
+// function only selects among cache STRATEGIES. A nil db always
+// degrades to MemoryCache rather than panicking on first use; the
+// explicit "sqlite" value additionally logs when that degrade happens,
+// since an explicit request for persistence silently not getting it is
+// more surprising than the unset default quietly doing the same thing.
 func DefaultCache(db storage.DB) CapabilityCache {
 	switch os.Getenv(EnvCapabilityCache) {
 	case "off":
 		return NullCache{}
+	case "memory":
+		return NewMemoryCache()
 	case "sqlite":
 		if db != nil {
 			return NewSQLiteCache(db)
@@ -171,8 +206,12 @@ func DefaultCache(db storage.DB) CapabilityCache {
 			"reason", "HARNESS_LLM_CAPABILITY_CACHE=sqlite but no storage.DB handle was supplied; falling back to MemoryCache")
 		return NewMemoryCache()
 	default:
-		// "memory" and unset fall back to MemoryCache, safe for
-		// in-process use with no persistence across restarts.
+		// Unset (or an unrecognized value): prefer the persistent
+		// backend whenever a real db handle is available (see the
+		// correction above); degrade to MemoryCache when it is not.
+		if db != nil {
+			return NewSQLiteCache(db)
+		}
 		return NewMemoryCache()
 	}
 }

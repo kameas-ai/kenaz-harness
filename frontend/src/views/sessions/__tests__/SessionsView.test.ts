@@ -339,6 +339,116 @@ describe('SessionsView (chat-ui)', () => {
     w.unmount();
   });
 
+  // model-settings-reach-the-model-01PMZ101 WP07: the auto-title half of
+  // the same class as the compaction tests immediately above.
+  // autotitlewiring.LLMCaller.Overhead() had zero non-test callers, so
+  // this readout is new — this drives the REAL compactionOverhead() RPC
+  // (same response, AutoTitle* fields) SessionsView.vue's own onMounted
+  // hook calls, not a hand-built prop.
+  it('renders the autotitle-overhead row when the backend reports a non-zero tally', async () => {
+    const messages: Message[] = [
+      makeMessage({ id: 'q', role: 'user', content: 'How are you?' }),
+    ];
+    const { w } = await mountWithRoute('#s-1', {
+      sessions: {
+        list: async () => [],
+        get: async (id: string) => ({ id, name: 'Onboarding', createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => messages,
+        listMessagesActive: async () => ({ messages, sweptCount: 0 }),
+        listMessagesAll: async () => ({ messages, sweptCount: 0 }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
+        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
+        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
+      } as any,
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-llm',
+        stopStream: async () => undefined,
+      } as any,
+      compactionOverhead: async () => ({
+        total: 0,
+        calls: 0,
+        indeterminateCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        autoTitleTotal: 0.0023,
+        autoTitleCurrency: 'USD',
+        autoTitleCalls: 4,
+        autoTitleIndeterminateCalls: 0,
+        autoTitleInputTokens: 1600,
+        autoTitleOutputTokens: 48,
+      }),
+    });
+
+    expect(w.find('[data-testid="autotitle-overhead-line"]').exists()).toBe(true);
+    expect(w.text()).toContain('$0.00');
+    expect(w.text()).toContain('4');
+    expect(w.text()).toContain('calls');
+    // The compaction row must stay absent — the two readouts are
+    // independent even though they share a response.
+    expect(w.find('[data-testid="compaction-overhead-line"]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it('hides the autotitle-overhead row when the backend reports zero calls', async () => {
+    const { w } = await mountWithRoute('#s-1', {
+      sessions: {
+        list: async () => [],
+        get: async (id: string) => ({ id, name: 'Onboarding', createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        listMessagesActive: async () => ({ messages: [], sweptCount: 0 }),
+        listMessagesAll: async () => ({ messages: [], sweptCount: 0 }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
+        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
+        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
+      } as any,
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-llm',
+        stopStream: async () => undefined,
+      } as any,
+      compactionOverhead: async () => ({
+        total: 0,
+        calls: 0,
+        indeterminateCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        autoTitleTotal: 0,
+        autoTitleCalls: 0,
+        autoTitleIndeterminateCalls: 0,
+        autoTitleInputTokens: 0,
+        autoTitleOutputTokens: 0,
+      }),
+    });
+
+    expect(w.find('[data-testid="autotitle-overhead-line"]').exists()).toBe(false);
+    w.unmount();
+  });
+
   // controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
   // FR-020, AC-035): the long-session nudge's token arm used to read
   // session.lastUsage.promptTokens — a PER-TURN snapshot overwritten by
