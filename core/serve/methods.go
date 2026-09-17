@@ -35,6 +35,10 @@ var (
 	// servedMethods are the method names POST /rpc dispatches.
 	servedMethods = []string{
 		"AppInfo",
+		"Agents_DeleteProfile",
+		"Agents_ListProfiles",
+		"Agents_LoadProfile",
+		"Agents_SaveProfile",
 		"Auth_State",
 		"Config_GetFlags",
 		"Connectors_List",

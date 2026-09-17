@@ -296,7 +296,7 @@ harness rendered that button — over a `Catalog_Publish` served mode refuses.
 
 So `lib/featureFlags.ts` now closes `signedIn` and `capability()` outright
 when `isServedMode()` is true. No fleet CAPABILITY method is in the
-`servedMethods` allowlist (49 entries; 39 as of served-mode-is-a-real-mode-01PMZ707
+`servedMethods` allowlist (53 entries; 39 as of served-mode-is-a-real-mode-01PMZ707
 WP08, up from the 33 this line originally cited — this count moves every
 time a method is ported; `TestServedMethodsCountMatchesDoc`,
 `core/serve/wp08_served_count_test.go`, fails and names both citations to
