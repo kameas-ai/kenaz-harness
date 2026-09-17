@@ -15,6 +15,12 @@
  *
  * Building a site writes files into the workspace and stops. Nothing is
  * uploaded or published, and the result says so.
+ *
+ * Stale responses: list, open, save, build and preview each capture a
+ * generation (and the session they ran in) before awaiting, and drop their
+ * result if the user has since switched session, opened another document,
+ * or started a different edit. A slow response must never paint another
+ * session's data or overwrite the editor the user is now in.
  */
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -49,6 +55,48 @@ function lastActive(s: Session): string {
   return s.lastActiveAt || s.updatedAt || s.createdAt || '';
 }
 
+// A fresh install has no sessions, and the global New session dialog needs a
+// configured model to start one. Documents do not need a model, so the view
+// can create a plain session itself (Sessions_Create takes only a name).
+const newSessionName = ref('Documents');
+const creatingSession = ref(false);
+const createSessionError = ref<string | null>(null);
+
+async function createSession() {
+  if (creatingSession.value) return;
+  creatingSession.value = true;
+  createSessionError.value = null;
+  try {
+    const name = newSessionName.value.trim() || 'Documents';
+    const created = await client.sessions.create(name);
+    sessions.value = [created, ...sessions.value.filter((s) => s.id !== created.id)];
+    sessionsError.value = null;
+    sessionId.value = created.id;
+  } catch (e) {
+    createSessionError.value = documentsErrorMessage(e);
+  } finally {
+    creatingSession.value = false;
+  }
+}
+
+/**
+ * syncSessionSelect pins the <select>'s displayed value to sessionId after
+ * every DOM patch. Creating a session prepends an option and changes the
+ * selection in one patch; the select's own reset rules (keep the last
+ * selected option in DOM order) then leave the OLD session displayed while
+ * the view loads the new one. Setting the value post-patch removes that.
+ */
+const sessionSelect = ref<HTMLSelectElement | null>(null);
+watch(
+  [sessionId, sessions],
+  () => {
+    if (sessionSelect.value && sessionSelect.value.value !== sessionId.value) {
+      sessionSelect.value.value = sessionId.value;
+    }
+  },
+  { flush: 'post' },
+);
+
 async function loadSessions() {
   sessionsError.value = null;
   try {
@@ -71,22 +119,30 @@ const listLoading = ref(false);
 const listError = ref<string | null>(null);
 const selected = ref<Set<string>>(new Set());
 
+let listGen = 0;
+
 async function loadDocuments() {
-  if (!sessionId.value) {
+  const gen = ++listGen;
+  const forSession = sessionId.value;
+  if (!forSession) {
     documents.value = [];
+    listLoading.value = false;
     return;
   }
   listLoading.value = true;
   listError.value = null;
   try {
-    documents.value = (await client.documents.list(sessionId.value)) ?? [];
-    const visible = new Set(documents.value.map((d) => d.id));
+    const rows = (await client.documents.list(forSession)) ?? [];
+    if (gen !== listGen || forSession !== sessionId.value) return;
+    documents.value = rows;
+    const visible = new Set(rows.map((d) => d.id));
     selected.value = new Set([...selected.value].filter((id) => visible.has(id)));
   } catch (e) {
+    if (gen !== listGen || forSession !== sessionId.value) return;
     documents.value = [];
     listError.value = documentsErrorMessage(e);
   } finally {
-    listLoading.value = false;
+    if (gen === listGen) listLoading.value = false;
   }
 }
 
@@ -94,8 +150,12 @@ watch(sessionId, (id, prev) => {
   if (id === prev) return;
   closeDocument();
   selected.value = new Set();
+  documents.value = [];
+  listError.value = null;
   site.value = null;
   siteError.value = null;
+  building.value = false;
+  buildGen++;
   if (id && route.query.session !== id) {
     void router.replace({ query: { ...route.query, session: id } });
   }
@@ -119,19 +179,35 @@ const mode = ref<Mode>('idle');
 const current = ref<DocumentRecord | null>(null);
 const docError = ref<string | null>(null);
 
-async function openDocument(id: string) {
+/**
+ * docGen identifies "what the right-hand pane is showing". It advances on
+ * every open, new document, close and session switch; an async result that
+ * started under an older docGen is discarded.
+ */
+let docGen = 0;
+
+async function openDocument(id: string): Promise<boolean> {
+  const gen = ++docGen;
+  const forSession = sessionId.value;
   docError.value = null;
   try {
-    current.value = await client.documents.get(sessionId.value, id);
+    const doc = await client.documents.get(forSession, id);
+    if (gen !== docGen || forSession !== sessionId.value) return false;
+    resetEditor();
+    current.value = doc;
     mode.value = 'read';
+    return true;
   } catch (e) {
+    if (gen !== docGen || forSession !== sessionId.value) return false;
     current.value = null;
     mode.value = 'idle';
     docError.value = documentsErrorMessage(e);
+    return false;
   }
 }
 
 function closeDocument() {
+  docGen++;
   mode.value = 'idle';
   current.value = null;
   docError.value = null;
@@ -154,6 +230,13 @@ let previewTimer: ReturnType<typeof setTimeout> | null = null;
 let previewSeq = 0;
 
 function resetEditor() {
+  // Invalidate any preview still in flight for the previous editor.
+  previewSeq++;
+  if (previewTimer) {
+    clearTimeout(previewTimer);
+    previewTimer = null;
+  }
+  saving.value = false;
   title.value = '';
   format.value = 'html';
   source.value = '';
@@ -165,6 +248,7 @@ function resetEditor() {
 }
 
 function startCreate() {
+  docGen++;
   current.value = null;
   docError.value = null;
   resetEditor();
@@ -174,6 +258,7 @@ function startCreate() {
 
 function startEdit() {
   if (!current.value) return;
+  docGen++;
   resetEditor();
   title.value = current.value.title;
   source.value = current.value.body;
@@ -184,6 +269,7 @@ function startEdit() {
 
 function cancelEdit() {
   if (mode.value === 'edit' && current.value) {
+    docGen++;
     resetEditor();
     mode.value = 'read';
   } else {
@@ -228,33 +314,37 @@ onBeforeUnmount(() => {
 
 async function save() {
   if (saving.value) return;
+  const gen = docGen;
+  const forSession = sessionId.value;
+  const editingId = current.value?.id ?? null;
+  const stillHere = () => gen === docGen && forSession === sessionId.value;
   saving.value = true;
   saveError.value = null;
   try {
     let doc: DocumentRecord;
     if (mode.value === 'create') {
-      doc = await client.documents.create(sessionId.value, title.value, bodyHtml());
-    } else if (current.value) {
-      doc = await client.documents.update(
-        sessionId.value,
-        current.value.id,
-        baseVersion.value,
-        bodyHtml(),
-      );
+      doc = await client.documents.create(forSession, title.value, bodyHtml());
+    } else if (editingId) {
+      doc = await client.documents.update(forSession, editingId, baseVersion.value, bodyHtml());
     } else {
       return;
     }
-    conflict.value = null;
-    current.value = doc;
+    // The write landed either way; refresh the list if we are still in
+    // that session, but only take over the pane if the user is still here.
+    if (forSession === sessionId.value) void loadDocuments();
+    if (!stillHere()) return;
+    docGen++;
     resetEditor();
+    current.value = doc;
     mode.value = 'read';
-    await loadDocuments();
   } catch (e) {
+    if (!stillHere()) return;
     const parsed = parseDocumentsError(e);
-    if (parsed?.code === 'version_conflict' && current.value) {
+    if (parsed?.code === 'version_conflict' && editingId) {
       conflict.value = { latestVersion: null };
       try {
-        const latest = await client.documents.get(sessionId.value, current.value.id);
+        const latest = await client.documents.get(forSession, editingId);
+        if (!stillHere()) return;
         conflict.value = { latestVersion: latest.version };
       } catch {
         // The document may have become unreadable; the banner still says why.
@@ -263,16 +353,14 @@ async function save() {
       saveError.value = documentsErrorMessage(e);
     }
   } finally {
-    saving.value = false;
+    if (stillHere()) saving.value = false;
   }
 }
 
 /** Discard local edits and reopen the server's current version. */
 async function reloadLatest() {
   if (!current.value) return;
-  const id = current.value.id;
-  await openDocument(id);
-  if (mode.value === 'read') startEdit();
+  if (await openDocument(current.value.id)) startEdit();
 }
 
 /**
@@ -306,22 +394,28 @@ async function loadExportsDir() {
   }
 }
 
+let buildGen = 0;
+
 async function buildSite() {
   if (!canBuild.value) return;
+  const gen = ++buildGen;
+  const forSession = sessionId.value;
+  const stillHere = () => gen === buildGen && forSession === sessionId.value;
   building.value = true;
   siteError.value = null;
   site.value = null;
   try {
-    site.value = await client.documents.buildSite(
-      sessionId.value,
+    const result = await client.documents.buildSite(
+      forSession,
       siteSlug.value,
       siteTitle.value,
       [...selected.value],
     );
+    if (stillHere()) site.value = result;
   } catch (e) {
-    siteError.value = documentsErrorMessage(e);
+    if (stillHere()) siteError.value = documentsErrorMessage(e);
   } finally {
-    building.value = false;
+    if (stillHere()) building.value = false;
   }
 }
 
@@ -360,15 +454,36 @@ onMounted(async () => {
     <div class="px-6 py-3 flex flex-wrap items-center gap-3 border-b border-border-muted">
       <label class="flex items-center gap-2">
         <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">Session</span>
+        <!-- Not v-model: see syncSessionSelect. -->
         <select
-          v-model="sessionId"
+          ref="sessionSelect"
           class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink max-w-[22rem]"
           data-testid="documents-session-select"
           :disabled="sessions.length === 0"
+          @change="sessionId = ($event.target as HTMLSelectElement).value"
         >
           <option v-for="s in sessions" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
         </select>
       </label>
+      <button
+        v-if="sessions.length > 0"
+        type="button"
+        class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
+        data-testid="documents-create-session-inline"
+        :disabled="creatingSession"
+        title="Create a new session for documents (no model needed)"
+        @click="createSession"
+      >
+        {{ creatingSession ? 'Creating…' : 'New session' }}
+      </button>
+      <span
+        v-if="sessions.length > 0 && createSessionError"
+        class="font-ui text-[11px] text-signal-danger"
+        role="alert"
+        data-testid="documents-create-session-inline-error"
+      >
+        Could not create a session: {{ createSessionError }}
+      </span>
       <button
         type="button"
         class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50"
@@ -397,10 +512,40 @@ onMounted(async () => {
     </div>
     <div
       v-else-if="sessions.length === 0"
-      class="px-6 py-6 font-ui text-[12px] text-ink-muted"
+      class="px-6 py-6 space-y-3 max-w-xl"
       data-testid="documents-no-sessions"
     >
-      Documents belong to a session. Start a session first, then come back here.
+      <p class="font-ui text-[12px] text-ink-muted">
+        Documents belong to a session. Create one here to start writing — it does not need a model or
+        provider, and you can chat in it later once one is configured.
+      </p>
+      <form class="flex flex-wrap items-center gap-2" @submit.prevent="createSession">
+        <label class="flex items-center gap-2">
+          <span class="font-ui text-[11px] text-ink-muted">Session name</span>
+          <input
+            v-model="newSessionName"
+            type="text"
+            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+            data-testid="documents-new-session-name"
+          />
+        </label>
+        <button
+          type="submit"
+          class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50"
+          data-testid="documents-create-session"
+          :disabled="creatingSession"
+        >
+          {{ creatingSession ? 'Creating…' : 'Create session' }}
+        </button>
+      </form>
+      <p
+        v-if="createSessionError"
+        class="font-ui text-[11px] text-signal-danger"
+        role="alert"
+        data-testid="documents-create-session-error"
+      >
+        Could not create a session: {{ createSessionError }}
+      </p>
     </div>
 
     <div v-else class="flex-1 min-h-0 grid grid-cols-[minmax(16rem,22rem)_1fr]">

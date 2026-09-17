@@ -50,8 +50,19 @@ const flushPreview = async () => {
   await flushPromises();
 };
 
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function setup(opts: {
   sessions?: Session[] | Error;
+  createSession?: (name: string) => Promise<Session>;
   documents: Partial<DocumentsClient>;
 }) {
   const router = createRouter({
@@ -86,6 +97,11 @@ async function setup(opts: {
                   if (opts.sessions instanceof Error) throw opts.sessions;
                   return opts.sessions ?? [SESSION];
                 },
+                create:
+                  opts.createSession ??
+                  (async () => {
+                    throw new Error('create not stubbed');
+                  }),
               } as never,
               documents,
             });
@@ -349,5 +365,180 @@ describe('DocumentsView — knowledge site', () => {
     await flushPromises();
     expect(w.find('[data-testid="documents-site-error"]').text()).toContain('pick another name');
     expect(w.find('[data-testid="documents-site-result"]').exists()).toBe(false);
+  });
+});
+
+describe('DocumentsView — creating a session without a model', () => {
+  it('creates a session from the empty state and starts working in it', async () => {
+    const pending = deferred<Session>();
+    const createSession = vi.fn(() => pending.promise);
+    const list = vi.fn(async () => []);
+    const { w, router } = await setup({ sessions: [], createSession, documents: { list } });
+
+    await w.find('[data-testid="documents-new-session-name"]').setValue('Team handbook');
+    await w.find('[data-testid="documents-create-session"]').trigger('submit');
+    await flushPromises();
+    expect(createSession).toHaveBeenCalledWith('Team handbook');
+    const button = w.find('[data-testid="documents-create-session"]');
+    expect(button.text()).toBe('Creating…');
+    expect(button.attributes('disabled')).toBeDefined();
+
+    pending.resolve({ ...SESSION, id: 'sess-new', name: 'Team handbook' });
+    await flushPromises();
+    expect(w.find('[data-testid="documents-no-sessions"]').exists()).toBe(false);
+    expect((w.find('[data-testid="documents-session-select"]').element as HTMLSelectElement).value).toBe('sess-new');
+    expect(list).toHaveBeenCalledWith('sess-new');
+    expect(router.currentRoute.value.query.session).toBe('sess-new');
+    expect(w.find('[data-testid="documents-new"]').attributes('disabled')).toBeUndefined();
+    expect(w.find('[data-testid="documents-empty"]').exists()).toBe(true);
+  });
+
+  it('shows why a session could not be created and lets the user retry', async () => {
+    const createSession = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('servedTransport: Sessions_Create: database is locked'))
+      .mockResolvedValueOnce({ ...SESSION, id: 'sess-2' });
+    const { w } = await setup({ sessions: [], createSession, documents: {} });
+
+    await w.find('[data-testid="documents-create-session"]').trigger('submit');
+    await flushPromises();
+    expect(createSession).toHaveBeenCalledWith('Documents');
+    expect(w.find('[data-testid="documents-create-session-error"]').text()).toContain('database is locked');
+    expect(w.find('[data-testid="documents-create-session"]').attributes('disabled')).toBeUndefined();
+
+    await w.find('[data-testid="documents-create-session"]').trigger('submit');
+    await flushPromises();
+    expect(w.find('[data-testid="documents-no-sessions"]').exists()).toBe(false);
+  });
+
+  it('offers a New session action when sessions already exist', async () => {
+    const createSession = vi.fn(async () => ({ ...SESSION, id: 'sess-3', name: 'Documents' }));
+    const list = vi.fn(async () => []);
+    const { w } = await setup({ createSession, documents: { list } });
+    await w.find('[data-testid="documents-create-session-inline"]').trigger('click');
+    await flushPromises();
+    expect((w.find('[data-testid="documents-session-select"]').element as HTMLSelectElement).value).toBe('sess-3');
+    expect(list).toHaveBeenLastCalledWith('sess-3');
+  });
+});
+
+describe('DocumentsView — stale responses', () => {
+  const SESSION_B = { ...SESSION, id: 'sess-b', name: 'Other', updatedAt: '2026-08-01T00:00:00Z' } as Session;
+  const docA = record({ id: '01K000000000000000000000AA', title: 'Only in A' });
+  const docB = record({ id: '01K000000000000000000000BB', title: 'Only in B' });
+
+  it('drops a slow list for the previous session after switching', async () => {
+    const slowA = deferred<DocumentSummary[]>();
+    let firstA = true;
+    const list = vi.fn((sid: string) => {
+      if (sid === 'sess-1' && firstA) {
+        firstA = false;
+        return slowA.promise;
+      }
+      return Promise.resolve(sid === 'sess-b' ? [summary(docB)] : [summary(docA)]);
+    });
+    const { w } = await setup({ sessions: [SESSION, SESSION_B], documents: { list } });
+
+    await w.find('[data-testid="documents-session-select"]').setValue('sess-b');
+    await flushPromises();
+    expect(w.find(`[data-testid="documents-open-${docB.id}"]`).exists()).toBe(true);
+
+    slowA.resolve([summary(docA)]);
+    await flushPromises();
+    expect(w.find(`[data-testid="documents-open-${docA.id}"]`).exists()).toBe(false);
+    expect(w.find(`[data-testid="documents-open-${docB.id}"]`).exists()).toBe(true);
+  });
+
+  it('shows the document opened last even if an earlier open resolves later', async () => {
+    const doc1 = record({ id: '01K0000000000000000000001A', title: 'First' });
+    const doc2 = record({ id: '01K0000000000000000000002A', title: 'Second' });
+    const slow1 = deferred<DocumentRecord>();
+    const get = vi.fn((_sid: string, id: string) => (id === doc1.id ? slow1.promise : Promise.resolve(doc2)));
+    const { w } = await setup({ documents: { list: async () => [summary(doc1), summary(doc2)], get } });
+
+    await w.find(`[data-testid="documents-open-${doc1.id}"]`).trigger('click');
+    await w.find(`[data-testid="documents-open-${doc2.id}"]`).trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid="documents-reader-title"]').text()).toBe('Second');
+
+    slow1.resolve(doc1);
+    await flushPromises();
+    expect(w.find('[data-testid="documents-reader-title"]').text()).toBe('Second');
+  });
+
+  it('does not let a late save replace the document the user moved on to', async () => {
+    const other = record({ id: '01K0000000000000000000003A', title: 'Moved on' });
+    const pendingSave = deferred<DocumentRecord>();
+    const update = vi.fn(() => pendingSave.promise);
+    const get = vi.fn(async (_sid: string, id: string) => (id === other.id ? other : docA));
+    const { w } = await setup({
+      documents: { list: async () => [summary(docA), summary(other)], get, update },
+    });
+
+    await w.find(`[data-testid="documents-open-${docA.id}"]`).trigger('click');
+    await flushPromises();
+    await w.find('[data-testid="documents-edit"]').trigger('click');
+    await w.find('[data-testid="documents-source"]').setValue('<p>edit of A</p>');
+    await w.find('[data-testid="documents-save"]').trigger('click');
+    await w.find(`[data-testid="documents-open-${other.id}"]`).trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid="documents-reader-title"]').text()).toBe('Moved on');
+
+    pendingSave.resolve(record({ ...docA, version: 3, body: '<p>edit of A</p>' }));
+    await flushPromises();
+    expect(update).toHaveBeenCalledWith('sess-1', docA.id, docA.version, '<p>edit of A</p>');
+    expect(w.find('[data-testid="documents-reader-title"]').text()).toBe('Moved on');
+    expect(w.find('[data-testid="documents-editor"]').exists()).toBe(false);
+  });
+
+  it('does not show a late version-conflict banner over a newly started document', async () => {
+    const pendingSave = deferred<DocumentRecord>();
+    const { w } = await setup({
+      documents: {
+        list: async () => [summary(docA)],
+        get: async () => docA,
+        update: () => pendingSave.promise,
+      },
+    });
+    await w.find(`[data-testid="documents-open-${docA.id}"]`).trigger('click');
+    await flushPromises();
+    await w.find('[data-testid="documents-edit"]').trigger('click');
+    await w.find('[data-testid="documents-source"]').setValue('<p>mine</p>');
+    await w.find('[data-testid="documents-save"]').trigger('click');
+    await w.find('[data-testid="documents-new"]').trigger('click');
+    await w.find('[data-testid="documents-source"]').setValue('fresh draft');
+
+    pendingSave.reject(new Error('documents: version_conflict: changed'));
+    await flushPromises();
+    expect(w.find('[data-testid="documents-conflict"]').exists()).toBe(false);
+    expect((w.find('[data-testid="documents-source"]').element as HTMLTextAreaElement).value).toBe('fresh draft');
+    expect(w.find('[data-testid="documents-save"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('drops a site build that resolves after switching session', async () => {
+    const pendingBuild = deferred<KnowledgeSiteBuild>();
+    const list = vi.fn(async (sid: string) => (sid === 'sess-b' ? [summary(docB)] : [summary(docA)]));
+    const { w } = await setup({
+      sessions: [SESSION, SESSION_B],
+      documents: { list, buildSite: () => pendingBuild.promise },
+    });
+    await w.find(`[data-testid="documents-select-${docA.id}"]`).setValue(true);
+    await w.find('[data-testid="documents-site-slug"]').setValue('kb-a');
+    await w.find('[data-testid="documents-build-site"]').trigger('click');
+    await w.find('[data-testid="documents-session-select"]').setValue('sess-b');
+    await flushPromises();
+
+    pendingBuild.resolve({
+      siteDir: '/workspace/documents-exports/kb-a',
+      publicDir: '/workspace/documents-exports/kb-a/public',
+      bundle: '/workspace/documents-exports/kb-a.tar.gz',
+      bundleSha256: 'x',
+      documents: 1,
+      warnings: [],
+      published: false,
+    });
+    await flushPromises();
+    expect(w.find('[data-testid="documents-site-result"]').exists()).toBe(false);
+    expect(w.find('[data-testid="documents-build-site"]').text()).toBe('Build site');
   });
 });
