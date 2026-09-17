@@ -35,6 +35,13 @@ type Impl struct {
 	// local-only (unchanged pre-fix behaviour).
 	OptIns optInPusher
 
+	// OnConsentChanged, when set, runs after a consent level has been saved
+	// (and the opt-in push attempted). Production wires it to
+	// settings.API.ReconcileTelemetry so a tier change activates or
+	// deactivates export immediately instead of at the next enroll. nil on
+	// the test chassis / fleet-disabled path.
+	OnConsentChanged func(ctx context.Context)
+
 	// Units is the fleet-free unified Unit store (resolution + enshrine live
 	// here). Nil on the test chassis.
 	Units *units.Manager
@@ -94,6 +101,13 @@ func (f *Impl) SetTelemetryConsent(ctx context.Context, level string) error {
 		// Tier-gating error (e.g. ErrTierInsufficient): local state is
 		// unchanged, nothing to push.
 		return err
+	}
+	// The level is saved. Whatever happens to the opt-in push below, export
+	// must now match it — and an opt-OUT in particular must stop export even
+	// when fleet is unreachable and the push fails. Deferred so it also runs
+	// after the push's OnPushed callback has narrowed the lanes.
+	if f.OnConsentChanged != nil {
+		defer f.OnConsentChanged(ctx)
 	}
 	if f.OptIns == nil {
 		return nil // no fleet client wired — local-only path, unchanged behaviour

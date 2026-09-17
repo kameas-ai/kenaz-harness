@@ -63,6 +63,38 @@ type toolCallContext struct {
 	// call is the node itself.
 	CallID   string
 	ToolName string
+	// StartedAt is when the caller began this invocation, stamped where the
+	// toolCallContext is built. toolPostDispatch reports the elapsed time to
+	// Env.ToolUsage. Zero means "unknown" and is reported as zero latency.
+	StartedAt time.Time
+}
+
+// ToolUsageObserver receives one call per COMPLETED tool invocation.
+//
+// The signature is the privacy boundary: a tool's arguments and its output
+// are not parameters, so an implementation cannot forward them. toolName is
+// the runtime name and may be user-authored (an MCP server or tool name);
+// reducing it to an exportable vocabulary is the implementation's job.
+//
+// A call blocked before dispatch (policy deny, hook deny, schema rejection)
+// is not an invocation and is not reported. Implementations must not block:
+// this runs on the tool-dispatch path, inside the parallel fan-out.
+type ToolUsageObserver interface {
+	ToolInvoked(ctx context.Context, sessionID, toolName string, latency time.Duration, success bool)
+}
+
+// reportToolUsage is the single reporting site. success means the call
+// returned without a transport/dispatch error AND the tool did not flag its
+// own result as an error.
+func reportToolUsage(ctx context.Context, env *Env, tc toolCallContext, tr ToolResult, callErr error) {
+	if env == nil || env.ToolUsage == nil {
+		return
+	}
+	var latency time.Duration
+	if !tc.StartedAt.IsZero() {
+		latency = time.Since(tc.StartedAt)
+	}
+	env.ToolUsage.ToolInvoked(ctx, env.SessionID, tc.ToolName, latency, callErr == nil && !tr.IsError)
 }
 
 // eventPayload builds the common {tool, call_id, node_kind} shape the
@@ -194,6 +226,10 @@ func toolPostDispatch(
 	extra map[string]any,
 ) (ToolResult, EventBatch) {
 	var events EventBatch
+
+	// Usage telemetry: before the hooks, so a slow or failing user hook
+	// neither inflates the reported latency nor suppresses the report.
+	reportToolUsage(ctx, env, tc, tr, callErr)
 
 	if callErr != nil {
 		if env.LifecycleHooks != nil {

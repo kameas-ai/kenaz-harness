@@ -1396,6 +1396,10 @@ func (a *API) Shutdown() {
 	// Fleet background goroutines (capability poller, config poller, lockdown
 	// watcher). StopFleetBackground is idempotent and nil-safe.
 	if a.settingsImpl != nil {
+		// Clean exit: report open conversation segments and flush the usage
+		// lanes while the session is still valid. StopFleetBackground then
+		// deactivates export (which would otherwise discard what is queued).
+		a.settingsImpl.FlushFleetTelemetryForShutdown()
 		a.settingsImpl.StopFleetBackground()
 	}
 	// fleet-audit-archival-01NDFSEX13: stop the archiver and sweeper so
@@ -3682,14 +3686,10 @@ func New(c *core.Core, opts ...Option) *API {
 			if a.settingsImpl == nil {
 				return "free"
 			}
-			p := a.settingsImpl.CapabilityPoller()
-			if p == nil {
-				return "free"
-			}
-			if t := p.Current().Tier; t != "" {
-				return t
-			}
-			return "free"
+			// Poller tier first, enrolled-identity tier as the fallback:
+			// see settings.API.FleetOrgTier for why the poller alone left
+			// served-mode consent clamped to "none" at enroll time.
+			return a.settingsImpl.FleetOrgTier()
 		})
 		tc, err := corefleet.NewTelemetryConsent(c.DataDir(), tierReader)
 		if err != nil {
@@ -3712,7 +3712,15 @@ func New(c *core.Core, opts ...Option) *API {
 			}
 			return a.settingsImpl.FleetClientForBootstrap()
 		})
-		a.fleetAPI = &fleetview.Impl{Consent: tc, OptIns: optInPusher}
+		fleetImpl := &fleetview.Impl{Consent: tc, OptIns: optInPusher}
+		if settingsImpl != nil {
+			// A consent change takes effect NOW: opting in activates export
+			// for the already-enrolled identity, opting out deactivates it
+			// and discards what is queued. Before this, consent was only
+			// read once, inside enroll.
+			fleetImpl.OnConsentChanged = settingsImpl.ReconcileTelemetry
+		}
+		a.fleetAPI = fleetImpl
 		if settingsImpl != nil {
 			// The "next app start" half of the retry contract: fleetEnroll
 			// calls Reconcile against this same pusher instance.
@@ -3774,6 +3782,15 @@ func New(c *core.Core, opts ...Option) *API {
 						tpFunc,
 						tc,
 					)
+					// otlpRes above is nil in production (c.Start has not run
+					// yet), which left exported records without service.name /
+					// service.version. Resolve it lazily, like the provider.
+					settingsImpl.SetFleetTelemetryResourceFunc(func() *resource.Resource {
+						if tel := c.Telemetry(); tel != nil {
+							return tel.Resource
+						}
+						return nil
+					})
 				}
 			}
 		}
@@ -7205,8 +7222,9 @@ func buildChatRunner(
 		}
 	}
 
+	fleetUsage := newFleetUsageObserver(settingsImpl)
 	var usageHookFn chat.UsageHookFunc
-	if usageMgr != nil || sessionMgr != nil {
+	if usageMgr != nil || sessionMgr != nil || fleetUsage != nil {
 		capturedUsageMgr := usageMgr
 		capturedSessionMgr := sessionMgr
 		capturedBroker := broker
@@ -7245,6 +7263,10 @@ func buildChatRunner(
 			if costUSD != nil {
 				costVal = *costUSD
 			}
+			// Fleet usage lifecycle: token + cost totals for the session's
+			// open conversation segment. Numbers only — the model id, the
+			// message id and the response text do not cross this call.
+			fleetUsage.LLMResponse(ctx, sessionID, resp.Usage.InputTokens, resp.Usage.OutputTokens, costVal)
 			snap := session.LastUsage{
 				PromptTokens:     resp.Usage.InputTokens,
 				CompletionTokens: resp.Usage.OutputTokens,
@@ -7383,6 +7405,7 @@ func buildChatRunner(
 		PartialPersister:   partialPersister,
 		StreamCheckpoints:  streamCheckpoints,
 		UsageHook:          usageHookFn,
+		TurnUsage:          turnUsageObserver(fleetUsage),
 		PostSendHook:       postSendHookFn,
 		AutoTitle:          autoTitleDeps,
 		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
@@ -8587,6 +8610,12 @@ func newGraphManagerWithDeps(
 		dataDir = c.DataDir()
 	}
 	deps := graphview.EnvDeps{}
+	if obs := newFleetUsageObserver(settingsImpl); obs != nil {
+		// Usage telemetry for every kernel run (chat and library-graph
+		// alike): one report per completed tool invocation. Inert until the
+		// user consents and an account-attributed pipeline is active.
+		deps.ToolUsage = obs
+	}
 	if hookRunner != nil {
 		// WP09 / UNIT-8: both production Env literals (chat_runner.go
 		// and manager.go) inherit EnvDeps via applyTo, so this single

@@ -78,6 +78,25 @@ type fleetState struct {
 	// (harness-fleet-otlp-export-01NTLMEX01 tp-nil timing fix)
 	tpFunc func() *sdktrace.TracerProvider
 
+	// resFunc lazily resolves the startup OTel resource. telemetryRes is
+	// captured at rpc.New time, before c.Start runs telemetry.Init, so in
+	// production it is always nil; resFunc is consulted at activation time
+	// instead, when the resource exists. Optional.
+	resFunc func() *resource.Resource
+
+	// usageTracker turns runtime turns / tool calls into the consent-gated
+	// usage lifecycle (fleet.ConversationTracker over a fleet.UsageEmitter).
+	// Built in SetFleetOTLPPipeline; nil when the pipeline is not wired.
+	usageTracker *fleet.ConversationTracker
+
+	// enrolled* is the identity of the last successful enroll, kept so
+	// ReconcileTelemetry can (re)activate export after a consent change
+	// without another enroll round trip. Cleared on sign-out.
+	enrolledOrgID  string
+	enrolledNodeID string
+	enrolledTier   string
+	enrolled       bool
+
 	// telemetryOptIns is the per-class telemetry opt-in set last fetched from
 	// the fleet store (harness-fleet-sync-activation-01NSYNC01 gap #4). The
 	// fleet store is authoritative; this is the harness-side cache populated at
@@ -271,6 +290,145 @@ func (a *API) SetFleetOTLPPipeline(
 	a.fleet.telemetryRes = startupRes
 	a.fleet.tpFunc = tpFunc
 	a.fleet.consent = consent
+
+	// The usage lifecycle: one emitter (consent-routed, closed vocabulary)
+	// and one tracker over it. A nil pipeline or consent yields a nil
+	// tracker, which every call site treats as a no-op.
+	if a.fleet.usageTracker != nil {
+		a.fleet.usageTracker.Close()
+		a.fleet.usageTracker = nil
+	}
+	if p != nil && consent != nil {
+		tracker := fleet.NewConversationTracker(fleet.NewUsageEmitter(p, consent))
+		a.fleet.usageTracker = tracker
+		if tracker != nil && !testing.Testing() {
+			// The idle janitor is a background ticker; like the pollers
+			// above it has no business running inside a unit test.
+			tracker.Start(context.Background())
+		}
+	}
+	// A tier change can move EFFECTIVE consent (a downgrade fails closed,
+	// an upgrade un-clamps a stored level), so re-evaluate export whenever
+	// the capability snapshot changes.
+	if a.fleet.poller != nil {
+		a.fleet.poller.OnChange(func(fleet.Capabilities) {
+			a.ReconcileTelemetry(context.Background())
+		})
+	}
+}
+
+// SetFleetTelemetryResourceFunc supplies a lazy accessor for the startup OTel
+// resource (service.name / service.version). See fleetState.resFunc.
+func (a *API) SetFleetTelemetryResourceFunc(fn func() *resource.Resource) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	a.fleet.resFunc = fn
+	a.fleet.mu.Unlock()
+}
+
+// FlushFleetTelemetryForShutdown is the CLEAN-shutdown path: the session is
+// still valid, so open conversation segments are ended (their totals are the
+// most useful numbers the lifecycle produces) and both usage lanes are flushed
+// before StopFleetBackground tears export down. Contrast sign-out, which
+// discards. Bounded so a dead network cannot hold up process exit.
+func (a *API) FlushFleetTelemetryForShutdown() {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	pipeline := a.fleet.otlpPipeline
+	tracker := a.fleet.usageTracker
+	a.fleet.mu.RUnlock()
+	if pipeline == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tracker.EndAll(ctx)
+	tracker.Close()
+	pipeline.Flush(ctx)
+}
+
+// FleetUsageTracker returns the usage lifecycle tracker, or nil when fleet
+// telemetry is not wired. The runtime seams (agentgraph.ToolUsageObserver,
+// chat.TurnUsageObserver, the chat UsageHook) resolve it through this
+// accessor on every call rather than capturing it, because the pipeline is
+// wired after the chat and graph stacks are constructed.
+func (a *API) FleetUsageTracker() *fleet.ConversationTracker {
+	if a == nil || a.fleet == nil {
+		return nil
+	}
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	return a.fleet.usageTracker
+}
+
+// FleetOrgTier returns the org tier the consent gate should clamp against.
+//
+// The capability poller is the primary source. It is not sufficient on its
+// own: in a workbench the poller's first refresh runs during rpc.New, BEFORE
+// the broker token source is installed, so it fails and backs off — and at
+// enroll time, seconds later, the poller still reports no tier. Consent then
+// clamps to "none" and export was skipped, permanently, with a debug line as
+// the only trace. The enroll response carries the same server-asserted tier,
+// so it is the fallback until the poller catches up.
+func (a *API) FleetOrgTier() string {
+	if a == nil || a.fleet == nil {
+		return "free"
+	}
+	a.fleet.mu.RLock()
+	poller := a.fleet.poller
+	enrolledTier := a.fleet.enrolledTier
+	a.fleet.mu.RUnlock()
+	if poller != nil {
+		if t := poller.Current().Tier; t != "" {
+			return t
+		}
+	}
+	if enrolledTier != "" {
+		return enrolledTier
+	}
+	return "free"
+}
+
+// FleetTelemetryStatus returns a payload-free snapshot of the export pipeline
+// for Settings and for diagnosis: whether it is active, the effective consent,
+// and accepted/dropped/export counters. No identifiers, no bodies.
+func (a *API) FleetTelemetryStatus(_ context.Context) (FleetTelemetryStatusView, error) {
+	view := FleetTelemetryStatusView{EffectiveConsent: string(fleet.ConsentNone)}
+	if a == nil || a.fleet == nil {
+		return view, nil
+	}
+	a.fleet.mu.RLock()
+	pipeline := a.fleet.otlpPipeline
+	consent := a.fleet.consent
+	tracker := a.fleet.usageTracker
+	view.Enrolled = a.fleet.enrolled
+	a.fleet.mu.RUnlock()
+	if consent != nil {
+		view.EffectiveConsent = string(consent.EffectiveLevel())
+		view.StoredConsent = string(consent.Level())
+	}
+	view.OrgTier = a.FleetOrgTier()
+	if pipeline != nil {
+		view.Wired = true
+		view.Pipeline = pipeline.Status()
+	}
+	view.OpenConversations = tracker.OpenSegments()
+	return view, nil
+}
+
+// FleetTelemetryStatusView is the wire shape of FleetTelemetryStatus.
+type FleetTelemetryStatusView struct {
+	Wired             bool                 `json:"wired"`
+	Enrolled          bool                 `json:"enrolled"`
+	StoredConsent     string               `json:"stored_consent"`
+	EffectiveConsent  string               `json:"effective_consent"`
+	OrgTier           string               `json:"org_tier"`
+	OpenConversations int                  `json:"open_conversations"`
+	Pipeline          fleet.PipelineStatus `json:"pipeline"`
 }
 
 // SetTelemetryOptInPusher wires the tier→opt-ins pusher (fleet telemetry
@@ -515,7 +673,12 @@ func (a *API) StopFleetBackground() {
 	// allow-list or default model pushed before sign-out.
 	llmview.ClearFleetModelPrefs()
 	a.fleet.telemetryOptIns = nil
+	a.fleet.enrolled = false
+	a.fleet.enrolledOrgID = ""
+	a.fleet.enrolledNodeID = ""
+	a.fleet.enrolledTier = ""
 	pipeline := a.fleet.otlpPipeline
+	tracker := a.fleet.usageTracker
 	mcpCatalog := a.fleet.mcpCatalog
 	syncKindRegistry := a.fleet.syncKindRegistry
 	a.fleet.mu.Unlock()
@@ -544,6 +707,13 @@ func (a *API) StopFleetBackground() {
 	// stale opt-in set.
 	if pipeline != nil {
 		pipeline.SetTelemetryOptIns(nil)
+		// ...and stop exporting. Clearing the opt-in snapshot narrows the
+		// lanes to nothing, but the span processor, the providers and their
+		// queues were left running under the signed-out identity. Deactivate
+		// tears them down and DISCARDS what is queued; open conversation
+		// segments are dropped, not reported, for the same reason.
+		tracker.DropAll()
+		pipeline.Deactivate(context.Background())
 	}
 
 	// Stop goroutines outside the lock.
@@ -662,18 +832,29 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		"tier", id.Tier,
 	)
 
-	// Activate the fleet OTLP export pipeline post-enroll.
-	// This is the post-login trigger point (FR-003): identity attrs are now
-	// known (user.id = JWT sub resolved via enroll response, org.id =
-	// enroll org_id, machine.id = nodeID), so we can build the identity
-	// resource and register the OTLP processors/exporters.
-	a.activateOTLPPipeline(ctx, id, nodeID)
+	// Remember who we enrolled as. ReconcileTelemetry needs the org + machine
+	// ids to (re)activate export later — after a consent change, a tier
+	// change, or a token renewal — without another enroll round trip, and
+	// FleetOrgTier uses the tier until the capability poller has one.
+	if a.fleet != nil {
+		a.fleet.mu.Lock()
+		a.fleet.enrolledOrgID = id.OrgID
+		a.fleet.enrolledNodeID = nodeID
+		a.fleet.enrolledTier = id.Tier
+		a.fleet.enrolled = true
+		a.fleet.mu.Unlock()
+	}
 
 	// Reconcile per-class telemetry opt-ins from the fleet store post-enroll
 	// (harness-fleet-sync-activation-01NSYNC01 gap #4). The fleet store is the
 	// source of truth for the seven classes (replacing local-only JSON). This
 	// is best-effort and consent-gated: it caches the fleet-resolved opt-ins
 	// but never relaxes the TelemetryConsent.EffectiveLevel export gate.
+	//
+	// Runs BEFORE activation so the lanes start already narrowed: the span
+	// lane's class gate and the usage lanes' admission both read this
+	// snapshot, and an Activate that precedes it would open with "nothing
+	// admitted" and silently drop the first events of the session.
 	a.refreshTelemetryOptIns(ctx)
 
 	// Retry a tier-implied opt-in push that failed (or was never attempted)
@@ -682,6 +863,11 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	// after the GET above so a successful push's onPushed callback is the
 	// last writer of the local cache, not the (possibly stale) GET.
 	a.retryPendingTelemetryOptInPush(ctx)
+
+	// Bring export in line with (identity, effective consent). This is the
+	// post-login trigger point (FR-003): identity attrs are now known
+	// (user.id = JWT sub, org.id = enroll org_id, machine.id = nodeID).
+	a.ReconcileTelemetry(ctx)
 
 	return fleetIdentityToView(id), nil
 }
@@ -718,60 +904,71 @@ func (a *API) refreshTelemetryOptIns(ctx context.Context) {
 	logging.L().Info("fleet.telemetry_optins.refreshed", "classes", len(items))
 }
 
-// activateOTLPPipeline calls FleetOTLPPipeline.Activate post-enroll.
-// Gates on: pipeline wired, consent != "none", profile configured.
-// Best-effort: errors are logged at warn and do not fail the enroll flow.
-func (a *API) activateOTLPPipeline(ctx context.Context, id fleet.Identity, nodeID string) {
-	if a.fleet == nil {
+// ReconcileTelemetry makes the fleet export pipeline match the current
+// (signed-in identity, effective consent) — activating, re-activating under a
+// new identity, or deactivating as needed. It is THE decision point; nothing
+// else calls Activate or Deactivate.
+//
+// It is idempotent and cheap when nothing changed, so it is called liberally:
+// after enroll, after a consent change, when the capability snapshot (tier)
+// changes, on sign-out, and — in served mode — by the enroll supervisor on
+// every auth-state notification and on a slow tick.
+//
+// Before this existed, Activate ran exactly once, inside enroll. A user who
+// opted in after signing in got nothing until the next app start; a user who
+// opted OUT kept exporting spans until then; and sign-out never stopped the
+// exporters at all.
+//
+// Best-effort: failures are logged and leave export off (fail closed).
+func (a *API) ReconcileTelemetry(ctx context.Context) {
+	if a == nil || a.fleet == nil {
 		return
 	}
 	a.fleet.mu.RLock()
 	pipeline := a.fleet.otlpPipeline
 	baseRes := a.fleet.telemetryRes
+	resFunc := a.fleet.resFunc
 	consent := a.fleet.consent
 	tpFunc := a.fleet.tpFunc
 	client := a.fleet.client
+	tracker := a.fleet.usageTracker
+	enrolled := a.fleet.enrolled
+	orgID := a.fleet.enrolledOrgID
+	nodeID := a.fleet.enrolledNodeID
 	a.fleet.mu.RUnlock()
 
-	// Resolve the TracerProvider lazily. By the time activateOTLPPipeline is
-	// called (post-login, post-c.Start), telemetry.Init has already run and
-	// tpFunc returns the real provider. Calling it here rather than capturing
-	// the pointer at rpc.New time avoids the tp-nil race where c.Start / init-
-	// Telemetry hasn't executed yet.
-	// (harness-fleet-otlp-export-01NTLMEX01 tp-nil timing fix)
-	var tp *sdktrace.TracerProvider
-	if tpFunc != nil {
-		tp = tpFunc()
+	if pipeline == nil {
+		logging.L().Debug("fleet.otlp.reconcile.skipped", "reason", "pipeline_not_wired")
+		return
 	}
 
-	if pipeline == nil {
-		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "pipeline_not_wired")
-		return
+	// deactivate is the single "export must be off" path. Open conversation
+	// segments are DROPPED, not ended: their totals were gathered under a
+	// session or a consent that no longer stands.
+	deactivate := func(reason string) {
+		if pipeline.Active() {
+			logging.L().Info("fleet.otlp.reconcile.deactivating", "reason", reason)
+		}
+		tracker.DropAll()
+		pipeline.Deactivate(ctx)
 	}
 
 	// Consent gate: "none" (default) → no OTLP export (NFR-005 / FR-006).
-	if consent != nil && consent.EffectiveLevel() == fleet.ConsentNone {
-		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "consent_none")
+	// EffectiveLevel clamps by org tier, so a downgraded account lands here.
+	level := fleet.ConsentNone
+	if consent != nil {
+		level = consent.EffectiveLevel()
+	}
+	// The event (log) lane is open only under full consent. Aggregate opts
+	// the count classes in so its counters pass; this switch is what keeps
+	// those same classes from admitting log records.
+	pipeline.SetLogLaneEnabled(level == fleet.ConsentFull)
+	if level == fleet.ConsentNone {
+		deactivate("consent_none")
 		return
 	}
-
-	// OTLP ingest lives on the API host, which is discovered from
-	// /config.json on the dashboard host — NOT on the dashboard host itself.
-	// Deriving it from profile.FleetBaseURL pointed telemetry at CloudFront,
-	// which returns 200 + index.html for any path, so exports "succeeded"
-	// into a void. See fleet.OTLPBaseURL.
-	if client == nil {
-		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "no_fleet_client")
-		return
-	}
-	cfg, cfgErr := client.FleetConfig(ctx)
-	if cfgErr != nil {
-		logging.L().Warn("fleet.otlp.activate.api_host_unresolved", "err", cfgErr.Error())
-		return
-	}
-	otlpBase := fleet.OTLPBaseURL(cfg)
-	if otlpBase == "" {
-		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "no_api_base_url")
+	if !enrolled || orgID == "" {
+		deactivate("not_enrolled")
 		return
 	}
 
@@ -781,21 +978,67 @@ func (a *API) activateOTLPPipeline(ctx context.Context, id fleet.Identity, nodeI
 	// identity namespace, so decode the sub from the access token instead.
 	userID, subErr := fleet.SubjectFromAccessToken()
 	if subErr != nil || userID == "" {
-		reason := "empty"
-		if subErr != nil {
-			reason = subErr.Error()
-		}
-		logging.L().Warn("fleet.otlp.activate.no_subject", "org_id", id.OrgID, "err", reason)
+		// No token ⇒ signed out (or the broker session ended).
+		deactivate("no_subject")
 		return
 	}
 
-	attrs := fleet.IdentityAttrs{
-		UserID:    userID,
-		OrgID:     id.OrgID,
-		MachineID: nodeID,
+	// kameas.org.id likewise MUST equal the token's Zitadel resource-owner
+	// claim, not the enroll response's org_id (Fleet's internal UUID — a
+	// different namespace). Sending the enroll org_id got every batch refused
+	// with 401 "kameas.org.id mismatch". No claim ⇒ Fleet cannot accept the
+	// batch, so do not activate.
+	zitadelOrgID, orgErr := fleet.ResourceOwnerFromAccessToken()
+	if orgErr != nil || zitadelOrgID == "" {
+		logging.L().Warn("fleet.otlp.reconcile.no_resource_owner_claim")
+		deactivate("no_resource_owner_claim")
+		return
 	}
 
-	if err := pipeline.Activate(ctx, otlpBase, baseRes, attrs, fleet.DefaultBearerProvider(), tp); err != nil {
+	want := fleet.IdentityAttrs{UserID: userID, OrgID: zitadelOrgID, MachineID: nodeID}
+	if pipeline.Active() {
+		if pipeline.ActiveIdentity() == want {
+			return // already exporting as the right account
+		}
+		// The account changed under us (host signed out and in as someone
+		// else). Whatever was gathered belongs to the previous account.
+		logging.L().Info("fleet.otlp.reconcile.identity_changed")
+		tracker.DropAll()
+	}
+
+	// OTLP ingest lives on the API host, which is discovered from
+	// /config.json on the dashboard host — NOT on the dashboard host itself.
+	// Deriving it from profile.FleetBaseURL pointed telemetry at CloudFront,
+	// which returns 200 + index.html for any path, so exports "succeeded"
+	// into a void. See fleet.OTLPBaseURL.
+	if client == nil {
+		logging.L().Debug("fleet.otlp.reconcile.skipped", "reason", "no_fleet_client")
+		return
+	}
+	cfg, cfgErr := client.FleetConfig(ctx)
+	if cfgErr != nil {
+		logging.L().Warn("fleet.otlp.activate.api_host_unresolved", "err", cfgErr.Error())
+		return
+	}
+	otlpBase := fleet.OTLPBaseURL(cfg)
+	if otlpBase == "" {
+		logging.L().Debug("fleet.otlp.reconcile.skipped", "reason", "no_api_base_url")
+		return
+	}
+
+	// Resolve the TracerProvider and startup resource lazily. Both come from
+	// telemetry.Init, which runs inside c.Start — after rpc.New captured
+	// whatever it could. By activation time they exist.
+	// (harness-fleet-otlp-export-01NTLMEX01 tp-nil timing fix)
+	var tp *sdktrace.TracerProvider
+	if tpFunc != nil {
+		tp = tpFunc()
+	}
+	if baseRes == nil && resFunc != nil {
+		baseRes = resFunc()
+	}
+
+	if err := pipeline.Activate(ctx, otlpBase, baseRes, want, fleet.DefaultBearerProvider(), tp); err != nil {
 		logging.L().Warn("fleet.otlp.activate.failed", "err", err.Error())
 	}
 }
