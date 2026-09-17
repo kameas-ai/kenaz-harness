@@ -44,11 +44,14 @@ import (
 // FormatHTML is the only body format a document has in v1.
 const FormatHTML = "text/html"
 
-// AuthorModelOutput is the provenance author kind for a body produced by a
-// model tool call (FR-002). User and model-assisted edit kinds arrive with
-// the editor (FR-008/FR-009); they are not declared until something writes
-// them.
-const AuthorModelOutput = "model_output"
+// Provenance author kinds (FR-002). AuthorModelOutput is a body produced by
+// a model tool call; AuthorUserEdit is a body a person wrote through the
+// Documents UI. The model-assisted kind arrives with inline AI actions
+// (FR-009) and is not declared until something writes it.
+const (
+	AuthorModelOutput = "model_output"
+	AuthorUserEdit    = "user_edit"
+)
 
 // Errors returned by Service. Callers map them to wire codes with
 // ServiceErrorCode.
@@ -96,7 +99,7 @@ type UnitStore interface {
 	Create(ctx context.Context, u units.Unit) (units.Unit, error)
 	Get(ctx context.Context, id string) (units.Unit, error)
 	List(ctx context.Context, filter units.UnitFilter) ([]units.Unit, error)
-	Update(ctx context.Context, id, body string, metadata json.RawMessage) (units.Unit, error)
+	UpdateAtVersion(ctx context.Context, id string, baseVersion int, body string, metadata json.RawMessage) (units.Unit, error)
 }
 
 // Provenance records who produced one version of a document body (FR-002).
@@ -190,7 +193,7 @@ func (s *Service) Update(ctx context.Context, sessionID, id string, baseVersion 
 	if err != nil {
 		return Document{}, err
 	}
-	u, err := s.store.Update(ctx, id, clean, meta)
+	u, err := s.store.UpdateAtVersion(ctx, id, current.Version, clean, meta)
 	if err != nil {
 		return Document{}, fmt.Errorf("docs: update: %w", err)
 	}

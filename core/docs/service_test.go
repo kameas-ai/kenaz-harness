@@ -223,3 +223,45 @@ func TestService_RejectsBadInput(t *testing.T) {
 		t.Errorf("sanitizer code passthrough = %q", code)
 	}
 }
+
+// Two editors holding the same version must not both land: the store's
+// compare-and-set (units.UpdateAtVersion) lets exactly one write through and
+// reports version_conflict to the rest, even when they race past the
+// service's own version read at the same moment.
+func TestService_ConcurrentUpdatesFromSameBaseLandExactlyOnce(t *testing.T) {
+	t.Parallel()
+	svc, mgr := newSQLService(t)
+	ctx := context.Background()
+	d, err := svc.Save(ctx, "s", "Shared", "<p>v0</p>", modelProv("s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const writers = 8
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		go func(i int) {
+			<-start
+			_, err := svc.Update(ctx, "s", d.ID, d.Version, "<p>writer "+string(rune('a'+i))+"</p>", modelProv("s"))
+			errs <- err
+		}(i)
+	}
+	close(start)
+	ok := 0
+	for i := 0; i < writers; i++ {
+		err := <-errs
+		switch {
+		case err == nil:
+			ok++
+		case docs.ServiceErrorCode(err) != docs.CodeVersionConflict:
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("%d concurrent updates landed; want exactly 1", ok)
+	}
+	versions, _ := mgr.ListVersions(ctx, d.ID)
+	if len(versions) != 1 {
+		t.Fatalf("history rows = %d; want 1", len(versions))
+	}
+}
