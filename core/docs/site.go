@@ -45,9 +45,10 @@ import (
 // (spec 092 FR-017).
 const ExportsDirName = "documents-exports"
 
-// siteDir is the manifest's static.dir. Keeping pages out of the site root
-// keeps kameas-site.json out of what a static server serves.
-const siteDir = "public"
+// SitePublicDir is the manifest's static.dir: the directory inside a site
+// that a static web server serves. Keeping pages out of the site root keeps
+// kameas-site.json out of what gets served.
+const SitePublicDir = "public"
 
 // MaxSiteDocuments bounds a single site build. The unit store's list cap
 // is 200; a site is built from a list.
@@ -124,7 +125,7 @@ func BuildSite(opts SiteOptions, documents []Document) (Site, error) {
 		Version: 1,
 		Name:    opts.Slug,
 		Type:    sites.KindStatic,
-		Static:  &sites.StaticSection{Dir: siteDir},
+		Static:  &sites.StaticSection{Dir: SitePublicDir},
 	}
 	if err := sites.Validate(manifest); err != nil {
 		return Site{}, fmt.Errorf("%w: %v", ErrInvalidSiteSlug, err)
@@ -175,8 +176,8 @@ func BuildSite(opts SiteOptions, documents []Document) (Site, error) {
 		if err != nil {
 			return Site{}, err
 		}
-		site.Files[path.Join(siteDir, "d", d.ID+".html")] = page
-		site.Files[path.Join(siteDir, "d", d.ID+".md")] = []byte(md.Markdown)
+		site.Files[path.Join(SitePublicDir, "d", d.ID+".html")] = page
+		site.Files[path.Join(SitePublicDir, "d", d.ID+".md")] = []byte(md.Markdown)
 		if len(md.Warnings) > 0 {
 			site.Warnings = append(site.Warnings, DocumentWarnings{DocumentID: d.ID, Warnings: md.Warnings})
 		}
@@ -193,8 +194,25 @@ func BuildSite(opts SiteOptions, documents []Document) (Site, error) {
 		html.EscapeString(title), len(ordered), noun, opts.GeneratedAt.UTC().Format("2006-01-02"), catalog.String())
 	comment := fmt.Sprintf("<!-- generator: %s; knowledge-site: %s; documents: %d; generated-at: %s -->",
 		generator, opts.Slug, len(ordered), opts.GeneratedAt.UTC().Format(time.RFC3339))
-	site.Files[path.Join(siteDir, "index.html")] = []byte(renderPage(title, comment, "", index))
+	site.Files[path.Join(SitePublicDir, "index.html")] = []byte(renderPage(title, comment, "", index))
 	return site, nil
+}
+
+// SiteStamp is the GeneratedAt a site built from documents should carry: the
+// newest create or update among them. Stamping with the documents' own
+// times, not the wall clock, is what makes rebuilding an unchanged set of
+// documents reproduce the same bundle bytes.
+func SiteStamp(documents []Document) time.Time {
+	var t time.Time
+	for _, d := range documents {
+		if d.UpdatedAt.After(t) {
+			t = d.UpdatedAt
+		}
+		if d.CreatedAt.After(t) {
+			t = d.CreatedAt
+		}
+	}
+	return t
 }
 
 // SiteWritePaths lists every path WriteSite creates or replaces for slug,
@@ -347,5 +365,5 @@ func refuseSymlink(p string) error {
 func isSiteBuild(dir, slug string) bool {
 	m, err := sites.Parse(dir)
 	return err == nil && m.Name == slug && m.Type == sites.KindStatic &&
-		m.Static != nil && m.Static.Dir == siteDir
+		m.Static != nil && m.Static.Dir == SitePublicDir
 }

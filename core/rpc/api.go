@@ -109,6 +109,8 @@ import (
 	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/policy"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
+	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
+	coredocs "github.com/kameas-ai/kenaz-harness/core/docs"
 	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
 	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
@@ -204,6 +206,7 @@ type HarnessAPI interface {
 	Memory() memoryview.MemoryAPI
 	Hooks() hooksview.HooksAPI
 	Projects() projectsview.ProjectsAPI
+	Documents() documentsview.DocumentsAPI
 	Attachments() attachmentsview.AttachmentsAPI
 	Artifacts() artifactsview.ArtifactsAPI
 	Tools() tools.ToolsAPI
@@ -495,6 +498,10 @@ type API struct {
 	memoryAPI      memoryview.MemoryAPI
 	hooksAPI       hooksview.HooksAPI
 	projectsAPI    projectsview.ProjectsAPI
+	// documentsAPI backs the Documents_* family (contracts/documents-rpc.md).
+	// nil when no database is wired; Documents() then returns
+	// documentsview.Unavailable() so callers get an honest error.
+	documentsAPI documentsview.DocumentsAPI
 	attachmentsMgr *coreatt.Manager
 	attachmentsAPI attachmentsview.AttachmentsAPI
 	artifactsMgr   *coreart.Manager
@@ -1692,6 +1699,17 @@ func New(c *core.Core, opts ...Option) *API {
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
+	if unitsMgr != nil && c != nil && a.sessionsAPI != nil {
+		sessionsForDocs := a.sessionsAPI
+		a.documentsAPI = documentsview.New(documentsview.Options{
+			Store: coredocs.NewService(unitsMgr),
+			SessionExists: func(ctx context.Context, id string) error {
+				_, err := sessionsForDocs.Get(ctx, id)
+				return err
+			},
+			WorkspaceDir: c.WorkspaceDir,
+		})
+	}
 	a.eventBus = NewEventBus()
 	a.broker = NewStreamBroker(NewMultiEmitter(WailsEmitter{}, &busEmitter{bus: a.eventBus}))
 
@@ -9886,6 +9904,13 @@ func (a *API) Hooks() hooksview.HooksAPI {
 		return &stubHooks{}
 	}
 	return a.hooksAPI
+}
+// Documents is the Documents_* surface (contracts/documents-rpc.md).
+func (a *API) Documents() documentsview.DocumentsAPI {
+	if a.documentsAPI == nil {
+		return documentsview.Unavailable()
+	}
+	return a.documentsAPI
 }
 func (a *API) Projects() projectsview.ProjectsAPI {
 	if a.projectsAPI == nil {

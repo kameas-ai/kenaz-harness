@@ -68,6 +68,7 @@ import (
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	permissionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/permissions"
 	sessionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
+	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 )
 
@@ -550,6 +551,19 @@ type AuthStateResult struct {
 	State string `json:"state"`
 }
 
+// decodeDocumentsParams decodes Documents_* params, reporting a malformed
+// payload in the contract's error form (contracts/documents-rpc.md §4) so
+// the client's code parser sees bad_params rather than a bare string.
+func decodeDocumentsParams(method string, params json.RawMessage, v any) error {
+	if len(params) == 0 {
+		params = json.RawMessage("{}")
+	}
+	if err := json.Unmarshal(params, v); err != nil {
+		return &documentsview.Error{Code: documentsview.CodeBadParams, Message: "the request was malformed: " + method}
+	}
+	return nil
+}
+
 // elicitAPI returns the elicitation surface the served frontend should read.
 // It prefers an explicitly-injected surface (WithElicitAPI) and otherwise
 // falls back to api.Elicit(). The fallback is safe for production where
@@ -770,6 +784,84 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 
 	case "Projects_List":
 		return s.api.Projects().List(ctx)
+
+	// ── documents + local knowledge sites ────────────────────────────
+	//
+	// contracts/documents-rpc.md. Every method but Preview/ExportsDir names
+	// a session; the view checks it exists and core/docs decides what that
+	// session may see. The whole flow — list, open, edit, preview, build a
+	// site into /workspace — completes inside a VM; nothing is uploaded.
+
+	case "Documents_List":
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := decodeDocumentsParams("Documents_List", params, &p); err != nil {
+			return nil, err
+		}
+		return s.api.Documents().List(ctx, p.SessionID)
+
+	case "Documents_Get":
+		var p struct {
+			SessionID string `json:"sessionId"`
+			ID        string `json:"id"`
+		}
+		if err := decodeDocumentsParams("Documents_Get", params, &p); err != nil {
+			return nil, err
+		}
+		return s.api.Documents().Get(ctx, p.SessionID, p.ID)
+
+	case "Documents_Create":
+		var p struct {
+			SessionID string `json:"sessionId"`
+			Title     string `json:"title"`
+			Body      string `json:"body"`
+		}
+		if err := decodeDocumentsParams("Documents_Create", params, &p); err != nil {
+			return nil, err
+		}
+		return s.api.Documents().Create(ctx, p.SessionID, p.Title, p.Body)
+
+	case "Documents_Update":
+		var p struct {
+			SessionID   string `json:"sessionId"`
+			ID          string `json:"id"`
+			BaseVersion *int   `json:"baseVersion"`
+			Body        string `json:"body"`
+		}
+		if err := decodeDocumentsParams("Documents_Update", params, &p); err != nil {
+			return nil, err
+		}
+		if p.BaseVersion == nil {
+			// A missing baseVersion must not decode to 0 and silently pass
+			// the conflict check against a version-0 document.
+			return nil, &documentsview.Error{Code: documentsview.CodeBadParams, Message: "the request was malformed: baseVersion is required"}
+		}
+		return s.api.Documents().Update(ctx, p.SessionID, p.ID, *p.BaseVersion, p.Body)
+
+	case "Documents_Preview":
+		var p struct {
+			Body string `json:"body"`
+		}
+		if err := decodeDocumentsParams("Documents_Preview", params, &p); err != nil {
+			return nil, err
+		}
+		return s.api.Documents().Preview(ctx, p.Body)
+
+	case "Documents_BuildSite":
+		var p struct {
+			SessionID   string   `json:"sessionId"`
+			Slug        string   `json:"slug"`
+			Title       string   `json:"title"`
+			DocumentIDs []string `json:"documentIds"`
+		}
+		if err := decodeDocumentsParams("Documents_BuildSite", params, &p); err != nil {
+			return nil, err
+		}
+		return s.api.Documents().BuildSite(ctx, p.SessionID, p.Slug, p.Title, p.DocumentIDs)
+
+	case "Documents_ExportsDir":
+		return s.api.Documents().ExportsDir(ctx)
 
 	// Sessions_ResolveAutonomy — a read on session state the served build
 	// already owns (folds global → project → session autonomy layers).

@@ -43,7 +43,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/docs"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
@@ -384,7 +383,7 @@ func (t *BuildSiteTool) Call(ctx context.Context, argsJSON json.RawMessage) (jso
 	site, err := docs.BuildSite(docs.SiteOptions{
 		Slug:        strings.TrimSpace(args.Slug),
 		Title:       args.Title,
-		GeneratedAt: newestUpdate(selected),
+		GeneratedAt: docs.SiteStamp(selected),
 	}, selected)
 	if err != nil {
 		return t.docErr(NameBuildSite, err)
@@ -411,19 +410,4 @@ func (t *BuildSiteTool) Call(ctx context.Context, argsJSON json.RawMessage) (jso
 		Note: "Built locally only. Serve " + docs.ExportsDirName + "/" + site.Manifest.Name +
 			"/public with any static web server; nothing was uploaded.",
 	})
-}
-
-// newestUpdate stamps a site with its newest document change, so rebuilding
-// an unchanged set of documents reproduces the same bundle.
-func newestUpdate(ds []docs.Document) time.Time {
-	var t time.Time
-	for _, d := range ds {
-		if d.UpdatedAt.After(t) {
-			t = d.UpdatedAt
-		}
-		if d.CreatedAt.After(t) {
-			t = d.CreatedAt
-		}
-	}
-	return t
 }
