@@ -28,6 +28,10 @@ import type {
   SiteSummary,
   SiteEnvEntry,
   Project,
+  DocumentSummary,
+  DocumentRecord,
+  DocumentPreview,
+  KnowledgeSiteBuild,
   Provider,
   AddProviderInput,
   TestResult,
@@ -315,6 +319,26 @@ interface WailsBindingsLike {
   Projects_AddSession(projectID: string, sessionID: string): Promise<void>;
   Projects_RemoveSession(sessionID: string): Promise<void>;
   Projects_ListSessions(projectID: string): Promise<Session[]>;
+  // ── documents (contracts/documents-rpc.md) ─────────────────────────
+  // Hand-declared per the convention documented on CompactionOverhead
+  // above: no agent runs `wails generate module`.
+  Documents_List(sessionID: string): Promise<DocumentSummary[]>;
+  Documents_Get(sessionID: string, id: string): Promise<DocumentRecord>;
+  Documents_Create(sessionID: string, title: string, body: string): Promise<DocumentRecord>;
+  Documents_Update(
+    sessionID: string,
+    id: string,
+    baseVersion: number,
+    body: string,
+  ): Promise<DocumentRecord>;
+  Documents_Preview(body: string): Promise<DocumentPreview>;
+  Documents_BuildSite(
+    sessionID: string,
+    slug: string,
+    title: string,
+    documentIDs: string[],
+  ): Promise<KnowledgeSiteBuild>;
+  Documents_ExportsDir(): Promise<{ dir: string }>;
   // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
   Settings_GetAutonomy(): Promise<AutonomyLayer>;
   Settings_SetAutonomy(layer: AutonomyLayer): Promise<void>;
@@ -1670,6 +1694,32 @@ export interface ArtifactsClient {
  * ProjectsClient — top-level Project entity CRUD + session membership.
  * Projects group related sessions; sessions outside a project are loose.
  */
+/**
+ * DocumentsClient — the Documents_* family (contracts/documents-rpc.md).
+ * Every call but preview/exportsDir names a session; the backend checks the
+ * session exists and decides what it may see. Errors carry
+ * "documents: <code>: <message>" — see parseDocumentsError.
+ */
+export interface DocumentsClient {
+  list(sessionId: string): Promise<DocumentSummary[]>;
+  get(sessionId: string, id: string): Promise<DocumentRecord>;
+  create(sessionId: string, title: string, body: string): Promise<DocumentRecord>;
+  update(
+    sessionId: string,
+    id: string,
+    baseVersion: number,
+    body: string,
+  ): Promise<DocumentRecord>;
+  preview(body: string): Promise<DocumentPreview>;
+  buildSite(
+    sessionId: string,
+    slug: string,
+    title: string,
+    documentIds: string[],
+  ): Promise<KnowledgeSiteBuild>;
+  exportsDir(): Promise<{ dir: string }>;
+}
+
 export interface ProjectsClient {
   list(): Promise<Project[]>;
   get(id: string): Promise<Project>;
@@ -3725,6 +3775,7 @@ export interface HarnessClient {
 
   sessions: SessionsClient;
   projects: ProjectsClient;
+  documents: DocumentsClient;
   llm: LLMConnectorClient;
   mcp: MCPClient;
   a2a: A2AClient;
@@ -3872,7 +3923,7 @@ const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
   'CedarPolicy_RecentDecisions', 'Permissions_ListGrants', 'Permissions_ListPending', 'Audit_ListEntries',
   'Audit_Filter', 'Audit_ListSavedQueries', 'Logs_Tail', 'Settings_FleetTelemetryOptIns',
   'Memory_ListChunks', 'Memory_JournalTail', 'Memory_NarrativeFailedList', 'Memory_EmbeddingProbe',
-  'Projects_List', 'Projects_ListSessions', 'Artifacts_List', 'Attachments_List',
+  'Projects_List', 'Projects_ListSessions', 'Documents_List', 'Artifacts_List', 'Attachments_List',
   'Attachments_ListResolved', 'Hooks_List', 'Hooks_AvailableBuiltins', 'Tools_ListRecipes',
   'Tools_CheckRecipePrereqs', 'Shell_PathComplete', 'Slash_List', 'Slashcmd_List',
   'Slashcmd_SkillList', 'Config_GetFlags', 'Corpus_ListCorpora', 'Corpus_ListFiles',
@@ -4086,6 +4137,17 @@ export function createHarnessClient(): HarnessClient {
       listSessions: (projectId) => b().Projects_ListSessions(projectId),
       getAutonomy: (id) => b().Projects_GetAutonomy(id),
       setAutonomy: (id, layer) => b().Projects_SetAutonomy(id, layer),
+    },
+    documents: {
+      list: (sessionId) => b().Documents_List(sessionId),
+      get: (sessionId, id) => b().Documents_Get(sessionId, id),
+      create: (sessionId, title, body) => b().Documents_Create(sessionId, title, body),
+      update: (sessionId, id, baseVersion, body) =>
+        b().Documents_Update(sessionId, id, baseVersion, body),
+      preview: (body) => b().Documents_Preview(body),
+      buildSite: (sessionId, slug, title, documentIds) =>
+        b().Documents_BuildSite(sessionId, slug, title, documentIds),
+      exportsDir: () => b().Documents_ExportsDir(),
     },
     llm: {
       listProviders: () => b().LLM_ListProviders(),
@@ -5148,6 +5210,34 @@ export function createServedHarnessClient(opts?: {
       list: () => transport.call<Project[]>('Projects_List'),
     },
 
+    // The whole Documents flow — list, open, edit with conflict detection,
+    // preview, build a local site into the workspace — completes inside a
+    // workbench, so every method is wired (contracts/documents-rpc.md §5).
+    documents: {
+      list: (sessionId) =>
+        transport.call<DocumentSummary[]>('Documents_List', { sessionId }),
+      get: (sessionId, id) =>
+        transport.call<DocumentRecord>('Documents_Get', { sessionId, id }),
+      create: (sessionId, title, body) =>
+        transport.call<DocumentRecord>('Documents_Create', { sessionId, title, body }),
+      update: (sessionId, id, baseVersion, body) =>
+        transport.call<DocumentRecord>('Documents_Update', {
+          sessionId,
+          id,
+          baseVersion,
+          body,
+        }),
+      preview: (body) => transport.call<DocumentPreview>('Documents_Preview', { body }),
+      buildSite: (sessionId, slug, title, documentIds) =>
+        transport.call<KnowledgeSiteBuild>('Documents_BuildSite', {
+          sessionId,
+          slug,
+          title,
+          documentIds,
+        }),
+      exportsDir: () => transport.call<{ dir: string }>('Documents_ExportsDir', {}),
+    },
+
     permissions: {
       ...base.permissions,
 
@@ -5356,6 +5446,25 @@ export function createFakeHarnessClient(
       listSessions: async () => [],
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: noop,
+    },
+    documents: {
+      list: async () => [],
+      get: async () => {
+        throw new Error('documents: document_not_found: no document with that id is visible in this session');
+      },
+      create: async () => {
+        throw new Error('documents: unavailable: the fake client has no document store');
+      },
+      update: async () => {
+        throw new Error('documents: unavailable: the fake client has no document store');
+      },
+      preview: async () => ({ html: '', sanitized: false, byteSize: 0 }),
+      buildSite: async () => {
+        throw new Error('documents: unavailable: the fake client has no document store');
+      },
+      exportsDir: async () => {
+        throw new Error('documents: unavailable: the fake client has no document store');
+      },
     },
     llm: {
       listProviders: async () => [],
