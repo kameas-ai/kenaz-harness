@@ -941,6 +941,7 @@ interface WailsBindingsLike {
   Fleet_GetTelemetryConsent(): Promise<string>;
   /** Persists a new fleet telemetry consent level. Returns an error if the org tier is insufficient. */
   Fleet_SetTelemetryConsent(level: string): Promise<void>;
+  Fleet_TelemetryStatus(): Promise<FleetTelemetryStatus>;
 
   // ── Catalog (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────────
   /** Sign and publish a workflow/agent-pack/bundle to the fleet catalog. */
@@ -3589,7 +3590,44 @@ export interface SentryClient {
 
 // ── fleet telemetry client (fleet-otel-archival-01NDFSEX11 WP06) ─────────
 
+/** Payload-free export health (Go: settings.FleetTelemetryStatusView). */
+export interface FleetTelemetryStatus {
+  wired: boolean;
+  enrolled: boolean;
+  stored_consent: string;
+  effective_consent: string;
+  org_tier: string;
+  open_conversations: number;
+  pipeline: {
+    active: boolean;
+    log_lane_enabled: boolean;
+    last_export_at?: string;
+    last_export_code?: number;
+    events_accepted: number;
+    events_dropped_inactive: number;
+    events_dropped_gated: number;
+    counts_recorded: number;
+    counts_dropped_inactive: number;
+    counts_dropped_gated: number;
+    exports_ok: number;
+    exports_failed: number;
+    exports_unauthorized: number;
+    exports_identity_mismatch: number;
+  };
+  /** Served mode only: the enroll supervisor. */
+  enroll?: {
+    auth_state: string;
+    enrolled: boolean;
+    enroll_attempts: number;
+    enroll_failures: number;
+    last_error?: string;
+    last_enroll_at?: string;
+  };
+}
+
 export interface FleetClient {
+  /** Export health, for diagnosing "enrolled but not reporting". */
+  getTelemetryStatus(): Promise<FleetTelemetryStatus>;
   /** Returns the current fleet telemetry consent level. */
   getTelemetryConsent(): Promise<'none' | 'aggregate' | 'full'>;
   /** Persists a new consent level. Rejects when the org tier is insufficient. */
@@ -4621,6 +4659,7 @@ export function createHarnessClient(): HarnessClient {
           .Fleet_GetTelemetryConsent()
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
       setTelemetryConsent: (level) => b().Fleet_SetTelemetryConsent(level),
+      getTelemetryStatus: () => b().Fleet_TelemetryStatus(),
     },
     // ── Catalog (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────
     catalog: {
@@ -5177,6 +5216,19 @@ export function createServedHarnessClient(opts?: {
         }),
       listPending: () =>
         transport.call<PermissionRequest[]>('Permissions_ListPending'),
+    },
+
+    // Fleet telemetry consent + status: the workbench is where everyday work
+    // happens, so consent must be settable here or a workbench never reports.
+    fleet: {
+      ...base.fleet,
+      getTelemetryConsent: () =>
+        transport
+          .call<string>('Fleet_GetTelemetryConsent')
+          .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
+      setTelemetryConsent: (level) =>
+        transport.call<void>('Fleet_SetTelemetryConsent', { level }),
+      getTelemetryStatus: () => transport.call<FleetTelemetryStatus>('Fleet_TelemetryStatus'),
     },
 
     config: {
@@ -6407,6 +6459,28 @@ export function createFakeHarnessClient(
     fleet: {
       getTelemetryConsent: async () => 'none' as const,
       setTelemetryConsent: noop,
+      getTelemetryStatus: async () => ({
+        wired: false,
+        enrolled: false,
+        stored_consent: 'none',
+        effective_consent: 'none',
+        org_tier: 'free',
+        open_conversations: 0,
+        pipeline: {
+          active: false,
+          log_lane_enabled: false,
+          events_accepted: 0,
+          events_dropped_inactive: 0,
+          events_dropped_gated: 0,
+          counts_recorded: 0,
+          counts_dropped_inactive: 0,
+          counts_dropped_gated: 0,
+          exports_ok: 0,
+          exports_failed: 0,
+          exports_unauthorized: 0,
+          exports_identity_mismatch: 0,
+        },
+      }),
     },
     catalog: {
       publish: async () => ({

@@ -8,8 +8,9 @@
  *
  * (fleet-otel-archival-01NDFSEX11 WP06)
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import type { FleetTelemetryStatus } from '@/lib/harnessClient';
 
 const client = useHarnessClient();
 
@@ -18,6 +19,47 @@ const client = useHarnessClient();
 const consentLevel = ref<'none' | 'aggregate' | 'full'>('none');
 const saving = ref(false);
 const errorMsg = ref('');
+const status = ref<FleetTelemetryStatus | null>(null);
+let statusTimer: ReturnType<typeof setInterval> | undefined;
+
+async function refreshStatus() {
+  try {
+    status.value = await client.fleet.getTelemetryStatus();
+  } catch {
+    status.value = null; // status is diagnostic; never block the panel on it
+  }
+}
+
+/**
+ * One sentence answering "is this machine reporting, and if not, why".
+ * Ordered most-upstream cause first.
+ */
+const statusLine = computed<string>(() => {
+  const s = status.value;
+  if (!s) return '';
+  if (!s.wired) return 'Fleet telemetry is not configured in this build.';
+  if (s.stored_consent === 'none') return 'Off — you have not opted in.';
+  if (s.effective_consent === 'none')
+    return `Off — your organization's plan (${s.org_tier}) does not include the "${s.stored_consent}" tier.`;
+  if (s.enroll && s.enroll.auth_state !== 'signed_in')
+    return 'Waiting — sign in to Kenaz on the host. This workbench will pick it up on its own.';
+  if (!s.enrolled) {
+    if (s.enroll?.last_error)
+      return `Not enrolled with Fleet yet (${s.enroll.last_error}); retrying automatically.`;
+    return 'Not enrolled with Fleet yet — sign in to your Fleet account.';
+  }
+  if (!s.pipeline.active) return 'Enrolled, but export is not active. It is re-checked every minute.';
+  if (s.pipeline.exports_identity_mismatch > 0 && s.pipeline.exports_ok === 0)
+    return 'Paused — the signed-in account changed; re-attributing to the new account.';
+  if (s.pipeline.exports_unauthorized > 0 && s.pipeline.exports_ok === 0)
+    return 'Fleet is rejecting this sign-in (401). Renewing the session.';
+  if (s.pipeline.exports_failed > 0 && s.pipeline.exports_ok === 0)
+    return 'Cannot reach Fleet; retrying.';
+  const recorded = s.pipeline.events_accepted + s.pipeline.counts_recorded;
+  if (recorded === 0) return 'Active — nothing to report yet. Send a prompt.';
+  if (s.pipeline.exports_ok === 0) return 'Active — first batch is queued (sent within a minute).';
+  return 'Reporting to Fleet.';
+});
 
 // ── Load ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +70,12 @@ onMounted(async () => {
   } catch (err) {
     errorMsg.value = String(err);
   }
+  void refreshStatus();
+  statusTimer = setInterval(() => void refreshStatus(), 15000);
+});
+
+onBeforeUnmount(() => {
+  if (statusTimer) clearInterval(statusTimer);
 });
 
 // ── Computed ────────────────────────────────────────────────────────────────
@@ -67,6 +115,7 @@ async function saveConsent(level: 'none' | 'aggregate' | 'full') {
   try {
     await client.fleet.setTelemetryConsent(level);
     consentLevel.value = level;
+    void refreshStatus();
   } catch (err) {
     errorMsg.value = String(err);
   } finally {
@@ -80,10 +129,11 @@ async function saveConsent(level: 'none' | 'aggregate' | 'full') {
     <div>
       <h2 class="text-sm font-semibold text-ink mb-1">Fleet Telemetry</h2>
       <p class="text-xs text-ink-muted">
-        Opt in to share performance telemetry with the fleet endpoint. Data is
-        signed with your device key and cleaned by the redactor before
-        transmission. No conversation content, API keys, or credentials are
-        ever included.
+        Opt in to share usage telemetry with your organization's Fleet account.
+        It is sent over HTTPS with your sign-in token and is attributed to you:
+        each record carries your user id, your organization id, and this
+        machine's id. It is not anonymous. No conversation content, source
+        code, file paths, API keys, or credentials are ever included.
       </p>
     </div>
 
@@ -169,6 +219,22 @@ async function saveConsent(level: 'none' | 'aggregate' | 'full') {
         <li>Application log lines</li>
         <li>Log records under Aggregate consent</li>
       </ul>
+    </div>
+
+    <!-- Reporting status: counts and reasons only, never content -->
+    <div
+      v-if="status"
+      class="rounded border border-border-muted p-3 space-y-1"
+      data-testid="telemetry-status"
+    >
+      <p class="text-xs font-semibold text-ink">Status</p>
+      <p class="text-xs text-ink-muted" data-testid="telemetry-status-line">{{ statusLine }}</p>
+      <p v-if="status.pipeline.active" class="text-xs text-ink-subtle">
+        Recorded {{ status.pipeline.events_accepted + status.pipeline.counts_recorded }} ·
+        sent {{ status.pipeline.exports_ok }} batch(es) ·
+        failed {{ status.pipeline.exports_failed + status.pipeline.exports_unauthorized }}
+        <span v-if="status.pipeline.last_export_at"> · last {{ status.pipeline.last_export_at }}</span>
+      </p>
     </div>
 
     <p v-if="errorMsg" class="text-xs text-signal-danger" data-testid="fleet-error">

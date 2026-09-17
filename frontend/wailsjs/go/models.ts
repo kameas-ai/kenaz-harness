@@ -747,7 +747,7 @@ export namespace attachments {
 }
 
 export namespace audit {
-
+	
 	export class ToolConfirmDecisionDetail {
 	    server?: string;
 	    tool?: string;
@@ -762,11 +762,11 @@ export namespace audit {
 	    model?: string;
 	    prompt_version?: string;
 	    cache_hit?: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ToolConfirmDecisionDetail(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.server = source["server"];
@@ -791,11 +791,11 @@ export namespace audit {
 	    subject: string;
 	    trailing?: string;
 	    tool_confirm_decision?: ToolConfirmDecisionDetail;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Entry(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -805,7 +805,7 @@ export namespace audit {
 	        this.trailing = source["trailing"];
 	        this.tool_confirm_decision = this.convertValues(source["tool_confirm_decision"], ToolConfirmDecisionDetail);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -842,6 +842,7 @@ export namespace audit {
 	        this.limit = source["limit"];
 	    }
 	}
+	
 	export class VerifyChainResult {
 	    verified: boolean;
 	    rows_checked: number;
@@ -2907,6 +2908,44 @@ export namespace fleet {
 	        this.body = source["body"];
 	        this.status = source["status"];
 	        this.created_at = source["created_at"];
+	    }
+	}
+	export class PipelineStatus {
+	    active: boolean;
+	    log_lane_enabled: boolean;
+	    last_export_at?: string;
+	    last_export_code?: number;
+	    events_accepted: number;
+	    events_dropped_inactive: number;
+	    events_dropped_gated: number;
+	    counts_recorded: number;
+	    counts_dropped_inactive: number;
+	    counts_dropped_gated: number;
+	    exports_ok: number;
+	    exports_failed: number;
+	    exports_unauthorized: number;
+	    exports_identity_mismatch: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PipelineStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.log_lane_enabled = source["log_lane_enabled"];
+	        this.last_export_at = source["last_export_at"];
+	        this.last_export_code = source["last_export_code"];
+	        this.events_accepted = source["events_accepted"];
+	        this.events_dropped_inactive = source["events_dropped_inactive"];
+	        this.events_dropped_gated = source["events_dropped_gated"];
+	        this.counts_recorded = source["counts_recorded"];
+	        this.counts_dropped_inactive = source["counts_dropped_inactive"];
+	        this.counts_dropped_gated = source["counts_dropped_gated"];
+	        this.exports_ok = source["exports_ok"];
+	        this.exports_failed = source["exports_failed"];
+	        this.exports_unauthorized = source["exports_unauthorized"];
+	        this.exports_identity_mismatch = source["exports_identity_mismatch"];
 	    }
 	}
 	export class ResolvedUnitView {
@@ -5802,23 +5841,7 @@ export namespace recipes {
 }
 
 export namespace risk {
-
-	export class BenchmarkProvenance {
-	    benchmark_date: string;
-	    calls: number;
-	    method: string;
-
-	    static createFrom(source: any = {}) {
-	        return new BenchmarkProvenance(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.benchmark_date = source["benchmark_date"];
-	        this.calls = source["calls"];
-	        this.method = source["method"];
-	    }
-	}
+	
 	export class BenchmarkModelRow {
 	    id: string;
 	    label: string;
@@ -5837,11 +5860,11 @@ export namespace risk {
 	    p90_latency_ms: number;
 	    cost_per_rating_usd: number;
 	    notes: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BenchmarkModelRow(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -5863,20 +5886,36 @@ export namespace risk {
 	        this.notes = source["notes"];
 	    }
 	}
+	export class BenchmarkProvenance {
+	    benchmark_date: string;
+	    calls: number;
+	    method: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkProvenance(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.benchmark_date = source["benchmark_date"];
+	        this.calls = source["calls"];
+	        this.method = source["method"];
+	    }
+	}
 	export class RiskRaterBenchmark {
 	    provenance: BenchmarkProvenance;
 	    models: BenchmarkModelRow[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RiskRaterBenchmark(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.provenance = this.convertValues(source["provenance"], BenchmarkProvenance);
 	        this.models = this.convertValues(source["models"], BenchmarkModelRow);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -5899,7 +5938,7 @@ export namespace risk {
 }
 
 export namespace rpc {
-
+	
 	export class WindowSize {
 	    width: number;
 	    height: number;
@@ -7065,6 +7104,48 @@ export namespace settings {
 	        this.configured = source["configured"];
 	    }
 	}
+	export class FleetTelemetryStatusView {
+	    wired: boolean;
+	    enrolled: boolean;
+	    stored_consent: string;
+	    effective_consent: string;
+	    org_tier: string;
+	    open_conversations: number;
+	    pipeline: fleet.PipelineStatus;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetTelemetryStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.wired = source["wired"];
+	        this.enrolled = source["enrolled"];
+	        this.stored_consent = source["stored_consent"];
+	        this.effective_consent = source["effective_consent"];
+	        this.org_tier = source["org_tier"];
+	        this.open_conversations = source["open_conversations"];
+	        this.pipeline = this.convertValues(source["pipeline"], fleet.PipelineStatus);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class LockdownStatusView {
 	    active: boolean;
 	    reason?: string;
@@ -7149,6 +7230,7 @@ export namespace settings {
 	    fsRequestAccessDisabled?: boolean;
 	    searchDisabled?: boolean;
 	    autonomy?: number[];
+	    riskRaterModel?: ProviderProfileRef;
 	    autoCheckUpdatesDisabled?: boolean;
 	    updateChannel?: string;
 	    updateCheckIntervalSec?: number;
@@ -7238,6 +7320,7 @@ export namespace settings {
 	        this.fsRequestAccessDisabled = source["fsRequestAccessDisabled"];
 	        this.searchDisabled = source["searchDisabled"];
 	        this.autonomy = source["autonomy"];
+	        this.riskRaterModel = this.convertValues(source["riskRaterModel"], ProviderProfileRef);
 	        this.autoCheckUpdatesDisabled = source["autoCheckUpdatesDisabled"];
 	        this.updateChannel = source["updateChannel"];
 	        this.updateCheckIntervalSec = source["updateCheckIntervalSec"];
@@ -7776,11 +7859,11 @@ export namespace toolloop {
 	    risk_tier?: string;
 	    risk_threshold?: number;
 	    risk_rationale?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ConfirmRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.session_id = source["session_id"];

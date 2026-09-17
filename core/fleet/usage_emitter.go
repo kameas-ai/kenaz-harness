@@ -27,10 +27,9 @@ package fleet
 //
 //   - conversation ids are random per-segment UUIDs minted by
 //     ConversationTracker. The local session id never reaches this file.
-//   - tool names: only compiled-in builtins (the reserved "kenaz__" prefix)
-//     pass verbatim. MCP server and tool names are user-authored and can name
-//     a customer, a system, or a project, so every other tool is reported as
-//     the constant ExternalToolName.
+//   - tool names: only names in a compiled allowlist pass verbatim. MCP names
+//     are user-authored, and a model can invent any name (including a
+//     "kenaz__"-prefixed one), so every other tool is ExternalToolName.
 //   - model providers pass through a closed allowlist, else "other".
 //   - errors carry a closed category enum. Never a message.
 
@@ -45,27 +44,52 @@ import (
 // ExternalToolName is what every non-builtin tool is reported as.
 const ExternalToolName = "external_tool"
 
-// builtinToolPrefix is the namespace reserved for in-binary tools
-// (toolloop.BuiltinServerName). The recipe catalog rejects an MCP server
-// called "kenaz", so a name with this prefix is compiled in, not user-chosen.
-const builtinToolPrefix = "kenaz__"
+// knownBuiltinTools is the compiled allowlist of tool names reported verbatim.
+//
+// A reserved prefix is NOT proof of a compiled name: toolPostDispatch reports
+// whatever name the MODEL emitted, including calls that fail as unknown, so a
+// model can invent "kenaz__acme_payroll_q3". Only names in this set pass;
+// everything else — unknown, malformed, MCP, future — is ExternalToolName.
+// TestKnownBuiltinTools_CoverProductionRegistry (core/rpc) fails when a
+// registered builtin is missing, so a new tool defaults safe until added.
+var knownBuiltinTools = map[string]bool{
+	"kenaz__ask_user_question":         true,
+	"kenaz__bash":                      true,
+	"kenaz__build_knowledge_site":      true,
+	"kenaz__edit_file":                 true,
+	"kenaz__enter_plan_mode":           true,
+	"kenaz__exit_plan_mode":            true,
+	"kenaz__glob":                      true,
+	"kenaz__grep":                      true,
+	"kenaz__list_dir":                  true,
+	"kenaz__list_open_worklist":        true,
+	"kenaz__list_secrets":              true,
+	"kenaz__monitor":                   true,
+	"kenaz__read_context_file":         true,
+	"kenaz__read_file":                 true,
+	"kenaz__request_filesystem_access": true,
+	"kenaz__save_artifact":             true,
+	"kenaz__save_document":             true,
+	"kenaz__skill":                     true,
+	"kenaz__sleep":                     true,
+	"kenaz__subagent_dispatch":         true,
+	"kenaz__todo_write":                true,
+	"kenaz__update_artifact":           true,
+	"kenaz__update_document":           true,
+	"kenaz__web_fetch":                 true,
+	"kenaz__web_search":                true,
+	"kenaz__write_file":                true,
+}
 
-// maxProjectedToolName bounds the verbatim builtin name. Builtin names are
-// short identifiers; anything longer is not one.
-const maxProjectedToolName = 64
+// KnownBuiltinToolName reports whether name is in the compiled allowlist.
+func KnownBuiltinToolName(name string) bool { return knownBuiltinTools[name] }
 
 // ProjectToolName maps a runtime tool name onto the exportable vocabulary.
 func ProjectToolName(name string) string {
-	if !strings.HasPrefix(name, builtinToolPrefix) || len(name) > maxProjectedToolName {
-		return ExternalToolName
+	if knownBuiltinTools[name] {
+		return name
 	}
-	for _, r := range name {
-		ok := r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
-		if !ok {
-			return ExternalToolName
-		}
-	}
-	return name
+	return ExternalToolName
 }
 
 // knownModelProviders is the closed set of provider kinds reported verbatim:

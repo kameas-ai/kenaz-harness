@@ -139,3 +139,24 @@ func TestToolUsage_NilObserverIsInert(t *testing.T) {
 	applyEnvDefaults(env)
 	dispatchOneCall(t, env, "kenaz__glob", `{}`) // must not panic
 }
+
+// The observer receives whatever name the MODEL emitted — including a tool
+// that does not exist. That is why the consumer must project names through a
+// compiled allowlist rather than trust a reserved prefix.
+func TestToolUsage_UnknownModelInventedToolName_CrossesTheSeamVerbatim(t *testing.T) {
+	t.Parallel()
+	usage := &fakeToolUsage{}
+	tools := newStubTools() // nothing registered
+	env := &Env{RunID: "r", SessionID: "s", Tools: tools, ToolUsage: usage}
+	applyEnvDefaults(env)
+
+	const invented = "kenaz__customer_secret_acme"
+	tr := firstToolResult(t, dispatchOneCall(t, env, invented, `{}`))
+	if !tr.IsError {
+		t.Fatalf("an unknown tool succeeded: %+v", tr)
+	}
+	recs := usage.snapshot()
+	if len(recs) != 1 || recs[0].toolName != invented || recs[0].success {
+		t.Fatalf("records = %+v, want one failed report carrying the invented name verbatim", recs)
+	}
+}

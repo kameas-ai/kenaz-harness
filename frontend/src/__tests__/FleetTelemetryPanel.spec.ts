@@ -7,17 +7,35 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
 import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
-import { createFakeHarnessClient, type FleetClient } from '@/lib/harnessClient';
+import {
+  createFakeHarnessClient,
+  type FleetClient,
+  type FleetTelemetryStatus,
+} from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 
 function makeClient(fleetOverride: Partial<FleetClient> = {}) {
   return createFakeHarnessClient({
     fleet: {
+      ...createFakeHarnessClient().fleet,
       getTelemetryConsent: async () => 'none',
       setTelemetryConsent: async () => undefined,
       ...fleetOverride,
     },
   });
+}
+
+async function baseStatus(): Promise<FleetTelemetryStatus> {
+  return createFakeHarnessClient().fleet.getTelemetryStatus();
+}
+
+/** status() with a few fields overridden. */
+async function statusWith(
+  over: Partial<FleetTelemetryStatus>,
+  pipeline: Partial<FleetTelemetryStatus['pipeline']> = {},
+): Promise<FleetTelemetryStatus> {
+  const b = await baseStatus();
+  return { ...b, wired: true, ...over, pipeline: { ...b.pipeline, ...pipeline } };
 }
 
 async function mountPanel(client = makeClient()) {
@@ -84,5 +102,91 @@ describe('FleetTelemetryPanel', () => {
   it('renders the live preview section', async () => {
     const w = await mountPanel();
     expect(w.find('[data-testid="telemetry-preview"]').exists()).toBe(true);
+  });
+});
+
+describe('FleetTelemetryPanel — disclosure', () => {
+  it('states that telemetry is account-attributed and makes no signing claim', async () => {
+    const text = (await mountPanel()).text();
+    expect(text).toContain('attributed to you');
+    expect(text).toContain('not anonymous');
+    // Nothing signs the OTLP export; the panel used to say it was.
+    expect(text.toLowerCase()).not.toContain('signed with');
+    expect(text.toLowerCase()).not.toContain('device key');
+  });
+});
+
+describe('FleetTelemetryPanel — status line explains why nothing is reporting', () => {
+  const cases: Array<[string, Promise<FleetTelemetryStatus>, string]> = [
+    ['not opted in', statusWith({ stored_consent: 'none' }), 'you have not opted in'],
+    [
+      'tier clamps consent',
+      statusWith({ stored_consent: 'full', effective_consent: 'none', org_tier: 'pro' }),
+      'does not include',
+    ],
+    [
+      'workbench waiting for host sign-in',
+      statusWith({
+        stored_consent: 'aggregate',
+        effective_consent: 'aggregate',
+        enroll: { auth_state: 'anonymous', enrolled: false, enroll_attempts: 0, enroll_failures: 0 },
+      }),
+      'sign in to Kenaz on the host',
+    ],
+    [
+      'enroll failing',
+      statusWith({
+        stored_consent: 'aggregate',
+        effective_consent: 'aggregate',
+        enroll: {
+          auth_state: 'signed_in',
+          enrolled: false,
+          enroll_attempts: 3,
+          enroll_failures: 3,
+          last_error: 'network',
+        },
+      }),
+      'network',
+    ],
+    [
+      'fleet rejecting the token',
+      statusWith(
+        { stored_consent: 'full', effective_consent: 'full', enrolled: true },
+        { active: true, exports_unauthorized: 2 },
+      ),
+      '401',
+    ],
+    [
+      'active, idle',
+      statusWith({ stored_consent: 'full', effective_consent: 'full', enrolled: true }, { active: true }),
+      'nothing to report yet',
+    ],
+    [
+      'reporting',
+      statusWith(
+        { stored_consent: 'full', effective_consent: 'full', enrolled: true },
+        { active: true, events_accepted: 4, exports_ok: 1 },
+      ),
+      'Reporting to Fleet',
+    ],
+  ];
+  for (const [name, status, want] of cases) {
+    it(name, async () => {
+      const st = await status;
+      const w = await mountPanel(makeClient({ getTelemetryStatus: async () => st }));
+      expect(w.find('[data-testid="telemetry-status-line"]').text()).toContain(want);
+    });
+  }
+
+  it('a failing status call never blocks the consent controls', async () => {
+    const w = await mountPanel(
+      makeClient({
+        getTelemetryStatus: async () => {
+          throw new Error('boom');
+        },
+      }),
+    );
+    expect(w.find('[data-testid="telemetry-status"]').exists()).toBe(false);
+    expect(w.find('[data-testid="fleet-telemetry-panel"]').exists()).toBe(true);
   });
 });

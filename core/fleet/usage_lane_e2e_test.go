@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	collogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -758,19 +758,40 @@ func TestUsageLane_InactivePipelineAcceptsNothing(t *testing.T) {
 
 func TestProjectToolName(t *testing.T) {
 	cases := map[string]string{
-		"kenaz__bash":                       "kenaz__bash",
-		"kenaz__read_file":                  "kenaz__read_file",
+		"kenaz__bash":          "kenaz__bash",
+		"kenaz__read_file":     "kenaz__read_file",
+		"kenaz__save_document": "kenaz__save_document",
+		// A reserved prefix proves nothing: the model picks the string.
+		"kenaz__customer_secret":            ExternalToolName,
+		"kenaz__acme_payroll_q3":            ExternalToolName,
+		"kenaz__bash ":                      ExternalToolName,
+		"KENAZ__BASH":                       ExternalToolName,
+		"kenaz__bash\x00":                   ExternalToolName,
+		"kenaz__":                           ExternalToolName,
+		"kenaz__" + strings.Repeat("a", 80): ExternalToolName,
+		"kenaz__/etc/passwd":                ExternalToolName,
 		"mcp__github__create_issue":         ExternalToolName,
 		"acme-internal-tool":                ExternalToolName,
 		"":                                  ExternalToolName,
-		"kenaz__" + strings.Repeat("a", 80): ExternalToolName,
-		"kenaz__has space":                  ExternalToolName,
-		"kenaz__/etc/passwd":                ExternalToolName,
 	}
 	for in, want := range cases {
 		if got := ProjectToolName(in); got != want {
 			t.Errorf("ProjectToolName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A model-invented, well-shaped, reserved-prefix name must not reach the wire.
+func TestUsageLane_InventedBuiltinLookingNameNeverLeaves(t *testing.T) {
+	r := newActiveRig(t, ConsentFull, identityA, optIns(usageClasses...))
+	r.emitter.ToolInvoked(context.Background(), "kenaz__customer_secret_acme", time.Second, false)
+	r.flush()
+	if bytes.Contains(r.fleet.allBytes(), []byte("customer_secret")) {
+		t.Fatal("an invented kenaz__ name reached the wire")
+	}
+	ev := decodeLogs(t, r.fleet.byPath("/otlp/v1/logs"))
+	if len(ev) != 1 || ev[0].body["tool_name"] != ExternalToolName {
+		t.Errorf("events = %+v, want one external_tool", ev)
 	}
 }
 
