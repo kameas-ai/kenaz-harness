@@ -112,6 +112,9 @@ func TestOTLPPipeline_RedactsSecretAttributeBeforeTransmission(t *testing.T) {
 
 	// Construct the FleetOTLPPipeline — the live OTLP path under test.
 	pipeline := NewFleetOTLPPipeline(nil)
+	// Most permissive reachable state (full consent, every class incl. the
+	// span class opted in): what this test proves must hold even then.
+	openEverything(pipeline)
 
 	// baseRes: minimal startup resource.
 	baseRes := resource.NewWithAttributes(semconv.SchemaURL,
@@ -196,6 +199,9 @@ func TestOTLPPipeline_RedactsSecretRef(t *testing.T) {
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
 	pipeline := NewFleetOTLPPipeline(nil)
+	// Most permissive reachable state (full consent, every class incl. the
+	// span class opted in): what this test proves must hold even then.
+	openEverything(pipeline)
 	baseRes := resource.NewWithAttributes(semconv.SchemaURL,
 		attribute.String("service.name", "harness-test"),
 	)
@@ -248,6 +254,9 @@ func TestOTLPPipeline_NoActivation_NoTraffic(t *testing.T) {
 
 	// Construct but do NOT activate the pipeline.
 	pipeline := NewFleetOTLPPipeline(nil)
+	// Most permissive reachable state (full consent, every class incl. the
+	// span class opted in): what this test proves must hold even then.
+	openEverything(pipeline)
 	_ = pipeline // not activated — tp has no fleet processor registered
 
 	tracer := tp.Tracer("no-activate-test")

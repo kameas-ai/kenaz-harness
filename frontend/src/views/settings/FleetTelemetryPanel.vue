@@ -35,21 +35,24 @@ onMounted(async () => {
 const previewLines = computed<string[]>(() => {
   switch (consentLevel.value) {
     case 'aggregate':
+      // Keep in step with core/fleet/usage_emitter.go (aggregate lane) and
+      // UsageCounters() in otlp_usage_lane.go — six label-less counters.
       return [
-        'Span names + durations',
-        'Status codes (ok / error)',
-        'Metric counters + histograms (no labels)',
-        'No log records',
-        'No string attribute values',
-        'Credentials always stripped',
+        'Counts only: conversations started and ended, tool calls, errors',
+        'Token totals in and out',
+        'No labels: no tool names, no model names, no durations',
+        'No log records, no spans',
+        'Nothing is sent for an interval with no activity',
       ];
     case 'full':
+      // Keep in step with core/fleet/usage_emitter.go (full lane): the four
+      // harness.* event kinds and their closed bodies.
       return [
-        'All spans with redactor-cleaned attributes',
-        'All metrics with labels',
-        'Log records (body redacted of secrets)',
-        'Credentials, bearer tokens, API keys stripped by redactor',
-        'Signed with device ed25519 key',
+        'Conversation start and end: duration, token totals, cost, model provider',
+        'Tool calls: built-in tool name, latency, success. Tools from your own MCP servers are reported only as "external_tool"',
+        'Errors: a category (auth, transient, cancelled, budget, unknown) — never the message',
+        'A random id per conversation that links its start to its end and nothing else',
+        'Diagnostic spans only if your organization has enabled the diagnostics class',
       ];
     default:
       return ['Nothing is sent to the fleet endpoint.'];
@@ -118,7 +121,7 @@ async function saveConsent(level: 'none' | 'aggregate' | 'full') {
           <span>
             <span class="text-sm text-ink font-medium">Aggregate</span>
             <span class="block text-xs text-ink-muted">
-              Counts + durations only. No string payloads, no log records.
+              Counts only. No names, no string payloads, no log records.
               Requires Pro+ subscription.
             </span>
           </span>
@@ -135,8 +138,8 @@ async function saveConsent(level: 'none' | 'aggregate' | 'full') {
           <span>
             <span class="text-sm text-ink font-medium">Full</span>
             <span class="block text-xs text-ink-muted">
-              All redactor-cleaned data: spans, metrics, and log records. Errors
-              still have credentials removed. Requires Team+ subscription.
+              Usage events with bounded fields: conversation and tool-call
+              records, error categories. Requires Team+ subscription.
             </span>
           </span>
         </label>
@@ -157,10 +160,13 @@ async function saveConsent(level: 'none' | 'aggregate' | 'full') {
     <div class="rounded border border-border-muted p-3 space-y-1">
       <p class="text-xs font-semibold text-ink">What we never send:</p>
       <ul class="text-xs text-ink-muted list-disc list-inside space-y-0.5">
-        <li>Conversation messages or prompt text</li>
-        <li>API keys, bearer tokens, or credentials (stripped by redactor)</li>
-        <li>OAuth secrets, JWTs, or sk-* keys (stripped by redactor)</li>
-        <li>Attributes marked <code>private.</code> in structured logs</li>
+        <li>Conversation messages, prompt text, or model output</li>
+        <li>Source code, file contents, or file paths</li>
+        <li>Tool arguments or tool results</li>
+        <li>Names of your own MCP servers or tools</li>
+        <li>Error messages or stack traces</li>
+        <li>Session ids, API keys, tokens, or credentials</li>
+        <li>Application log lines</li>
         <li>Log records under Aggregate consent</li>
       </ul>
     </div>

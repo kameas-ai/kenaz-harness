@@ -118,6 +118,11 @@ type FleetOTLPPipeline struct {
 	// (see closableSpanExporter). Replaced on every Activate.
 	spanClosed *atomic.Bool
 
+	// spansAdmitted is the span lane's admission decision, recomputed whenever
+	// consent or the opt-in snapshot changes: effective consent is "full" AND
+	// Fleet's snapshot opts in SpanTelemetryClass. See closableSpanExporter.
+	spansAdmitted atomic.Bool
+
 	// usage is the account-attributed event + counter lane for the live
 	// activation; nil while inactive. See otlp_usage_lane.go.
 	usage          *usageLane
@@ -198,10 +203,38 @@ func (p *FleetOTLPPipeline) SetTelemetryOptIns(optIns []TelemetryOptInItem) {
 	p.mu.Lock()
 	p.optIns = append([]TelemetryOptInItem(nil), optIns...)
 	lane := p.usage
+	p.recomputeSpanAdmissionLocked()
 	p.mu.Unlock()
 	if lane != nil {
 		lane.gate.setOptIns(optIns)
 	}
+}
+
+// SpanTelemetryClass is the class Fleet's HandleTraces gates on (Team+,
+// default OFF). It is not in the log-kind ceiling because no log kind maps to
+// it, so the tier→opt-ins mapping never writes it: spans flow only for a user
+// whose org/admin has opted this class in explicitly.
+const SpanTelemetryClass = "harness.diagnostics"
+
+// recomputeSpanAdmissionLocked updates spansAdmitted. Caller holds p.mu.
+//
+// Spans used to be exported whenever the pipeline was active, and Fleet then
+// dropped every one whose user had not opted in harness.diagnostics — i.e.
+// all of them, since nothing writes that opt-in. "The far end drops it" is
+// not a privacy property: the span names and attributes had already crossed
+// the network under the user's identity. The client now applies the same
+// class gate first, so an opted-out class costs no bytes.
+func (p *FleetOTLPPipeline) recomputeSpanAdmissionLocked() {
+	admitted := false
+	if p.logLaneEnabled { // effective consent == full
+		for _, item := range p.optIns {
+			if item.Class == SpanTelemetryClass && item.OptedIn {
+				admitted = true
+				break
+			}
+		}
+	}
+	p.spansAdmitted.Store(admitted)
 }
 
 // IdentityAttrs holds the OTel Resource attributes required by the fleet
@@ -302,7 +335,7 @@ func (p *FleetOTLPPipeline) Activate(
 		// Wrap to substitute resource on every export call.
 		spanClosed := &atomic.Bool{}
 		withResource := &resourceOverrideSpanExporter{
-			inner: &closableSpanExporter{inner: spanExp, closed: spanClosed},
+			inner: &closableSpanExporter{inner: spanExp, closed: spanClosed, admitted: &p.spansAdmitted},
 			res:   identityRes,
 		}
 		p.spanClosed = spanClosed

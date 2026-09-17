@@ -149,6 +149,9 @@ func TestFleetLogLane_PlainSlogLineNeverLeavesTheProcess(t *testing.T) {
 	const errText = "failed to parse ledger entry 8831: unexpected EOF"
 
 	pipeline := NewFleetOTLPPipeline(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// Most permissive reachable state (full consent, every class incl. the
+	// span class opted in): what this test proves must hold even then.
+	openEverything(pipeline)
 	t.Cleanup(func() { _ = pipeline.Shutdown(ctx) })
 
 	// Real LoggerProvider wired exactly as core.go wires it: the fleet log

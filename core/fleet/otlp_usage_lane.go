@@ -282,14 +282,21 @@ func (e *closableMetricExporter) ForceFlush(ctx context.Context) error {
 
 func (e *closableMetricExporter) Shutdown(ctx context.Context) error { return e.inner.Shutdown(ctx) }
 
-// closableSpanExporter is the span-lane equivalent.
+// closableSpanExporter is the span-lane equivalent. It additionally applies
+// the span lane's class gate at export time (FleetOTLPPipeline.spansAdmitted),
+// so a consent or opt-in change takes effect on the next batch without
+// re-registering the processor.
 type closableSpanExporter struct {
-	inner  sdktrace.SpanExporter
-	closed *atomic.Bool
+	inner    sdktrace.SpanExporter
+	closed   *atomic.Bool
+	admitted *atomic.Bool
 }
 
 func (e *closableSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
 	if e.closed.Load() {
+		return nil
+	}
+	if e.admitted != nil && !e.admitted.Load() {
 		return nil
 	}
 	return e.inner.ExportSpans(ctx, spans)
@@ -518,6 +525,7 @@ func (p *FleetOTLPPipeline) SetLogLaneEnabled(enabled bool) {
 	p.mu.Lock()
 	p.logLaneEnabled = enabled
 	lane := p.usage
+	p.recomputeSpanAdmissionLocked()
 	p.mu.Unlock()
 	if lane != nil {
 		lane.gate.setEnabled(enabled)

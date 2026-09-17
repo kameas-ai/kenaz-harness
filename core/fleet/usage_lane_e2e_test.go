@@ -319,6 +319,15 @@ func (r *activeRig) flush() {
 
 var usageClasses = []string{"harness.usage_counts", "harness.tool_calls", "harness.errors"}
 
+// openEverything puts a pipeline in its MOST permissive reachable state:
+// effective consent full, every ceiling class opted in, and the span class
+// opted in too. Tests that prove something is withheld use this, so the proof
+// does not depend on some other gate happening to be shut.
+func openEverything(p *FleetOTLPPipeline) {
+	p.SetTelemetryOptIns(optIns(append(CeilingClasses(), SpanTelemetryClass)...))
+	p.SetLogLaneEnabled(true)
+}
+
 // ── tests ────────────────────────────────────────────────────────────────────
 
 func TestUsageLane_FullConsent_SendsIdentityStampedEvents(t *testing.T) {
@@ -789,6 +798,7 @@ func TestSpanLane_PostsToTheFleetOTLPRoute(t *testing.T) {
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
 	p := NewFleetOTLPPipeline(nil)
+	openEverything(p)
 	tokens := &tokenBox{tok: fakeJWT(identityA.UserID)}
 	if err := p.Activate(context.Background(), f.base(), nil, identityA, tokens.provider(), tp); err != nil {
 		t.Fatalf("Activate: %v", err)
@@ -811,5 +821,75 @@ func TestSpanLane_PostsToTheFleetOTLPRoute(t *testing.T) {
 	_ = tp.ForceFlush(ctx)
 	if after := len(f.snapshot()); after != before {
 		t.Errorf("span export continued after Deactivate (%d → %d requests)", before, after)
+	}
+}
+
+// TestSpanLane_ClassGateIsAppliedOnTheClient: Fleet drops every span whose
+// user has not opted in harness.diagnostics. The client must not send them in
+// the first place — "the far end drops it" still puts span names and
+// attributes on the network under the user's identity.
+func TestSpanLane_ClassGateIsAppliedOnTheClient(t *testing.T) {
+	cases := []struct {
+		name    string
+		prepare func(*FleetOTLPPipeline)
+		want    bool
+	}{
+		{"full + diagnostics opted in", openEverything, true},
+		{"full, diagnostics NOT opted in (what the tier mapping writes)", func(p *FleetOTLPPipeline) {
+			p.SetTelemetryOptIns(TierOptInUpdates(ConsentFull))
+			p.SetLogLaneEnabled(true)
+		}, false},
+		{"aggregate, diagnostics opted in", func(p *FleetOTLPPipeline) {
+			p.SetTelemetryOptIns(optIns(append(CeilingClasses(), SpanTelemetryClass)...))
+			p.SetLogLaneEnabled(false)
+		}, false},
+		{"no snapshot", func(p *FleetOTLPPipeline) { p.SetLogLaneEnabled(true) }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeFleet(t)
+			tp := sdktrace.NewTracerProvider()
+			defer func() { _ = tp.Shutdown(context.Background()) }()
+			p := NewFleetOTLPPipeline(nil)
+			tc.prepare(p)
+			tokens := &tokenBox{tok: fakeJWT(identityA.UserID)}
+			if err := p.Activate(context.Background(), f.base(), nil, identityA, tokens.provider(), tp); err != nil {
+				t.Fatalf("Activate: %v", err)
+			}
+			defer p.Deactivate(context.Background())
+			_, span := tp.Tracer("t").Start(context.Background(), "harness.task.create")
+			span.End()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = tp.ForceFlush(ctx)
+			if got := len(f.byPath("/otlp/v1/traces")) > 0; got != tc.want {
+				t.Errorf("spans sent = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSpanLane_OptInChangeTakesEffectWithoutReactivation: withdrawing the
+// class mid-session must stop the very next batch.
+func TestSpanLane_OptInChangeTakesEffectWithoutReactivation(t *testing.T) {
+	f := newFakeFleet(t)
+	tp := sdktrace.NewTracerProvider()
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+	p := NewFleetOTLPPipeline(nil)
+	openEverything(p)
+	tokens := &tokenBox{tok: fakeJWT(identityA.UserID)}
+	if err := p.Activate(context.Background(), f.base(), nil, identityA, tokens.provider(), tp); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	defer p.Deactivate(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	p.SetTelemetryOptIns(TierOptInUpdates(ConsentNone)) // user drops to none
+	_, span := tp.Tracer("t").Start(ctx, "harness.task.create")
+	span.End()
+	_ = tp.ForceFlush(ctx)
+	if n := len(f.byPath("/otlp/v1/traces")); n != 0 {
+		t.Errorf("%d span export(s) after the class was withdrawn", n)
 	}
 }
