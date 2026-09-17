@@ -153,6 +153,20 @@ func isBrokerSignedOut(err error) bool {
 // harness proactively contacts the broker to renew.
 const renewalThreshold = 300 * time.Second // 5 minutes
 
+// Recovery probing: while the session is NOT signed in (host was anonymous at
+// workbench start, or the host signed out), the loop keeps asking the broker
+// at a slow, backing-off cadence. The broker answers 200 the moment the host
+// has a session again, and the workbench picks it up without a restart.
+//
+// The cadence is deliberately lazy: a probe is one loopback-ish POST carrying
+// only the per-workbench broker secret, but a signed-out host can stay signed
+// out for days.
+const (
+	recoveryProbeInitial = 5 * time.Second
+	recoveryProbeBase    = 30 * time.Second
+	recoveryProbeMax     = 5 * time.Minute
+)
+
 // Session manages the in-VM auth session for a single serve-mode lifecycle.
 //
 // It is safe for concurrent use.  The access token is held in memory only —
@@ -189,6 +203,13 @@ type Session struct {
 	// Buffered; non-blocking send — a slow consumer misses intermediate transitions
 	// but always reads the latest state.
 	stateChangedCh chan struct{}
+
+	// subscribers are additional notification channels handed out by
+	// Subscribe. stateChangedCh is a single channel and therefore a single
+	// consumer; the fleet enroll supervisor and the served frontend push are
+	// two.
+	subMu       sync.Mutex
+	subscribers []chan struct{}
 }
 
 // SessionOption is a functional option for [NewSession].
@@ -246,6 +267,17 @@ func NewSession(ctx context.Context, cfg Config, log *slog.Logger, opts ...Sessi
 
 	if !cfg.SignedIn || cfg.SeedAccessToken == "" {
 		s.state = StateAnonymous
+		if cfg.BrokerAddr != "" && cfg.BrokerToken != "" {
+			// The host always provisions a broker address and a per-workbench
+			// broker secret, even when it is not signed in. That is enough to
+			// notice a LATER host sign-in: run the loop in recovery-probe
+			// mode. Before this, an anonymous boot was permanent — signing in
+			// on the host did nothing for any workbench already running.
+			s.log.Info("harness.authbroker: anonymous mode, probing the broker for a later host sign-in",
+				"broker_addr", cfg.BrokerAddr)
+			go s.renewalLoop(ctx)
+			return s
+		}
 		s.log.Info("harness.authbroker: anonymous mode (host not signed in or no seed token)")
 		return s
 	}
@@ -293,6 +325,23 @@ func (s *Session) StateChangedCh() <-chan struct{} {
 	return s.stateChangedCh
 }
 
+// Subscribe returns a fresh notification channel that receives an empty struct
+// on every auth change: a state transition AND every successful token renewal
+// (the state stays signed_in, but the token — and, after a host account
+// change, the identity inside it — is new). Same delivery contract as
+// StateChangedCh: buffered, non-blocking send, so a slow subscriber coalesces
+// notifications and must re-read State / AccessToken rather than count them.
+//
+// Unlike StateChangedCh, every call returns its own channel, so any number of
+// consumers can listen without stealing each other's notifications.
+func (s *Session) Subscribe() <-chan struct{} {
+	ch := make(chan struct{}, 4)
+	s.subMu.Lock()
+	s.subscribers = append(s.subscribers, ch)
+	s.subMu.Unlock()
+	return ch
+}
+
 // NotifyOn401 signals the renewal goroutine that an upstream API call received
 // a 401, which may mean the current access token has been revoked.  The
 // goroutine will attempt an immediate broker renewal instead of waiting for
@@ -313,19 +362,31 @@ func (s *Session) NotifyOn401() {
 	}
 }
 
-// renewalLoop is the background goroutine that keeps the access token fresh.
-// It exits when ctx is cancelled or when the broker signals session end (401).
+// renewalLoop is the background goroutine that keeps the access token fresh
+// while signed in, and probes for a recoverable session while not.
+//
+// It exits only when ctx is cancelled. It used to return on the first broker
+// 401 ("host signed out"), which made sign-out terminal for the life of the
+// process: signing back in on the host — as the same account or another —
+// never reached a running workbench.
 func (s *Session) renewalLoop(ctx context.Context) {
 	backoffBase := 2 * time.Second
 	backoffMax := 5 * time.Minute
 	backoff := backoffBase
+	probe := recoveryProbeBase
 
-	// Schedule the first renewal relative to the estimated expiry.
-	nextRenewal := s.nextRenewalDuration()
-	timer := s.newTimer(nextRenewal)
+	// Signed in: schedule relative to the estimated expiry. Not signed in:
+	// first recovery probe shortly after boot (the host may be mid sign-in).
+	var first time.Duration
+	if s.State() == StateSignedIn {
+		first = s.nextRenewalDuration()
+	} else {
+		first = recoveryProbeInitial
+	}
+	timer := s.newTimer(first)
 	defer timer.Stop()
 
-	s.log.Debug("harness.authbroker: renewal loop started", "first_renewal_in", nextRenewal)
+	s.log.Debug("harness.authbroker: renewal loop started", "first_attempt_in", first)
 
 	for {
 		select {
@@ -333,12 +394,15 @@ func (s *Session) renewalLoop(ctx context.Context) {
 			s.log.Info("harness.authbroker: renewal loop context cancelled")
 			return
 		case <-timer.C:
-			// Scheduled renewal (expiry approaching).
+			// Scheduled renewal (expiry approaching) or recovery probe.
 		case <-s.on401Ch:
 			// Upstream API call returned 401 — renew immediately.
 		}
 
-		s.log.Debug("harness.authbroker: attempting token renewal")
+		wasSignedIn := s.State() == StateSignedIn
+		if wasSignedIn {
+			s.log.Debug("harness.authbroker: attempting token renewal")
+		}
 
 		newTok, expiresIn, err := s.callBroker(ctx)
 		if err == nil {
@@ -350,28 +414,47 @@ func (s *Session) renewalLoop(ctx context.Context) {
 			s.mu.Unlock()
 
 			backoff = backoffBase // reset backoff on success
+			probe = recoveryProbeBase
 			next := s.nextRenewalDuration()
-			s.log.Info("harness.authbroker: token renewed", "expires_in_s", expiresIn, "next_renewal_in", next)
+			if wasSignedIn {
+				s.log.Info("harness.authbroker: token renewed", "expires_in_s", expiresIn, "next_renewal_in", next)
+			} else {
+				s.log.Info("harness.authbroker: host session recovered — signed in", "expires_in_s", expiresIn)
+			}
 			timer.Reset(next)
 			s.notifyStateChanged()
 			continue
 		}
 
 		if isBrokerSignedOut(err) {
-			// 401: host has signed out — tear down the session.
-			s.mu.Lock()
-			s.state = StateSignedOut
-			s.accessToken = "" // clear from memory — privacy constraint
-			s.mu.Unlock()
+			// 401: the host has no session for this workbench.
+			if wasSignedIn {
+				s.mu.Lock()
+				s.state = StateSignedOut
+				s.accessToken = "" // clear from memory — privacy constraint
+				s.mu.Unlock()
 
-			s.log.Info("harness.authbroker: host signed out — session ended")
-			s.notifyStateChanged()
+				s.log.Info("harness.authbroker: host signed out — session ended; probing for a later sign-in")
+				s.notifyStateChanged()
 
-			if s.ledgerEmit != nil {
-				s.ledgerEmit("session.signed_out")
+				if s.ledgerEmit != nil {
+					s.ledgerEmit("session.signed_out")
+				}
 			}
-			// No more renewals.
-			return
+			// Keep probing, slowly. A later host sign-in (same account or a
+			// different one) turns the next probe into a 200.
+			timer.Reset(probe)
+			probe = minDuration(probe*2, recoveryProbeMax)
+			continue
+		}
+
+		if !wasSignedIn {
+			// Not signed in and the broker has nothing for us yet (503 while
+			// the host is anonymous, 403, network). Nothing to retain; probe.
+			s.log.Debug("harness.authbroker: no host session yet", "err", err, "next_probe_in", probe)
+			timer.Reset(probe)
+			probe = minDuration(probe*2, recoveryProbeMax)
+			continue
 		}
 
 		// 403, network error, or other: broker unreachable — backoff and retry.
@@ -441,6 +524,15 @@ func (s *Session) notifyStateChanged() {
 	select {
 	case s.stateChangedCh <- struct{}{}:
 	default:
+	}
+	s.subMu.Lock()
+	subs := s.subscribers
+	s.subMu.Unlock()
+	for _, ch := range subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
 }
 

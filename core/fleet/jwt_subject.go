@@ -110,3 +110,40 @@ func resourceOwnerFromJWT(token string) (string, error) {
 	}
 	return org, nil
 }
+
+
+// TokenIdentity is the account identity an access token asserts.
+type TokenIdentity struct {
+	Subject string // sub
+	OrgID   string // Zitadel resource-owner claim
+	Issuer  string // iss — the realm
+}
+
+// TokenIdentityFromAccessToken decodes the stored access token's identity.
+func TokenIdentityFromAccessToken() (TokenIdentity, error) {
+	ts, err := LoadTokens()
+	if err != nil {
+		return TokenIdentity{}, err
+	}
+	return tokenIdentityFromJWT(ts.AccessToken)
+}
+
+func tokenIdentityFromJWT(token string) (TokenIdentity, error) {
+	sub, err := subjectFromJWT(token)
+	if err != nil {
+		return TokenIdentity{}, err
+	}
+	id := TokenIdentity{Subject: sub}
+	id.OrgID, _ = resourceOwnerFromJWT(token)
+	parts := strings.Split(token, ".")
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, _ = base64.URLEncoding.DecodeString(parts[1])
+	}
+	var claims struct {
+		Iss string `json:"iss"`
+	}
+	_ = json.Unmarshal(payload, &claims)
+	id.Issuer = claims.Iss
+	return id, nil
+}

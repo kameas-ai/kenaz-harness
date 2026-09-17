@@ -328,6 +328,40 @@ func (a *API) SetFleetTelemetryResourceFunc(fn func() *resource.Resource) {
 	a.fleet.mu.Unlock()
 }
 
+// FleetSessionEnded is the served-mode sign-out: the host broker session is
+// gone. It forgets the enrolled identity and stops export (discarding the
+// queue) but leaves the pollers alone — unlike FleetSignOut there is no token
+// store to clear, and the session may come back.
+func (a *API) FleetSessionEnded(ctx context.Context) {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	a.fleet.enrolled = false
+	a.fleet.enrolledOrgID, a.fleet.enrolledNodeID, a.fleet.enrolledTier = "", "", ""
+	a.fleet.telemetryOptIns = nil
+	pipeline := a.fleet.otlpPipeline
+	a.fleet.mu.Unlock()
+	if pipeline != nil {
+		pipeline.SetTelemetryOptIns(nil)
+	}
+	a.ReconcileTelemetry(ctx) // not enrolled ⇒ DropAll + Deactivate
+}
+
+// SetFleetExportUnauthorizedHook wires the pipeline's 401 callback (served
+// mode: the broker session's NotifyOn401).
+func (a *API) SetFleetExportUnauthorizedHook(fn func()) {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	pipeline := a.fleet.otlpPipeline
+	a.fleet.mu.RUnlock()
+	if pipeline != nil {
+		pipeline.SetOnUnauthorized(fn)
+	}
+}
+
 // FlushFleetTelemetryForShutdown is the CLEAN-shutdown path: the session is
 // still valid, so open conversation segments are ended (their totals are the
 // most useful numbers the lifecycle produces) and both usage lanes are flushed
@@ -972,39 +1006,21 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 		return
 	}
 
-	// kameas.user.id MUST equal the Zitadel JWT `sub` — the fleet OTLP
-	// receiver (validateResourceAttrs) rejects with 401 otherwise. The
-	// enroll response's user_id is the fleet-internal UUID, a DIFFERENT
-	// identity namespace, so decode the sub from the access token instead.
-	userID, subErr := fleet.SubjectFromAccessToken()
-	if subErr != nil || userID == "" {
-		// No token ⇒ signed out (or the broker session ended).
-		deactivate("no_subject")
+	// Identity comes from the TOKEN, not the enroll response: Fleet's receiver
+	// compares kameas.user.id to the JWT sub and kameas.org.id to the JWT
+	// resource-owner claim, and 401s the batch otherwise. Enroll's user_id /
+	// org_id are Fleet-internal UUIDs — a different namespace.
+	tokID, idErr := fleet.TokenIdentityFromAccessToken()
+	if idErr != nil || tokID.Subject == "" {
+		deactivate("no_subject") // no token ⇒ signed out / broker session ended
 		return
 	}
-
-	// kameas.org.id likewise MUST equal the token's Zitadel resource-owner
-	// claim, not the enroll response's org_id (Fleet's internal UUID — a
-	// different namespace). Sending the enroll org_id got every batch refused
-	// with 401 "kameas.org.id mismatch". No claim ⇒ Fleet cannot accept the
-	// batch, so do not activate.
-	zitadelOrgID, orgErr := fleet.ResourceOwnerFromAccessToken()
-	if orgErr != nil || zitadelOrgID == "" {
+	if tokID.OrgID == "" {
 		logging.L().Warn("fleet.otlp.reconcile.no_resource_owner_claim")
 		deactivate("no_resource_owner_claim")
 		return
 	}
-
-	want := fleet.IdentityAttrs{UserID: userID, OrgID: zitadelOrgID, MachineID: nodeID}
-	if pipeline.Active() {
-		if pipeline.ActiveIdentity() == want {
-			return // already exporting as the right account
-		}
-		// The account changed under us (host signed out and in as someone
-		// else). Whatever was gathered belongs to the previous account.
-		logging.L().Info("fleet.otlp.reconcile.identity_changed")
-		tracker.DropAll()
-	}
+	want := fleet.IdentityAttrs{UserID: tokID.Subject, OrgID: tokID.OrgID, MachineID: nodeID, Issuer: tokID.Issuer}
 
 	// OTLP ingest lives on the API host, which is discovered from
 	// /config.json on the dashboard host — NOT on the dashboard host itself.
@@ -1024,6 +1040,16 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 	if otlpBase == "" {
 		logging.L().Debug("fleet.otlp.reconcile.skipped", "reason", "no_api_base_url")
 		return
+	}
+
+	if pipeline.Active() {
+		if pipeline.ActiveIdentity() == want && pipeline.ActiveEndpoint() == otlpBase {
+			return // already exporting as the right account, to the right realm
+		}
+		// Account, org, issuer or endpoint changed: what was gathered belongs
+		// to the previous activation.
+		logging.L().Info("fleet.otlp.reconcile.identity_changed")
+		tracker.DropAll()
 	}
 
 	// Resolve the TracerProvider and startup resource lazily. Both come from

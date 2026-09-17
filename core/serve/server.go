@@ -68,6 +68,7 @@ import (
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	permissionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/permissions"
 	sessionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 )
 
@@ -158,6 +159,7 @@ type Server struct {
 	log         *slog.Logger
 	srv         *http.Server
 	authSession *authbroker.Session    // nil when serve mode is not wired with auth (tests / anonymous)
+	fleetEnroll *FleetEnrollSupervisor // nil outside a workbench
 	elicit      elicitview.ElicitAPI   // nil → falls back to api.Elicit(); injected for a stable pending surface
 	queueCap    int                    // per-WS-client frame queue depth; 0 → defaultStreamQueueCap
 	connectors  *connectors.Supervisor // nil → Connectors_* report "not provisioned" (spec 091 D11)
@@ -191,6 +193,18 @@ func (s *Server) backgroundCtx() context.Context {
 
 // ServerOption is a functional option for [New].
 type ServerOption func(*Server)
+
+// FleetTelemetryStatusResult is Fleet_TelemetryStatus in served mode: the
+// export snapshot plus the enroll supervisor's.
+type FleetTelemetryStatusResult struct {
+	settings.FleetTelemetryStatusView
+	Enroll *FleetEnrollStatus `json:"enroll,omitempty"`
+}
+
+// WithFleetEnroll exposes the enroll supervisor's status. nil is fine.
+func WithFleetEnroll(sup *FleetEnrollSupervisor) ServerOption {
+	return func(s *Server) { s.fleetEnroll = sup }
+}
 
 // WithAuthSession wires an [authbroker.Session] into the server.  When set,
 // the Auth_State RPC method returns the current auth state.  When nil (default)
@@ -805,6 +819,32 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	// uses so this is not a second hand-maintained flag list.
 	case "Config_GetFlags":
 		return rpc.ComputeFeatureFlags(), nil
+
+	// Fleet telemetry consent + status. Served mode is where everyday work
+	// happens (the workbench), and these were desktop-only: a workbench user
+	// had no way to move consent off "none", so a workbench could never
+	// report. Tier gating and the opt-in push are inside the view.
+	case "Fleet_GetTelemetryConsent":
+		return s.api.Fleet().GetTelemetryConsent(ctx)
+	case "Fleet_SetTelemetryConsent":
+		var p struct {
+			Level string `json:"level"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Fleet_SetTelemetryConsent: bad params: " + err.Error())
+		}
+		return nil, s.api.Fleet().SetTelemetryConsent(ctx, p.Level)
+	case "Fleet_TelemetryStatus":
+		st, err := s.api.Settings().FleetTelemetryStatus(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := FleetTelemetryStatusResult{FleetTelemetryStatusView: st}
+		if s.fleetEnroll != nil {
+			enroll := s.fleetEnroll.Status()
+			out.Enroll = &enroll
+		}
+		return out, nil
 
 	// Auth_State returns the current in-VM auth state.
 	// Privacy: no token bytes are included in the response.

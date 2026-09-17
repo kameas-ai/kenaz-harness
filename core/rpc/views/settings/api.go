@@ -1603,6 +1603,19 @@ type SettingsAPI interface {
 	// the cached identity. Returns fleet.ErrNotSignedIn if not signed in.
 	FleetRefreshIdentity(ctx context.Context) (FleetIdentity, error)
 
+	// ReconcileTelemetry brings fleet export in line with the current
+	// (identity, effective consent). Idempotent.
+	ReconcileTelemetry(ctx context.Context)
+
+	// FleetSessionEnded is the served-mode sign-out (host broker session gone).
+	FleetSessionEnded(ctx context.Context)
+
+	// SetFleetExportUnauthorizedHook wires the OTLP 401 callback.
+	SetFleetExportUnauthorizedHook(fn func())
+
+	// FleetTelemetryStatus is a payload-free export health snapshot.
+	FleetTelemetryStatus(ctx context.Context) (FleetTelemetryStatusView, error)
+
 	// FleetProfile returns the active env profile for UI rendering.
 	// Does NOT expose ClientID, APIAudience, or any secret fields.
 	FleetProfile(ctx context.Context) (FleetProfileInfo, error)

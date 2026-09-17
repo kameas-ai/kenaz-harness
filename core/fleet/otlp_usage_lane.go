@@ -160,24 +160,25 @@ func (errIdentityMismatch) Error() string {
 	return "fleet/otlp: current token subject differs from the activated identity; refusing to export"
 }
 
-// boundBearer wraps inner so it yields a token only while that token's `sub`
-// equals sub — the kameas.user.id this activation was built for.
+// boundBearer yields a token only while it asserts the SAME identity the
+// activation was stamped with: subject, resource-owner org, and issuer.
 //
-// The identity resource is frozen at Activate; the bearer is read on every
-// flush. Without this binding there is a window, between a host account
-// change and the supervisor re-activating, in which account A's queued batch
-// would be POSTed with account B's token. Fleet would 401 it (the receiver
-// compares kameas.user.id to the JWT sub), so nothing would be mis-stored —
-// but "the far end rejects it" is not the property we want for account
-// attribution. This makes the client refuse first, before any bytes move.
-func boundBearer(inner BearerProvider, sub string, stats *pipelineStats) BearerProvider {
+// The resource is frozen at Activate; the bearer is read per flush. A subject
+// alone is not the account: the same sub can move org, and the same sub string
+// can exist in another realm. On any mismatch the client refuses before bytes
+// move, rather than relying on Fleet's 401.
+func boundBearer(inner BearerProvider, want IdentityAttrs, stats *pipelineStats) BearerProvider {
 	return func() (string, error) {
 		tok, err := inner()
 		if err != nil || tok == "" {
 			return tok, err
 		}
-		got, subErr := subjectFromJWT(tok)
-		if subErr != nil || got != sub {
+		got, idErr := tokenIdentityFromJWT(tok)
+		mismatch := idErr != nil ||
+			got.Subject != want.UserID ||
+			(want.OrgID != "" && got.OrgID != want.OrgID) ||
+			(want.Issuer != "" && got.Issuer != want.Issuer)
+		if mismatch {
 			if stats != nil {
 				stats.exportsIdentityMism.Add(1)
 			}
@@ -502,6 +503,16 @@ func (p *FleetOTLPPipeline) Active() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.usage != nil && !p.usage.closed.Load()
+}
+
+// ActiveEndpoint returns the OTLP base the live activation exports to.
+func (p *FleetOTLPPipeline) ActiveEndpoint() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.usage == nil || p.usage.closed.Load() {
+		return ""
+	}
+	return p.activeEndpoint
 }
 
 // ActiveIdentity returns the identity of the live activation, or the zero

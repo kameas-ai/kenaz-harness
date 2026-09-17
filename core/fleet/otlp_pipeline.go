@@ -127,6 +127,7 @@ type FleetOTLPPipeline struct {
 	// activation; nil while inactive. See otlp_usage_lane.go.
 	usage          *usageLane
 	activeIdentity IdentityAttrs
+	activeEndpoint string
 
 	// optIns is the last Fleet opt-in snapshot, retained so an Activate that
 	// happens AFTER the snapshot arrived still starts narrowed correctly.
@@ -244,6 +245,10 @@ type IdentityAttrs struct {
 	UserID    string // kameas.user.id — must equal JWT sub
 	OrgID     string // kameas.org.id — must equal Zitadel resource-owner claim
 	MachineID string // kameas.machine.id — per-(org,machine) rate-limit key
+
+	// Issuer is the token's `iss` at activation. Binding only — it is never
+	// exported. Empty means "not bound to a realm" (tests, legacy callers).
+	Issuer string
 }
 
 // Activate wires the OTLP export pipeline post-login. Idempotent: a second
@@ -295,7 +300,7 @@ func (p *FleetOTLPPipeline) Activate(
 	//             of reporting success into a void (NewOTLPAckRoundTripper).
 	httpClient := &http.Client{
 		Transport: NewOTLPAckRoundTripper(&exportObserver{
-			inner:          NewTokenRoundTripper(boundBearer(bearer, identity.UserID, p.stats), nil),
+			inner:          NewTokenRoundTripper(boundBearer(bearer, identity, p.stats), nil),
 			stats:          p.stats,
 			onUnauthorized: p.onUnauthorized,
 		}),
@@ -385,6 +390,7 @@ func (p *FleetOTLPPipeline) Activate(
 	}
 	p.usage = lane
 	p.activeIdentity = identity
+	p.activeEndpoint = otlpBase
 	p.logger.Info("fleet.otlp.usage_lane.activated",
 		"endpoint", otlpBase,
 		"log_lane_enabled", p.logLaneEnabled,
@@ -416,6 +422,7 @@ func (p *FleetOTLPPipeline) Deactivate(ctx context.Context) {
 		p.usage = nil
 	}
 	p.activeIdentity = IdentityAttrs{}
+	p.activeEndpoint = ""
 	if wasActive {
 		p.logger.Info("fleet.otlp.deactivated")
 	}
@@ -437,6 +444,7 @@ func (p *FleetOTLPPipeline) Shutdown(ctx context.Context) error {
 		p.usage = nil
 	}
 	p.activeIdentity = IdentityAttrs{}
+	p.activeEndpoint = ""
 	_ = p.lazyMetricExp.Shutdown(ctx)
 	_ = p.lazyLogExp.Shutdown(ctx)
 	return nil

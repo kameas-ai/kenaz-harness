@@ -33,12 +33,14 @@ import (
 
 const resourceOwnerClaim = "urn:zitadel:iam:user:resourceowner:id"
 
-func jwtFor(sub, zitadelOrg string) string {
+func jwtFor(sub, zitadelOrg string) string { return jwtForIss(sub, zitadelOrg, "https://issuer.test") }
+
+func jwtForIss(sub, zitadelOrg, iss string) string {
 	enc := func(v any) string {
 		b, _ := json.Marshal(v)
 		return base64.RawURLEncoding.EncodeToString(b)
 	}
-	claims := map[string]string{"sub": sub}
+	claims := map[string]string{"sub": sub, "iss": iss}
 	if zitadelOrg != "" {
 		claims[resourceOwnerClaim] = zitadelOrg
 	}
@@ -538,5 +540,40 @@ func TestReconcile_ServedBootRace_TierComesFromEnrollWhenThePollerHasNone(t *tes
 	}
 	if err := r.consent.SetLevel(fleet.ConsentFull); err != nil {
 		t.Fatalf("full consent refused on an enterprise org: %v", err)
+	}
+}
+
+func TestReconcile_SameSubjectDifferentOrgOrIssuer_Reattributes(t *testing.T) {
+	for name, tok := range map[string]string{
+		"org":    jwtFor("sub-alice", "zitadel-org-999"),
+		"issuer": jwtForIss("sub-alice", "zitadel-org-111", "https://other-realm.test"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newReconcileRig(t, fleet.ConsentFull)
+			before := r.pipeline.ActiveIdentity()
+			r.work(t, "s1") // queued under the first identity
+
+			r.setToken(tok)
+			r.flush() // before reconcile: the bound bearer must refuse
+			if n := r.fleet.count(); n != 0 {
+				t.Fatalf("%d request(s) sent under a token for a different %s", n, name)
+			}
+
+			r.api.ReconcileTelemetry(context.Background())
+			after := r.pipeline.ActiveIdentity()
+			if after == before {
+				t.Fatalf("identity not re-stamped after the %s changed: %+v", name, after)
+			}
+			r.work(t, "s1")
+			r.flush()
+			for _, e := range r.fleet.events(t) {
+				if e.bearer != tok || e.resource["kameas.org.id"] != after.OrgID {
+					t.Errorf("event %s: resource org %q / bearer mismatch after %s change", e.kind, e.resource["kameas.org.id"], name)
+				}
+			}
+			if len(r.fleet.events(t)) == 0 {
+				t.Error("nothing exported under the new identity")
+			}
+		})
 	}
 }

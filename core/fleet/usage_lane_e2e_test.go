@@ -235,14 +235,35 @@ func anyToGo(av *commonpb.AnyValue) any {
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
-// fakeJWT builds an unsigned compact JWT whose payload carries sub. The
-// pipeline only decodes the payload; signature verification is Fleet's job.
-func fakeJWT(sub string) string {
+const testIssuer = "https://issuer.test"
+
+// testOrgBySub gives each test subject the resource-owner org its identity
+// fixture is stamped with, so fakeJWT(sub) asserts a complete identity.
+var testOrgBySub = map[string]string{
+	"sub-alice":                            "org-alpha",
+	"sub-bob":                              "org-beta",
+	"user-test-123":                        "org-test-456",
+	"user-secret-ref-test":                 "org-secret-ref-test",
+	"11111111-1111-1111-1111-111111111111": "22222222-2222-2222-2222-222222222222",
+}
+
+// fakeJWT builds an unsigned compact JWT for sub (payload decode only;
+// signature verification is Fleet's job).
+func fakeJWT(sub string) string { return fakeJWTWith(sub, testOrgBySub[sub], testIssuer) }
+
+func fakeJWTWith(sub, org, iss string) string {
 	enc := func(v any) string {
 		b, _ := json.Marshal(v)
 		return base64.RawURLEncoding.EncodeToString(b)
 	}
-	return enc(map[string]string{"alg": "none"}) + "." + enc(map[string]string{"sub": sub}) + ".sig"
+	claims := map[string]string{"sub": sub}
+	if org != "" {
+		claims[zitadelResourceOwnerClaim] = org
+	}
+	if iss != "" {
+		claims["iss"] = iss
+	}
+	return enc(map[string]string{"alg": "none"}) + "." + enc(claims) + ".sig"
 }
 
 // tokenBox is a swappable bearer source.
@@ -273,8 +294,8 @@ func (c *staticConsent) EffectiveLevel() ConsentLevel {
 func (c *staticConsent) set(l ConsentLevel) { c.mu.Lock(); c.level = l; c.mu.Unlock() }
 
 var (
-	identityA = IdentityAttrs{UserID: "sub-alice", OrgID: "org-alpha", MachineID: "machine-01"}
-	identityB = IdentityAttrs{UserID: "sub-bob", OrgID: "org-beta", MachineID: "machine-01"}
+	identityA = IdentityAttrs{UserID: "sub-alice", OrgID: "org-alpha", MachineID: "machine-01", Issuer: testIssuer}
+	identityB = IdentityAttrs{UserID: "sub-bob", OrgID: "org-beta", MachineID: "machine-01", Issuer: testIssuer}
 )
 
 func optIns(classes ...string) []TelemetryOptInItem {
@@ -891,5 +912,38 @@ func TestSpanLane_OptInChangeTakesEffectWithoutReactivation(t *testing.T) {
 	_ = tp.ForceFlush(ctx)
 	if n := len(f.byPath("/otlp/v1/traces")); n != 0 {
 		t.Errorf("%d span export(s) after the class was withdrawn", n)
+	}
+}
+
+// TestUsageLane_BoundToFullIdentity: the subject alone is not the account.
+func TestUsageLane_BoundToFullIdentity(t *testing.T) {
+	cases := []struct {
+		name  string
+		token string
+		sends bool
+	}{
+		{"same identity", fakeJWTWith("sub-alice", "org-alpha", testIssuer), true},
+		{"same sub, different org", fakeJWTWith("sub-alice", "org-OTHER", testIssuer), false},
+		{"same sub, org claim missing", fakeJWTWith("sub-alice", "", testIssuer), false},
+		{"same sub+org, different issuer", fakeJWTWith("sub-alice", "org-alpha", "https://other-realm.test"), false},
+		{"same sub+org, issuer missing", fakeJWTWith("sub-alice", "org-alpha", ""), false},
+		{"different sub", fakeJWTWith("sub-bob", "org-alpha", testIssuer), false},
+		{"not a JWT", "opaque-token", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, level := range []ConsentLevel{ConsentAggregate, ConsentFull} {
+				r := newActiveRig(t, level, identityA, optIns(usageClasses...))
+				r.emitter.ToolInvoked(context.Background(), "kenaz__bash", time.Second, true)
+				r.tokens.set(tc.token)
+				r.flush()
+				if got := len(r.fleet.snapshot()) > 0; got != tc.sends {
+					t.Errorf("%s: sent=%v, want %v", level, got, tc.sends)
+				}
+				if !tc.sends && r.pipeline.Status().ExportsIdentityMism == 0 {
+					t.Errorf("%s: refusal not counted in Status", level)
+				}
+			}
+		})
 	}
 }
