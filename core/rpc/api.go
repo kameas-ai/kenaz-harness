@@ -2473,7 +2473,8 @@ func New(c *core.Core, opts ...Option) *API {
 	if a.branchSeam != nil && a.llmAPI != nil && a.eventBus != nil {
 		capturedPersonalStoreForSubagent := personalForLLM
 		a.branchSeam.SetRunSpawner(NewSubagentRunSpawner(SubagentRunSpawnerDeps{
-			LLM:   a.llmAPI,
+			UsageParent: newFleetUsageObserver(a.settingsImpl).AttributeTo,
+			LLM:         a.llmAPI,
 			Bus:   a.eventBus,
 			Tasks: taskReg,
 			// UNIT-7 (FR-007): the SAME process-singleton *hooks.Runner

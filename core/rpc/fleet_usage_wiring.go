@@ -83,3 +83,9 @@ func (o *fleetUsageObserver) TurnFailed(ctx context.Context, sessionID, failureK
 func (o *fleetUsageObserver) LLMResponse(ctx context.Context, sessionID string, tokenIn, tokenOut int, costUSD float64) {
 	o.tracker().LLMResponse(ctx, sessionID, int64(tokenIn), int64(tokenOut), costUSD)
 }
+
+// AttributeTo rolls a sub-agent child session's usage into its parent's
+// conversation. Session ids stay local; see ConversationTracker.AttributeTo.
+func (o *fleetUsageObserver) AttributeTo(childSessionID, parentSessionID string) {
+	o.tracker().AttributeTo(childSessionID, parentSessionID)
+}

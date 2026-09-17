@@ -66,6 +66,10 @@ type ConversationTracker struct {
 
 	mu       sync.Mutex
 	segments map[string]*conversationSegment // key: local session id — NEVER exported
+	// aliases maps a sub-agent's child session to the session that spawned
+	// it, so delegated work lands in the parent's conversation instead of
+	// counting as a conversation of its own.
+	aliases map[string]string
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -108,6 +112,7 @@ func newConversationTracker(emitter conversationEmitter, opts ...TrackerOption) 
 		idleTimeout: DefaultConversationIdleTimeout,
 		now:         time.Now,
 		segments:    make(map[string]*conversationSegment),
+		aliases:     make(map[string]string),
 		stopCh:      make(chan struct{}),
 		doneCh:      make(chan struct{}),
 	}
@@ -146,6 +151,34 @@ func (t *ConversationTracker) Start(ctx context.Context) {
 	}()
 }
 
+// maxAliases bounds the alias table; oldest-unknown eviction is not worth the
+// bookkeeping, so a full table simply stops aliasing (children then count as
+// their own conversations — a count skew, never a leak).
+const maxAliases = 4096
+
+// AttributeTo makes child's usage count toward parent's conversation.
+func (t *ConversationTracker) AttributeTo(childSessionID, parentSessionID string) {
+	if t == nil || childSessionID == "" || parentSessionID == "" || childSessionID == parentSessionID {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if root, ok := t.aliases[parentSessionID]; ok {
+		parentSessionID = root // nested sub-agents roll up to the root
+	}
+	if len(t.aliases) < maxAliases {
+		t.aliases[childSessionID] = parentSessionID
+	}
+}
+
+// resolve maps a session id through the alias table. Caller holds t.mu.
+func (t *ConversationTracker) resolveLocked(sessionID string) string {
+	if root, ok := t.aliases[sessionID]; ok {
+		return root
+	}
+	return sessionID
+}
+
 // TurnStarted records that a user turn began in sessionID. It opens a segment
 // when none is open, or when the open one was never reported and export has
 // since come on.
@@ -156,6 +189,7 @@ func (t *ConversationTracker) TurnStarted(ctx context.Context, sessionID, provid
 	now := t.now()
 
 	t.mu.Lock()
+	sessionID = t.resolveLocked(sessionID)
 	seg := t.segments[sessionID]
 	if seg != nil && seg.reported {
 		seg.lastActive = now
@@ -197,7 +231,7 @@ func (t *ConversationTracker) LLMResponse(_ context.Context, sessionID string, t
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	seg := t.segments[sessionID]
+	seg := t.segments[t.resolveLocked(sessionID)]
 	if seg == nil {
 		return
 	}
@@ -236,7 +270,7 @@ func (t *ConversationTracker) touch(sessionID string) {
 		return
 	}
 	t.mu.Lock()
-	if seg := t.segments[sessionID]; seg != nil {
+	if seg := t.segments[t.resolveLocked(sessionID)]; seg != nil {
 		seg.lastActive = t.now()
 	}
 	t.mu.Unlock()
@@ -311,6 +345,7 @@ func (t *ConversationTracker) drain() []*conversationSegment {
 		out = append(out, seg)
 		delete(t.segments, sid)
 	}
+	t.aliases = make(map[string]string)
 	return out
 }
 

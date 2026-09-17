@@ -271,3 +271,38 @@ func TestTracker_NilIsANoOp(t *testing.T) {
 		t.Error("a tracker over a nil emitter must be nil (fleet disabled)")
 	}
 }
+
+func TestTracker_SubagentWorkCountsTowardTheParentConversation(t *testing.T) {
+	r := newActiveRig(t, ConsentFull, identityA, optIns(usageClasses...))
+	tr := NewConversationTracker(r.emitter)
+	ctx := context.Background()
+
+	tr.TurnStarted(ctx, "parent", "anthropic")
+	tr.AttributeTo("child", "parent")
+	tr.AttributeTo("grandchild", "child")
+	tr.TurnStarted(ctx, "child", "anthropic")
+	tr.LLMResponse(ctx, "child", 100, 10, 0)
+	tr.TurnStarted(ctx, "grandchild", "anthropic")
+	tr.LLMResponse(ctx, "grandchild", 1000, 100, 0)
+	tr.ToolInvoked(ctx, "grandchild", "kenaz__bash", time.Millisecond, true)
+	if tr.OpenSegments() != 1 {
+		t.Fatalf("open segments = %d, want 1 — sub-agents must not open conversations", tr.OpenSegments())
+	}
+	tr.EndAll(ctx)
+	r.flush()
+
+	var started int
+	for _, e := range decodeLogs(t, r.fleet.byPath("/otlp/v1/logs")) {
+		switch e.kind {
+		case "harness.conversation_started":
+			started++
+		case "harness.conversation_ended":
+			if e.body["token_in"] != int64(1100) || e.body["token_out"] != int64(110) {
+				t.Errorf("ended totals = %v, want delegated tokens rolled into the parent", e.body)
+			}
+		}
+	}
+	if started != 1 {
+		t.Errorf("conversation_started = %d, want 1", started)
+	}
+}
