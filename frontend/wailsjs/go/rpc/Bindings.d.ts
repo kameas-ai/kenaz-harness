@@ -22,6 +22,7 @@ import {contextbootstrap} from '../models';
 import {contextview} from '../models';
 import {contexts} from '../models';
 import {corpus} from '../models';
+import {documents} from '../models';
 import {elicit} from '../models';
 import {json} from '../models';
 import {settings} from '../models';
@@ -311,6 +312,20 @@ export function Corpus_Retrieve(arg1:string,arg2:corpus.RetrieveRequest):Promise
 export function Diag_LogClientEvent(arg1:string,arg2:string,arg3:Record<string, any>):Promise<void>;
 
 export function Diag_LogPath():Promise<string>;
+
+export function Documents_BuildSite(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<documents.SiteBuildResult>;
+
+export function Documents_Create(arg1:string,arg2:string,arg3:string):Promise<documents.Document>;
+
+export function Documents_ExportsDir():Promise<documents.ExportsDirResult>;
+
+export function Documents_Get(arg1:string,arg2:string):Promise<documents.Document>;
+
+export function Documents_List(arg1:string):Promise<Array<documents.DocumentSummary>>;
+
+export function Documents_Preview(arg1:string):Promise<documents.PreviewResult>;
+
+export function Documents_Update(arg1:string,arg2:string,arg3:number,arg4:string):Promise<documents.Document>;
 
 export function Elicit_AnswerDeferred(arg1:string,arg2:any):Promise<string>;
 

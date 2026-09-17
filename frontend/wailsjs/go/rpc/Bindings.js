@@ -506,6 +506,34 @@ export function Diag_LogPath() {
   return window['go']['rpc']['Bindings']['Diag_LogPath']();
 }
 
+export function Documents_BuildSite(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Documents_BuildSite'](arg1, arg2, arg3, arg4);
+}
+
+export function Documents_Create(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Documents_Create'](arg1, arg2, arg3);
+}
+
+export function Documents_ExportsDir() {
+  return window['go']['rpc']['Bindings']['Documents_ExportsDir']();
+}
+
+export function Documents_Get(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Documents_Get'](arg1, arg2);
+}
+
+export function Documents_List(arg1) {
+  return window['go']['rpc']['Bindings']['Documents_List'](arg1);
+}
+
+export function Documents_Preview(arg1) {
+  return window['go']['rpc']['Bindings']['Documents_Preview'](arg1);
+}
+
+export function Documents_Update(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Documents_Update'](arg1, arg2, arg3, arg4);
+}
+
 export function Elicit_AnswerDeferred(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Elicit_AnswerDeferred'](arg1, arg2);
 }

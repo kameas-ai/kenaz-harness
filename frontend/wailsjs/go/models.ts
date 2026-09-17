@@ -2575,6 +2575,149 @@ export namespace corpus {
 
 }
 
+export namespace documents {
+	
+	export class Document {
+	    id: string;
+	    title: string;
+	    scope: string;
+	    version: number;
+	    contentSha256: string;
+	    byteSize: number;
+	    createdAt: string;
+	    updatedAt: string;
+	    body: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Document(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.scope = source["scope"];
+	        this.version = source["version"];
+	        this.contentSha256 = source["contentSha256"];
+	        this.byteSize = source["byteSize"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	        this.body = source["body"];
+	    }
+	}
+	export class DocumentSummary {
+	    id: string;
+	    title: string;
+	    scope: string;
+	    version: number;
+	    contentSha256: string;
+	    byteSize: number;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DocumentSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.scope = source["scope"];
+	        this.version = source["version"];
+	        this.contentSha256 = source["contentSha256"];
+	        this.byteSize = source["byteSize"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class ExportsDirResult {
+	    dir: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExportsDirResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.dir = source["dir"];
+	    }
+	}
+	export class PreviewResult {
+	    html: string;
+	    sanitized: boolean;
+	    byteSize: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PreviewResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.html = source["html"];
+	        this.sanitized = source["sanitized"];
+	        this.byteSize = source["byteSize"];
+	    }
+	}
+	export class SiteWarnings {
+	    documentId: string;
+	    warnings: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SiteWarnings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.documentId = source["documentId"];
+	        this.warnings = source["warnings"];
+	    }
+	}
+	export class SiteBuildResult {
+	    siteDir: string;
+	    publicDir: string;
+	    bundle: string;
+	    bundleSha256: string;
+	    documents: number;
+	    warnings: SiteWarnings[];
+	    published: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SiteBuildResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.siteDir = source["siteDir"];
+	        this.publicDir = source["publicDir"];
+	        this.bundle = source["bundle"];
+	        this.bundleSha256 = source["bundleSha256"];
+	        this.documents = source["documents"];
+	        this.warnings = this.convertValues(source["warnings"], SiteWarnings);
+	        this.published = source["published"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace elicit {
 	
 	export class DeferredResult {
