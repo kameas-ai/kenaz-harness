@@ -70,7 +70,8 @@ func TestServedRPC_TelemetryStatus_IsPayloadFree(t *testing.T) {
 	for k := range st {
 		switch k {
 		case "wired", "enrolled", "stored_consent", "effective_consent", "org_tier",
-			"open_conversations", "pipeline", "enroll":
+			"open_conversations", "pipeline", "enroll",
+			"opted_in_classes", "preferences_fetched_at":
 		default:
 			t.Errorf("unexpected status field %q — the surface must stay payload-free", k)
 		}
