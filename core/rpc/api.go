@@ -2522,6 +2522,20 @@ func New(c *core.Core, opts ...Option) *API {
 	// shutdown-race analysis.
 	hookMCPInvoker.setPool(stack.dispatchPool)
 	a.builtins = stack.builtins
+	// Spec 092: document tools + knowledge-site builder. Needs a.unitsMgr
+	// (built above, not passed to newLLMStack) and the fs gate the stack
+	// built — see registerDocumentTools.
+	{
+		var docSettings settings.SettingsStore
+		if settingsImpl != nil {
+			docSettings = settingsImpl.Store()
+		}
+		var workspaceDir func() string
+		if c != nil {
+			workspaceDir = c.WorkspaceDir
+		}
+		registerDocumentTools(a.builtins, a.unitsMgr, docSettings, stack.fsGate, workspaceDir)
+	}
 	// harness-self-attach-01PMHS01 UNIT-4: hold the merged resolver
 	// newLLMStack constructed so tests can exercise the actual
 	// production wire (see harness_session_kind_resolver_wiring_test.go)
@@ -5433,6 +5447,11 @@ type llmStack struct {
 	// on the stack so the chassis-level wiring path can register and
 	// unregister tools as the user toggles them in Settings.
 	builtins *toolloop.BuiltinRegistry
+	// fsGate is the Cedar filesystem gate registerFSBuiltinTools built.
+	// Held so tools registered after newLLMStack returns (the spec-092
+	// knowledge-site builder) are bound by the same write policy as
+	// kenaz__write_file instead of constructing a second gate.
+	fsGate *corefs.Gate
 	// bashStore is the bash tool's per-process output cache. Held so
 	// the agent-graph manager (which constructs its read_bash_output
 	// adapter against the SAME instance) wires both halves of the
@@ -5940,7 +5959,7 @@ func newLLMStack(
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
-	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir, blockedSink, originResolve)
+	fsGate := registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir, blockedSink, originResolve)
 	// unified-context-artifacts-01NCTXU01: register the read_context_file
 	// built-in so the agent can read on-demand files from attached context
 	// modules. Requires both the contexts library AND an attachment manager;
@@ -6236,6 +6255,7 @@ func newLLMStack(
 		secrets:             secretsBackend,
 		reg:                 reg,
 		builtins:            builtinRegistry,
+		fsGate:              fsGate,
 		bashStore:           bashStore,
 		compactionScheduler: sweepScheduler,
 		compactionLLM:       compactionLLM,

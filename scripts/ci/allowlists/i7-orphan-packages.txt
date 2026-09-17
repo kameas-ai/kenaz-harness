@@ -59,7 +59,6 @@ core/context
 core/context/bundlekind
 core/context/snapshot
 core/credstore
-core/docs
 core/event/branch
 core/event/replay
 core/event/retention
