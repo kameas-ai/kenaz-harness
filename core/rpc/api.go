@@ -109,6 +109,8 @@ import (
 	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/policy"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
+	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
+	coredocs "github.com/kameas-ai/kenaz-harness/core/docs"
 	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
 	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
@@ -204,6 +206,7 @@ type HarnessAPI interface {
 	Memory() memoryview.MemoryAPI
 	Hooks() hooksview.HooksAPI
 	Projects() projectsview.ProjectsAPI
+	Documents() documentsview.DocumentsAPI
 	Attachments() attachmentsview.AttachmentsAPI
 	Artifacts() artifactsview.ArtifactsAPI
 	Tools() tools.ToolsAPI
@@ -495,6 +498,10 @@ type API struct {
 	memoryAPI      memoryview.MemoryAPI
 	hooksAPI       hooksview.HooksAPI
 	projectsAPI    projectsview.ProjectsAPI
+	// documentsAPI backs the Documents_* family (contracts/documents-rpc.md).
+	// nil when no database is wired; Documents() then returns
+	// documentsview.Unavailable() so callers get an honest error.
+	documentsAPI documentsview.DocumentsAPI
 	attachmentsMgr *coreatt.Manager
 	attachmentsAPI attachmentsview.AttachmentsAPI
 	artifactsMgr   *coreart.Manager
@@ -1696,6 +1703,17 @@ func New(c *core.Core, opts ...Option) *API {
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
+	if unitsMgr != nil && c != nil && a.sessionsAPI != nil {
+		sessionsForDocs := a.sessionsAPI
+		a.documentsAPI = documentsview.New(documentsview.Options{
+			Store: coredocs.NewService(unitsMgr),
+			SessionExists: func(ctx context.Context, id string) error {
+				_, err := sessionsForDocs.Get(ctx, id)
+				return err
+			},
+			WorkspaceDir: c.WorkspaceDir,
+		})
+	}
 	a.eventBus = NewEventBus()
 	a.broker = NewStreamBroker(NewMultiEmitter(WailsEmitter{}, &busEmitter{bus: a.eventBus}))
 
@@ -2527,6 +2545,20 @@ func New(c *core.Core, opts ...Option) *API {
 	// shutdown-race analysis.
 	hookMCPInvoker.setPool(stack.dispatchPool)
 	a.builtins = stack.builtins
+	// Spec 092: document tools + knowledge-site builder. Needs a.unitsMgr
+	// (built above, not passed to newLLMStack) and the fs gate the stack
+	// built — see registerDocumentTools.
+	{
+		var docSettings settings.SettingsStore
+		if settingsImpl != nil {
+			docSettings = settingsImpl.Store()
+		}
+		var workspaceDir func() string
+		if c != nil {
+			workspaceDir = c.WorkspaceDir
+		}
+		registerDocumentTools(a.builtins, a.unitsMgr, docSettings, stack.fsGate, workspaceDir)
+	}
 	// harness-self-attach-01PMHS01 UNIT-4: hold the merged resolver
 	// newLLMStack constructed so tests can exercise the actual
 	// production wire (see harness_session_kind_resolver_wiring_test.go)
@@ -5451,6 +5483,11 @@ type llmStack struct {
 	// on the stack so the chassis-level wiring path can register and
 	// unregister tools as the user toggles them in Settings.
 	builtins *toolloop.BuiltinRegistry
+	// fsGate is the Cedar filesystem gate registerFSBuiltinTools built.
+	// Held so tools registered after newLLMStack returns (the spec-092
+	// knowledge-site builder) are bound by the same write policy as
+	// kenaz__write_file instead of constructing a second gate.
+	fsGate *corefs.Gate
 	// bashStore is the bash tool's per-process output cache. Held so
 	// the agent-graph manager (which constructs its read_bash_output
 	// adapter against the SAME instance) wires both halves of the
@@ -5958,7 +5995,7 @@ func newLLMStack(
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
-	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir, blockedSink, originResolve)
+	fsGate := registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir, blockedSink, originResolve)
 	// unified-context-artifacts-01NCTXU01: register the read_context_file
 	// built-in so the agent can read on-demand files from attached context
 	// modules. Requires both the contexts library AND an attachment manager;
@@ -6254,6 +6291,7 @@ func newLLMStack(
 		secrets:             secretsBackend,
 		reg:                 reg,
 		builtins:            builtinRegistry,
+		fsGate:              fsGate,
 		bashStore:           bashStore,
 		compactionScheduler: sweepScheduler,
 		compactionLLM:       compactionLLM,
@@ -9896,6 +9934,13 @@ func (a *API) Hooks() hooksview.HooksAPI {
 		return &stubHooks{}
 	}
 	return a.hooksAPI
+}
+// Documents is the Documents_* surface (contracts/documents-rpc.md).
+func (a *API) Documents() documentsview.DocumentsAPI {
+	if a.documentsAPI == nil {
+		return documentsview.Unavailable()
+	}
+	return a.documentsAPI
 }
 func (a *API) Projects() projectsview.ProjectsAPI {
 	if a.projectsAPI == nil {

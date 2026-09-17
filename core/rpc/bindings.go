@@ -52,6 +52,7 @@ import (
 	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/policy"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
+	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
 	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
@@ -1971,6 +1972,39 @@ func (b *Bindings) Projects_RemoveSession(sessionID string) error {
 func (b *Bindings) Projects_ListSessions(projectID string) ([]projectsview.Session, error) {
 	defer sentry.WrapBinding("Projects_ListSessions")()
 	return b.api.Projects().ListSessions(b.ctx(), projectID)
+}
+
+// ── documents + local knowledge sites (contracts/documents-rpc.md) ────
+//
+// Mirrored one-for-one by the served dispatch in core/serve/server.go.
+
+func (b *Bindings) Documents_List(sessionID string) ([]documentsview.DocumentSummary, error) {
+	defer sentry.WrapBinding("Documents_List")()
+	return b.api.Documents().List(b.ctx(), sessionID)
+}
+func (b *Bindings) Documents_Get(sessionID, id string) (documentsview.Document, error) {
+	defer sentry.WrapBinding("Documents_Get")()
+	return b.api.Documents().Get(b.ctx(), sessionID, id)
+}
+func (b *Bindings) Documents_Create(sessionID, title, body string) (documentsview.Document, error) {
+	defer sentry.WrapBinding("Documents_Create")()
+	return b.api.Documents().Create(b.ctx(), sessionID, title, body)
+}
+func (b *Bindings) Documents_Update(sessionID, id string, baseVersion int, body string) (documentsview.Document, error) {
+	defer sentry.WrapBinding("Documents_Update")()
+	return b.api.Documents().Update(b.ctx(), sessionID, id, baseVersion, body)
+}
+func (b *Bindings) Documents_Preview(body string) (documentsview.PreviewResult, error) {
+	defer sentry.WrapBinding("Documents_Preview")()
+	return b.api.Documents().Preview(b.ctx(), body)
+}
+func (b *Bindings) Documents_BuildSite(sessionID, slug, title string, documentIDs []string) (documentsview.SiteBuildResult, error) {
+	defer sentry.WrapBinding("Documents_BuildSite")()
+	return b.api.Documents().BuildSite(b.ctx(), sessionID, slug, title, documentIDs)
+}
+func (b *Bindings) Documents_ExportsDir() (documentsview.ExportsDirResult, error) {
+	defer sentry.WrapBinding("Documents_ExportsDir")()
+	return b.api.Documents().ExportsDir(b.ctx())
 }
 
 // ── artifacts (artifacts-storage WP02) ────────────────────────────────

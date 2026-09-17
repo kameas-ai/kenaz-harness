@@ -5,6 +5,7 @@ import RailEntry from './RailEntry.vue';
 import SessionTreeRow from './SessionTreeRow.vue';
 import {
   Archive,
+  BookOpen,
   Plus,
   MessageSquare,
   Package,
@@ -1026,6 +1027,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
         <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
         <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" /></li>
+        <li><RailEntry :icon="BookOpen" label="Documents" to="/documents" /></li>
         <!-- agentgraph-total-convergence-01PMGX01 WP16: Agent graphs RESTORED to
              top-level nav, reversing nav-settings-ia-cleanup WP03's demotion.
              WP03 demoted it because the surface had nothing real in it: a

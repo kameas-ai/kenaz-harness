@@ -168,11 +168,25 @@ func (s *sqlStore) List(ctx context.Context, filter UnitFilter) ([]Unit, error) 
 // ── Update ─────────────────────────────────────────────────────────────
 
 func (s *sqlStore) Update(ctx context.Context, id, body string, metadata []byte) (Unit, error) {
+	return s.update(ctx, id, -1, body, metadata)
+}
+
+func (s *sqlStore) UpdateAtVersion(ctx context.Context, id string, baseVersion int, body string, metadata []byte) (Unit, error) {
+	if baseVersion < 0 {
+		return Unit{}, ErrVersionConflict
+	}
+	return s.update(ctx, id, baseVersion, body, metadata)
+}
+
+func (s *sqlStore) update(ctx context.Context, id string, baseVersion int, body string, metadata []byte) (Unit, error) {
 	current, err := s.Get(ctx, id)
 	if err != nil {
 		return Unit{}, err
 	}
 
+	if baseVersion >= 0 && current.Version != baseVersion {
+		return Unit{}, ErrVersionConflict
+	}
 	meta := normaliseMetadata(metadata)
 	now := s.now()
 	newVersion := current.Version + 1
