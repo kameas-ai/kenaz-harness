@@ -181,7 +181,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 188 entries.
+# 184 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -189,13 +189,6 @@
 "ACP_ListTraces"
 "ACP_RevokePeer"
 "ACP_TrustPeer"
-
-# Caller(s) AgentsView.vue only reachable from a view that renders
-# NotAvailableInServedMode.
-"Agents_DeleteProfile"
-"Agents_ListProfiles"
-"Agents_LoadProfile"
-"Agents_SaveProfile"
 
 # Caller(s) GlobalContextPanel.vue, ProjectLandingPage.vue, SettingsView.vue
 # only reachable from a view that renders NotAvailableInServedMode.
