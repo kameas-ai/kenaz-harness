@@ -20,6 +20,7 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/kameas-ai/kenaz-harness/cmd/mcpsubcmd"
+	"github.com/kameas-ai/kenaz-harness/cmd/servedfleet"
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -504,20 +505,12 @@ func runServeMode(listenAddr string) {
 	// has no OS keychain for the default store to read, and renewal is owned
 	// host-side; no refresh token ever crosses the boundary. Guarded on
 	// BrokerAddr so a desktop `--serve` run keeps keychain-backed sign-in.
-	if authCfg.BrokerAddr != "" {
-		fleet.SetExternalTokenSource(authSession.AccessToken)
-		if authSession.State() == authbroker.StateSignedIn {
-			// One-shot enroll → activates the fleet OTLP pipeline. On
-			// desktop FleetSignIn does this post-login; served mode has no
-			// sign-in affordance, so the signed-in seed is the trigger.
-			// Best-effort: failure means telemetry stays off, nothing else.
-			go func() {
-				if _, err := api.Settings().FleetRefreshIdentity(ctx); err != nil {
-					serveLog.Info("harness.serve: fleet enroll skipped", "reason", err.Error())
-				}
-			}()
-		}
-	}
+	//
+	// servedfleet.Start also runs the enroll supervisor: enroll with backoff,
+	// recover from an anonymous boot or a host sign-out/in, re-enroll on an
+	// account change. It replaced a one-shot enroll that only fired when the
+	// host was already signed in at boot and never retried.
+	fleetEnroll := servedfleet.Start(ctx, api, authCfg, authSession, serveLog)
 
 	token := os.Getenv(serve.EnvToken)
 	addr := listenAddr
@@ -549,6 +542,7 @@ func runServeMode(listenAddr string) {
 
 	srv := serve.New(api, addr, token, servedFS, serveLog,
 		serve.WithAuthSession(authSession),
+		serve.WithFleetEnroll(fleetEnroll),
 		serve.WithConnectors(connSup),
 		// SD-16 (WP08): KENAZ_SERVE_STREAM_QUEUE_CAP, the workbench-image
 		// config surface WithStreamQueueCap's "constrained workbench" half

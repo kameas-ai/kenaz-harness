@@ -534,6 +534,10 @@ export function Fleet_SetTelemetryConsent(arg1) {
   return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1);
 }
 
+export function Fleet_TelemetryStatus() {
+  return window['go']['rpc']['Bindings']['Fleet_TelemetryStatus']();
+}
+
 export function Graph_CancelRun(arg1) {
   return window['go']['rpc']['Bindings']['Graph_CancelRun'](arg1);
 }

@@ -24,6 +24,7 @@ import {contexts} from '../models';
 import {corpus} from '../models';
 import {elicit} from '../models';
 import {json} from '../models';
+import {settings} from '../models';
 import {agentgraph} from '../models';
 import {contextsync} from '../models';
 import {hooks} from '../models';
@@ -37,7 +38,6 @@ import {onboarding} from '../models';
 import {permissions} from '../models';
 import {planmode} from '../models';
 import {policy} from '../models';
-import {risk} from '../models';
 import {projects} from '../models';
 import {autonomy} from '../models';
 import {scheduledchat} from '../models';
@@ -46,7 +46,7 @@ import {secrets} from '../models';
 import {sentry} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
-import {settings} from '../models';
+import {risk} from '../models';
 import {sites} from '../models';
 import {slashcmd} from '../models';
 import {storage} from '../models';
@@ -325,6 +325,8 @@ export function Elicit_SubmitWizardStep(arg1:string,arg2:string,arg3:json.RawMes
 export function Fleet_GetTelemetryConsent():Promise<string>;
 
 export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
+
+export function Fleet_TelemetryStatus():Promise<settings.FleetTelemetryStatusView>;
 
 export function Graph_CancelRun(arg1:string):Promise<void>;
 

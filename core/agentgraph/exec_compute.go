@@ -467,7 +467,7 @@ func (b builtinToolExecutor) Execute(ctx context.Context, env *Env, node *Node, 
 	// The pre-call gate is shared with tool_dispatch — greedy-memory
 	// hook, canonical EventToolCall, v2 pre_tool_use hooks (block /
 	// rewrite args / inject context). See tool_invocation.go.
-	tc := toolCallContext{NodeID: node.ID, NodeKind: b.kind, ToolName: a.Name}
+	tc := toolCallContext{NodeID: node.ID, NodeKind: b.kind, ToolName: a.Name, StartedAt: time.Now()}
 	args, argsJSON, _, blocked, preEvents := toolPreDispatch(ctx, env, tc, args)
 	res.Events.Events = append(res.Events.Events, preEvents.Events...)
 	if blocked != nil {

@@ -317,6 +317,15 @@ type Env struct {
 	// existing memory-write hooks still fire through Hooks.
 	LifecycleHooks LifecycleHookRunner
 
+	// ToolUsage is told about every completed tool invocation — name,
+	// latency, success, nothing else. It is the usage-telemetry seam; the
+	// kernel knows nothing about what consumes it (in production, fleet's
+	// consent-gated ConversationTracker via core/rpc). nil disables it.
+	// Called from toolPostDispatch, the single tool-invocation path, so a
+	// `tool` node and a model-emitted `tool_dispatch` batch are counted
+	// identically.
+	ToolUsage ToolUsageObserver
+
 	// PendingContext receives additional system-context injected by hooks
 	// (e.g. additional_context from pre_tool_use). Nil drops the context
 	// (it is still logged but not forwarded to the next LLM turn).

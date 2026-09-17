@@ -32,6 +32,7 @@ describe('createFakeHarnessClient — fleet sub-client', () => {
 
     const client = createFakeHarnessClient({
       fleet: {
+        ...createFakeHarnessClient().fleet,
         getTelemetryConsent: async () => mockLevel,
         setTelemetryConsent: setFn,
       },
@@ -48,6 +49,7 @@ describe('createFakeHarnessClient — fleet sub-client', () => {
     let received: string | undefined;
     const client = createFakeHarnessClient({
       fleet: {
+        ...createFakeHarnessClient().fleet,
         getTelemetryConsent: async () => 'none',
         setTelemetryConsent: async (level) => {
           received = level;

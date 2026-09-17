@@ -1103,11 +1103,16 @@ onMounted(() => {
 </script>
 
 <template>
-  <NotAvailableInServedMode
-    v-if="servedMode"
-    feature="Settings"
-        reason="Settings are read and written through desktop-only RPCs; the in-workbench build exposes no settings surface yet. Workbench-level configuration lives in Kenaz on the host."
-  />
+  <div v-if="servedMode">
+    <!-- The one settings surface served mode has: telemetry consent. The
+         workbench is where everyday work happens, so consent has to be
+         reachable here (Fleet_Get/SetTelemetryConsent are served RPCs). -->
+    <FleetTelemetryPanel />
+    <NotAvailableInServedMode
+      feature="Other settings"
+      reason="Apart from Fleet telemetry above, settings are read and written through desktop-only RPCs. Workbench-level configuration lives in Kenaz on the host."
+    />
+  </div>
   <SettingsShell
     v-else
     number="06"

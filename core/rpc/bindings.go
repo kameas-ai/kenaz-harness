@@ -3449,6 +3449,13 @@ func (b *Bindings) Fleet_SetTelemetryConsent(level string) error {
 	return b.api.Fleet().SetTelemetryConsent(b.ctx(), level)
 }
 
+// Fleet_TelemetryStatus returns a payload-free export health snapshot, so
+// "enrolled but not reporting" is diagnosable from Settings.
+func (b *Bindings) Fleet_TelemetryStatus() (settings.FleetTelemetryStatusView, error) {
+	defer sentry.WrapBinding("Fleet_TelemetryStatus")()
+	return b.api.Settings().FleetTelemetryStatus(b.ctx())
+}
+
 // ── Phase-3 unit collaboration bindings (unified-context-artifacts-01NCTXU01) ─
 
 // Unit_PromoteAsMergeRequest opens a merge request to promote a unit UP a
