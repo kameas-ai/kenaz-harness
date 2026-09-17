@@ -5280,6 +5280,18 @@ export function createServedHarnessClient(opts?: {
       exportsDir: () => transport.call<{ dir: string }>('Documents_ExportsDir', {}),
     },
 
+    // Agents_* — sub-agent profile registry CRUD, ported to served mode so
+    // a workbench can configure named Sonnet/Opus/Fable delegation profiles
+    // (contracts/agents-served-rpc.md). Full family, no partial overlay.
+    agents: {
+      listProfiles: () =>
+        transport.call<import('./types').AgentProfileSummary[]>('Agents_ListProfiles', {}),
+      loadProfile: (id) =>
+        transport.call<import('./types').AgentProfile>('Agents_LoadProfile', { id }),
+      saveProfile: (profile) => transport.call<void>('Agents_SaveProfile', profile),
+      deleteProfile: (id) => transport.call<void>('Agents_DeleteProfile', { id }),
+    },
+
     permissions: {
       ...base.permissions,
 

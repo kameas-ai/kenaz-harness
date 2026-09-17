@@ -65,11 +65,12 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	agentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agents"
+	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	permissionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/permissions"
 	sessionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
-	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 )
 
@@ -876,6 +877,38 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 
 	case "Documents_ExportsDir":
 		return s.api.Documents().ExportsDir(ctx)
+
+	// Agents_* ports the existing sub-agent profile registry CRUD
+	// (contracts/agents-served-rpc.md). No new wire shape — ProfileWire /
+	// ProfileSummaryWire are the same structs the desktop Wails binding
+	// already uses.
+	case "Agents_ListProfiles":
+		return s.api.Agents().ListProfiles(ctx)
+
+	case "Agents_LoadProfile":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Agents_LoadProfile: bad params: " + err.Error())
+		}
+		return s.api.Agents().LoadProfile(ctx, p.ID)
+
+	case "Agents_SaveProfile":
+		var p agentsview.ProfileWire
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Agents_SaveProfile: bad params: " + err.Error())
+		}
+		return nil, s.api.Agents().SaveProfile(ctx, p)
+
+	case "Agents_DeleteProfile":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Agents_DeleteProfile: bad params: " + err.Error())
+		}
+		return nil, s.api.Agents().DeleteProfile(ctx, p.ID)
 
 	// Sessions_ResolveAutonomy — a read on session state the served build
 	// already owns (folds global → project → session autonomy layers).
