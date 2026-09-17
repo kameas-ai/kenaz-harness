@@ -7111,6 +7111,8 @@ export namespace settings {
 	    effective_consent: string;
 	    org_tier: string;
 	    open_conversations: number;
+	    opted_in_classes: string[];
+	    preferences_fetched_at?: string;
 	    pipeline: fleet.PipelineStatus;
 	
 	    static createFrom(source: any = {}) {
@@ -7125,6 +7127,8 @@ export namespace settings {
 	        this.effective_consent = source["effective_consent"];
 	        this.org_tier = source["org_tier"];
 	        this.open_conversations = source["open_conversations"];
+	        this.opted_in_classes = source["opted_in_classes"];
+	        this.preferences_fetched_at = source["preferences_fetched_at"];
 	        this.pipeline = this.convertValues(source["pipeline"], fleet.PipelineStatus);
 	    }
 	

@@ -35,7 +35,13 @@ async function statusWith(
   pipeline: Partial<FleetTelemetryStatus['pipeline']> = {},
 ): Promise<FleetTelemetryStatus> {
   const b = await baseStatus();
-  return { ...b, wired: true, ...over, pipeline: { ...b.pipeline, ...pipeline } };
+  return {
+    ...b,
+    wired: true,
+    opted_in_classes: ['harness.usage_counts'],
+    ...over,
+    pipeline: { ...b.pipeline, ...pipeline },
+  };
 }
 
 async function mountPanel(client = makeClient()) {
@@ -149,6 +155,16 @@ describe('FleetTelemetryPanel — status line explains why nothing is reporting'
       'network',
     ],
     [
+      'all classes off in Fleet preferences',
+      statusWith({
+        stored_consent: 'full',
+        effective_consent: 'full',
+        enrolled: true,
+        opted_in_classes: [],
+      }),
+      'turned off in your Fleet preferences',
+    ],
+    [
       'fleet rejecting the token',
       statusWith(
         { stored_consent: 'full', effective_consent: 'full', enrolled: true },
@@ -177,6 +193,17 @@ describe('FleetTelemetryPanel — status line explains why nothing is reporting'
       expect(w.find('[data-testid="telemetry-status-line"]').text()).toContain(want);
     });
   }
+
+  it('says the listed classes are per-user preferences', async () => {
+    const st = await statusWith(
+      { stored_consent: 'full', effective_consent: 'full', enrolled: true },
+      { active: true },
+    );
+    const w = await mountPanel(makeClient({ getTelemetryStatus: async () => st }));
+    const text = w.find('[data-testid="telemetry-status-classes"]').text();
+    expect(text).toContain('harness.usage_counts');
+    expect(text).toContain('not an organization default');
+  });
 
   it('a failing status call never blocks the consent controls', async () => {
     const w = await mountPanel(

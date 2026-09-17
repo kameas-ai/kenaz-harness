@@ -157,7 +157,21 @@ func (s *FleetEnrollSupervisor) step(ctx context.Context) (retry bool) {
 		return false
 	}
 
-	// First sign-in, a retry, or the account changed under us.
+	// The account changed under us: end the previous enrollment BEFORE trying
+	// the new one. If the new enroll then fails, nothing of the old account —
+	// enrolled status, export, opt-in or capability caches — is left standing
+	// as if it were current.
+	if enrolled != "" {
+		s.cfg.Log.Info("harness-served: fleet identity changed; ending the previous enrollment")
+		if s.cfg.SessionEnded != nil {
+			s.cfg.SessionEnded(ctx)
+		}
+		s.mu.Lock()
+		s.enrolled = ""
+		s.mu.Unlock()
+	}
+
+	// First sign-in, a retry, or a changed account.
 	err := s.cfg.Enroll(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()

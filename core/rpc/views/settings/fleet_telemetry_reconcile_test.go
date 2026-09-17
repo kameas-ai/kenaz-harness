@@ -62,6 +62,8 @@ type reconcileFleet struct {
 	enrollFails int // answer this many enrolls with 503 first
 	tier        string
 	optIns      []fleet.TelemetryOptInItem
+	// optInsStatus, when non-zero, is the status the opt-ins GET answers with.
+	optInsStatus int
 }
 
 func newReconcileFleet(t *testing.T) *reconcileFleet {
@@ -97,7 +99,12 @@ func newReconcileFleet(t *testing.T) *reconcileFleet {
 	mux.HandleFunc("/api/v1/me/telemetry-opt-ins", func(w http.ResponseWriter, _ *http.Request) {
 		f.mu.Lock()
 		items := append([]fleet.TelemetryOptInItem(nil), f.optIns...)
+		status := f.optInsStatus
 		f.mu.Unlock()
+		if status != 0 {
+			http.Error(w, `{"code":"unavailable"}`, status)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"opt_ins": items})
 	})
@@ -575,5 +582,127 @@ func TestReconcile_SameSubjectDifferentOrgOrIssuer_Reattributes(t *testing.T) {
 				t.Error("nothing exported under the new identity")
 			}
 		})
+	}
+}
+
+// A preference changed in Fleet's web UI must reach a RUNNING harness.
+func TestRefreshPreferences_FleetWebToggleReachesARunningSession(t *testing.T) {
+	r := newReconcileRig(t, fleet.ConsentFull)
+	ctx := context.Background()
+	toolEvents := func() int {
+		n := 0
+		for _, e := range r.fleet.events(t) {
+			if e.kind == "harness.tool_invoked" {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Revoke tool_calls in Fleet while the session stays signed in.
+	var narrowed []fleet.TelemetryOptInItem
+	for _, item := range fleet.TierOptInUpdates(fleet.ConsentFull) {
+		if item.Class == "harness.tool_calls" {
+			item.OptedIn = false
+		}
+		narrowed = append(narrowed, item)
+	}
+	r.fleet.setOptIns(narrowed)
+	r.api.RefreshTelemetryPreferences(ctx) // the supervisor's slow tick
+
+	r.work(t, "s1")
+	r.flush()
+	if n := toolEvents(); n != 0 {
+		t.Fatalf("%d tool_invoked event(s) after the class was revoked in Fleet", n)
+	}
+	st, _ := r.api.FleetTelemetryStatus(ctx)
+	for _, c := range st.OptedInClasses {
+		if c == "harness.tool_calls" {
+			t.Errorf("status still lists the revoked class: %v", st.OptedInClasses)
+		}
+	}
+	if st.PreferencesFetchedAt == "" {
+		t.Error("status does not say when preferences were last confirmed")
+	}
+
+	// Re-enable in Fleet: takes effect on the next tick, no restart.
+	r.fleet.setOptIns(fleet.TierOptInUpdates(fleet.ConsentFull))
+	r.api.RefreshTelemetryPreferences(ctx)
+	r.work(t, "s1")
+	r.flush()
+	if toolEvents() == 0 {
+		t.Error("re-enabling the class in Fleet did not resume tool events")
+	}
+}
+
+// Fleet unreachable: keep the last confirmed snapshot for a bounded time, then
+// fail closed. Never broaden.
+func TestRefreshPreferences_FetchFailure_BoundedCacheThenFailClosed(t *testing.T) {
+	r := newReconcileRig(t, fleet.ConsentFull)
+	ctx := context.Background()
+	r.fleet.mu.Lock()
+	r.fleet.optInsStatus = http.StatusServiceUnavailable
+	r.fleet.mu.Unlock()
+
+	r.api.RefreshTelemetryPreferences(ctx)
+	st, _ := r.api.FleetTelemetryStatus(ctx)
+	if len(st.OptedInClasses) == 0 {
+		t.Fatal("a single failed fetch dropped a fresh snapshot")
+	}
+
+	// Age the snapshot past the bound.
+	r.api.fleet.mu.Lock()
+	r.api.fleet.optInsFetchedAt = time.Now().Add(-TelemetryPreferencesMaxAge - time.Minute)
+	r.api.fleet.mu.Unlock()
+	r.api.RefreshTelemetryPreferences(ctx)
+
+	st, _ = r.api.FleetTelemetryStatus(ctx)
+	if len(st.OptedInClasses) != 0 {
+		t.Fatalf("stale snapshot still admits %v", st.OptedInClasses)
+	}
+	r.work(t, "s1")
+	r.flush()
+	if n := r.fleet.count(); n != 0 {
+		t.Fatalf("%d OTLP request(s) on a stale, unconfirmable preference snapshot", n)
+	}
+}
+
+// Review follow-up 2, settings half: ending the session leaves nothing of the
+// old account behind even when the next enroll fails.
+func TestSessionEnded_ThenFailedEnroll_LeavesNothingOfTheOldAccount(t *testing.T) {
+	r := newReconcileRig(t, fleet.ConsentFull)
+	ctx := context.Background()
+	r.work(t, "s1") // alice, queued
+
+	r.api.FleetSessionEnded(ctx) // supervisor: identity changed
+	r.setToken(jwtFor("sub-bob", "zitadel-org-222"))
+	r.fleet.mu.Lock()
+	r.fleet.enrollFails = 1
+	r.fleet.mu.Unlock()
+	if _, err := r.api.FleetRefreshIdentity(ctx); err == nil {
+		t.Fatal("fixture: bob's enroll should have failed")
+	}
+
+	st, _ := r.api.FleetTelemetryStatus(ctx)
+	if st.Enrolled || st.Pipeline.Active || len(st.OptedInClasses) != 0 {
+		t.Fatalf("after a failed switch: %+v — alice's state must be gone", st)
+	}
+	r.flush()
+	if n := r.fleet.count(); n != 0 {
+		t.Fatalf("%d OTLP request(s) after the failed switch", n)
+	}
+
+	if _, err := r.api.FleetRefreshIdentity(ctx); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got := r.pipeline.ActiveIdentity(); got.UserID != "sub-bob" {
+		t.Fatalf("active identity = %+v, want only bob", got)
+	}
+	r.work(t, "s1")
+	r.flush()
+	for _, e := range r.fleet.events(t) {
+		if e.resource["kameas.user.id"] != "sub-bob" {
+			t.Errorf("event attributed to %q", e.resource["kameas.user.id"])
+		}
 	}
 }

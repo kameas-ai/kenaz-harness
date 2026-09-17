@@ -102,6 +102,9 @@ type fleetState struct {
 	// fleet store is authoritative; this is the harness-side cache populated at
 	// enroll. nil before the first successful fetch.
 	telemetryOptIns []fleet.TelemetryOptInItem
+	// optInsFetchedAt is when telemetryOptIns was last confirmed by Fleet (a
+	// GET, or a push Fleet acknowledged). Zero = never.
+	optInsFetchedAt time.Time
 
 	// optInPusher pushes the per-class opt-in vector a consent tier implies
 	// (fleet.TierOptInUpdates) to the fleet store, wired via
@@ -328,6 +331,45 @@ func (a *API) SetFleetTelemetryResourceFunc(fn func() *resource.Resource) {
 	a.fleet.mu.Unlock()
 }
 
+// TelemetryPreferencesMaxAge bounds how long a cached per-user opt-in snapshot
+// may keep admitting export without Fleet re-confirming it. Past this, the
+// snapshot is dropped (nothing admitted) until a fetch succeeds: a preference
+// revoked in Fleet's web UI must not be outlived by an unreachable Fleet.
+const TelemetryPreferencesMaxAge = 15 * time.Minute
+
+// RefreshTelemetryPreferences re-reads the signed-in USER's per-class opt-ins
+// from Fleet and reconciles export. It is how a change made in Fleet's web UI
+// reaches a running harness; the served supervisor calls it on its slow tick
+// (about once a minute — never per tool call).
+//
+// Fetch failure never broadens consent: the cached snapshot is kept only
+// while it is younger than TelemetryPreferencesMaxAge, then fails closed.
+func (a *API) RefreshTelemetryPreferences(ctx context.Context) {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	enrolled := a.fleet.enrolled
+	a.fleet.mu.RUnlock()
+	if enrolled {
+		a.refreshTelemetryOptIns(ctx) // keeps the cache on error
+		a.fleet.mu.Lock()
+		stale := !a.fleet.optInsFetchedAt.IsZero() &&
+			time.Since(a.fleet.optInsFetchedAt) > TelemetryPreferencesMaxAge
+		pipeline := a.fleet.otlpPipeline
+		if stale {
+			a.fleet.telemetryOptIns = nil
+			a.fleet.optInsFetchedAt = time.Time{}
+		}
+		a.fleet.mu.Unlock()
+		if stale && pipeline != nil {
+			logging.L().Warn("fleet.telemetry_optins.stale_failing_closed")
+			pipeline.SetTelemetryOptIns(nil)
+		}
+	}
+	a.ReconcileTelemetry(ctx)
+}
+
 // FleetSessionEnded is the served-mode sign-out: the host broker session is
 // gone. It forgets the enrolled identity and stops export (discarding the
 // queue) but leaves the pollers alone — unlike FleetSignOut there is no token
@@ -340,6 +382,7 @@ func (a *API) FleetSessionEnded(ctx context.Context) {
 	a.fleet.enrolled = false
 	a.fleet.enrolledOrgID, a.fleet.enrolledNodeID, a.fleet.enrolledTier = "", "", ""
 	a.fleet.telemetryOptIns = nil
+	a.fleet.optInsFetchedAt = time.Time{}
 	pipeline := a.fleet.otlpPipeline
 	a.fleet.mu.Unlock()
 	if pipeline != nil {
@@ -440,7 +483,16 @@ func (a *API) FleetTelemetryStatus(_ context.Context) (FleetTelemetryStatusView,
 	consent := a.fleet.consent
 	tracker := a.fleet.usageTracker
 	view.Enrolled = a.fleet.enrolled
+	for _, item := range a.fleet.telemetryOptIns {
+		if item.OptedIn {
+			view.OptedInClasses = append(view.OptedInClasses, item.Class)
+		}
+	}
+	if !a.fleet.optInsFetchedAt.IsZero() {
+		view.PreferencesFetchedAt = a.fleet.optInsFetchedAt.UTC().Format(time.RFC3339)
+	}
 	a.fleet.mu.RUnlock()
+	sort.Strings(view.OptedInClasses)
 	if consent != nil {
 		view.EffectiveConsent = string(consent.EffectiveLevel())
 		view.StoredConsent = string(consent.Level())
@@ -462,6 +514,10 @@ type FleetTelemetryStatusView struct {
 	EffectiveConsent  string               `json:"effective_consent"`
 	OrgTier           string               `json:"org_tier"`
 	OpenConversations int                  `json:"open_conversations"`
+	// OptedInClasses are THIS USER's per-class preferences as last confirmed
+	// by Fleet (per user, not an org default). Class names only.
+	OptedInClasses       []string `json:"opted_in_classes"`
+	PreferencesFetchedAt string   `json:"preferences_fetched_at,omitempty"`
 	Pipeline          fleet.PipelineStatus `json:"pipeline"`
 }
 
@@ -492,6 +548,11 @@ func (a *API) AdoptTelemetryOptIns(items []fleet.TelemetryOptInItem) {
 	}
 	a.fleet.mu.Lock()
 	a.fleet.telemetryOptIns = items
+	if items != nil {
+		a.fleet.optInsFetchedAt = time.Now()
+	} else {
+		a.fleet.optInsFetchedAt = time.Time{}
+	}
 	pipeline := a.fleet.otlpPipeline
 	a.fleet.mu.Unlock()
 	if pipeline != nil {
@@ -926,6 +987,7 @@ func (a *API) refreshTelemetryOptIns(ctx context.Context) {
 	}
 	a.fleet.mu.Lock()
 	a.fleet.telemetryOptIns = items
+	a.fleet.optInsFetchedAt = time.Now()
 	pipeline := a.fleet.otlpPipeline
 	a.fleet.mu.Unlock()
 

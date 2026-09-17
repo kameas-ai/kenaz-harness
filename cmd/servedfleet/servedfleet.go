@@ -36,7 +36,7 @@ func Start(ctx context.Context, api *rpc.API, cfg authbroker.Config, session *au
 			_, err := settings.FleetRefreshIdentity(ctx)
 			return err
 		},
-		Reconcile:    settings.ReconcileTelemetry,
+		Reconcile:    settings.RefreshTelemetryPreferences,
 		SessionEnded: settings.FleetSessionEnded,
 		Log:          log,
 	})

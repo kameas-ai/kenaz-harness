@@ -196,3 +196,35 @@ func TestSupervisor_IdentityChange_ReEnrolls_TokenRenewalDoesNot(t *testing.T) {
 		}
 	}
 }
+
+func TestSupervisor_AccountChange_EndsOldEnrollmentBeforeAFailingNewOne(t *testing.T) {
+	r := newSupRig(t, authbroker.StateSignedIn, "alice|org|iss")
+	r.nextWait(t)
+	if !r.sup.Status().Enrolled {
+		t.Fatal("fixture: not enrolled as alice")
+	}
+
+	r.failNext.Store(1) // bob's first enroll fails
+	r.identity.Store("bob|org|iss")
+	r.auth.set(authbroker.StateSignedIn)
+	if d := r.nextWait(t); d != 2*time.Second {
+		t.Errorf("wait after the failed switch = %v, want the retry backoff", d)
+	}
+	st := r.sup.Status()
+	if st.Enrolled {
+		t.Error("alice's enrollment is still reported as current after a failed switch to bob")
+	}
+	if r.ended.Load() != 1 {
+		t.Errorf("SessionEnded ran %d times, want 1 — before the new enroll was attempted", r.ended.Load())
+	}
+	if st.LastError == "" {
+		t.Error("the failed enroll left no error class in status")
+	}
+
+	r.fire() // retry succeeds
+	r.nextWait(t)
+	st = r.sup.Status()
+	if !st.Enrolled || r.ended.Load() != 1 {
+		t.Errorf("after retry: status=%+v ended=%d, want enrolled (as bob) with no second teardown", st, r.ended.Load())
+	}
+}

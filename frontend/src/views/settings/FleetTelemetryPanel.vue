@@ -48,6 +48,8 @@ const statusLine = computed<string>(() => {
       return `Not enrolled with Fleet yet (${s.enroll.last_error}); retrying automatically.`;
     return 'Not enrolled with Fleet yet — sign in to your Fleet account.';
   }
+  if (!s.opted_in_classes || s.opted_in_classes.length === 0)
+    return 'Off — every telemetry class is turned off in your Fleet preferences.';
   if (!s.pipeline.active) return 'Enrolled, but export is not active. It is re-checked every minute.';
   if (s.pipeline.exports_identity_mismatch > 0 && s.pipeline.exports_ok === 0)
     return 'Paused — the signed-in account changed; re-attributing to the new account.';
@@ -229,6 +231,14 @@ async function saveConsent(level: 'none' | 'aggregate' | 'full') {
     >
       <p class="text-xs font-semibold text-ink">Status</p>
       <p class="text-xs text-ink-muted" data-testid="telemetry-status-line">{{ statusLine }}</p>
+      <p
+        v-if="status.opted_in_classes && status.opted_in_classes.length"
+        class="text-xs text-ink-subtle"
+        data-testid="telemetry-status-classes"
+      >
+        Your preferences (yours, not an organization default; also editable in Fleet, picked up
+        within a minute): {{ status.opted_in_classes.join(', ') }}
+      </p>
       <p v-if="status.pipeline.active" class="text-xs text-ink-subtle">
         Recorded {{ status.pipeline.events_accepted + status.pipeline.counts_recorded }} ·
         sent {{ status.pipeline.exports_ok }} batch(es) ·

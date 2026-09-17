@@ -1607,6 +1607,10 @@ type SettingsAPI interface {
 	// (identity, effective consent). Idempotent.
 	ReconcileTelemetry(ctx context.Context)
 
+	// RefreshTelemetryPreferences re-reads the user's per-class opt-ins from
+	// Fleet (bounded cache, fails closed when stale) and reconciles export.
+	RefreshTelemetryPreferences(ctx context.Context)
+
 	// FleetSessionEnded is the served-mode sign-out (host broker session gone).
 	FleetSessionEnded(ctx context.Context)
 

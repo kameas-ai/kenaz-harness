@@ -3598,6 +3598,9 @@ export interface FleetTelemetryStatus {
   effective_consent: string;
   org_tier: string;
   open_conversations: number;
+  /** This USER's per-class preferences as last confirmed by Fleet (not an org default). */
+  opted_in_classes: string[] | null;
+  preferences_fetched_at?: string;
   pipeline: {
     active: boolean;
     log_lane_enabled: boolean;
@@ -6466,6 +6469,7 @@ export function createFakeHarnessClient(
         effective_consent: 'none',
         org_tier: 'free',
         open_conversations: 0,
+        opted_in_classes: [],
         pipeline: {
           active: false,
           log_lane_enabled: false,
