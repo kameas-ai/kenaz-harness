@@ -19,29 +19,50 @@
 // opt-in snapshot stayed empty forever, so LogKindsAdmittedBy admitted
 // nothing regardless of the chosen tier.
 //
-// # The mapping (owner ruling 2026-09-16, option B of fleet brief #94)
+// # The mapping
 //
-// Picking a tier now writes the FULL per-class opt-in vector implied by
-// that tier — the whole vector, not a diff — so downgrading (e.g.
-// full -> none) actively clears stale `true` rows instead of stranding
-// them opted in forever with no future write to turn them back off.
+// Picking a tier writes the FULL per-class opt-in vector implied by that tier
+// — the whole vector, not a diff — so downgrading (e.g. full -> none)
+// actively clears stale `true` rows instead of stranding them opted in forever
+// with no future write to turn them back off.
 //
 //   - ConsentNone:      every ceiling class -> false.
-//   - ConsentAggregate: every ceiling class -> false. FleetTelemetryPanel.vue's
-//     own preview text for aggregate is explicit: "No log records". Every
-//     class in the compiled ceiling (log_event_kind.go) exists *only* to
-//     gate log-record admission via LogKindsAdmittedBy — the spans and
-//     metrics aggregate DOES send are gated purely by
-//     TelemetryConsent.EffectiveLevel inside FleetOTLPPipeline.Activate, not
-//     by any per-class opt-in. So aggregate's per-class vector is
-//     indistinguishable from none's today, and that is correct, not an
-//     oversight: there is currently no telemetry class in the compiled
-//     ceiling whose job is "log records for aggregate". If a future kind
-//     vendor bump adds one, TestCeilingClasses_PinnedClassSet
-//     (telemetry_tier_optins_test.go) fails until a human decides which
-//     tier(s) should carry it true.
-//   - ConsentFull:      every ceiling class -> true. This is what actually
-//     delivers on Full's preview promise of log records.
+//   - ConsentAggregate: the three COUNT classes -> true
+//     (harness.usage_counts, harness.tool_calls, harness.errors);
+//     every other ceiling class -> false.
+//   - ConsentFull:      every ceiling class -> true.
+//
+// # AMENDMENT 2026-09-16 (supersedes "option B of fleet brief #94" for the
+// aggregate row; needs owner ratification — see telemetry-plan.md §2.3)
+//
+// Option B mapped aggregate to all-false, reasoning that every ceiling class
+// exists only to gate LOG-record admission and aggregate promises "no log
+// records". The first half of that stopped being true, and the conclusion was
+// already wrong end to end:
+//
+//   - Fleet's receiver gates the METRICS lane on these same classes
+//     (kenaz-fleet service/telemetry/receiver.go HandleMetrics: a metric is
+//     dropped unless its class is opted in). With aggregate all-false, every
+//     counter the aggregate tier is *for* was discarded server-side, traces
+//     need harness.diagnostics (Team+), and logs are off — so choosing
+//     Aggregate produced nothing anywhere. The tier was a no-op that reported
+//     itself as on: exactly the "lie" the unwired sweep exists to end.
+//   - The classes are, by Fleet's own definition, count classes:
+//     harness.usage_counts "carries aggregated harness session / conversation
+//     counts", harness.tool_calls "counts and latencies (no payloads)",
+//     harness.errors "error rate and categories". Aggregate's promise —
+//     "Counts + durations only" — is these classes.
+//
+// What keeps "no log records under Aggregate" true is no longer an empty
+// opt-in vector; it is an explicit switch. FleetOTLPPipeline.SetLogLaneEnabled
+// closes the event lane unless EFFECTIVE consent is full, and UsageEmitter
+// routes an aggregate occurrence to a label-less counter, never to a record.
+// Both are pinned on wire bytes by
+// TestUsageLane_AggregateConsent_SendsLabellessDeltaCountersAndNoLogRecords
+// and TestAggregateTierVector_OpensCountersButNeverTheLogLane.
+//
+// sigil.* stays false under aggregate: those kinds have no counter form in the
+// declared metric budget, so opting them in would gate nothing.
 //
 // The mapping is scanned over CeilingClasses() (the classes the compiled
 // ceiling actually names) rather than fleet's full KnownTelemetryClasses
@@ -57,11 +78,30 @@ package fleet
 // opted_at=NOW() on every PUT (telemetry_optins.go), which is semantically
 // correct here — a tier change is direct, first-party user consent.
 func TierOptInUpdates(level ConsentLevel) []TelemetryOptInItem {
-	optedIn := level == ConsentFull
 	classes := CeilingClasses()
 	out := make([]TelemetryOptInItem, 0, len(classes))
 	for _, class := range classes {
-		out = append(out, TelemetryOptInItem{Class: class, OptedIn: optedIn})
+		out = append(out, TelemetryOptInItem{Class: class, OptedIn: tierOptsIn(level, class)})
 	}
 	return out
+}
+
+// aggregateCountClasses are the classes the Aggregate tier opts in: exactly
+// the classes that gate a declared label-less counter (usageCounterClass).
+// TestAggregateCountClasses_MatchTheCounterBudget keeps the two in step.
+var aggregateCountClasses = map[string]bool{
+	"harness.usage_counts": true,
+	"harness.tool_calls":   true,
+	"harness.errors":       true,
+}
+
+func tierOptsIn(level ConsentLevel, class string) bool {
+	switch level {
+	case ConsentFull:
+		return true
+	case ConsentAggregate:
+		return aggregateCountClasses[class]
+	default:
+		return false
+	}
 }

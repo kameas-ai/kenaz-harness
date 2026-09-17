@@ -65,9 +65,12 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	agentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agents"
+	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	permissionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/permissions"
 	sessionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 )
 
@@ -158,6 +161,7 @@ type Server struct {
 	log         *slog.Logger
 	srv         *http.Server
 	authSession *authbroker.Session    // nil when serve mode is not wired with auth (tests / anonymous)
+	fleetEnroll *FleetEnrollSupervisor // nil outside a workbench
 	elicit      elicitview.ElicitAPI   // nil → falls back to api.Elicit(); injected for a stable pending surface
 	queueCap    int                    // per-WS-client frame queue depth; 0 → defaultStreamQueueCap
 	connectors  *connectors.Supervisor // nil → Connectors_* report "not provisioned" (spec 091 D11)
@@ -191,6 +195,18 @@ func (s *Server) backgroundCtx() context.Context {
 
 // ServerOption is a functional option for [New].
 type ServerOption func(*Server)
+
+// FleetTelemetryStatusResult is Fleet_TelemetryStatus in served mode: the
+// export snapshot plus the enroll supervisor's.
+type FleetTelemetryStatusResult struct {
+	settings.FleetTelemetryStatusView
+	Enroll *FleetEnrollStatus `json:"enroll,omitempty"`
+}
+
+// WithFleetEnroll exposes the enroll supervisor's status. nil is fine.
+func WithFleetEnroll(sup *FleetEnrollSupervisor) ServerOption {
+	return func(s *Server) { s.fleetEnroll = sup }
+}
 
 // WithAuthSession wires an [authbroker.Session] into the server.  When set,
 // the Auth_State RPC method returns the current auth state.  When nil (default)
@@ -550,6 +566,19 @@ type AuthStateResult struct {
 	State string `json:"state"`
 }
 
+// decodeDocumentsParams decodes Documents_* params, reporting a malformed
+// payload in the contract's error form (contracts/documents-rpc.md §4) so
+// the client's code parser sees bad_params rather than a bare string.
+func decodeDocumentsParams(method string, params json.RawMessage, v any) error {
+	if len(params) == 0 {
+		params = json.RawMessage("{}")
+	}
+	if err := json.Unmarshal(params, v); err != nil {
+		return &documentsview.Error{Code: documentsview.CodeBadParams, Message: "the request was malformed: " + method}
+	}
+	return nil
+}
+
 // elicitAPI returns the elicitation surface the served frontend should read.
 // It prefers an explicitly-injected surface (WithElicitAPI) and otherwise
 // falls back to api.Elicit(). The fallback is safe for production where
@@ -771,6 +800,116 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "Projects_List":
 		return s.api.Projects().List(ctx)
 
+	// ── documents + local knowledge sites ────────────────────────────
+	//
+	// contracts/documents-rpc.md. Every method but Preview/ExportsDir names
+	// a session; the view checks it exists and core/docs decides what that
+	// session may see. The whole flow — list, open, edit, preview, build a
+	// site into /workspace — completes inside a VM; nothing is uploaded.
+
+	case "Documents_List":
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := decodeDocumentsParams("Documents_List", params, &p); err != nil {
+			return nil, err
+		}
+		return s.api.Documents().List(ctx, p.SessionID)
+
+	case "Documents_Get":
+		var p struct {
+			SessionID string `json:"sessionId"`
+			ID        string `json:"id"`
+		}
+		if err := decodeDocumentsParams("Documents_Get", params, &p); err != nil {
+			return nil, err
+		}
+		return s.api.Documents().Get(ctx, p.SessionID, p.ID)
+
+	case "Documents_Create":
+		var p struct {
+			SessionID string `json:"sessionId"`
+			Title     string `json:"title"`
+			Body      string `json:"body"`
+		}
+		if err := decodeDocumentsParams("Documents_Create", params, &p); err != nil {
+			return nil, err
+		}
+		return s.api.Documents().Create(ctx, p.SessionID, p.Title, p.Body)
+
+	case "Documents_Update":
+		var p struct {
+			SessionID   string `json:"sessionId"`
+			ID          string `json:"id"`
+			BaseVersion *int   `json:"baseVersion"`
+			Body        string `json:"body"`
+		}
+		if err := decodeDocumentsParams("Documents_Update", params, &p); err != nil {
+			return nil, err
+		}
+		if p.BaseVersion == nil {
+			// A missing baseVersion must not decode to 0 and silently pass
+			// the conflict check against a version-0 document.
+			return nil, &documentsview.Error{Code: documentsview.CodeBadParams, Message: "the request was malformed: baseVersion is required"}
+		}
+		return s.api.Documents().Update(ctx, p.SessionID, p.ID, *p.BaseVersion, p.Body)
+
+	case "Documents_Preview":
+		var p struct {
+			Body string `json:"body"`
+		}
+		if err := decodeDocumentsParams("Documents_Preview", params, &p); err != nil {
+			return nil, err
+		}
+		return s.api.Documents().Preview(ctx, p.Body)
+
+	case "Documents_BuildSite":
+		var p struct {
+			SessionID   string   `json:"sessionId"`
+			Slug        string   `json:"slug"`
+			Title       string   `json:"title"`
+			DocumentIDs []string `json:"documentIds"`
+		}
+		if err := decodeDocumentsParams("Documents_BuildSite", params, &p); err != nil {
+			return nil, err
+		}
+		return s.api.Documents().BuildSite(ctx, p.SessionID, p.Slug, p.Title, p.DocumentIDs)
+
+	case "Documents_ExportsDir":
+		return s.api.Documents().ExportsDir(ctx)
+
+	// Agents_* ports the existing sub-agent profile registry CRUD
+	// (contracts/agents-served-rpc.md). No new wire shape — ProfileWire /
+	// ProfileSummaryWire are the same structs the desktop Wails binding
+	// already uses.
+	case "Agents_ListProfiles":
+		return s.api.Agents().ListProfiles(ctx)
+
+	case "Agents_LoadProfile":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Agents_LoadProfile: bad params: " + err.Error())
+		}
+		return s.api.Agents().LoadProfile(ctx, p.ID)
+
+	case "Agents_SaveProfile":
+		var p agentsview.ProfileWire
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Agents_SaveProfile: bad params: " + err.Error())
+		}
+		return nil, s.api.Agents().SaveProfile(ctx, p)
+
+	case "Agents_DeleteProfile":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Agents_DeleteProfile: bad params: " + err.Error())
+		}
+		return nil, s.api.Agents().DeleteProfile(ctx, p.ID)
+
 	// Sessions_ResolveAutonomy — a read on session state the served build
 	// already owns (folds global → project → session autonomy layers).
 	// Ported per served-mode-is-a-real-mode-01PMZ707 WP04. NOTE: this does
@@ -805,6 +944,32 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	// uses so this is not a second hand-maintained flag list.
 	case "Config_GetFlags":
 		return rpc.ComputeFeatureFlags(), nil
+
+	// Fleet telemetry consent + status. Served mode is where everyday work
+	// happens (the workbench), and these were desktop-only: a workbench user
+	// had no way to move consent off "none", so a workbench could never
+	// report. Tier gating and the opt-in push are inside the view.
+	case "Fleet_GetTelemetryConsent":
+		return s.api.Fleet().GetTelemetryConsent(ctx)
+	case "Fleet_SetTelemetryConsent":
+		var p struct {
+			Level string `json:"level"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Fleet_SetTelemetryConsent: bad params: " + err.Error())
+		}
+		return nil, s.api.Fleet().SetTelemetryConsent(ctx, p.Level)
+	case "Fleet_TelemetryStatus":
+		st, err := s.api.Settings().FleetTelemetryStatus(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := FleetTelemetryStatusResult{FleetTelemetryStatusView: st}
+		if s.fleetEnroll != nil {
+			enroll := s.fleetEnroll.Status()
+			out.Enroll = &enroll
+		}
+		return out, nil
 
 	// Auth_State returns the current in-VM auth state.
 	// Privacy: no token bytes are included in the response.
