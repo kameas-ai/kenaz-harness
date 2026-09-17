@@ -7,9 +7,10 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -71,14 +72,15 @@ func OTLPBaseURL(cfg FleetConfig) string {
 //     each ReadOnlySpan and overrides Resource() to return the identity resource.
 //     The OTLP transform layer reads Resource() per span, so the fleet receiver
 //     sees the correct resource on every ResourceSpans envelope.
-//   - Metrics:  A resourceOverrideMetricExporter is registered at boot in
-//     telemetry.Config.MetricExporters (no-ops until Activate). Activate swaps
-//     in the real OTLP exporter + identity resource.
-//   - Logs:     Not exported. kindGatedLogExporter is registered at boot in
-//     telemetry.Config.LogExporters but Activate never gives it an inner
-//     exporter — the resource problem above has no per-record solution for
-//     logs, and nothing emits kind-tagged log records. See the "Logs" section
-//     of Activate.
+//   - Metrics + Logs: neither has a per-batch Resource() hook, so the
+//     boot-time providers can never carry the identity. Activate instead
+//     builds a DEDICATED MeterProvider and LoggerProvider post-enroll, whose
+//     resource is the identity resource from construction, and Deactivate
+//     tears them down (otlp_usage_lane.go). Only the closed usage vocabulary
+//     (UsageEmitter) can write to them.
+//   - The boot-time exporters (MetricExporter / LogExporter) stay registered
+//     but are never given an inner exporter: the process-wide instruments and
+//     the slog-bridged application log stream do not leave the machine.
 //
 // # Constraint 2: Dynamic auth
 //
@@ -92,7 +94,9 @@ func OTLPBaseURL(cfg FleetConfig) string {
 //  2. At boot, add MetricExporter() and LogExporter() to
 //     telemetry.Config.MetricExporters / LogExporters.
 //  3. After successful enroll, call Activate — idempotent.
-//  4. On harness teardown, call Shutdown.
+//  4. On sign-out, account change, or consent withdrawal, call Deactivate —
+//     queued data is discarded, and Activate may be called again later.
+//  5. On harness teardown, call Shutdown (flushes, then closes).
 type FleetOTLPPipeline struct {
 	mu     sync.Mutex
 	logger *slog.Logger
@@ -100,15 +104,40 @@ type FleetOTLPPipeline struct {
 	// active span processor (registered on TracerProvider) so Shutdown drains it.
 	activeSpanProc sdktrace.SpanProcessor
 
-	// Lazy metric and log exporters registered at boot; the metric
-	// exporter's inner exporter is swapped on Activate. The log exporter's
-	// inner exporter is deliberately never swapped in — see the comment on
-	// kindGatedLogExporter and the "Logs" section of Activate.
+	// Lazy metric and log exporters registered at boot. Neither is ever given
+	// an inner exporter: they sit on the process-wide providers, which carry
+	// undeclared instruments and the slog-bridged application log stream.
+	// Account-attributed export goes through `usage` instead.
 	lazyMetricExp *resourceOverrideMetricExporter
 	lazyLogExp    *kindGatedLogExporter
 
 	// Back-ref to the TracerProvider we registered on.
 	tp *sdktrace.TracerProvider
+
+	// spanClosed lets Deactivate discard the span processor's shutdown flush
+	// (see closableSpanExporter). Replaced on every Activate.
+	spanClosed *atomic.Bool
+
+	// usage is the account-attributed event + counter lane for the live
+	// activation; nil while inactive. See otlp_usage_lane.go.
+	usage          *usageLane
+	activeIdentity IdentityAttrs
+
+	// optIns is the last Fleet opt-in snapshot, retained so an Activate that
+	// happens AFTER the snapshot arrived still starts narrowed correctly.
+	optIns []TelemetryOptInItem
+
+	// logLaneEnabled mirrors (effective consent == full). Default false: a
+	// pipeline nobody has told about consent sends no event records.
+	logLaneEnabled bool
+
+	onUnauthorized func()
+	stats          *pipelineStats
+
+	// Export cadence overrides; zero means the SDK defaults. Tests shorten
+	// them, production leaves them alone.
+	metricInterval time.Duration
+	logBatchDelay  time.Duration
 }
 
 // NewFleetOTLPPipeline creates an inactive pipeline. Call Activate after login.
@@ -120,12 +149,23 @@ func NewFleetOTLPPipeline(logger *slog.Logger) *FleetOTLPPipeline {
 		logger:        logger,
 		lazyMetricExp: &resourceOverrideMetricExporter{},
 		lazyLogExp:    &kindGatedLogExporter{},
+		stats:         &pipelineStats{},
 	}
 }
 
-// MetricExporter returns the lazy metric exporter that should be registered
-// at boot time in telemetry.Config.MetricExporters. It no-ops until Activate
-// is called.
+// SetExportCadence overrides how often the usage lanes export. Zero keeps the
+// SDK default for that lane. Takes effect at the next Activate.
+func (p *FleetOTLPPipeline) SetExportCadence(metricInterval, logBatchDelay time.Duration) {
+	p.mu.Lock()
+	p.metricInterval = metricInterval
+	p.logBatchDelay = logBatchDelay
+	p.mu.Unlock()
+}
+
+// MetricExporter returns the lazy metric exporter registered at boot time in
+// telemetry.Config.MetricExporters. It exports nothing: the process-wide
+// MeterProvider carries instruments and labels outside the declared metric
+// budget. Declared counters leave through the usage lane (AddCount).
 func (p *FleetOTLPPipeline) MetricExporter() sdkmetric.Exporter {
 	return p.lazyMetricExp
 }
@@ -133,10 +173,11 @@ func (p *FleetOTLPPipeline) MetricExporter() sdkmetric.Exporter {
 // LogExporter returns the fleet log exporter registered at boot time in
 // telemetry.Config.LogExporters.
 //
-// It exports nothing. The fleet log lane is off (see the "Logs" section of
-// Activate for why, and what must change to turn it back on); this returns the
-// gate rather than nil so that the wiring, and the fail-closed admission rule
-// it enforces, stay in the live pipeline.
+// It exports nothing. This gate sits on the boot-time LoggerProvider, which
+// the slog→OTel bridge feeds, and it is never given an inner exporter — so the
+// application log stream cannot leave even if a line were somehow kind-tagged.
+// Kind-tagged event records leave through the separate usage lane (EmitEvent),
+// which has its own instance of the same gate.
 func (p *FleetOTLPPipeline) LogExporter() sdklog.Exporter {
 	return p.lazyLogExp
 }
@@ -154,6 +195,13 @@ func (p *FleetOTLPPipeline) LogExporter() sdklog.Exporter {
 // nil (e.g. on sign-out) returns the lane to admitting nothing.
 func (p *FleetOTLPPipeline) SetTelemetryOptIns(optIns []TelemetryOptInItem) {
 	p.lazyLogExp.setOptIns(optIns)
+	p.mu.Lock()
+	p.optIns = append([]TelemetryOptInItem(nil), optIns...)
+	lane := p.usage
+	p.mu.Unlock()
+	if lane != nil {
+		lane.gate.setOptIns(optIns)
+	}
 }
 
 // IdentityAttrs holds the OTel Resource attributes required by the fleet
@@ -203,36 +251,61 @@ func (p *FleetOTLPPipeline) Activate(
 		return fmt.Errorf("fleet/otlp: build identity resource: %w", err)
 	}
 
-	// Shared transport: auth inside, ack validation outside. The ack wrapper
-	// turns a 2xx that is not an OTLP acknowledgement into an export error, so
-	// a misrouted endpoint fails loudly instead of reporting success into a
-	// void (see NewOTLPAckRoundTripper).
+	// Shared transport, inside → out:
+	//
+	//   token   — reads the live bearer per flush, but only while its `sub`
+	//             still equals the identity this activation is stamped with
+	//             (boundBearer): a batch never rides another account's token.
+	//   observe — records status codes; a 401 nudges the auth layer to renew.
+	//   ack     — turns a 2xx that is not an OTLP acknowledgement into an
+	//             export error, so a misrouted endpoint fails loudly instead
+	//             of reporting success into a void (NewOTLPAckRoundTripper).
 	httpClient := &http.Client{
-		Transport: NewOTLPAckRoundTripper(NewTokenRoundTripper(bearer, nil)),
+		Transport: NewOTLPAckRoundTripper(&exportObserver{
+			inner:          NewTokenRoundTripper(boundBearer(bearer, identity.UserID, p.stats), nil),
+			stats:          p.stats,
+			onUnauthorized: p.onUnauthorized,
+		}),
+	}
+
+	// A re-activation (re-login, account change) replaces the previous usage
+	// lane. Whatever it still had queued belongs to the previous activation
+	// and is discarded rather than flushed under a session that may be gone.
+	if p.usage != nil {
+		p.usage.close(ctx, true)
+		p.usage = nil
 	}
 
 	// ── Traces ────────────────────────────────────────────────────────────────
 	if tp != nil {
 		// Drain previous span processor if any.
 		if p.activeSpanProc != nil && p.tp != nil {
+			if p.spanClosed != nil {
+				p.spanClosed.Store(true)
+			}
 			p.tp.UnregisterSpanProcessor(p.activeSpanProc)
 			_ = p.activeSpanProc.Shutdown(ctx)
 			p.activeSpanProc = nil
 		}
 
+		// The signal path is part of the endpoint URL. WithEndpointURL takes
+		// the path from the URL verbatim; a separate WithURLPath("/v1/traces")
+		// REPLACES it, which silently dropped the "/otlp" prefix and sent
+		// spans to <api-host>/v1/traces — a route Fleet does not serve.
 		spanExp, err := otlptracehttp.New(ctx,
-			otlptracehttp.WithEndpointURL(otlpBase),
-			otlptracehttp.WithURLPath("/v1/traces"),
+			otlptracehttp.WithEndpointURL(otlpBase+"/v1/traces"),
 			otlptracehttp.WithHTTPClient(httpClient),
 		)
 		if err != nil {
 			return fmt.Errorf("fleet/otlp: span exporter: %w", err)
 		}
 		// Wrap to substitute resource on every export call.
+		spanClosed := &atomic.Bool{}
 		withResource := &resourceOverrideSpanExporter{
-			inner: spanExp,
+			inner: &closableSpanExporter{inner: spanExp, closed: spanClosed},
 			res:   identityRes,
 		}
+		p.spanClosed = spanClosed
 		// Wrap again to redact span name + attributes before they leave the
 		// process boundary (security fix: FR-005 / NFR-001 on the live OTLP
 		// path — harness-fleet-otlp-export-01NTLMEX01). The redacting wrapper
@@ -250,65 +323,69 @@ func (p *FleetOTLPPipeline) Activate(
 		)
 	}
 
-	// ── Metrics ───────────────────────────────────────────────────────────────
-	metricExp, err := otlpmetrichttp.New(ctx,
-		otlpmetrichttp.WithEndpointURL(otlpBase),
-		otlpmetrichttp.WithURLPath("/v1/metrics"),
-		otlpmetrichttp.WithHTTPClient(httpClient),
-	)
+	// ── Usage lanes: events (logs) + counters (metrics) ──────────────────────
+	//
+	// Both are built here, post-enroll, on providers this pipeline owns, so
+	// their resource carries the identity attrs Fleet requires — the blocker
+	// that previously kept the log lane off. See otlp_usage_lane.go for the
+	// full argument, and for why the slog bridge cannot reach them.
+	//
+	// The generic boot-time metric exporter (lazyMetricExp) is deliberately NOT
+	// given an inner exporter any more. It used to forward every instrument of
+	// the process-wide MeterProvider — names and labels nobody had declared —
+	// to Fleet. The counter lane replaces it with a closed, label-less set.
+	// The boot-time log gate (lazyLogExp) likewise keeps a nil inner: it is fed
+	// by the slog bridge, and application log lines stay on the machine.
+	lane, err := buildUsageLane(ctx, usageLaneConfig{
+		otlpBase:       otlpBase,
+		identityRes:    identityRes,
+		httpClient:     httpClient,
+		optIns:         p.optIns,
+		logLaneEnabled: p.logLaneEnabled,
+		metricInterval: p.metricInterval,
+		logBatchDelay:  p.logBatchDelay,
+	})
 	if err != nil {
-		p.logger.Warn("fleet.otlp.metric_exporter.failed", "err", err)
-		// Non-fatal: traces and logs still proceed.
-	} else {
-		p.lazyMetricExp.swapInner(ctx, metricExp, identityRes)
-		p.logger.Info("fleet.otlp.metric_pipeline.activated", "endpoint", otlpBase)
+		p.logger.Warn("fleet.otlp.usage_lane.failed", "err", err)
+		// Non-fatal: traces still proceed.
+		return nil
 	}
-
-	// ── Logs ─────────────────────────────────────────────────────────────────
-	//
-	// Deliberately not activated: no OTLP log exporter is constructed here, so
-	// the fleet log lane makes no network calls and ships no records. This is
-	// a decision, not an omission.
-	//
-	// What used to happen: an otlploghttp exporter was wired to /v1/logs and
-	// the harness's entire slog stream — every application log line, via the
-	// slog→OTel bridge installed by telemetry.Init — was batched and POSTed to
-	// Fleet. Application log bodies are content-bearing by nature (file paths,
-	// error strings, identifiers), which constitution §IX does not permit to
-	// leave the machine.
-	//
-	// Two independent facts make that traffic pure cost:
-	//
-	//  1. Nothing emits a kameas.event.kind attribute. The Fleet receiver
-	//     admits a log record only when ClassFor(kameas.event.kind) resolves
-	//     (kenaz-fleet service/telemetry/receiver.go, HandleLogs). No code in
-	//     any Kameas repo sets that attribute on a log record, so every record
-	//     the harness sent was counted DroppedInvalid — after crossing the
-	//     network and terminating TLS on Kameas infrastructure.
-	//
-	//  2. The batch is rejected before the kind check anyway. Log records
-	//     carry the LoggerProvider's resource, which is frozen at boot and has
-	//     no kameas.user.id (see Constraint 1 above — there is no per-record
-	//     Resource() hook to override, the way there is for spans). HandleLogs
-	//     validates the first ResourceLogs group's resource attrs up front and
-	//     401s the WHOLE request when kameas.user.id != the JWT sub.
-	//
-	// To turn the lane back on, both must be fixed, in this order:
-	//
-	//   a. Solve the resource problem — the records must carry
-	//      kameas.user.id / kameas.org.id / kameas.machine.id — e.g. by
-	//      building the ResourceLogs envelope directly instead of relying on
-	//      the boot-time LoggerProvider resource.
-	//   b. Emit records that actually carry an allowlisted AttrEventKind.
-	//      Everything else stays dropped by kindGatedLogExporter regardless.
-	//
-	// Re-adding an OTLP log exporter requires the fence's explicit opt-out
-	// annotation at the call site; scripts/ci/check-fleet-log-export-fence.sh
-	// documents it and fails the build without it.
-	p.logger.Debug("fleet.otlp.log_pipeline.disabled",
-		"reason", "no_kind_tagged_emitters_and_no_identity_resource")
+	p.usage = lane
+	p.activeIdentity = identity
+	p.logger.Info("fleet.otlp.usage_lane.activated",
+		"endpoint", otlpBase,
+		"log_lane_enabled", p.logLaneEnabled,
+	)
 
 	return nil
+}
+
+// Deactivate stops all account-attributed export and DISCARDS whatever is
+// still queued. It is the sign-out / account-change / consent-withdrawn path:
+// the session the queued data was collected under is gone or no longer
+// consented, so flushing it would be wrong even where it would succeed.
+//
+// Idempotent. The pipeline can be Activated again afterwards.
+func (p *FleetOTLPPipeline) Deactivate(ctx context.Context) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	wasActive := p.usage != nil || p.activeSpanProc != nil
+	if p.spanClosed != nil {
+		p.spanClosed.Store(true)
+	}
+	if p.activeSpanProc != nil && p.tp != nil {
+		p.tp.UnregisterSpanProcessor(p.activeSpanProc)
+		_ = p.activeSpanProc.Shutdown(ctx)
+		p.activeSpanProc = nil
+	}
+	if p.usage != nil {
+		p.usage.close(ctx, true)
+		p.usage = nil
+	}
+	p.activeIdentity = IdentityAttrs{}
+	if wasActive {
+		p.logger.Info("fleet.otlp.deactivated")
+	}
 }
 
 // Shutdown drains and shuts down all active processors/exporters.
@@ -320,6 +397,13 @@ func (p *FleetOTLPPipeline) Shutdown(ctx context.Context) error {
 		_ = p.activeSpanProc.Shutdown(ctx)
 		p.activeSpanProc = nil
 	}
+	// Clean process shutdown: the session is still valid, so flush rather
+	// than discard (contrast Deactivate).
+	if p.usage != nil {
+		p.usage.close(ctx, false)
+		p.usage = nil
+	}
+	p.activeIdentity = IdentityAttrs{}
 	_ = p.lazyMetricExp.Shutdown(ctx)
 	_ = p.lazyLogExp.Shutdown(ctx)
 	return nil
@@ -553,11 +637,12 @@ func (e *resourceOverrideMetricExporter) swapInner(ctx context.Context, newInner
 // Fail-closed by construction: the gate is an allowlist, not a denylist, so a
 // new record shape is non-exportable until someone deliberately tags it.
 //
-// This is the fence, not the switch. The lane is additionally off at the
-// source: Activate never installs an inner exporter, so inner is nil in
-// production and nothing is transmitted at all. The gate stays in the live
-// pipeline so that installing an inner exporter — the one change that would
-// re-open the lane — cannot on its own put raw application logs on the wire.
+// There are two instances in a live pipeline. The boot-time one
+// (FleetOTLPPipeline.lazyLogExp) sits behind the slog bridge and never gets an
+// inner exporter. The usage-lane one (usageLane.gate) fronts the only OTLP log
+// exporter in the process, on a provider the slog bridge cannot reach. The
+// gate is what guarantees that even that second lane can carry nothing but
+// allowlisted, opted-in kinds.
 //
 // Consent composes on top of, not instead of, the gate: activateOTLPPipeline
 // (core/rpc/views/settings/fleet.go) refuses to call Activate at all while
@@ -579,15 +664,14 @@ func (e *resourceOverrideMetricExporter) swapInner(ctx context.Context, newInner
 // # On the log resource
 //
 // sdklog.Record carries no Resource() — the LoggerProvider's resource is
-// attached at the OTLP encoding layer, and that resource is frozen at boot,
-// before login, so it has no kameas.user.id. There is no per-record override
-// hook the way there is for spans (resourceOverrideSpanExporter). Fleet's
-// HandleLogs validates the first ResourceLogs group's resource attrs and
-// rejects the entire request with 401 when kameas.user.id != the JWT sub, so
-// this is a hard blocker on the lane rather than a cosmetic gap. It is
-// recorded here, and in the "Logs" section of Activate, as a precondition for
-// re-enabling log export — it is not a live-pipeline TODO, because there is no
-// live log pipeline.
+// attached at the OTLP encoding layer and frozen at provider construction.
+// There is no per-record override hook the way there is for spans
+// (resourceOverrideSpanExporter), and Fleet's HandleLogs rejects the entire
+// request with 401 when kameas.user.id != the JWT sub. That is why the usage
+// lane builds its LoggerProvider inside Activate, post-enroll: the identity is
+// known by then, so the frozen resource is the right one. The boot-time
+// provider can never satisfy this, which is one more reason its gate keeps a
+// nil inner exporter.
 type kindGatedLogExporter struct {
 	mu    sync.RWMutex
 	inner sdklog.Exporter
@@ -595,6 +679,45 @@ type kindGatedLogExporter struct {
 	// admitted is ceiling ∩ Fleet opt-ins, recomputed whenever Fleet supplies
 	// a new opt-in snapshot. nil ⇒ nothing is admissible.
 	admitted map[LogEventKind]struct{}
+
+	// optedInClasses is the same snapshot by class, for the counter lane,
+	// which is gated per class rather than per kind. nil ⇒ nothing.
+	optedInClasses map[string]bool
+
+	// disabled closes the lane regardless of opt-ins. Set when effective
+	// consent is below "full": the aggregate tier opts usage classes in (so
+	// its counters pass), and without this switch those classes would admit
+	// their event kinds too. Zero value is "not disabled" so a bare gate
+	// behaves exactly as it did before the switch existed.
+	disabled bool
+}
+
+// setEnabled opens (true) or closes (false) the lane independently of the
+// per-class opt-ins.
+func (e *kindGatedLogExporter) setEnabled(enabled bool) {
+	e.mu.Lock()
+	e.disabled = !enabled
+	e.mu.Unlock()
+}
+
+// admits reports whether kind would currently pass the gate.
+func (e *kindGatedLogExporter) admits(kind LogEventKind) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.disabled || !LogEventKindAllowed(string(kind)) {
+		return false
+	}
+	_, ok := e.admitted[kind]
+	return ok
+}
+
+// classOptedIn reports whether Fleet's snapshot opts class in. Unlike admits
+// it ignores the lane switch: counters are the aggregate tier's lane and must
+// pass while event records are closed.
+func (e *kindGatedLogExporter) classOptedIn(class string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.optedInClasses[class]
 }
 
 // setOptIns recomputes the admitted set from a Fleet opt-in snapshot. The
@@ -602,17 +725,43 @@ type kindGatedLogExporter struct {
 // and uses optIns solely to exclude.
 func (e *kindGatedLogExporter) setOptIns(optIns []TelemetryOptInItem) {
 	next := LogKindsAdmittedBy(optIns)
+	classes := make(map[string]bool, len(optIns))
+	for _, item := range optIns {
+		// Only `true` is recorded, and only for classes the compiled ceiling
+		// or the compiled counter set actually names — an opt-in for a class
+		// this binary knows nothing about contributes nothing.
+		if item.OptedIn && knownGatingClass(item.Class) {
+			classes[item.Class] = true
+		}
+	}
 	e.mu.Lock()
 	e.admitted = next
+	e.optedInClasses = classes
 	e.mu.Unlock()
+}
+
+// knownGatingClass reports whether class gates anything this binary can emit.
+func knownGatingClass(class string) bool {
+	for _, c := range logKindCeiling {
+		if c == class {
+			return true
+		}
+	}
+	for _, c := range usageCounterClass {
+		if c == class {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *kindGatedLogExporter) Export(ctx context.Context, records []sdklog.Record) error {
 	e.mu.RLock()
 	inner := e.inner
 	allowed := e.admitted
+	disabled := e.disabled
 	e.mu.RUnlock()
-	if inner == nil {
+	if inner == nil || disabled {
 		return nil
 	}
 

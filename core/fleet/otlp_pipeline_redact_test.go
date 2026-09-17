@@ -118,7 +118,9 @@ func TestOTLPPipeline_RedactsSecretAttributeBeforeTransmission(t *testing.T) {
 		attribute.String("service.name", "harness-test"),
 	)
 
-	bearer := fakeBearerProvider("test-pipeline-token")
+	// A JWT whose sub matches identity.UserID below: Activate binds the bearer
+	// to the activated subject (boundBearer), as production tokens always are.
+	bearer := fakeBearerProvider(fakeJWT("user-test-123"))
 
 	// Activate against the fake OTLP server. The pipeline appends "/v1/traces"
 	// to the base URL (matching the mux handler above).
@@ -202,7 +204,7 @@ func TestOTLPPipeline_RedactsSecretRef(t *testing.T) {
 	if err := pipeline.Activate(ctx, srv.URL, baseRes, IdentityAttrs{
 		UserID: "user-secret-ref-test",
 		OrgID:  "org-secret-ref-test",
-	}, fakeBearerProvider("token-secret-ref"), tp); err != nil {
+	}, fakeBearerProvider(fakeJWT("user-secret-ref-test")), tp); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 
