@@ -102,7 +102,7 @@ var knownModelProviders = map[string]bool{
 	"openai":        true,
 	"azure-openai":  true,
 	"bedrock":       true,
-	"gemini":        true,
+	"gemini":        true, // model-lit-allow: provider adapter KIND in the telemetry export vocabulary (projected verbatim or collapsed to "other") — not family-based routing/classification
 	"ollama":        true,
 	"openrouter":    true,
 	"custom-openai": true,

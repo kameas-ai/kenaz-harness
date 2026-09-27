@@ -234,6 +234,14 @@ func (r *reconcileRig) flush() {
 
 func newReconcileRig(t *testing.T, level fleet.ConsentLevel) *reconcileRig {
 	t.Helper() // deliberately NOT t.Parallel: SetExternalTokenSource is process-global
+	if fleet.Disabled() {
+		// check-oss-first runs core/rpc/views/... with HARNESS_FLEET_DISABLED=1
+		// to prove the OSS build degrades gracefully. Every test through this
+		// rig exercises fleet-ENABLED reconcile behaviour (enroll + consent +
+		// export), which is impossible in that mode — same convention as
+		// sites_test.go's capability tests.
+		t.Skip("HARNESS_FLEET_DISABLED=1: reconcile rig requires fleet enabled")
+	}
 	f := newReconcileFleet(t)
 	f.setOptIns(fleet.TierOptInUpdates(level)) // what the tier push would have written
 
