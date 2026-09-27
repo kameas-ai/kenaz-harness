@@ -119,7 +119,18 @@ func (s *memStore) List(_ context.Context, filter UnitFilter) ([]Unit, error) {
 	return out, nil
 }
 
-func (s *memStore) Update(_ context.Context, id, body string, metadata []byte) (Unit, error) {
+func (s *memStore) Update(ctx context.Context, id, body string, metadata []byte) (Unit, error) {
+	return s.update(ctx, id, -1, body, metadata)
+}
+
+func (s *memStore) UpdateAtVersion(ctx context.Context, id string, baseVersion int, body string, metadata []byte) (Unit, error) {
+	if baseVersion < 0 {
+		return Unit{}, ErrVersionConflict
+	}
+	return s.update(ctx, id, baseVersion, body, metadata)
+}
+
+func (s *memStore) update(_ context.Context, id string, baseVersion int, body string, metadata []byte) (Unit, error) {
 	meta := normaliseMetadata(metadata)
 	now := s.now()
 
@@ -129,6 +140,9 @@ func (s *memStore) Update(_ context.Context, id, body string, metadata []byte) (
 	u, ok := s.units[id]
 	if !ok {
 		return Unit{}, ErrUnitNotFound
+	}
+	if baseVersion >= 0 && u.Version != baseVersion {
+		return Unit{}, ErrVersionConflict
 	}
 	newVersion := u.Version + 1
 

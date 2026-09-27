@@ -181,7 +181,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 189 entries.
+# 184 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -189,13 +189,6 @@
 "ACP_ListTraces"
 "ACP_RevokePeer"
 "ACP_TrustPeer"
-
-# Caller(s) AgentsView.vue only reachable from a view that renders
-# NotAvailableInServedMode.
-"Agents_DeleteProfile"
-"Agents_ListProfiles"
-"Agents_LoadProfile"
-"Agents_SaveProfile"
 
 # Caller(s) GlobalContextPanel.vue, ProjectLandingPage.vue, SettingsView.vue
 # only reachable from a view that renders NotAvailableInServedMode.
@@ -283,10 +276,6 @@
 "Contexts_RootPath"
 "Contexts_Save"
 
-# views/settings/FleetTelemetryPanel.vue (nested under SettingsView.vue) --
-# caller confirmed by hand (multi-line client.fleet.getTelemetryConsent() chain
-# this mapper's single-line regex missed).
-"Fleet_GetTelemetryConsent"
 
 # Caller(s) RunView.vue only reachable from a view that renders
 # NotAvailableInServedMode. approval-node-01PMZC12 UNIT-3 added the verb;
@@ -797,7 +786,7 @@
 # genuine escalation. This class must shrink release over release (spec
 # AC-717); the next sweep should re-walk these against the tree it finds,
 # not assume this list still holds.
-# 79 entries.
+# 78 entries.
 
 # Reachable from the LIVE routed chat surface (MarkdownBlock.vue /
 # CodeBlock.vue's "save as artifact" + artifact-chip flow, and SessionsView.vue
@@ -852,7 +841,6 @@
 "ContextBootstrap_Health"
 "ContextBootstrap_Start"
 "Elicit_AnswerDeferred"
-"Fleet_SetTelemetryConsent"
 "LLM_ResumeAfterKeyRotation"
 "LLM_TestAndRotateKey"
 "LoadRoute"

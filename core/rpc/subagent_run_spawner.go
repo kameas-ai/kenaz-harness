@@ -133,6 +133,10 @@ type SubagentRunSpawnerDeps struct {
 	// childSessionID. nil disables the clamp entirely (profile budgets
 	// stay documented-but-unenforced, today's pre-existing behaviour).
 	BudgetOverrides *chat.SubagentBudgetRegistry
+	// UsageParent, when set, is told (child, parent) before the child's first
+	// turn so usage telemetry counts delegated work toward the parent's
+	// conversation rather than as a conversation of its own. nil is fine.
+	UsageParent func(childSessionID, parentSessionID string)
 
 	// HookRunner fires hooks.EventSubagentStart once per dispatch, before
 	// deps.LLM.StartStream is called (UNIT-7, FR-007). The SAME
@@ -213,6 +217,10 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 				Tokens:        req.BudgetTokens,
 				WallclockSecs: req.BudgetTimeS,
 			})
+		}
+
+		if deps.UsageParent != nil {
+			deps.UsageParent(childSessionID, req.ParentSessionID)
 		}
 
 		// UNIT-7 (FR-007, AC-08): subagent_start fires here — after the

@@ -209,13 +209,13 @@ function stringToToolList(s: string): string[] {
           <!-- Allowed Tools -->
           <div>
             <label class="mb-1 block font-ui text-xs font-medium text-ink" for="profile-allowed">
-              Allowed Tools
+              Allowed Tools (advisory)
             </label>
             <input
               id="profile-allowed"
               :value="toolListToString(local.allowedTools)"
               type="text"
-              placeholder="kenaz__read_file, kenaz__grep (empty = all tools)"
+              placeholder="kenaz__read_file, kenaz__grep"
               :disabled="readOnly"
               class="w-full rounded border border-border-muted bg-surface-1 px-3 py-1.5 font-ui text-sm text-ink placeholder:text-ink-subtle focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
               data-testid="profile-allowed-input"
@@ -225,13 +225,13 @@ function stringToToolList(s: string): string[] {
                 }
               "
             />
-            <p class="mt-1 font-ui text-[11px] text-ink-subtle">Comma-separated tool IDs. Empty = inherit parent session.</p>
+            <p class="mt-1 font-ui text-[11px] text-ink-subtle">Stored profile metadata. These lists are not enforced; the worker uses the parent session’s tools and permissions.</p>
           </div>
 
           <!-- Denied Tools -->
           <div>
             <label class="mb-1 block font-ui text-xs font-medium text-ink" for="profile-denied">
-              Denied Tools
+              Denied Tools (advisory)
             </label>
             <input
               id="profile-denied"
@@ -247,7 +247,7 @@ function stringToToolList(s: string): string[] {
                 }
               "
             />
-            <p class="mt-1 font-ui text-[11px] text-ink-subtle">Always denied, even if in allowed list. Deny wins.</p>
+            <p class="mt-1 font-ui text-[11px] text-ink-subtle">Stored preference only. This list does not block tool execution.</p>
           </div>
 
           <!-- Budget Tokens -->

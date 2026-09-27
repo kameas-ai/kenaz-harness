@@ -208,3 +208,34 @@ func TestDeleteNotFound(t *testing.T) {
 		t.Error("Delete: expected ErrProfileNotFound, got nil")
 	}
 }
+
+// TestDeleteRejectsPathTraversal guards the fix in this change: Delete used
+// to join the caller-supplied id straight into <dataDir>/agents/<id>.yaml
+// with no format check (unlike Save, which validates via Validate(p) first).
+// "../canary" resolves exactly one level up from <dataDir>/agents/, i.e.
+// <dataDir>/canary.yaml — a real, seeded file — so this proves the guard
+// fires BEFORE the filesystem is touched, not merely that a nonexistent
+// path returned "not found" for an unrelated reason.
+func TestDeleteRejectsPathTraversal(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	// The intermediate directory must exist or even vulnerable os.Remove
+	// returns ENOENT before resolving agents/../canary.yaml.
+	if err := os.MkdirAll(filepath.Join(dataDir, "agents"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	canary := filepath.Join(dataDir, "canary.yaml")
+	if err := os.WriteFile(canary, []byte("do-not-delete"), 0o640); err != nil {
+		t.Fatalf("seed canary: %v", err)
+	}
+
+	for _, id := range []string{"../canary", "", "a/b", ".", ".."} {
+		err := agents.Delete(dataDir, id)
+		if err == nil {
+			t.Errorf("Delete(%q): expected a rejection, got nil", id)
+		}
+	}
+	if _, statErr := os.Stat(canary); statErr != nil {
+		t.Fatalf("canary file was removed (path traversal succeeded): %v", statErr)
+	}
+}

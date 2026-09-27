@@ -42,6 +42,7 @@ import (
 	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/policy"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
+	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
 	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
@@ -133,6 +134,9 @@ func (f *fakeHarnessAPI) Settings() settings.SettingsAPI              { return f
 func (f *fakeHarnessAPI) Memory() memoryview.MemoryAPI                { return f.memoryAPI }
 func (f *fakeHarnessAPI) Hooks() hooksview.HooksAPI                   { return f.hooksAPI }
 func (f *fakeHarnessAPI) Projects() projectsview.ProjectsAPI          { return f.projectsAPI }
+func (f *fakeHarnessAPI) Documents() documentsview.DocumentsAPI {
+	return documentsview.Unavailable()
+}
 func (f *fakeHarnessAPI) Attachments() attachmentsview.AttachmentsAPI { return f.attachmentsAPI }
 func (f *fakeHarnessAPI) Artifacts() artifactsview.ArtifactsAPI       { return f.artifactsAPI }
 func (f *fakeHarnessAPI) Tools() tools.ToolsAPI                       { return f.toolsAPI }

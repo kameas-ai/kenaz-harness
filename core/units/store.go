@@ -37,6 +37,9 @@ type Store interface {
 	// ErrUnitNotFound when id has no match.
 	Update(ctx context.Context, id string, body string, metadata []byte) (Unit, error)
 
+	// UpdateAtVersion atomically refuses a stale base with ErrVersionConflict.
+	UpdateAtVersion(ctx context.Context, id string, baseVersion int, body string, metadata []byte) (Unit, error)
+
 	// AddEdge writes a new Edge row. If e.ID is empty a fresh ULID is
 	// minted. Returns the inserted Edge. Validates EdgeKind and that
 	// both FromID and ToID refer to existing units.

@@ -123,6 +123,54 @@ export interface Project {
   updatedAt: string;
 }
 
+// ── documents + local knowledge sites (contracts/documents-rpc.md) ─────
+
+export type DocumentScope = 'session' | 'global';
+
+/** A Documents_List row. Timestamps are RFC3339Nano UTC. */
+export interface DocumentSummary {
+  id: string;
+  title: string;
+  scope: DocumentScope;
+  version: number;
+  contentSha256: string;
+  byteSize: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A full document. `body` is the sanitized HTML the store holds. */
+export interface DocumentRecord extends DocumentSummary {
+  body: string;
+}
+
+/** Documents_Preview: exactly what Create/Update would store. */
+export interface DocumentPreview {
+  html: string;
+  sanitized: boolean;
+  byteSize: number;
+}
+
+export interface KnowledgeSiteWarnings {
+  documentId: string;
+  warnings: string[];
+}
+
+/**
+ * Documents_BuildSite. Paths are absolute on the machine running the
+ * harness (inside a workbench, under /workspace). `published` is always
+ * false: nothing in this family uploads.
+ */
+export interface KnowledgeSiteBuild {
+  siteDir: string;
+  publicDir: string;
+  bundle: string;
+  bundleSha256: string;
+  documents: number;
+  warnings: KnowledgeSiteWarnings[];
+  published: boolean;
+}
+
 export interface Provider {
   id: string;
   name: string;

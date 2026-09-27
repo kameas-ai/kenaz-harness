@@ -840,7 +840,9 @@ watch(
             in the same media-store the rest of the harness uses — no
             filesystem touch, no MCP filesystem recipe required. Default ON;
             the model picks this tool when you ask it to save, export, or
-            produce a document.
+            produce a document. Also gates
+            <span class="font-mono text-[10px]">kenaz__save_document</span>,
+            which saves sanitized HTML documents to your local document store.
           </p>
           <div
             v-if="saveArtifactError"
@@ -942,6 +944,8 @@ watch(
           <ul class="mt-1 font-mono text-[10px] text-ink-dim list-none">
             <li>kenaz__write_file</li>
             <li>kenaz__edit_file</li>
+            <li>kenaz__update_document</li>
+            <li>kenaz__build_knowledge_site</li>
           </ul>
           <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
             Default OFF. Write tools modify your filesystem directly.

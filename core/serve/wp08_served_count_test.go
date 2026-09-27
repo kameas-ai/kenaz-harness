@@ -18,7 +18,7 @@ import "testing"
 //
 // *Falsify*: add or remove an entry from servedMethods in methods.go
 // without updating wantServedMethodCount below → this goes red.
-const wantServedMethodCount = 39
+const wantServedMethodCount = 53 // +3: Fleet_GetTelemetryConsent, Fleet_SetTelemetryConsent, Fleet_TelemetryStatus; +7: Documents_{BuildSite,Create,ExportsDir,Get,List,Preview,Update} (contracts/documents-rpc.md); +4: Agents_{ListProfiles,LoadProfile,SaveProfile,DeleteProfile} (contracts/agents-served-rpc.md)
 
 func TestServedMethodsCountMatchesDoc(t *testing.T) {
 	got := len(servedMethods)

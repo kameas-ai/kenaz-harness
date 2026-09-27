@@ -38,6 +38,10 @@ import AccountPanel from '@/views/settings/AccountPanel.vue';
 import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
 import PeersPanel from '@/views/settings/PeersPanel.vue';
 import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
+// fix/served-agent-profiles-sep17: served workbenches had no route to
+// AgentsView at all (contracts/agents-served-rpc.md) — a served-mode user
+// could not configure named Sonnet/Opus/Fable delegation profiles.
+import AgentsView from '@/views/settings/AgentsView.vue';
 // fleet-share-and-sync-01NDFSEX14 WP06 — Sync panel
 import SyncPanel from '@/views/settings/SyncPanel.vue';
 // fleet-audit-archival-01NDFSEX13 WP06 — Compliance panel
@@ -1103,11 +1107,17 @@ onMounted(() => {
 </script>
 
 <template>
-  <NotAvailableInServedMode
-    v-if="servedMode"
-    feature="Settings"
-        reason="Settings are read and written through desktop-only RPCs; the in-workbench build exposes no settings surface yet. Workbench-level configuration lives in Kenaz on the host."
-  />
+  <div v-if="servedMode">
+    <!-- Fleet telemetry consent (Fleet_Get/SetTelemetryConsent are served
+         RPCs) and Agent Profiles (Agents_* — contracts/agents-served-rpc.md)
+         are the settings served mode has. -->
+    <FleetTelemetryPanel />
+    <AgentsView />
+    <NotAvailableInServedMode
+      feature="Other settings"
+      reason="Apart from Fleet telemetry and Agent Profiles above, settings are read and written through desktop-only RPCs. Workbench-level configuration lives in Kenaz on the host."
+    />
+  </div>
   <SettingsShell
     v-else
     number="06"

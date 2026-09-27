@@ -87,6 +87,11 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/artifacts/ArtifactsView.vue'),
   },
   {
+    path: '/documents',
+    name: 'documents',
+    component: () => import('@/views/documents/DocumentsView.vue'),
+  },
+  {
     // FR-002 (01NKNOW01): Corpora surface retired; redirect to Contexts.
     path: '/corpora/:pathMatch(.*)*',
     redirect: '/contexts',

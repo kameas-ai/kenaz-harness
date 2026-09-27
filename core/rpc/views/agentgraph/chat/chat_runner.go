@@ -328,6 +328,12 @@ type Config struct {
 	// post_send entirely (including the memory.persist builtin).
 	PostSendHook PostSendHookFunc
 
+	// TurnUsage is told when a user turn starts and when one fails. It is
+	// the usage-telemetry seam for the conversation lifecycle; per-response
+	// token usage reaches the same consumer through UsageHook. nil disables
+	// it. See TurnUsageObserver for what it may and may not be given.
+	TurnUsage TurnUsageObserver
+
 	// PartialPersister is the long-turn-resilience-01KR3PRS WP03 seam
 	// that handles the "kernel returned an error mid-stream" case: when
 	// driveRun observes a non-nil err that classifies as backend-error
@@ -614,6 +620,20 @@ type StreamCheckpointStore interface {
 // must not block the chat turn — it should write async or accept the
 // latency.
 type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp corellm.Response)
+
+// TurnUsageObserver receives the conversation-lifecycle facts of a chat turn.
+//
+// As with agentgraph.ToolUsageObserver, the signature is the privacy boundary:
+// neither method has a parameter that could carry the user's message, the
+// model's text, or an error string. TurnFailed is given the output of
+// classifyPartialFailureKind — a closed set ("auth", "transient", "unknown")
+// — never the failure message it was derived from.
+//
+// Implementations must not block the turn.
+type TurnUsageObserver interface {
+	TurnStarted(ctx context.Context, sessionID, providerKind string)
+	TurnFailed(ctx context.Context, sessionID, failureKind string, recoverable bool)
+}
 
 // PostSendHookFunc is the callback signature for the core/hooks
 // `post_send` event. userTurn is the user message that started this
@@ -1520,6 +1540,11 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		}
 	}()
 
+	if r.cfg.TurnUsage != nil {
+		// The run is committed: everything that can refuse a turn (profile
+		// resolution, graph load, budget, lockdown) has already returned.
+		r.cfg.TurnUsage.TurnStarted(ctx, sessionID, llmAdapter.ProviderKind())
+	}
 	go r.driveRun(streamCtx, sub, env)
 	return subID, nil
 }
@@ -1969,6 +1994,15 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	//     would surface a stale Resume button with no recovery upside.
 	//   - no PartialPersister wired: degrade to the WP00 frontend-only
 	//     fallback (the partial bubble's streamingError sub-line).
+	if reason == "backend-error" && r.cfg.TurnUsage != nil {
+		// Only the CLASSIFIED kind crosses this seam — `message` stays here.
+		// "recoverable" uses the PartialPersister definition: no tool_use
+		// executed, so a retry cannot double-bill a side effect.
+		_, ranTool := sub.bridge.PartialState()
+		r.cfg.TurnUsage.TurnFailed(context.WithoutCancel(ctx), sub.sessionID,
+			classifyPartialFailureKind(message), !ranTool)
+	}
+
 	var (
 		partialMessageID   string
 		partialFailureKind string

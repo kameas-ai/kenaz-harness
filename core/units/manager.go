@@ -48,6 +48,17 @@ func (m *Manager) Update(ctx context.Context, id, body string, metadata json.Raw
 	return m.store.Update(ctx, id, body, []byte(metadata))
 }
 
+// UpdateAtVersion writes only if the persisted version still equals baseVersion.
+func (m *Manager) UpdateAtVersion(ctx context.Context, id string, baseVersion int, body string, metadata json.RawMessage) (Unit, error) {
+	if id == "" {
+		return Unit{}, errors.New("units: empty id")
+	}
+	if baseVersion < 0 {
+		return Unit{}, ErrVersionConflict
+	}
+	return m.store.UpdateAtVersion(ctx, id, baseVersion, body, []byte(metadata))
+}
+
 // AddEdge creates a directed edge between two units.
 func (m *Manager) AddEdge(ctx context.Context, e Edge) (Edge, error) {
 	return m.store.AddEdge(ctx, e)

@@ -22,8 +22,10 @@ import {contextbootstrap} from '../models';
 import {contextview} from '../models';
 import {contexts} from '../models';
 import {corpus} from '../models';
+import {documents} from '../models';
 import {elicit} from '../models';
 import {json} from '../models';
+import {settings} from '../models';
 import {agentgraph} from '../models';
 import {contextsync} from '../models';
 import {hooks} from '../models';
@@ -37,7 +39,6 @@ import {onboarding} from '../models';
 import {permissions} from '../models';
 import {planmode} from '../models';
 import {policy} from '../models';
-import {risk} from '../models';
 import {projects} from '../models';
 import {autonomy} from '../models';
 import {scheduledchat} from '../models';
@@ -46,7 +47,7 @@ import {secrets} from '../models';
 import {sentry} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
-import {settings} from '../models';
+import {risk} from '../models';
 import {sites} from '../models';
 import {slashcmd} from '../models';
 import {storage} from '../models';
@@ -312,6 +313,20 @@ export function Diag_LogClientEvent(arg1:string,arg2:string,arg3:Record<string, 
 
 export function Diag_LogPath():Promise<string>;
 
+export function Documents_BuildSite(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<documents.SiteBuildResult>;
+
+export function Documents_Create(arg1:string,arg2:string,arg3:string):Promise<documents.Document>;
+
+export function Documents_ExportsDir():Promise<documents.ExportsDirResult>;
+
+export function Documents_Get(arg1:string,arg2:string):Promise<documents.Document>;
+
+export function Documents_List(arg1:string):Promise<Array<documents.DocumentSummary>>;
+
+export function Documents_Preview(arg1:string):Promise<documents.PreviewResult>;
+
+export function Documents_Update(arg1:string,arg2:string,arg3:number,arg4:string):Promise<documents.Document>;
+
 export function Elicit_AnswerDeferred(arg1:string,arg2:any):Promise<string>;
 
 export function Elicit_ListPending():Promise<Array<elicit.ElicitRequest>>;
@@ -325,6 +340,8 @@ export function Elicit_SubmitWizardStep(arg1:string,arg2:string,arg3:json.RawMes
 export function Fleet_GetTelemetryConsent():Promise<string>;
 
 export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
+
+export function Fleet_TelemetryStatus():Promise<settings.FleetTelemetryStatusView>;
 
 export function Graph_CancelRun(arg1:string):Promise<void>;
 

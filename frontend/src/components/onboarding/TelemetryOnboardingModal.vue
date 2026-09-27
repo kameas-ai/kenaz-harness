@@ -158,9 +158,9 @@ async function dismiss() {
         Share performance telemetry
       </h2>
       <p class="text-sm text-ink-muted mb-4">
-        Help improve Kenaz Harness by sharing redacted performance data with the
-        fleet endpoint. No conversation content, API keys, or credentials are
-        ever included — the redactor strips them before transmission.
+        Share usage counts with your organization's Fleet account. No
+        conversation content, source code, file paths, API keys, or credentials
+        are ever included — they are not part of what is collected.
       </p>
 
       <fieldset class="space-y-2 mb-4">
@@ -204,8 +204,8 @@ async function dismiss() {
               data-testid="aggregate-gate-badge"
             >Requires Pro+</span>
             <span class="block text-xs text-ink-muted">
-              Span names, durations, and status counts only. No string
-              payloads or log records.
+              Counts only: conversations, tool calls, errors, token totals.
+              No names, no string payloads, no log records.
             </span>
           </span>
         </label>
@@ -231,8 +231,8 @@ async function dismiss() {
               data-testid="full-gate-badge"
             >Requires Team+</span>
             <span class="block text-xs text-ink-muted">
-              All redactor-cleaned spans, metrics, and log records. Errors
-              still have credentials removed.
+              Usage events with bounded fields: conversation duration and
+              token totals, built-in tool name and latency, error category.
             </span>
           </span>
         </label>

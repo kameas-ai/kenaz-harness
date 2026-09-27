@@ -295,12 +295,16 @@ capability snapshot was actually wired, a browser client of a signed-in
 harness rendered that button — over a `Catalog_Publish` served mode refuses.
 
 So `lib/featureFlags.ts` now closes `signedIn` and `capability()` outright
-when `isServedMode()` is true. There is no fleet method anywhere in the
-`servedMethods` allowlist (39 entries as of served-mode-is-a-real-mode-01PMZ707
+when `isServedMode()` is true. No fleet CAPABILITY method is in the
+`servedMethods` allowlist (53 entries; 39 as of served-mode-is-a-real-mode-01PMZ707
 WP08, up from the 33 this line originally cited — this count moves every
 time a method is ported; `TestServedMethodsCountMatchesDoc`,
 `core/serve/wp08_served_count_test.go`, fails and names both citations to
-update the next time it drifts), so no fleet gate can legitimately open in
+update the next time it drifts). The three fleet methods that ARE served —
+`Fleet_GetTelemetryConsent`, `Fleet_SetTelemetryConsent`,
+`Fleet_TelemetryStatus` — are telemetry consent and its health readout, not
+capability-gated features: without them a workbench could never leave consent
+`none`. They do not depend on `signedIn` / `capability()`, so no fleet gate can legitimately open in
 served mode, and the fence needs no per-surface knowledge. Its scope is
 also narrower than "everything": it closes exactly `signedIn` and
 `capability()`, both FLEET gates — every finding this doc's own history

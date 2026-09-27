@@ -18,6 +18,7 @@ import (
 	coremonitor "github.com/kameas-ai/kenaz-harness/core/tools/monitor"
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	coredocs "github.com/kameas-ai/kenaz-harness/core/docs"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -30,6 +31,7 @@ import (
 	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
 	corefsbuiltins "github.com/kameas-ai/kenaz-harness/core/tools/fsbuiltins"
 	corefsrequest "github.com/kameas-ai/kenaz-harness/core/tools/fsrequest"
+	coredocuments "github.com/kameas-ai/kenaz-harness/core/tools/documents"
 	coresaveartifact "github.com/kameas-ai/kenaz-harness/core/tools/saveartifact"
 	coreskilltool "github.com/kameas-ai/kenaz-harness/core/tools/skill"
 	coresleep "github.com/kameas-ai/kenaz-harness/core/tools/sleep"
@@ -43,6 +45,7 @@ import (
 	coresecrets "github.com/kameas-ai/kenaz-harness/core/secrets"
 	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
+	"github.com/kameas-ai/kenaz-harness/core/units"
 )
 
 // GlobalFSReadSet is the process-global ReadSet shared across all sessions.
@@ -636,9 +639,9 @@ func registerFSBuiltinTools(
 	dataDir string,
 	blockedSink corefs.BlockedRequestSink,
 	originResolve corefs.OriginResolver,
-) {
+) *corefs.Gate {
 	if registry == nil {
-		return
+		return nil
 	}
 
 	// Gate: construct a *corefs.Gate with the existing Cedar engine.
@@ -732,6 +735,71 @@ func registerFSBuiltinTools(
 		registry.Register(tool)
 		logging.L().Info("rpc.builtins.register", "tool", tool.Name())
 	}
+	return gate
+}
+
+// registerDocumentTools installs the spec-092 document tools and the
+// knowledge-site builder (core/tools/documents).
+//
+// Registered from New() after newLLMStack returns rather than inside
+// registerBuiltinTools, because the units manager is built in New() and
+// newLLMStack does not receive it; the tool registry is live, so late
+// registration is visible to the next catalog read (the same property
+// kenaz__subagent_dispatch relies on).
+//
+// Gates, mirrored exactly in builtinEnabledPredicate:
+//   - kenaz__save_document: the save_artifact dial.
+//   - kenaz__update_document, kenaz__build_knowledge_site: the filesystem
+//     write dial kenaz__write_file uses. The site builder additionally asks
+//     fsGate about every path it writes, so Cedar write policy binds it
+//     exactly as it binds kenaz__write_file.
+//
+// Skipped entirely when unitsMgr is nil (no database); skipping the site
+// builder alone when fsGate is nil would leave a write path with no policy
+// seam, so it is not registered in that case.
+func registerDocumentTools(
+	registry *toolloop.BuiltinRegistry,
+	unitsMgr *units.Manager,
+	store settings.SettingsStore,
+	fsGate *corefs.Gate,
+	workspaceDir func() string,
+) {
+	if registry == nil || unitsMgr == nil {
+		logging.L().Info("rpc.builtins.document_tools_skipped", "reason", "no units manager wired")
+		return
+	}
+	service := coredocs.NewService(unitsMgr)
+	registry.Register(coredocuments.NewSave(coredocuments.Options{
+		Store:   service,
+		Enabled: saveArtifactEnabledLookup(store),
+	}))
+	registry.Register(coredocuments.NewUpdate(coredocuments.Options{
+		Store:   service,
+		Enabled: fsWriteEnabledLookup(store),
+	}))
+	logging.L().Info("rpc.builtins.register", "tool", coredocuments.NameSave)
+	logging.L().Info("rpc.builtins.register", "tool", coredocuments.NameUpdate)
+
+	if fsGate == nil || workspaceDir == nil {
+		logging.L().Info("rpc.builtins.build_knowledge_site_skipped", "reason", "no filesystem gate or workspace")
+		return
+	}
+	registry.Register(coredocuments.NewBuildSite(coredocuments.Options{
+		Store:        service,
+		Enabled:      fsWriteEnabledLookup(store),
+		WorkspaceDir: workspaceDir,
+		AuthorizeWrite: func(ctx context.Context, path string) error {
+			d, err := fsGate.Evaluate(ctx, corefs.OpWrite, path)
+			if err != nil {
+				return err
+			}
+			if d.Outcome != cedar.Allow {
+				return corefsbuiltins.ErrFSDenied
+			}
+			return nil
+		},
+	}))
+	logging.L().Info("rpc.builtins.register", "tool", coredocuments.NameBuildSite)
 }
 
 // constructWebSearch builds a websearch.Tool with the package's
@@ -854,7 +922,7 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			}
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
-		case coresaveartifact.ToolName:
+		case coresaveartifact.ToolName, coredocuments.NameSave:
 			v, err := store.LoadSaveArtifactEnabled()
 			if err != nil {
 				logging.L().Warn("rpc.builtins.predicate.read_failed",
@@ -897,7 +965,8 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// Write-family tools: default OFF until the user opts in from the Tools panel.
 		// update_artifact is gated by the same FSWriteEnabled toggle.
 		case corefsbuiltins.NameWriteFile, corefsbuiltins.NameEditFile,
-			coreupdateartifact.ToolName:
+			coreupdateartifact.ToolName,
+			coredocuments.NameUpdate, coredocuments.NameBuildSite:
 			v, err := store.LoadFSWriteEnabled()
 			if err != nil {
 				logging.L().Warn("rpc.builtins.predicate.read_failed",

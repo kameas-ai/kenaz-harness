@@ -236,10 +236,11 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		// could not block, rewrite, or annotate any tool call the
 		// product actually made.
 		tc := toolCallContext{
-			NodeID:   node.ID,
-			NodeKind: NodeKindToolDispatch,
-			CallID:   oc.call.ID,
-			ToolName: oc.call.Name,
+			NodeID:    node.ID,
+			NodeKind:  NodeKindToolDispatch,
+			CallID:    oc.call.ID,
+			ToolName:  oc.call.Name,
+			StartedAt: time.Now(),
 		}
 		var argsJSON json.RawMessage
 		var blocked *ToolResult

@@ -102,6 +102,17 @@ func Save(dataDir string, p Profile) error {
 // <dataDir>/agents/. Returns ErrBundledReadOnly for bundled ids and
 // ErrProfileNotFound when no user file exists for the id.
 func Delete(dataDir, id string) error {
+	// isValidID rejects "..", "/", and any other path-separator-shaped id
+	// before it ever reaches filepath.Join below — unlike Save (which
+	// validates via Validate(p) before touching the filesystem), this
+	// path had no such check, so a caller could join an arbitrary id into
+	// <dataDir>/agents/<id>.yaml and os.Remove it. Only reachable via a
+	// trusted local caller until this package's four RPCs were exposed
+	// over served mode's HTTP transport (contracts/agents-served-rpc.md);
+	// fixed as part of that exposure rather than carried forward.
+	if !isValidID(id) {
+		return fmt.Errorf("agents.Delete: invalid id %q: must be lowercase alphanumeric + hyphens", id)
+	}
 	bundled, err := loadBundled()
 	if err != nil {
 		return fmt.Errorf("agents.Delete: %w", err)
