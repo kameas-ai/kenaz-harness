@@ -1336,6 +1336,17 @@ export interface Settings {
   bundleSigningPolicy?: string;
 
   /**
+   * Explicit (provider, model) choice for laya-advisors-01LAYA001's
+   * advisor seam (branch_now / compact_now / escalate_model, WP04-06).
+   * Empty == no explicit choice: the backend's laya ladder
+   * (core/advice.ResolveAdvisorModel) falls back to a detected local
+   * laya model, then to disabled. Mirrors riskRaterModel /
+   * compactionModel exactly; no dedicated picker ships in WP01-03 — the
+   * field rides the generic settings get/save round-trip.
+   */
+  advisorModel?: ProviderProfileRef;
+
+  /**
    * GraphAuthoringEnabled — the model-authored-agent-graphs consent
    * dial (model-authored-graphs-01PMGA01 UNIT-4/UNIT-6, FR-006).
    * Default false: a fresh install, and any install upgraded from a
