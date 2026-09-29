@@ -28,8 +28,8 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
-	"github.com/kameas-ai/kenaz-harness/core/advice"
 	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
+	"github.com/kameas-ai/kenaz-harness/core/advice"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	compactionwiring "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction/wiring"

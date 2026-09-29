@@ -166,6 +166,13 @@ var cwdSensitiveGates = []string{
 	// os.Getwd() if `git rev-parse --show-toplevel` fails — the same
 	// class every other entry here was added to catch.
 	"check-risk-gate-decides.sh",
+
+	// check-advice-kinds.sh (WP03, laya-advisors-01LAYA001): sources
+	// lib/ci-gate.sh like every gate in this list and delegates to a
+	// `go run` invocation whose own repoRoot() falls back to
+	// os.Getwd() if `git rev-parse --show-toplevel` fails — the same
+	// class every other entry here was added to catch.
+	"check-advice-kinds.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -3677,8 +3684,14 @@ func TestKnobCoverageGate_UnregisteredSettingsFieldFires(t *testing.T) {
 	root := repoRoot(t)
 	apiPath := filepath.Join(root, "core", "rpc", "views", "settings", "api.go")
 
-	const target = "\tBundleSigningPolicy string `json:\"bundleSigningPolicy,omitempty\"`\n}"
-	const mutated = "\tBundleSigningPolicy string `json:\"bundleSigningPolicy,omitempty\"`\n\n" +
+	// Anchored on AdvisorModel (laya-advisors-01LAYA001 WP02) — the
+	// struct's last field as of this test's most recent update. Content-
+	// anchored, not order-anchored (findings #67/#92): this must be
+	// re-anchored to the real last field whenever a later WP appends one,
+	// the same maintenance TestServedModeTopicForwardingGate_Planted*
+	// documents for passthroughTopics' own terminator-anchored proof.
+	const target = "\tAdvisorModel ProviderProfileRef `json:\"advisorModel,omitempty\"`\n}"
+	const mutated = "\tAdvisorModel ProviderProfileRef `json:\"advisorModel,omitempty\"`\n\n" +
 		"\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
 		"\t// to prove check-knob-coverage.sh's real settings.Settings guard\n" +
 		"\t// (TestKnobCoverage_Settings) fails when a field has no\n" +
@@ -4644,5 +4657,144 @@ func TestRiskGateDecidesGate_CleanOnUnmutatedTree(t *testing.T) {
 	if strings.Contains(out, "0 qualifying Outcome switch") {
 		t.Fatalf("gate reports zero qualifying Outcome switches — this is the discovery-floor failure "+
 			"mode (a broken scan reporting a false clean), not a real pass:\n%s", out)
+	}
+}
+
+// ── check-advice-kinds.sh (WP03, laya-advisors-01LAYA001) ──────────────
+//
+// The three planted-violation proofs below are content-anchored (findings
+// #67/#92): they name field TEXT the tool's regexes match, never a line
+// number or slice position, so appending unrelated content to
+// core/advice/kind.go cannot silently break these tests the way an
+// order-anchored proof would.
+//
+// The two "AdviceKind{...}" fixtures are planted as plain TEXT under
+// core/rpc/ — a real scanRoot the gate walks — using the qualified
+// `advice.` call form. They deliberately do NOT import "core/advice" and
+// are not expected to actually compile; check-advice-kinds.sh is a static
+// text scan, not a build, and no verification step in this repo's release
+// flow runs `go build`/`go vet` against core/rpc while these transient
+// files are on disk (plant()'s defer removes them before this test
+// function returns).
+
+// TestAdviceKindsGate_PlantedMissingFieldFires proves check #2 (registry
+// completeness): an AdviceKind{...} literal missing `Extract:` (the
+// extractor) must fail, named by file:line and the missing field.
+func TestAdviceKindsGate_PlantedMissingFieldFires(t *testing.T) {
+	root := repoRoot(t)
+	probePath := filepath.Join(root, "core", "rpc", "zz_gate_probe_advice_missing_field.go")
+	content := "package rpc\n\n" +
+		"// zzGateProbeAdviceMissingField is planted by gates_can_fail_test.go's\n" +
+		"// check-advice-kinds.sh completeness proof and removed after the test\n" +
+		"// runs. Text-only fixture for the gate's regex scan — does not import\n" +
+		"// \"core/advice\" and is not expected to compile.\n" +
+		"func zzGateProbeAdviceMissingField() {\n" +
+		"\tadvice.MustRegister(advice.AdviceKind{\n" +
+		"\t\tID:            \"zz_gate_probe_missing_field\",\n" +
+		"\t\tPromptVersion: \"v1\",\n" +
+		"\t\tSafetyClass:   advice.SafetyReversible,\n" +
+		"\t\t// Extract deliberately omitted — the completeness violation.\n" +
+		"\t})\n" +
+		"}\n"
+	cleanup := plant(t, probePath, content, "")
+	defer cleanup()
+
+	// NOTE: `go run`'s own process exit code collapses any non-zero child
+	// exit to 1 regardless of the underlying program's os.Exit(1) vs
+	// os.Exit(2) (verified against this toolchain) — the same reason
+	// checkriskgatedecides's own planted-violation tests never assert an
+	// exact non-zero code either. The distinction still exists for
+	// anyone running the built binary directly; only "fails, and names
+	// the right thing" is checked here.
+	code, out := runGate(t, "check-advice-kinds.sh", root)
+	if code == 0 {
+		t.Fatalf("check-advice-kinds.sh exited 0 with an AdviceKind literal missing Extract — "+
+			"the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "zz_gate_probe_missing_field") || !strings.Contains(out, "extractor") {
+		t.Fatalf("gate failed, but its output does not name the planted kind id and the missing "+
+			"\"extractor\" field:\n%s", out)
+	}
+}
+
+// TestAdviceKindsGate_PlantedSuggestOnlyAutoActFires proves check #3
+// (spec §3's enforcement point): a call to advice.RequireCanAutoAct
+// naming a kind registered SafetySuggestOnly must fail.
+func TestAdviceKindsGate_PlantedSuggestOnlyAutoActFires(t *testing.T) {
+	root := repoRoot(t)
+	probePath := filepath.Join(root, "core", "rpc", "zz_gate_probe_advice_suggest_only_autoact.go")
+	content := "package rpc\n\n" +
+		"// zzGateProbeAdviceSuggestOnlyAutoAct is planted by\n" +
+		"// gates_can_fail_test.go's check-advice-kinds.sh suggest-only-cannot-\n" +
+		"// auto-act proof and removed after the test runs. Text-only fixture —\n" +
+		"// does not import \"core/advice\" and is not expected to compile.\n" +
+		"func zzGateProbeAdviceRegisterSuggestOnly() {\n" +
+		"\tadvice.MustRegister(advice.AdviceKind{\n" +
+		"\t\tID:            \"zz_gate_probe_suggest_only_autoact\",\n" +
+		"\t\tPromptVersion: \"v1\",\n" +
+		"\t\tSafetyClass:   advice.SafetySuggestOnly,\n" +
+		"\t\tExtract:       nil,\n" +
+		"\t})\n" +
+		"}\n\n" +
+		"func zzGateProbeAdviceAutoAct() error {\n" +
+		"\treturn advice.RequireCanAutoAct(\"zz_gate_probe_suggest_only_autoact\")\n" +
+		"}\n"
+	cleanup := plant(t, probePath, content, "")
+	defer cleanup()
+
+	code, out := runGate(t, "check-advice-kinds.sh", root)
+	if code == 0 {
+		t.Fatalf("check-advice-kinds.sh exited 0 with a suggest-only kind reaching "+
+			"advice.RequireCanAutoAct — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "zz_gate_probe_suggest_only_autoact") || !strings.Contains(out, "SUGGEST-ONLY") {
+		t.Fatalf("gate failed, but its output does not name the planted kind id and the "+
+			"suggest-only violation:\n%s", out)
+	}
+}
+
+// TestAdviceKindsGate_PlantedStructuralFloorBreakFires proves check #1
+// (the non-vacuous discovery floor): if core/advice/kind.go's
+// SafetySuggestOnly constant is renamed away from its "suggest_only"
+// string value, the gate must FAIL LOUDLY (exit 1, a scan defect) rather
+// than silently report clean — the exact "broken scan reports a false
+// clean" failure mode check-served-mode-topic-forwarding.sh's own
+// discovery-floor guards were hardened against (see
+// TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires
+// above).
+func TestAdviceKindsGate_PlantedStructuralFloorBreakFires(t *testing.T) {
+	root := repoRoot(t)
+	kindPath := filepath.Join(root, "core", "advice", "kind.go")
+
+	const target = `SafetySuggestOnly SafetyClass = "suggest_only"`
+	const mutated = `SafetySuggestOnly SafetyClass = "suggest_only_renamed"`
+	cleanup := plantReplace(t, kindPath, target, mutated)
+	defer cleanup()
+
+	code, out := runGate(t, "check-advice-kinds.sh", root)
+	if code == 0 {
+		t.Fatalf("check-advice-kinds.sh exited 0 after SafetySuggestOnly's string value was renamed — "+
+			"the discovery floor silently passed instead of detecting its own broken scan.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "suggest_only") {
+		t.Fatalf("gate failed, but its output does not mention the discovery floor's missing "+
+			"safety-class match:\n%s", out)
+	}
+}
+
+// TestAdviceKindsGate_CleanOnUnmutatedTree pins the negative control: the
+// real, unmutated tree must exit 0 and print "clean" — not merely "no
+// violations found" indistinguishable from "did not look" (the WARN line
+// for zero registered kinds is expected during the WP01-03 bootstrap and
+// must NOT be confused with the structural floor, which is what actually
+// guards against a broken scan).
+func TestAdviceKindsGate_CleanOnUnmutatedTree(t *testing.T) {
+	root := repoRoot(t)
+	code, out := runGate(t, "check-advice-kinds.sh", root)
+	if code != 0 {
+		t.Fatalf("check-advice-kinds.sh exited %d on the unmutated tree:\n%s", code, out)
+	}
+	if !strings.Contains(out, "clean") {
+		t.Fatalf("check-advice-kinds.sh exited 0 but did not print \"clean\":\n%s", out)
 	}
 }
