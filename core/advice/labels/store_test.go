@@ -46,40 +46,87 @@ func TestSQLStore_InsertAndQuery_RealSQLite(t *testing.T) {
 	ctx := context.Background()
 
 	row := Row{
-		KindID:        "branch_now",
-		PromptVersion: "v1",
-		FeaturesHash:  "hash-1",
-		FeaturesJSON:  `{"turns_since_session_start":3}`,
-		ModelID:       "heuristic/branch-regex-v1",
-		Rung:          "heuristic",
-		Decision:      true,
-		Confidence:    82,
-		Shown:         true,
-		UserAction:    ActionIgnored,
-		LatencyMS:     5,
-		SessionID:     "sess-1",
-		CreatedAt:     time.Unix(1700000000, 0).UTC(),
+		KindID:           "branch_now",
+		PromptVersion:    "v1",
+		FeaturesHash:     "hash-1",
+		FeaturesJSON:     `{"turns_since_session_start":3}`,
+		FeaturesComplete: true,
+		ModelID:          "heuristic/branch-regex-v1",
+		Rung:             "heuristic",
+		Decision:         true,
+		Confidence:       82,
+		Shown:            true,
+		UserAction:       ActionIgnored,
+		LatencyMS:        5,
+		SessionID:        "sess-1",
+		CreatedAt:        time.Unix(1700000000, 0).UTC(),
 	}
 	if err := store.Insert(ctx, row); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
 	var (
-		gotKind    string
-		gotDecide  int
-		gotShown   int
-		gotAction  string
-		gotSession string
+		gotKind     string
+		gotDecide   int
+		gotShown    int
+		gotComplete int
+		gotAction   string
+		gotSession  string
 	)
 	err := db.QueryRowContext(ctx,
-		`SELECT kind, decision, shown, user_action, session_id FROM advice_labels WHERE features_hash = ?`,
-		"hash-1").Scan(&gotKind, &gotDecide, &gotShown, &gotAction, &gotSession)
+		`SELECT kind, decision, shown, features_complete, user_action, session_id FROM advice_labels WHERE features_hash = ?`,
+		"hash-1").Scan(&gotKind, &gotDecide, &gotShown, &gotComplete, &gotAction, &gotSession)
 	if err != nil {
 		t.Fatalf("query inserted row: %v", err)
 	}
-	if gotKind != "branch_now" || gotDecide != 1 || gotShown != 1 || gotAction != "ignored" || gotSession != "sess-1" {
-		t.Errorf("row mismatch: kind=%s decision=%d shown=%d action=%s session=%s",
-			gotKind, gotDecide, gotShown, gotAction, gotSession)
+	if gotKind != "branch_now" || gotDecide != 1 || gotShown != 1 || gotComplete != 1 || gotAction != "ignored" || gotSession != "sess-1" {
+		t.Errorf("row mismatch: kind=%s decision=%d shown=%d features_complete=%d action=%s session=%s",
+			gotKind, gotDecide, gotShown, gotComplete, gotAction, gotSession)
+	}
+}
+
+// TestSQLStore_FeaturesComplete_RoundTrips is the placeholder-row
+// discriminator's persistence proof (review promotion, laya-advisors-
+// 01LAYA001 WP07/WP08 review round, 2026-09-29): both polarities of
+// features_complete round-trip through real sqlite distinctly, and the
+// column DEFAULT (1, matching the safe "complete" default) is what an
+// explicit false actually overrides — a schema bug that silently ignored
+// the column, or that always wrote 1, would pass a test that only checked
+// the true case.
+func TestSQLStore_FeaturesComplete_RoundTrips(t *testing.T) {
+	db := newTestDB(t)
+	store := NewSQLStore(db)
+	ctx := context.Background()
+
+	complete := Row{
+		KindID: "branch_now", PromptVersion: "v1", FeaturesHash: "hash-complete",
+		FeaturesJSON: "{}", FeaturesComplete: true, ModelID: "heuristic/branch-regex-v1",
+		Rung: "heuristic", Decision: true, Confidence: 80, SessionID: "sess-fc",
+	}
+	incomplete := Row{
+		KindID: "compact_now", PromptVersion: "v1", FeaturesHash: "hash-incomplete",
+		FeaturesJSON: "{}", FeaturesComplete: false, ModelID: "heuristic/compact-fill-threshold-v1",
+		Rung: "heuristic", Decision: false, Confidence: 0, SessionID: "sess-fc",
+	}
+	if err := store.Insert(ctx, complete); err != nil {
+		t.Fatalf("insert complete: %v", err)
+	}
+	if err := store.Insert(ctx, incomplete); err != nil {
+		t.Fatalf("insert incomplete: %v", err)
+	}
+
+	var got int
+	if err := db.QueryRowContext(ctx, `SELECT features_complete FROM advice_labels WHERE features_hash = ?`, "hash-complete").Scan(&got); err != nil {
+		t.Fatalf("query complete row: %v", err)
+	}
+	if got != 1 {
+		t.Errorf("features_complete for the complete row = %d, want 1", got)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT features_complete FROM advice_labels WHERE features_hash = ?`, "hash-incomplete").Scan(&got); err != nil {
+		t.Fatalf("query incomplete row: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("features_complete for the incomplete row = %d, want 0", got)
 	}
 }
 

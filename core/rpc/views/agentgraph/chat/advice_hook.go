@@ -247,6 +247,14 @@ func (r *ChatRunner) fireAdvice(sessionID, profileID, modelOverride, userMessage
 		// yet a USEFUL one either; captured as a shown=false label row
 		// regardless, so the corpus starts accumulating real heuristic
 		// outputs (all "no, 0%") the moment real accounting is wired.
+		//
+		// FeaturesIncomplete=true: this whole Snapshot is placeholder data
+		// per the justify() above — the review-promoted placeholder-row
+		// discriminator (advice.FeaturesCompleteness). Flip to false (or
+		// remove the field, defaulting false) the same day the token-span
+		// accessor lands; leaving it true forever would just move the lie
+		// from "no signal" to "no signal, but we said we checked."
+		FeaturesIncomplete: true,
 	}, broker)
 
 	r.evaluateEscalateModel(ctx, advisor, sess, adviceescalatemodel.Snapshot{
@@ -267,6 +275,10 @@ func (r *ChatRunner) fireAdvice(sessionID, profileID, modelOverride, userMessage
 		// answer "no, don't escalate" at 0 confidence — safe (never a
 		// false escalation nudge) — captured as a shown=false label row
 		// regardless, same reasoning as compact_now above.
+		//
+		// FeaturesIncomplete=true: same placeholder-row discriminator as
+		// compact_now above (advice.FeaturesCompleteness).
+		FeaturesIncomplete: true,
 	}, broker)
 }
 
