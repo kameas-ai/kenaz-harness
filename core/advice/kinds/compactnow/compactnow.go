@@ -100,11 +100,28 @@ type Snapshot struct {
 	// SessionCompactedPayload.CompressionRatio from this session's most
 	// recent prior compaction (0 if none yet).
 	HistoricalCompressionRatio float64
+	// FeaturesIncomplete, when true, tells Extract that the caller built
+	// this Snapshot from placeholder/zero-value data because no
+	// ChatRunner-visible token-accounting accessor is wired yet (see
+	// core/rpc/views/agentgraph/chat/advice_hook.go's fireAdvice, the one
+	// production caller — its own comment names the exact blocker). This
+	// is the "justify site" advice.FeaturesCompleteness's doc comment
+	// refers to: the kind package is the one place that knows whether ITS
+	// OWN Snapshot fields are real, so it is also the place that decides
+	// how that maps onto FeaturesComplete() — never hardcoded by kind id
+	// in the label-capture bridge.
+	FeaturesIncomplete bool
 }
 
 // Features is compact_now's model/label-facing feature vector — design
 // §4's harness-kinds table. Field order is declaration order (see
 // branchnow.Features' identical note on advice.FeaturesHash).
+// FeaturesIncomplete is deliberately `json:"-"`: it is a training-corpus
+// bookkeeping signal, not part of the model-facing feature vector or the
+// FeaturesHash cache key (a placeholder run and a future real run with
+// identical resulting numbers are still "materially identical features"
+// for caching purposes — completeness is a provenance fact the DB layer
+// tracks in its own column, not a fact about the features themselves).
 type Features struct {
 	ContextFillFraction        float64 `json:"context_fill_fraction"`
 	TokensInSpan               int     `json:"tokens_in_span"`
@@ -112,7 +129,11 @@ type Features struct {
 	ToolResultTokenFraction    float64 `json:"tool_result_token_fraction"`
 	ModelContextLimit          int     `json:"model_context_limit"`
 	HistoricalCompressionRatio float64 `json:"historical_compression_ratio"`
+	FeaturesIncomplete         bool    `json:"-"`
 }
+
+// FeaturesComplete implements advice.FeaturesCompleteness.
+func (f Features) FeaturesComplete() bool { return !f.FeaturesIncomplete }
 
 // Extract implements advice.FeatureExtractor.
 func Extract(input any) (advice.Features, error) {
@@ -127,6 +148,7 @@ func Extract(input any) (advice.Features, error) {
 		ToolResultTokenFraction:    snap.ToolResultTokenFraction,
 		ModelContextLimit:          snap.ModelContextLimit,
 		HistoricalCompressionRatio: snap.HistoricalCompressionRatio,
+		FeaturesIncomplete:         snap.FeaturesIncomplete,
 	}, nil
 }
 

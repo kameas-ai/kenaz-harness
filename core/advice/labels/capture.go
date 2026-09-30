@@ -101,19 +101,20 @@ func (c *CaptureAdvisor) Recommend(ctx context.Context, kind advice.AdviceKind, 
 		return rec, nil
 	}
 	row := Row{
-		KindID:        kind.ID,
-		PromptVersion: rec.PromptVersion,
-		FeaturesHash:  mustHash(features),
-		FeaturesJSON:  featuresJSON,
-		ModelID:       rec.Model,
-		Rung:          string(rec.Rung),
-		Decision:      rec.Decision,
-		Confidence:    rec.Confidence,
-		Shown:         advice.ShouldShowChip(rec),
-		UserAction:    ActionIgnored,
-		LatencyMS:     latencyMS,
-		SessionID:     sess.SessionID,
-		CreatedAt:     c.now(),
+		KindID:           kind.ID,
+		PromptVersion:    rec.PromptVersion,
+		FeaturesHash:     mustHash(features),
+		FeaturesJSON:     featuresJSON,
+		FeaturesComplete: featuresComplete(features),
+		ModelID:          rec.Model,
+		Rung:             string(rec.Rung),
+		Decision:         rec.Decision,
+		Confidence:       rec.Confidence,
+		Shown:            advice.ShouldShowChip(rec),
+		UserAction:       ActionIgnored,
+		LatencyMS:        latencyMS,
+		SessionID:        sess.SessionID,
+		CreatedAt:        c.now(),
 	}
 	_ = c.store.Insert(ctx, row)
 	return rec, nil
@@ -174,4 +175,19 @@ func mustHash(features advice.Features) string {
 		return ""
 	}
 	return h
+}
+
+// featuresComplete is the placeholder-row discriminator's bridge-side
+// half (review promotion, laya-advisors-01LAYA001 WP07/WP08 review
+// round, 2026-09-29): a type assertion against the kind-owned
+// advice.FeaturesCompleteness interface, never a hardcoded kind id. A
+// Features value that does not implement the interface (branch_now
+// today — its decision-bearing fields are all real data) is treated as
+// complete, matching the DB column's own DEFAULT 1.
+func featuresComplete(features advice.Features) bool {
+	fc, ok := features.(advice.FeaturesCompleteness)
+	if !ok {
+		return true
+	}
+	return fc.FeaturesComplete()
 }

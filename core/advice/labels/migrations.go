@@ -61,22 +61,48 @@ const migrationIDAdviceLabelsInit = "laya-advisors/1600-advice-labels"
 //   - session_id is the LOCAL session id (spec §4: "never exported
 //     as-is" — this package never exports anything; the field is local
 //     by construction in v1).
+//   - features_complete (review promotion, laya-advisors-01LAYA001 WP07/
+//     WP08 review round, 2026-09-29): the placeholder-row discriminator.
+//     Without this, a compact_now/escalate_model row built from
+//     advice_hook.go's documented zero-value placeholder Snapshot (no
+//     ChatRunner-visible accessor for real token-span/tool-failure data
+//     exists yet) is byte-for-byte indistinguishable from a row where the
+//     model genuinely saw no signal — training on the two as if they were
+//     the same thing would teach a future fine-tune that "no data wired"
+//     means "nothing happening." DEFAULT 1 (true, complete) is the safe
+//     default for every kind that does not opt into reporting
+//     incompleteness (branch_now's decision-bearing fields are all real
+//     data, so it never sets this false). Set by CaptureAdvisor.Recommend
+//     (capture.go) via a type assertion against the kind-owned
+//     advice.FeaturesCompleteness interface — the bridge never
+//     hardcodes a kind id to decide this; each kind's own Features type
+//     (compactnow.Features, escalatemodel.Features) is the "justify
+//     site" that knows whether ITS OWN Snapshot input was placeholder
+//     data, via a FeaturesIncomplete field advice_hook.go sets when
+//     building that kind's Snapshot.
+//
+//     This migration has not shipped in any release yet (WP08 landed on
+//     an unreleased branch), so the column is added in place — amending
+//     sqlAdviceLabelsInit directly, not a second migration — per the
+//     migration-immutability rule's own precondition ("once applied
+//     anywhere"), which does not yet hold here.
 const sqlAdviceLabelsInit = `
 	CREATE TABLE IF NOT EXISTS advice_labels (
-	  id             INTEGER PRIMARY KEY AUTOINCREMENT,
-	  kind           TEXT NOT NULL,
-	  prompt_version TEXT NOT NULL,
-	  features_hash  TEXT NOT NULL,
-	  features_json  TEXT NOT NULL DEFAULT '{}',
-	  model_id       TEXT NOT NULL,
-	  rung           TEXT NOT NULL,
-	  decision       INTEGER NOT NULL,
-	  confidence     INTEGER NOT NULL,
-	  shown          INTEGER NOT NULL,
-	  user_action    TEXT NOT NULL DEFAULT 'ignored',
-	  latency_ms     INTEGER NOT NULL DEFAULT 0,
-	  session_id     TEXT NOT NULL,
-	  created_at     INTEGER NOT NULL
+	  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+	  kind               TEXT NOT NULL,
+	  prompt_version     TEXT NOT NULL,
+	  features_hash      TEXT NOT NULL,
+	  features_json      TEXT NOT NULL DEFAULT '{}',
+	  features_complete  INTEGER NOT NULL DEFAULT 1,
+	  model_id           TEXT NOT NULL,
+	  rung               TEXT NOT NULL,
+	  decision           INTEGER NOT NULL,
+	  confidence         INTEGER NOT NULL,
+	  shown              INTEGER NOT NULL,
+	  user_action        TEXT NOT NULL DEFAULT 'ignored',
+	  latency_ms         INTEGER NOT NULL DEFAULT 0,
+	  session_id         TEXT NOT NULL,
+	  created_at         INTEGER NOT NULL
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_advice_labels_session_kind_hash

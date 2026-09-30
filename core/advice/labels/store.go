@@ -51,11 +51,25 @@ type Row struct {
 	// false for every below-threshold or decision=false recommendation —
 	// captured anyway, per spec: "the filter shapes UX, not the training
 	// corpus."
-	Shown      bool
-	UserAction UserAction
-	LatencyMS  int64
-	SessionID  string
-	CreatedAt  time.Time
+	Shown bool
+	// FeaturesComplete is the placeholder-row discriminator (review
+	// promotion, laya-advisors-01LAYA001 WP07/WP08 review round,
+	// 2026-09-29): true unless the kind that produced Features reported
+	// (via advice.FeaturesCompleteness) that it was extracted from
+	// placeholder/zero-value data rather than a real wired source. A
+	// caller that constructs a Row directly (rather than through
+	// CaptureAdvisor.Recommend, which always sets this field explicitly)
+	// MUST set it too — Store deliberately does not default an unset bool
+	// here the way it defaults UserAction/CreatedAt below, because "did
+	// the caller forget to set this" and "the caller explicitly means
+	// false" are indistinguishable for a bool, and silently defaulting to
+	// the SAFE value (true) would hide exactly the bug this field exists
+	// to catch.
+	FeaturesComplete bool
+	UserAction       UserAction
+	LatencyMS        int64
+	SessionID        string
+	CreatedAt        time.Time
 }
 
 // ErrCaptureDisabled is returned by Store methods that choose to no-op
@@ -124,11 +138,11 @@ func (s *SQLStore) Insert(ctx context.Context, row Row) error {
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO advice_labels
-		    (kind, prompt_version, features_hash, features_json, model_id, rung,
+		    (kind, prompt_version, features_hash, features_json, features_complete, model_id, rung,
 		     decision, confidence, shown, user_action, latency_ms, session_id, created_at)
 		VALUES
-		    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		row.KindID, row.PromptVersion, row.FeaturesHash, featuresJSON, row.ModelID, row.Rung,
+		    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.KindID, row.PromptVersion, row.FeaturesHash, featuresJSON, boolToInt(row.FeaturesComplete), row.ModelID, row.Rung,
 		boolToInt(row.Decision), row.Confidence, boolToInt(row.Shown), string(action),
 		row.LatencyMS, row.SessionID, createdAt.UnixMilli(),
 	)

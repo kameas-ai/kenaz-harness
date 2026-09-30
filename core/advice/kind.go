@@ -55,6 +55,34 @@ func (c SafetyClass) Valid() bool {
 // RenderPrompt a stable, typed shape to render from.
 type Features any
 
+// FeaturesCompleteness is an OPTIONAL interface a kind's Features value
+// may implement to report whether its own extraction used placeholder
+// data rather than a real, wired data source (review promotion,
+// laya-advisors-01LAYA001 WP07/WP08 review round, 2026-09-29: "a
+// placeholder row built from zero-value features is indistinguishable
+// from a genuine no-signal row, which would poison a future fine-tune").
+//
+// The KIND decides this, never the label-capture bridge: a bridge that
+// hardcoded "compact_now and escalate_model are always incomplete" would
+// silently keep lying the day a real accessor lands for one of them but
+// not the other, or the day a fifth kind ships with the same gap. Instead
+// each kind's own Features type carries whatever field it needs to know
+// the answer (see compactnow.Features.FeaturesIncomplete /
+// escalatemodel.Features.FeaturesIncomplete for the two kinds that need
+// it today) and implements this interface over that field. A Features
+// value that does NOT implement FeaturesCompleteness is treated as
+// complete — the safe default matching the DB column's own
+// DEFAULT 1 (core/advice/labels/migrations.go): branch_now's
+// decision-bearing fields are all real data today, so it has no reason
+// to implement this at all.
+type FeaturesCompleteness interface {
+	// FeaturesComplete reports true when every field this kind's
+	// heuristic/model actually consumes came from a real, wired data
+	// source — false when one or more were filled with placeholder/
+	// zero-value data because no accessor exists yet.
+	FeaturesComplete() bool
+}
+
 // FeatureExtractor is a kind's typed feature-extraction contract. input
 // is whatever session-state snapshot the KIND's OWN package defines and
 // passes in — this package does not know or constrain its concrete

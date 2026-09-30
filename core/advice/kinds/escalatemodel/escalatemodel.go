@@ -84,13 +84,25 @@ type Snapshot struct {
 	// BudgetRemainingFraction is the fraction (0-1) of the run's
 	// tool-call/token budget still remaining.
 	BudgetRemainingFraction float64
+	// FeaturesIncomplete, when true, tells Extract that the caller built
+	// this Snapshot from placeholder/zero-value data because no
+	// ChatRunner-visible tool-failure/doom-loop accessor is wired yet
+	// (see core/rpc/views/agentgraph/chat/advice_hook.go's fireAdvice —
+	// its own comment names the exact blocker). See
+	// advice.FeaturesCompleteness's doc comment and compactnow.Snapshot's
+	// identical field for the full reasoning: the kind package is the
+	// "justify site" that knows whether its own Snapshot is real, not the
+	// label-capture bridge.
+	FeaturesIncomplete bool
 }
 
 // Features is escalate_model's model/label-facing feature vector —
 // design §4's harness-kinds table. Field order is declaration order (see
 // branchnow.Features' identical note on advice.FeaturesHash). Go's
 // encoding/json sorts map keys, so ErrorKindCounts hashes deterministically
-// despite being a map rather than a struct.
+// despite being a map rather than a struct. FeaturesIncomplete is
+// `json:"-"` — see compactnow.Features' identical field for why
+// completeness is excluded from the model-facing vector / cache key.
 type Features struct {
 	ConsecutiveToolFailures int            `json:"consecutive_tool_failures"`
 	RetriesInWindow         int            `json:"retries_in_window"`
@@ -99,7 +111,11 @@ type Features struct {
 	CurrentRung             string         `json:"current_rung"`
 	ErrorKindCounts         map[string]int `json:"error_kind_counts,omitempty"`
 	BudgetRemainingFraction float64        `json:"budget_remaining_fraction"`
+	FeaturesIncomplete      bool           `json:"-"`
 }
+
+// FeaturesComplete implements advice.FeaturesCompleteness.
+func (f Features) FeaturesComplete() bool { return !f.FeaturesIncomplete }
 
 // Extract implements advice.FeatureExtractor.
 func Extract(input any) (advice.Features, error) {
@@ -126,6 +142,7 @@ func Extract(input any) (advice.Features, error) {
 		CurrentRung:             snap.CurrentRung,
 		ErrorKindCounts:         errCounts,
 		BudgetRemainingFraction: snap.BudgetRemainingFraction,
+		FeaturesIncomplete:      snap.FeaturesIncomplete,
 	}, nil
 }
 

@@ -911,19 +911,20 @@ func assertAdviceLabelsTableMigrated(t *testing.T, ctx context.Context, db stora
 	}
 	store := advicelabels.NewSQLStore(rawDB)
 	probe := advicelabels.Row{
-		KindID:        "branch_now",
-		PromptVersion: "v1",
-		FeaturesHash:  "upgrade-path-probe-hash",
-		FeaturesJSON:  `{"probe":true}`,
-		ModelID:       "heuristic/branch-regex-v1",
-		Rung:          "heuristic",
-		Decision:      true,
-		Confidence:    80,
-		Shown:         true,
-		UserAction:    advicelabels.ActionIgnored,
-		LatencyMS:     1,
-		SessionID:     "upgrade-path-advice-probe",
-		CreatedAt:     fixedProbeTime,
+		KindID:           "branch_now",
+		PromptVersion:    "v1",
+		FeaturesHash:     "upgrade-path-probe-hash",
+		FeaturesJSON:     `{"probe":true}`,
+		FeaturesComplete: true,
+		ModelID:          "heuristic/branch-regex-v1",
+		Rung:             "heuristic",
+		Decision:         true,
+		Confidence:       80,
+		Shown:            true,
+		UserAction:       advicelabels.ActionIgnored,
+		LatencyMS:        1,
+		SessionID:        "upgrade-path-advice-probe",
+		CreatedAt:        fixedProbeTime,
 	}
 	if err := store.Insert(ctx, probe); err != nil {
 		t.Fatalf("advice_labels store insert after Open on an upgraded install failed: %v — "+
@@ -934,6 +935,19 @@ func assertAdviceLabelsTableMigrated(t *testing.T, ctx context.Context, db stora
 	}
 	if n != 1 {
 		t.Errorf("advice_labels row count for the probe session = %d, want 1", n)
+	}
+
+	// Placeholder-row discriminator (review promotion, laya-advisors-
+	// 01LAYA001 WP07/WP08 review round, 2026-09-29): features_complete
+	// exists on THIS upgraded install and both polarities are queryable
+	// — not just the column's bare presence via a schema query, but an
+	// actual value written by the production writer.
+	var gotComplete int
+	if err := r.QueryRow(ctx, "SELECT features_complete FROM advice_labels WHERE session_id = ?", probe.SessionID).Scan(&gotComplete); err != nil {
+		t.Fatalf("advice_labels.features_complete not queryable after Open: %v", err)
+	}
+	if gotComplete != 1 {
+		t.Errorf("features_complete for the probe row = %d, want 1 (Row.FeaturesComplete=true)", gotComplete)
 	}
 }
 
