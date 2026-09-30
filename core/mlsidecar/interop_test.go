@@ -215,11 +215,12 @@ func TestLabelPush_503IsTransient_NotPaused(t *testing.T) {
 	}
 }
 
-// TestLabelPush_PoisonRow_AcksThePrefix_ThenPauses: the engine acks the
-// leading run before a refused row, answers acked:null when the refused
-// row leads the batch — the pusher advances to the real ack, then parks
-// the kind instead of re-sending the poison row on every write.
-func TestLabelPush_PoisonRow_AcksThePrefix_ThenPauses(t *testing.T) {
+// TestLabelPush_PermanentRowRefusal_AckedPast_LoggedNotAnError is design
+// Amendment A4: the engine acks PAST a permanently-refused middle row and
+// reports it in refusals. The pusher advances to the ack (the last row),
+// counts the refusal, returns no error and does not pause — one bad row
+// no longer wedges the kind's lane.
+func TestLabelPush_PermanentRowRefusal_AckedPast_LoggedNotAnError(t *testing.T) {
 	stub := newStubSidecar()
 	defer stub.Close()
 	h := openPushHarness(t, t.TempDir())
@@ -231,12 +232,49 @@ func TestLabelPush_PoisonRow_AcksThePrefix_ThenPauses(t *testing.T) {
 	rows, _ := h.store.PendingSince(ctx, "branch_now", 0, 10)
 	stub.setLabelsRefuseRevision(rows[1].Revision, "features_invalid")
 	p := newPusher(stub, h.store, true)
-	if _, err := p.PushOnce(ctx); err == nil {
-		t.Fatal("a poison row returned no error")
+	res, err := p.PushOnce(ctx)
+	if err != nil {
+		t.Fatalf("a permanent per-row refusal surfaced as an error: %v", err)
+	}
+	if res.Pushed != 2 || res.RowsRefused != 1 {
+		t.Fatalf("PushOnce = %+v, want 2 pushed + 1 refused", res)
 	}
 	cur, _ := h.store.LoadCursor(ctx, "sidecar", "branch_now")
-	if cur.Revision != rows[0].Revision {
-		t.Fatalf("cursor = %+v, want the acked prefix (revision %d)", cur, rows[0].Revision)
+	if cur.Revision != rows[2].Revision {
+		t.Fatalf("cursor = %+v, want past the refused row to revision %d", cur, rows[2].Revision)
+	}
+	if len(p.LaneStatus()) != 0 {
+		t.Fatalf("a permanent row refusal paused the lane: %+v", p.LaneStatus())
+	}
+	posts := stub.labelPostCount()
+	if res, err := p.PushOnce(ctx); err != nil || res.Batches != 0 {
+		t.Fatalf("second PushOnce = %+v, %v; want nothing left to send", res, err)
+	}
+	if stub.labelPostCount() != posts {
+		t.Fatal("the refused row was re-sent")
+	}
+}
+
+// TestLabelPush_PreA4NullAck_PausesInsteadOfHotRetry is the defensive
+// path: an older engine that answers acked:null when a refused row leads
+// the batch. The pusher advances to the real ack of the prefix, then
+// parks the kind rather than re-sending the poison row on every write.
+func TestLabelPush_PreA4NullAck_PausesInsteadOfHotRetry(t *testing.T) {
+	stub := newStubSidecar()
+	defer stub.Close()
+	h := openPushHarness(t, t.TempDir())
+	defer h.close(t)
+	ctx := context.Background()
+	h.insert(t, "branch_now", "h1", 1000)
+	rows, _ := h.store.PendingSince(ctx, "branch_now", 0, 10)
+	stub.setLabelsNullAck(true)
+	stub.setLabelsRefuseRevision(rows[0].Revision, "features_invalid")
+	p := newPusher(stub, h.store, true)
+	if _, err := p.PushOnce(ctx); err == nil {
+		t.Fatal("a null ack returned no error")
+	}
+	if cur, _ := h.store.LoadCursor(ctx, "sidecar", "branch_now"); (cur != labels.PushCursor{}) {
+		t.Fatalf("cursor moved on a null ack: %+v", cur)
 	}
 	if r := p.LaneStatus()["branch_now"].Reason; r != PauseRowsRefused {
 		t.Fatalf("pause reason = %q, want %q", r, PauseRowsRefused)

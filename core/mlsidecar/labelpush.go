@@ -108,9 +108,12 @@ const (
 	// PauseUnknownKind: the engine answered 404 — it has no contract for
 	// this kind at all.
 	PauseUnknownKind = "unknown_kind"
-	// PauseRowsRefused: the engine acked nothing because the batch's
-	// first pending row was refused (a poison row). Re-sending it on
-	// every label write would be a hot retry of a deterministic refusal.
+	// PauseRowsRefused: DEFENSIVE, pre-Amendment-A4 engines only — the
+	// engine acked nothing because the batch's first pending row was
+	// refused (a poison row), so re-sending it on every label write would
+	// be a hot retry of a deterministic refusal. An A4 engine acks past
+	// every permanently-refused row (logged, see logRowRefusals), so it
+	// never produces this pause.
 	PauseRowsRefused = "rows_refused"
 )
 
@@ -211,6 +214,12 @@ type PushResult struct {
 	// Paused lists kinds skipped this call because they are parked (see
 	// LanePause) — no HTTP was sent for them.
 	Paused []string
+	// RowsRefused counts rows the engine PERMANENTLY refused this call
+	// (design Amendment A4: client/kind mismatch, unknown user_action,
+	// invalid features, row too large). The engine acks past them and the
+	// cursor moves on — each is logged (mlsidecar.labelpush.row_refused);
+	// their presence is not an error.
+	RowsRefused int
 }
 
 // PushOnce drains every kind's pending rows to the engine. It returns the
@@ -253,12 +262,13 @@ func (p *LabelPusher) PushOnce(ctx context.Context) (PushResult, error) {
 			res.Paused = append(res.Paused, kind)
 			continue
 		}
-		n, batches, kerr := p.pushKind(ctx, kind)
+		n, batches, refused, kerr := p.pushKind(ctx, kind)
 		if kerr == nil {
 			p.clearPause(kind)
 		}
 		res.Pushed += n
 		res.Batches += batches
+		res.RowsRefused += refused
 		if kerr != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("mlsidecar: push labels for kind %q: %w", kind, kerr)
@@ -272,25 +282,25 @@ func (p *LabelPusher) PushOnce(ctx context.Context) (PushResult, error) {
 	return res, firstErr
 }
 
-func (p *LabelPusher) pushKind(ctx context.Context, kind string) (pushed, batches int, err error) {
+func (p *LabelPusher) pushKind(ctx context.Context, kind string) (pushed, batches, refused int, err error) {
 	batchSize := p.BatchSize
 	if batchSize <= 0 {
 		batchSize = defaultLabelPushBatch
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			return pushed, batches, err
+			return pushed, batches, refused, err
 		}
 		cur, err := p.Source.LoadCursor(ctx, labelPushSink, kind)
 		if err != nil {
-			return pushed, batches, err
+			return pushed, batches, refused, err
 		}
 		rows, err := p.Source.PendingSince(ctx, kind, cur.Revision, batchSize)
 		if err != nil {
-			return pushed, batches, err
+			return pushed, batches, refused, err
 		}
 		if len(rows) == 0 {
-			return pushed, batches, nil
+			return pushed, batches, refused, nil
 		}
 		wire := make([]LabelWireRow, 0, len(rows))
 		for _, r := range rows {
@@ -311,12 +321,16 @@ func (p *LabelPusher) pushKind(ctx context.Context, kind string) (pushed, batche
 					reason = PauseUnknownKind
 				}
 				p.pause(kind, reason, se.Code, err.Error())
-				return pushed, batches, fmt.Errorf("%w (%s): %v", errLanePaused, reason, err)
+				return pushed, batches, refused, fmt.Errorf("%w (%s): %v", errLanePaused, reason, err)
 			}
-			return pushed, batches, err
+			return pushed, batches, refused, err
 		}
 		batches++
+		logRowRefusals(kind, resp.Refusals)
 		if resp.Acked.Revision == 0 && resp.Refused > 0 {
+			// Defensive: a pre-A4 engine answered acked:null when the
+			// batch's FIRST row was refused (an A4 engine acks past every
+			// permanent refusal, so this never fires against it).
 			// The first pending row was refused, so nothing is acked and
 			// the next attempt would send the very same row first again.
 			detail := fmt.Sprintf("%d row(s) refused", resp.Refused)
@@ -325,26 +339,47 @@ func (p *LabelPusher) pushKind(ctx context.Context, kind string) (pushed, batche
 				detail = fmt.Sprintf("%s; first: revision %d (%s)", detail, r0.Revision, r0.Reason)
 			}
 			p.pause(kind, PauseRowsRefused, "", detail)
-			return pushed, batches, fmt.Errorf("%w (%s): %s", errLanePaused, PauseRowsRefused, detail)
+			return pushed, batches, refused, fmt.Errorf("%w (%s): %s", errLanePaused, PauseRowsRefused, detail)
 		}
 		// The cursor advances ONLY to what the engine acknowledged, and
 		// never backwards, and never past the batch we actually sent (a
 		// bogus ack must not skip unsent rows).
 		last := rows[len(rows)-1].Revision
 		if resp.Acked.Revision <= cur.Revision || resp.Acked.Revision > last {
-			return pushed, batches, fmt.Errorf("engine ack revision %d outside the pushed window (%d, %d]", resp.Acked.Revision, cur.Revision, last)
+			return pushed, batches, refused, fmt.Errorf("engine ack revision %d outside the pushed window (%d, %d]", resp.Acked.Revision, cur.Revision, last)
 		}
 		if err := p.Source.SaveCursor(ctx, labelPushSink, kind, labels.PushCursor{TS: resp.Acked.TS, Revision: resp.Acked.Revision}); err != nil {
-			return pushed, batches, err
+			return pushed, batches, refused, err
+		}
+		refusedRev := make(map[int64]bool, len(resp.Refusals))
+		for _, rf := range resp.Refusals {
+			refusedRev[rf.Revision] = true
 		}
 		for _, r := range rows {
-			if r.Revision <= resp.Acked.Revision {
-				pushed++
+			if r.Revision > resp.Acked.Revision {
+				continue
 			}
+			if refusedRev[r.Revision] {
+				refused++
+				continue
+			}
+			pushed++
 		}
 		if resp.Acked.Revision >= last && len(rows) < batchSize {
-			return pushed, batches, nil
+			return pushed, batches, refused, nil
 		}
+	}
+}
+
+// logRowRefusals logs each PERMANENTLY refused row distinctly (design
+// Amendment A4): the engine has already acked past it, so it will never be
+// re-sent — this line is the only trace the harness keeps that the engine
+// holds no copy of that label.
+func logRowRefusals(kind string, refusals []LabelRowRefusal) {
+	for _, rf := range refusals {
+		logging.L().Warn("mlsidecar.labelpush.row_refused",
+			"kind", kind, "features_hash", rf.FeaturesHash, "ts", rf.TS,
+			"revision", rf.Revision, "reason", rf.Reason)
 	}
 }
 

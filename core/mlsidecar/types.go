@@ -143,13 +143,16 @@ type HealthPayload struct {
 	LifecycleProtocol int                    `json:"lifecycle_protocol"`
 }
 
-// StatusPayload mirrors GET /status — a superset of /health. Design
-// §3.7 R4: "/status carries lifecycle_protocol" is satisfied by
-// embedding HealthPayload rather than duplicating the field.
-type StatusPayload struct {
-	HealthPayload
-	UptimeSeconds float64 `json:"uptime_s"`
-}
+// There is deliberately no StatusPayload. The engine's GET /status is the
+// workbench poller readout ({mode, cursor, latest_predictions,
+// poller_running}) and carries NONE of /health's identity fields —
+// design §3.7 R4's "/status carries lifecycle_protocol" does not hold
+// against the real engine (design Amendment A4). The previous
+// StatusPayload embedded HealthPayload, so decoding the real /status
+// into it yielded a zero-valued identity (LifecycleProtocol==0,
+// ExePath=="") with no error. It had no caller and was deleted in the
+// 2026-09-30 interop review. Identity, adoption (F2) and the skew-window
+// check read /health ONLY (Client.Health).
 
 // KindContract is one entry of ContractsPayload.Kinds (design §3.3: "The
 // sidecar publishes each kind's ordered feature contract at

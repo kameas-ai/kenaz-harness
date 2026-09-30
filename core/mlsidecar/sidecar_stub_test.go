@@ -54,7 +54,8 @@ type stubSidecar struct {
 	labelsFailStatus int              // non-2xx simulates an engine error (409/404 carry the refusal envelope)
 	labelsAckLimit   int              // >0: apply/ack only the first N rows of a batch
 	labelsBogusAck   *LabelAck        // non-nil: respond with this ack regardless
-	labelsRefuseRev  map[int64]string // revision -> per-row refusal reason (a poison row)
+	labelsRefuseRev  map[int64]string // revision -> PERMANENT per-row refusal reason (A4: acked past)
+	labelsNullAck    bool             // emulate a pre-A4 engine that acks nothing past a leading refused row
 
 	srv *httptest.Server
 }
@@ -122,12 +123,11 @@ func (s *stubSidecar) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(h)
 }
 
+// handleStatus mirrors the engine's /status: the workbench poller
+// readout, with NO identity fields (design Amendment A4).
 func (s *stubSidecar) handleStatus(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	h := s.health
-	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(StatusPayload{HealthPayload: h, UptimeSeconds: 12.5})
+	_ = json.NewEncoder(w).Encode(map[string]any{"mode": "local", "cursor": nil, "latest_predictions": []any{}, "poller_running": false})
 }
 
 func (s *stubSidecar) setContracts(c ContractsPayload) {
@@ -320,11 +320,13 @@ type labelWireResponse struct {
 }
 
 // handleLabels implements POST /v1/labels/{kind} the way the engine's
-// label_log.ingest does: rows are processed IN THE ORDER SENT; each is
-// applied (new key), replaced (higher revision) or stale; a refused row
-// (labelsRefuseRev) is reported in refusals and closes the acked prefix —
-// acked is the (ts, revision) of the last row of the LEADING run that was
-// not refused, or null when the first row is refused. labelsFailStatus
+// label_log.ingest does (design Amendments A3.3 + A4): rows are processed
+// IN THE ORDER SENT; each is applied (new key), replaced (higher
+// revision), stale, or — per labelsRefuseRev — PERMANENTLY refused. A
+// per-row refusal can never be fixed by a re-send, so the ack advances
+// past it and it is reported in refusals: acked is the (ts, revision) of
+// the LAST row of the batch. (labelsNullAck emulates a pre-A4 engine that
+// answered acked:null when a refused row led the batch.) labelsFailStatus
 // simulates a whole-batch refusal (409 contract/names mismatch, 404
 // unknown kind — both with the refusal envelope) or an I/O error (503).
 // Every request is recorded (labelPosts) for call-count proofs.
@@ -363,12 +365,15 @@ func (s *stubSidecar) handleLabels(w http.ResponseWriter, r *http.Request) {
 	if limit > 0 && len(rows) > limit {
 		rows = rows[:limit]
 	}
-	prefixOpen := true
+	nullAck := s.labelsNullAck
 	for i, row := range rows {
 		if reason, bad := refuse[row.Revision]; bad {
 			resp.Refused++
 			resp.Refusals = append(resp.Refusals, LabelRowRefusal{Index: i, FeaturesHash: row.FeaturesHash, TS: row.TS, Revision: row.Revision, Reason: reason})
-			prefixOpen = false
+			if nullAck && resp.Acked == nil {
+				break
+			}
+			resp.Acked = &LabelAck{TS: row.TS, Revision: row.Revision}
 			continue
 		}
 		k := labelKey(req.Client, row)
@@ -383,9 +388,7 @@ func (s *stubSidecar) handleLabels(w http.ResponseWriter, r *http.Request) {
 		default:
 			resp.Stale++
 		}
-		if prefixOpen {
-			resp.Acked = &LabelAck{TS: row.TS, Revision: row.Revision}
-		}
+		resp.Acked = &LabelAck{TS: row.TS, Revision: row.Revision}
 	}
 	if badAck != nil {
 		a := *badAck
@@ -396,8 +399,16 @@ func (s *stubSidecar) handleLabels(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// setLabelsRefuseRevision makes the stub refuse the row with revision rev
-// (a per-row refusal, e.g. "features_invalid") on every push.
+// setLabelsNullAck makes the stub behave like a pre-A4 engine: a batch
+// whose first row is refused answers acked:null.
+func (s *stubSidecar) setLabelsNullAck(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.labelsNullAck = on
+}
+
+// setLabelsRefuseRevision makes the stub PERMANENTLY refuse the row with
+// revision rev (a per-row refusal, e.g. "features_invalid") on every push.
 func (s *stubSidecar) setLabelsRefuseRevision(rev int64, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

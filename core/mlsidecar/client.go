@@ -154,20 +154,14 @@ func (c *Client) postJSON(ctx context.Context, path string, in, out any, headers
 	return resp.StatusCode, nil
 }
 
-// Health calls GET /health.
+// Health calls GET /health — the ONLY endpoint that carries the engine's
+// identity (product, sidecar_version, exe_path, engine_sha256,
+// lifecycle_protocol). Adoption (F2) and the skew-window check must read
+// it from here; /status carries none of it (see types.go).
 func (c *Client) Health(ctx context.Context) (HealthPayload, error) {
 	var out HealthPayload
 	if _, err := c.get(ctx, "/health", &out); err != nil {
 		return HealthPayload{}, err
-	}
-	return out, nil
-}
-
-// Status calls GET /status.
-func (c *Client) Status(ctx context.Context) (StatusPayload, error) {
-	var out StatusPayload
-	if _, err := c.get(ctx, "/status", &out); err != nil {
-		return StatusPayload{}, err
 	}
 	return out, nil
 }
