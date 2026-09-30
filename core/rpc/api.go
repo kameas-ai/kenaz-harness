@@ -30,6 +30,7 @@ import (
 	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
 	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
 	"github.com/kameas-ai/kenaz-harness/core/advice"
+	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
 	// Imported for both their init()-time advice.MustRegister call
 	// (laya-advisors-01LAYA001 WP04-06: each package registers exactly
 	// one AdviceKind) AND their exported Heuristic function, which
@@ -130,6 +131,7 @@ import (
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
 	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
 	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
+	sidecarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sidecar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/shell"
@@ -356,6 +358,11 @@ type HarnessAPI interface {
 	// sentry-error-monitoring-01KX5R8G WP05). Provides GetLastFive,
 	// GenerateLocalReport, and TestDSN for the Settings → Privacy panel.
 	Sentry() sentryview.SentryAPI
+
+	// Sidecar exposes the local ML engine install/status/uninstall/update
+	// RPC surface (laya-advisors-01LAYA001 WP13, spec §2c) for the
+	// Settings → Recommendations panel.
+	Sidecar() sidecarview.SidecarAPI
 
 	// Fleet exposes the fleet telemetry consent RPC surface (mission
 	// fleet-otel-archival-01NDFSEX11 WP07). Provides GetTelemetryConsent
@@ -869,6 +876,15 @@ type API struct {
 	// sentryAPI is the crash-reporting RPC surface (sentry-error-monitoring-
 	// 01KX5R8G WP05). Provides GetLastFive, GenerateLocalReport, TestDSN.
 	sentryAPI sentryview.SentryAPI
+
+	// sidecarAPI is the local ML engine RPC surface (laya-advisors-
+	// 01LAYA001 WP13); sidecarMgr is the process's single
+	// *mlsidecar.Manager behind it and sidecarProbe the demand-driven
+	// advisor-facing probe over that Manager (copied from newLLMStack's
+	// stack, below). All nil on the nil-core chassis.
+	sidecarAPI   sidecarview.SidecarAPI
+	sidecarMgr   *mlsidecar.Manager
+	sidecarProbe advice.SidecarProbe
 
 	// fleetAPI is the fleet telemetry consent RPC surface
 	// (fleet-otel-archival-01NDFSEX11 WP07).
@@ -1411,6 +1427,17 @@ func (a *API) Shutdown() {
 	}
 	if a.chatCronEngine != nil {
 		a.chatCronEngine.Stop()
+	}
+	// laya-advisors-01LAYA001 WP13: a clean stop on app exit means "stop
+	// pinning the shared engine alive" — cancel + drain any in-flight
+	// demand-driven Ensure, then release this client's lease (the engine's own 120s
+	// zero-lease self-termination does the rest; the harness never kills
+	// an engine another client may still be using). Nil-safe, idempotent.
+	if d, ok := a.sidecarProbe.(*mlsidecar.DemandProbe); ok {
+		d.Close()
+	}
+	if a.sidecarMgr != nil {
+		_ = a.sidecarMgr.Shutdown(context.Background())
 	}
 	// Flush any active eval captures so partial files get a KindCaptureStop
 	// record even on clean shutdown.
@@ -2480,6 +2507,11 @@ func New(c *core.Core, opts ...Option) *API {
 	// needs both to drive a chip's accept/dismiss click.
 	a.chatAdvisor = stack.chatAdvisor
 	a.adviceDeps = stack.adviceDeps
+	// laya-advisors-01LAYA001 WP13: the real sidecar Manager + its
+	// demand-driven probe, and the Settings RPC surface over them.
+	a.sidecarMgr = stack.sidecarMgr
+	a.sidecarProbe = stack.sidecarProbe
+	a.sidecarAPI = &sidecarview.Impl{Manager: stack.sidecarMgr, Release: mlsidecar.PinnedEngineRelease}
 	// model-settings-reach-the-model-01PMZ101 WP07: same pattern as the
 	// compaction pair above, for the chat runner's auto-title caller.
 	a.autotitleLLM = stack.autotitleLLM
@@ -3035,6 +3067,10 @@ func New(c *core.Core, opts ...Option) *API {
 	}
 	bundleOpts = append(bundleOpts, bundle.WithChannelRegistry(channelRegistry))
 	a.bundleAPI = bundle.NewAPI(bundleOpts...)
+	// laya-advisors-01LAYA001 WP13: the ML engine's explicit install path
+	// reuses this exact channel registry and the trust engine's anchors
+	// (SigningRequired) — one verifier, not a second.
+	attachSidecarInstallDeps(a.sidecarMgr, channelRegistry, a.trustEngine)
 
 	// Corpora subsystem (mission agent-kernel-graph; Bundle C). Wired
 	// only when the chassis has a real DataDir + storage; otherwise the
@@ -5629,6 +5665,11 @@ type llmStack struct {
 	// manual chip-accept and an autonomous auto-act create a branch
 	// through the exact same call, never a second implementation.
 	adviceDeps *chat.AdviceDeps
+	// sidecarMgr / sidecarProbe: laya-advisors-01LAYA001 WP13 — the
+	// process's single *mlsidecar.Manager and its demand-driven advisor
+	// probe (newSidecarStack). Copied onto the API struct in New().
+	sidecarMgr   *mlsidecar.Manager
+	sidecarProbe advice.SidecarProbe
 }
 
 func newLLMStack(
@@ -6229,18 +6270,34 @@ func newLLMStack(
 	// switch is a real branch, and its outcome is a real, observable slog
 	// line ("advice.model_resolve") distinct per rung.
 	var chatAdvisor advice.Advisor
+	// Hoisted out of the block below so the llmStack literal at the end of
+	// newLLMStack can carry them (laya-advisors-01LAYA001 WP13).
+	var stackSidecarMgr *mlsidecar.Manager
+	var stackSidecarProbe advice.SidecarProbe
 	if reg != nil {
 		capturedAdvisorStore := store
-		// sidecarProbe: laya-advisors-01LAYA001 WP12 ships the sidecar
-		// lifecycle manager (core/mlsidecar.Manager, satisfying
-		// advice.SidecarProbe) but a real, running Manager needs the
-		// Settings-surface + install-root decisions a later WP owns (the
-		// WP12 brief scopes this change to "no UI work"). nil here means
-		// rung 2 (RungLocalLaya) is fully wired and reachable in the
-		// ladder's logic — unlike rung 3, which stays behind the literal
-		// `fleetRungEnabled = false` — but never resolves true until that
-		// follow-up wiring constructs a real Manager and reconciles it.
+		// sidecarMgr / sidecarProbe: laya-advisors-01LAYA001 WP13 — the real
+		// *mlsidecar.Manager (install root <DataDir>/ml, the ~/.kenaz
+		// per-env family) and its DEMAND-DRIVEN probe. Nothing here spawns
+		// or dials at construction: lazy start on first advisor demand stays
+		// the law (a demand — sidecarProbe.Healthy() called by an advisor —
+		// schedules one throttled background Manager.Ensure, and only when
+		// an engine is installed). nil on the nil-core chassis (no data dir);
+		// newSidecarStack returns a NIL interface then, never a typed nil.
+		//
+		// sidecarBootProbe is the same Manager as a CACHE-ONLY probe, for the
+		// boot-time resolve below: app boot must never be a lazy-start
+		// trigger, and Manager.Healthy() reads only the cached Status.
+		var sidecarMgr *mlsidecar.Manager
 		var sidecarProbe advice.SidecarProbe
+		if c != nil {
+			sidecarMgr, sidecarProbe = newSidecarStack(c.DataDir(), c.BuildVersion())
+		}
+		var sidecarBootProbe advice.SidecarProbe
+		if sidecarMgr != nil {
+			sidecarBootProbe = sidecarMgr
+		}
+		stackSidecarMgr, stackSidecarProbe = sidecarMgr, sidecarProbe
 		loadAdvisorProfiles := func() []corellm.ProviderProfile {
 			if capturedAdvisorStore == nil {
 				return nil
@@ -6345,7 +6402,7 @@ func newLLMStack(
 		// serves the kinds (HeuristicAdvisor does not consult the ladder;
 		// see RungHeuristic). This is what keeps Settings.AdvisorModel's
 		// reader real today, ahead of the Phase-B laya backend.
-		_, _, bootRung, bootUnbenchmarked, bootOK := advice.ResolveAdvisorModel(loadAdvisorSetting(), loadAdvisorProfiles(), sidecarProbe)
+		_, _, bootRung, bootUnbenchmarked, bootOK := advice.ResolveAdvisorModel(loadAdvisorSetting(), loadAdvisorProfiles(), sidecarBootProbe)
 		logging.L().Info("advice.laya_ladder.boot_resolve",
 			"rung", string(bootRung),
 			"unbenchmarked", bootUnbenchmarked,
@@ -6563,6 +6620,8 @@ func newLLMStack(
 		staticPermsLoadError: staticPermsLoadErr,
 		chatAdvisor:          chatAdvisor,
 		adviceDeps:           adviceDeps,
+		sidecarMgr:           stackSidecarMgr,
+		sidecarProbe:         stackSidecarProbe,
 	}
 }
 
@@ -11253,6 +11312,10 @@ func (a *API) Agents_DeleteProfile(ctx context.Context, id string) error {
 // Sentry implements HarnessAPI. Returns the crash-reporting RPC surface.
 // (sentry-error-monitoring-01KX5R8G WP05)
 func (a *API) Sentry() sentryview.SentryAPI { return a.sentryAPI }
+
+// Sidecar implements HarnessAPI. Returns the local ML engine RPC surface.
+// (laya-advisors-01LAYA001 WP13)
+func (a *API) Sidecar() sidecarview.SidecarAPI { return a.sidecarAPI }
 
 // Fleet implements HarnessAPI. Returns the fleet telemetry consent RPC surface.
 // (fleet-otel-archival-01NDFSEX11 WP07)

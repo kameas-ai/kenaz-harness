@@ -45,6 +45,8 @@ type DemandProbe struct {
 	mu       sync.Mutex
 	last     time.Time
 	inflight bool
+	closed   bool
+	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 }
 
@@ -79,7 +81,7 @@ func (d *DemandProbe) kick() {
 	}
 	d.mu.Lock()
 	now := d.now()
-	if d.inflight || (!d.last.IsZero() && now.Sub(d.last) < interval) {
+	if d.closed || d.inflight || (!d.last.IsZero() && now.Sub(d.last) < interval) {
 		d.mu.Unlock()
 		return
 	}
@@ -95,30 +97,49 @@ func (d *DemandProbe) kick() {
 		return
 	}
 
-	d.mu.Lock()
-	if d.inflight {
-		d.mu.Unlock()
-		return
-	}
-	d.inflight = true
-	d.wg.Add(1)
-	d.mu.Unlock()
-
 	timeout := d.Timeout
 	if timeout <= 0 {
 		timeout = 90 * time.Second
 	}
+	d.mu.Lock()
+	if d.closed || d.inflight {
+		d.mu.Unlock()
+		return
+	}
+	d.inflight = true
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	d.cancel = cancel
+	d.wg.Add(1)
+	d.mu.Unlock()
+
 	go func() {
 		defer d.wg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		d.M.Ensure(ctx)
 		d.mu.Lock()
 		d.inflight = false
+		d.cancel = nil
 		d.mu.Unlock()
 	}()
 }
 
-// Wait blocks until any in-flight background Ensure finishes. Used by
-// tests and by shutdown so no goroutine outlives its owner.
+// Wait blocks until any in-flight background Ensure finishes (tests).
 func (d *DemandProbe) Wait() { d.wg.Wait() }
+
+// Close stops the probe: later demands schedule nothing, an in-flight
+// Ensure is cancelled (its spawn-wait ends at once), and Close returns
+// only after that goroutine has exited — so app shutdown never waits out
+// a 30s startup poll and no goroutine outlives its owner. Idempotent.
+func (d *DemandProbe) Close() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.closed = true
+	cancel := d.cancel
+	d.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	d.wg.Wait()
+}

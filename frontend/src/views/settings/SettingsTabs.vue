@@ -100,6 +100,8 @@ const groups: ReadonlyArray<TabGroup> = [
       // engineer-truth-pass-01PMTP01 WP03 (finding B2b) — the panel existed
       // and had zero mount sites; this is the real click path FR-004 requires.
       { to: '/settings?tab=branch-advisor', label: 'Branch Advisor', query: 'branch-advisor', icon: GitBranch },
+      // laya-advisors-01LAYA001 WP13 — the local ML engine's install/status panel.
+      { to: '/settings?tab=recommendations', label: 'Recommendations', query: 'recommendations', icon: Server },
     ],
   },
   {

@@ -963,6 +963,13 @@ interface WailsBindingsLike {
   Sentry_GenerateLocalReport(): Promise<{ Path: string; ByteCount: number }>;
   Sentry_TestDSN(dsn: string): Promise<{ OK: boolean; Error: string }>;
 
+  // ── Local ML engine (laya-advisors-01LAYA001 WP13) ──────────────────────
+  Sidecar_Status(): Promise<SidecarStatusView>;
+  Sidecar_Enable(): Promise<SidecarStatusView>;
+  Sidecar_Update(): Promise<SidecarStatusView>;
+  Sidecar_Repair(): Promise<SidecarStatusView>;
+  Sidecar_Uninstall(): Promise<SidecarStatusView>;
+
   // ── Fleet telemetry consent (fleet-otel-archival-01NDFSEX11 WP06) ────────
   /** Returns the current fleet telemetry consent level: "none" | "aggregate" | "full". */
   Fleet_GetTelemetryConsent(): Promise<string>;
@@ -3666,6 +3673,76 @@ export interface SentryClient {
   testDsn(dsn: string): Promise<{ ok: boolean; error?: string }>;
 }
 
+// ── local ML engine client (laya-advisors-01LAYA001 WP13) ────────────────
+
+/**
+ * Every value of SidecarStatusView.state. The first seven are
+ * core/mlsidecar.State strings verbatim; `installed_idle` is the one
+ * view-only state (Go: core/rpc/views/sidecar.StateInstalledIdle) for the
+ * normal "installed, engine stopped, starts when needed" condition.
+ */
+export type SidecarState =
+  | 'not_installed'
+  | 'installing'
+  | 'healthy'
+  | 'installed_unhealthy'
+  | 'unverified'
+  | 'contract_unsupported'
+  | 'legacy_unverified'
+  | 'installed_idle';
+
+/** Go: core/rpc/views/sidecar.StatusView. */
+export interface SidecarStatusView {
+  state: SidecarState;
+  /** crash | port_conflict | digest_mismatch | update_pending | legacy_engine | ... ('' when none). */
+  reason: string;
+  detail: string;
+  engineVersion: string;
+  installed: boolean;
+  installedVersion: string;
+  /** false on platforms the engine is not built for. */
+  supported: boolean;
+  /** The single "may the Enable button be offered" bit. */
+  available: boolean;
+  unavailableReason: string;
+  /** What Enable would download — disclosed before the click. */
+  release: { version: string; sizeMB: number };
+  /** Where the engine, its models and its config live on this device. */
+  installLocation: string;
+  updateAvailable: boolean;
+}
+
+export interface SidecarClient {
+  /** Read-only observation (never spawns) + the pre-download disclosure. */
+  status(): Promise<SidecarStatusView>;
+  /** Download, verify, install and start the engine. Blocks for the duration. */
+  enable(): Promise<SidecarStatusView>;
+  /** Install the newer pinned engine. Always an explicit user action. */
+  update(): Promise<SidecarStatusView>;
+  /** Re-attempt to start an installed engine that is not answering. */
+  repair(): Promise<SidecarStatusView>;
+  /** Stop the engine and remove it, its models and its config. */
+  uninstall(): Promise<SidecarStatusView>;
+}
+
+/** The fake client's (and the no-binding fallback's) honest "unavailable" status. */
+export function fakeSidecarStatus(): Promise<SidecarStatusView> {
+  return Promise.resolve({
+    state: 'not_installed',
+    reason: '',
+    detail: '',
+    engineVersion: '',
+    installed: false,
+    installedVersion: '',
+    supported: false,
+    available: false,
+    unavailableReason: 'not available in test mode',
+    release: { version: '', sizeMB: 0 },
+    installLocation: '',
+    updateAvailable: false,
+  });
+}
+
 // ── fleet telemetry client (fleet-otel-archival-01NDFSEX11 WP06) ─────────
 
 /** Payload-free export health (Go: settings.FleetTelemetryStatusView). */
@@ -3894,6 +3971,8 @@ export interface HarnessClient {
   agents: AgentsClient;
   /** Crash-reporting surface (sentry-error-monitoring-01KX5R8G WP05). */
   sentry: SentryClient;
+  /** Local ML engine install/status surface (laya-advisors-01LAYA001 WP13). */
+  sidecar: SidecarClient;
   /** Fleet telemetry consent surface (fleet-otel-archival-01NDFSEX11 WP06). */
   fleet: FleetClient;
   /** Catalog publish/list/install surface (fleet-share-and-sync-01NDFSEX14 WP02). */
@@ -4750,6 +4829,14 @@ export function createHarnessClient(): HarnessClient {
         b()
           .Sentry_TestDSN(dsn)
           .then((r) => ({ ok: r.OK, error: r.Error || undefined })),
+    },
+    // ── local ML engine (laya-advisors-01LAYA001 WP13) ─────────────────────
+    sidecar: {
+      status: () => b().Sidecar_Status(),
+      enable: () => b().Sidecar_Enable(),
+      update: () => b().Sidecar_Update(),
+      repair: () => b().Sidecar_Repair(),
+      uninstall: () => b().Sidecar_Uninstall(),
     },
     // ── fleet telemetry (fleet-otel-archival-01NDFSEX11 WP06) ──────────────
     fleet: {
@@ -6619,6 +6706,13 @@ export function createFakeHarnessClient(
       getLastFive: async () => [],
       generateLocalReport: async () => ({ path: '', byteCount: 0 }),
       testDsn: async (_dsn: string) => ({ ok: false, error: 'not available in test mode' }),
+    },
+    sidecar: {
+      status: fakeSidecarStatus,
+      enable: async () => fakeSidecarStatus(),
+      update: async () => fakeSidecarStatus(),
+      repair: async () => fakeSidecarStatus(),
+      uninstall: async () => fakeSidecarStatus(),
     },
     fleet: {
       getTelemetryConsent: async () => 'none' as const,

@@ -47,6 +47,7 @@ import (
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
 	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
 	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
+	sidecarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sidecar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/shell"
@@ -188,6 +189,9 @@ func (f *fakeHarnessAPI) Agents() *agentsview.API {
 
 func (f *fakeHarnessAPI) Sentry() sentryview.SentryAPI {
 	return &sentryview.Impl{DataDir: ""}
+}
+func (f *fakeHarnessAPI) Sidecar() sidecarview.SidecarAPI {
+	return &sidecarview.Impl{}
 }
 func (f *fakeHarnessAPI) Fleet() fleetview.FleetAPI {
 	tc, _ := corefleet.NewTelemetryConsent(os.TempDir(), corefleet.StaticTierReader{})

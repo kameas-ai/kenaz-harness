@@ -156,7 +156,12 @@ func (m *Manager) reconcileLocked(ctx context.Context) Status {
 // this client's lease — a legacy engine is never usable for
 // recommendations (see StateLegacyUnverified's doc comment), so this
 // client has no relationship with it worth advertising via a lease.
-func (m *Manager) evaluateRunning(health HealthPayload) Status {
+func (m *Manager) evaluateRunning(health HealthPayload) Status { return m.evaluate(health, true) }
+
+// evaluate is evaluateRunning with the lease renewal switchable: Observe
+// (a settings-panel read) must report the verdict without pinning the
+// engine alive.
+func (m *Manager) evaluate(health HealthPayload, renew bool) Status {
 	decision, err := EvaluateAdoption(m.Layout, health)
 	if err != nil {
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: err.Error(), UpdatedAt: time.Now()}
@@ -164,7 +169,9 @@ func (m *Manager) evaluateRunning(health HealthPayload) Status {
 	now := time.Now()
 	switch decision.Action {
 	case AdoptAccept:
-		m.renewLease()
+		if renew {
+			m.renewLease()
+		}
 		return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.ContractVersions["api"], Detail: decision.Detail, UpdatedAt: now}
 	case AdoptLegacyUnverified:
 		// Never healthy, never leased: adopt-only in the narrow sense of

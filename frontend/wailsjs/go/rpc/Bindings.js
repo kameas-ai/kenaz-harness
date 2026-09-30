@@ -1606,6 +1606,26 @@ export function Shell_ReadFile(arg1) {
   return window['go']['rpc']['Bindings']['Shell_ReadFile'](arg1);
 }
 
+export function Sidecar_Enable() {
+  return window['go']['rpc']['Bindings']['Sidecar_Enable']();
+}
+
+export function Sidecar_Repair() {
+  return window['go']['rpc']['Bindings']['Sidecar_Repair']();
+}
+
+export function Sidecar_Status() {
+  return window['go']['rpc']['Bindings']['Sidecar_Status']();
+}
+
+export function Sidecar_Uninstall() {
+  return window['go']['rpc']['Bindings']['Sidecar_Uninstall']();
+}
+
+export function Sidecar_Update() {
+  return window['go']['rpc']['Bindings']['Sidecar_Update']();
+}
+
 export function Sites_Delete(arg1) {
   return window['go']['rpc']['Bindings']['Sites_Delete'](arg1);
 }
