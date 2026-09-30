@@ -35,10 +35,12 @@ const defaultContractsTTL = 30 * time.Second
 var ErrEngineKindNotServed = errors.New("advice: engine does not serve this kind")
 
 // EngineKindContract is the slice of GET /v1/contracts a SidecarAdvisor
-// routes on: which contract version the engine expects for a kind, and
-// whether the engine serves the kind right now.
+// routes on: which contract version the engine expects for a kind (its
+// 16-hex feature-contract hash, echoed verbatim on the recommend call —
+// the harness never computes it), and whether the engine serves the kind
+// right now.
 type EngineKindContract struct {
-	ContractVersion int
+	ContractVersion string
 	Available       bool
 }
 
@@ -48,7 +50,7 @@ type EngineKindContract struct {
 type EngineRequest struct {
 	KindID                 string
 	Features               map[string]any
-	FeatureContractVersion int
+	FeatureContractVersion string
 	SessionID              string
 }
 
@@ -243,9 +245,16 @@ func (a *SidecarAdvisor) Recommend(ctx context.Context, kind AdviceKind, feature
 		}
 		if errors.Is(err, ErrEngineKindNotServed) {
 			// Not a fault: the engine has no graduated model for this kind
-			// (Amendment A3.2). Debug-level, and the contracts view that
-			// told us otherwise is dropped so the next call re-checks.
-			a.invalidateContracts()
+			// (Amendment A3.2). Debug-level. Only a refusal the ENGINE
+			// returned contradicts the cached contracts view, so only that
+			// one drops it; a "not available" read straight OUT of the
+			// view agrees with it and must keep it — dropping it there
+			// turned the TTL cache into a /v1/contracts round trip on
+			// every call for every unserved kind (all of them, on the
+			// real engine's day 1).
+			if !errors.Is(err, errNotServedByContractsView) {
+				a.invalidateContracts()
+			}
 			logging.L().Debug("advice.sidecar.kind_not_served", "kind", kind.ID)
 		} else {
 			logging.L().Debug("advice.sidecar.engine_fallthrough", "kind", kind.ID, "err", err.Error())
@@ -261,10 +270,15 @@ func (a *SidecarAdvisor) fallbackRecommend(ctx context.Context, kind AdviceKind,
 	return a.fallback.Recommend(ctx, kind, features, sess)
 }
 
+// errNotServedByContractsView marks a "not served" verdict read from the
+// cached /v1/contracts view (as opposed to one the engine returned).
+var errNotServedByContractsView = errors.New("advice: contracts view does not serve this kind")
+
 // errNotServedByContract is the internal "contracts say no" signal; it
-// wraps ErrEngineKindNotServed so both refusal sources take one branch.
+// wraps ErrEngineKindNotServed so both refusal sources take one branch,
+// and errNotServedByContractsView so the view is not dropped over it.
 func errNotServedByContract(kindID string) error {
-	return fmt.Errorf("%w: /v1/contracts does not list %q as available", ErrEngineKindNotServed, kindID)
+	return fmt.Errorf("%w: %w: /v1/contracts does not list %q as available", ErrEngineKindNotServed, errNotServedByContractsView, kindID)
 }
 
 // engineRecommend performs the contracts check + engine call under ONE

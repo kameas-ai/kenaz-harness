@@ -47,6 +47,15 @@ var ErrKindNotServed = errors.New("mlsidecar: kind not served")
 // KindNotServedCode is the wire error code carrying ErrKindNotServed.
 const KindNotServedCode = "kind_not_served"
 
+// ErrUnusableResponse marks a call where SOMETHING answered on the port
+// but not with a usable payload: a non-2xx /health, or a body that does
+// not decode into the wire type. It is deliberately distinct from a
+// transport failure (connection refused / timeout): the port is occupied,
+// so the Manager must never treat it as "nothing is running" and spawn a
+// second engine onto a taken port (the failure mode a /health shape
+// drift produced before the 2026-09-30 interop review).
+var ErrUnusableResponse = errors.New("mlsidecar: sidecar answered with an unusable response")
+
 // StatusError is a non-2xx sidecar response. Code is the engine's typed
 // error code when the body was `{"error": "<code>"}`, else "".
 type StatusError struct {
@@ -94,7 +103,7 @@ func (c *Client) get(ctx context.Context, path string, out any) (int, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return resp.StatusCode, fmt.Errorf("mlsidecar: GET %s: status %d", path, resp.StatusCode)
+		return resp.StatusCode, fmt.Errorf("%w: GET %s: status %d", ErrUnusableResponse, path, resp.StatusCode)
 	}
 	if out == nil {
 		return resp.StatusCode, nil
@@ -104,7 +113,7 @@ func (c *Client) get(ctx context.Context, path string, out any) (int, error) {
 		return resp.StatusCode, fmt.Errorf("mlsidecar: read %s body: %w", path, err)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return resp.StatusCode, fmt.Errorf("mlsidecar: decode %s body: %w", path, err)
+		return resp.StatusCode, fmt.Errorf("%w: decode %s body: %v", ErrUnusableResponse, path, err)
 	}
 	return resp.StatusCode, nil
 }
@@ -140,7 +149,7 @@ func (c *Client) postJSON(ctx context.Context, path string, in, out any, headers
 		return resp.StatusCode, fmt.Errorf("mlsidecar: read %s body: %w", path, err)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return resp.StatusCode, fmt.Errorf("mlsidecar: decode %s body: %w", path, err)
+		return resp.StatusCode, fmt.Errorf("%w: decode %s body: %v", ErrUnusableResponse, path, err)
 	}
 	return resp.StatusCode, nil
 }

@@ -89,33 +89,56 @@ const (
 // (the future settings panel, the advice ladder probe) consumes this
 // shape rather than re-deriving state from raw HTTP calls.
 type Status struct {
-	State           State
-	Reason          Reason
-	Detail          string
-	EngineVersion   string
+	State         State
+	Reason        Reason
+	Detail        string
+	EngineVersion string
+	// ContractVersion is the running engine's lifecycle-protocol major
+	// (/health lifecycle_protocol) — see SupportedContractMajor.
 	ContractVersion int
 	UpdatedAt       time.Time
 }
 
-// ModelHealth is one entry of HealthPayload.Models — per-kind serving
-// health, keyed by kind id.
+// ModelHealth is one entry of HealthPayload.ModelDetails — per-model
+// serving detail, keyed by model name (the engine's /health
+// `model_details`). Slot/Refusal are JSON null when the engine has
+// nothing to say; a null decodes to "".
 type ModelHealth struct {
-	Status string `json:"status"` // "ok" | "refused"
-	Reason string `json:"reason,omitempty"`
+	Status  string `json:"status"`
+	Slot    string `json:"slot,omitempty"`
+	Refusal string `json:"refusal,omitempty"`
 }
 
 // HealthPayload mirrors the wire shape of GET /health (design §3.5): "The
 // payload carries identity ... The client does not trust the
-// self-report." LifecycleProtocol is the skew-window marker (design F5 /
-// §3.7 R4): zero (or the field's absence, which json.Unmarshal leaves as
-// the zero value) means a pre-lease legacy engine.
+// self-report." Shapes are the kenaz-ml engine's (two-client-engine-
+// 01MSK2EN, routes.py HealthResponse; interop ruling 2026-09-30 — the
+// engine's shapes won every contested point):
+//
+//   - LifecycleProtocol is the skew-window marker (design F5 / §3.7 R4):
+//     the integer lease-protocol version, 1 today; zero (or the field's
+//     absence, which json.Unmarshal leaves as the zero value) means a
+//     pre-lease legacy engine (the engine also reports 0 in cloud mode).
+//   - ContractVersions is PER KIND: the 16-hex feature-contract hashes
+//     /v1/recommend accepts for that kind (N, and N-1 during a
+//     transition). There is no API-wide contract major on /health; the
+//     lifecycle protocol is the only protocol version the engine
+//     publishes (see contractCompatible).
+//   - Models is name -> status string ("ready" | "untrained" | ...), a
+//     pre-existing field the engine may not reshape (its C-008); the
+//     per-model detail lives in ModelDetails.
+//   - EngineSHA256 is optional (absence tolerated): a cross-check only,
+//     never a trust root (F2).
 type HealthPayload struct {
+	Status            string                 `json:"status,omitempty"`
+	Mode              string                 `json:"mode,omitempty"`
 	Product           string                 `json:"product"`
 	SidecarVersion    string                 `json:"sidecar_version"`
-	ContractVersions  map[string]int         `json:"contract_versions"`
+	ContractVersions  map[string][]string    `json:"contract_versions"`
 	ExePath           string                 `json:"exe_path"`
-	EngineSHA256      string                 `json:"engine_sha256"`
-	Models            map[string]ModelHealth `json:"models"`
+	EngineSHA256      string                 `json:"engine_sha256,omitempty"`
+	Models            map[string]string      `json:"models"`
+	ModelDetails      map[string]ModelHealth `json:"model_details,omitempty"`
 	Device            string                 `json:"device"`
 	LifecycleProtocol int                    `json:"lifecycle_protocol"`
 }
@@ -130,12 +153,20 @@ type StatusPayload struct {
 
 // KindContract is one entry of ContractsPayload.Kinds (design §3.3: "The
 // sidecar publishes each kind's ordered feature contract at
-// /v1/contracts").
+// /v1/contracts"). Version is the kind's 16-hex feature-contract hash
+// (the engine's service_version) — the value a client echoes back as
+// RecommendRequest.FeatureContractVersion. Available is true only when a
+// backend actually serves the kind; it is what routing gates on.
+// Reason/Detail explain an unavailable kind (e.g. kind_not_served).
 type KindContract struct {
-	ContractVersion int      `json:"contract_version"`
-	Features        []string `json:"features"`
-	Backend         string   `json:"backend"` // "heuristic" | "classic" | "laya"
-	Available       bool     `json:"available"`
+	Features          []string `json:"features"`
+	DTypes            []string `json:"dtypes,omitempty"`
+	Version           string   `json:"version"`
+	SupportedVersions []string `json:"supported_versions,omitempty"`
+	Available         bool     `json:"available"`
+	Backend           string   `json:"backend,omitempty"` // "heuristic" | "classic" | "laya"; "" when none
+	Reason            string   `json:"reason,omitempty"`
+	Detail            string   `json:"detail,omitempty"`
 }
 
 // ContractsPayload mirrors GET /v1/contracts.
@@ -144,26 +175,39 @@ type ContractsPayload struct {
 }
 
 // LeaseWireRequest mirrors the body of POST /v1/clients/lease.
+// MinContracts maps a kind to the 16-hex feature-contract hash this client
+// requires; the engine only REPORTS an unmet one back (IncompatibleKinds)
+// and never stops serving other clients over it.
 type LeaseWireRequest struct {
-	Client        string         `json:"client"`
-	PID           int            `json:"pid"`
-	ClientVersion string         `json:"client_version"`
-	MinContracts  map[string]int `json:"min_contracts,omitempty"`
+	Client        string            `json:"client"`
+	PID           int               `json:"pid"`
+	ClientVersion string            `json:"client_version"`
+	MinContracts  map[string]string `json:"min_contracts,omitempty"`
 }
 
-// LeaseWireResponse mirrors the response of POST /v1/clients/lease.
+// LeaseWireResponse mirrors the response of POST /v1/clients/lease — the
+// registration/compatibility handshake (leases themselves stay file-based
+// on the harness side; the engine keeps its explicit leases in memory).
 type LeaseWireResponse struct {
-	LeaseID    string `json:"lease_id"`
-	ExpiresInS int    `json:"expires_in_s"`
+	LifecycleProtocol int                 `json:"lifecycle_protocol"`
+	SidecarVersion    string              `json:"sidecar_version"`
+	ContractVersions  map[string][]string `json:"contract_versions"`
+	IncompatibleKinds map[string]string   `json:"incompatible_kinds"`
+	Client            string              `json:"client"`
+	PID               int                 `json:"pid"`
+	LiveLeases        int                 `json:"live_leases"`
+	ImplicitLeaseSec  float64             `json:"implicit_lease_sec"`
+	IdleExitSec       float64             `json:"idle_exit_sec"`
+	Managed           bool                `json:"managed"`
 }
 
 // RecommendRequest / RecommendResponse mirror POST /v1/recommend/{kind}
-// (design §3.2) — included so the stub and any future caller share one
-// wire shape; WP12 itself never calls this (no kind is sidecar-preferred
-// yet, design §9 Phase 0's gating note).
+// (design §3.2). FeatureContractVersion is the kind's 16-hex contract
+// hash, echoed from /v1/contracts (KindContract.Version). Generation is
+// the serving manifest's version STRING ("0" when no artifact).
 type RecommendRequest struct {
 	Features               map[string]any `json:"features"`
-	FeatureContractVersion int            `json:"feature_contract_version"`
+	FeatureContractVersion string         `json:"feature_contract_version"`
 	SessionID              string         `json:"session_id"`
 	KindID                 string         `json:"kind_id"`
 }
@@ -173,13 +217,13 @@ type RecommendResponse struct {
 	Score                  *int   `json:"score,omitempty"`
 	Confidence             int    `json:"confidence"`
 	KindID                 string `json:"kind_id"`
-	FeatureContractVersion int    `json:"feature_contract_version"`
+	FeatureContractVersion string `json:"feature_contract_version"`
 	Model                  string `json:"model"`
 	Rung                   string `json:"rung"`
 	Backend                string `json:"backend"` // "heuristic" | "classic" | "laya"
 	ModelIDSha8            string `json:"model_id_sha8"`
 	CheckpointProvenance   string `json:"checkpoint_provenance"` // "local" | "org" | "base"
-	Generation             int    `json:"generation"`
+	Generation             string `json:"generation"`
 	Unbenchmarked          bool   `json:"unbenchmarked"`
 }
 
@@ -229,11 +273,29 @@ type LabelAck struct {
 // counts brand-new (client, kind, features_hash, ts) keys; Replaced
 // counts higher-revision upserts; Stale counts rows whose revision was
 // not higher than the stored one (a harmless duplicate delivery).
+//
+// Acked is JSON null when the batch's FIRST row was refused (the engine
+// acks only the leading run of rows it applied, replaced or found stale,
+// in the order sent); a null decodes to the zero LabelAck. Refused /
+// Refusals report per-row refusals (client/kind mismatch, unknown
+// user_action, non-finite features) — rows after a refused one are not
+// acked, so the client re-sends them.
 type LabelPushResponse struct {
-	Acked    LabelAck `json:"acked"`
-	Applied  int      `json:"applied"`
-	Replaced int      `json:"replaced"`
-	Stale    int      `json:"stale"`
+	Acked    LabelAck          `json:"acked"`
+	Applied  int               `json:"applied"`
+	Replaced int               `json:"replaced"`
+	Stale    int               `json:"stale"`
+	Refused  int               `json:"refused"`
+	Refusals []LabelRowRefusal `json:"refusals,omitempty"`
+}
+
+// LabelRowRefusal is one entry of LabelPushResponse.Refusals.
+type LabelRowRefusal struct {
+	Index        int    `json:"index"`
+	FeaturesHash string `json:"features_hash"`
+	TS           int64  `json:"ts"`
+	Revision     int64  `json:"revision"`
+	Reason       string `json:"reason"`
 }
 
 // SystemOneRequest / SystemOneResponse mirror POST /v1/systemone — raw

@@ -86,11 +86,118 @@ type LabelPusher struct {
 	Healthy func() bool
 	// BatchSize overrides defaultLabelPushBatch when > 0.
 	BatchSize int
+	// Now overrides the wall clock for the pause backoff (tests). nil
+	// means time.Now.
+	Now func() time.Time
 
 	mu      sync.Mutex // serializes PushOnce: one ack cursor, one writer
 	running atomic.Bool
 	dirty   atomic.Bool
+
+	pauseMu sync.Mutex
+	paused  map[string]LanePause
 }
+
+// Pause reasons a kind's lane can be parked for (LanePause.Reason).
+const (
+	// PauseContractMismatch: the engine refused the whole batch with 409
+	// (feature contract / names / retained-header mismatch). Version skew
+	// must be LOUD and must not hot-retry: nothing was written, the
+	// cursor is kept, and the kind is parked with backoff.
+	PauseContractMismatch = "contract_mismatch"
+	// PauseUnknownKind: the engine answered 404 — it has no contract for
+	// this kind at all.
+	PauseUnknownKind = "unknown_kind"
+	// PauseRowsRefused: the engine acked nothing because the batch's
+	// first pending row was refused (a poison row). Re-sending it on
+	// every label write would be a hot retry of a deterministic refusal.
+	PauseRowsRefused = "rows_refused"
+)
+
+// Pause backoff bounds: the first pause parks a kind for
+// labelPauseBaseBackoff, each consecutive one doubles it, capped at
+// labelPauseMaxBackoff. A successful push of that kind clears it.
+const (
+	labelPauseBaseBackoff = time.Minute
+	labelPauseMaxBackoff  = time.Hour
+)
+
+// LanePause is one kind's parked state — the "label lane paused" signal a
+// status surface reads (LaneStatus). The cursor is untouched while a kind
+// is paused, so nothing is lost; the kind is simply not re-sent until
+// Until.
+type LanePause struct {
+	Reason  string // PauseContractMismatch | PauseUnknownKind | PauseRowsRefused
+	Code    string // the engine's typed error code, when it sent one
+	Detail  string
+	Until   time.Time
+	Backoff time.Duration
+}
+
+// LaneStatus returns a snapshot of every currently-paused kind. An empty
+// map means the lane is flowing (or idle).
+func (p *LabelPusher) LaneStatus() map[string]LanePause {
+	out := map[string]LanePause{}
+	if p == nil {
+		return out
+	}
+	p.pauseMu.Lock()
+	defer p.pauseMu.Unlock()
+	for k, v := range p.paused {
+		out[k] = v
+	}
+	return out
+}
+
+func (p *LabelPusher) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now()
+}
+
+// pausedNow reports whether kind is parked right now.
+func (p *LabelPusher) pausedNow(kind string) (LanePause, bool) {
+	p.pauseMu.Lock()
+	defer p.pauseMu.Unlock()
+	lp, ok := p.paused[kind]
+	if !ok || !p.now().Before(lp.Until) {
+		return lp, false
+	}
+	return lp, true
+}
+
+// pause parks kind with doubling backoff and logs the distinct
+// "label lane paused" line once per pause.
+func (p *LabelPusher) pause(kind, reason, code, detail string) {
+	p.pauseMu.Lock()
+	if p.paused == nil {
+		p.paused = map[string]LanePause{}
+	}
+	backoff := labelPauseBaseBackoff
+	if prev, ok := p.paused[kind]; ok && prev.Backoff > 0 {
+		backoff = prev.Backoff * 2
+		if backoff > labelPauseMaxBackoff {
+			backoff = labelPauseMaxBackoff
+		}
+	}
+	lp := LanePause{Reason: reason, Code: code, Detail: detail, Until: p.now().Add(backoff), Backoff: backoff}
+	p.paused[kind] = lp
+	p.pauseMu.Unlock()
+	logging.L().Warn("mlsidecar.labelpush.lane_paused",
+		"msg", "label lane paused: "+reason,
+		"kind", kind, "reason", reason, "code", code, "detail", detail,
+		"backoff", backoff.String())
+}
+
+func (p *LabelPusher) clearPause(kind string) {
+	p.pauseMu.Lock()
+	defer p.pauseMu.Unlock()
+	delete(p.paused, kind)
+}
+
+// errLanePaused marks a pushKind error that parked the kind.
+var errLanePaused = errors.New("mlsidecar: label lane paused")
 
 // PushResult summarizes one PushOnce.
 type PushResult struct {
@@ -101,6 +208,9 @@ type PushResult struct {
 	// Skipped is non-empty when the call did nothing by design:
 	// "capture_disabled" or "sidecar_unhealthy".
 	Skipped string
+	// Paused lists kinds skipped this call because they are parked (see
+	// LanePause) — no HTTP was sent for them.
+	Paused []string
 }
 
 // PushOnce drains every kind's pending rows to the engine. It returns the
@@ -139,7 +249,14 @@ func (p *LabelPusher) PushOnce(ctx context.Context) (PushResult, error) {
 	}
 	var firstErr error
 	for _, kind := range kinds {
+		if _, parked := p.pausedNow(kind); parked {
+			res.Paused = append(res.Paused, kind)
+			continue
+		}
 		n, batches, kerr := p.pushKind(ctx, kind)
+		if kerr == nil {
+			p.clearPause(kind)
+		}
 		res.Pushed += n
 		res.Batches += batches
 		if kerr != nil {
@@ -181,9 +298,35 @@ func (p *LabelPusher) pushKind(ctx context.Context, kind string) (pushed, batche
 		}
 		resp, err := p.Client.PushLabels(ctx, kind, LabelPushRequest{Client: labelPushClientID, Rows: wire})
 		if err != nil {
+			var se *StatusError
+			if errors.As(err, &se) && (se.Status == 409 || se.Status == 404) {
+				// Whole-batch refusal (409 contract/names/header mismatch,
+				// 404 unknown kind): nothing was written, and re-sending
+				// the same rows can only be refused again. Park the kind
+				// (cursor kept) instead of hot-retrying on every label
+				// write. 503 / transport errors stay plain retryable
+				// errors — those are transient by nature.
+				reason := PauseContractMismatch
+				if se.Status == 404 {
+					reason = PauseUnknownKind
+				}
+				p.pause(kind, reason, se.Code, err.Error())
+				return pushed, batches, fmt.Errorf("%w (%s): %v", errLanePaused, reason, err)
+			}
 			return pushed, batches, err
 		}
 		batches++
+		if resp.Acked.Revision == 0 && resp.Refused > 0 {
+			// The first pending row was refused, so nothing is acked and
+			// the next attempt would send the very same row first again.
+			detail := fmt.Sprintf("%d row(s) refused", resp.Refused)
+			if len(resp.Refusals) > 0 {
+				r0 := resp.Refusals[0]
+				detail = fmt.Sprintf("%s; first: revision %d (%s)", detail, r0.Revision, r0.Reason)
+			}
+			p.pause(kind, PauseRowsRefused, "", detail)
+			return pushed, batches, fmt.Errorf("%w (%s): %s", errLanePaused, PauseRowsRefused, detail)
+		}
 		// The cursor advances ONLY to what the engine acknowledged, and
 		// never backwards, and never past the batch we actually sent (a
 		// bogus ack must not skip unsent rows).

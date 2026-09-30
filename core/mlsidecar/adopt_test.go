@@ -54,7 +54,7 @@ func TestEvaluateAdoption_AdoptVerified(t *testing.T) {
 		SidecarVersion:    "1.0.0",
 		ExePath:           exePath,
 		EngineSHA256:      sha,
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
 	decision, err := EvaluateAdoption(l, health)
@@ -80,7 +80,7 @@ func TestEvaluateAdoption_RefusesOnDigestMismatch(t *testing.T) {
 		SidecarVersion:    "1.0.0",
 		ExePath:           exePath,
 		EngineSHA256:      "sha256:" + "deadbeef00000000000000000000000000000000000000000000000000",
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
 	decision, err := EvaluateAdoption(l, health)
@@ -115,7 +115,7 @@ func TestEvaluateAdoption_TamperedOnDiskArtifact_NeverAdopted(t *testing.T) {
 		SidecarVersion:    "1.0.0",
 		ExePath:           exePath,
 		EngineSHA256:      sha, // stale/lying self-report
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
 	decision, err := EvaluateAdoption(l, health)
@@ -135,7 +135,7 @@ func TestEvaluateAdoption_PortConflict_NoCurrentInstall(t *testing.T) {
 	health := HealthPayload{
 		SidecarVersion:    "9.9.9",
 		ExePath:           "/some/foreign/path/kameas-ml",
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
 	decision, err := EvaluateAdoption(l, health)
@@ -158,7 +158,7 @@ func TestEvaluateAdoption_PortConflict_ExePathOutsideCurrent(t *testing.T) {
 	health := HealthPayload{
 		SidecarVersion:    "1.0.0",
 		ExePath:           "/completely/different/place/kameas-ml",
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
 	decision, err := EvaluateAdoption(l, health)
@@ -195,7 +195,7 @@ func TestEvaluateAdoption_RefusesWhenNeverVerified(t *testing.T) {
 	health := HealthPayload{
 		SidecarVersion:    "1.0.0",
 		ExePath:           exePath,
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
 	decision, err := EvaluateAdoption(l, health)
@@ -220,7 +220,7 @@ func TestEvaluateAdoption_SkewWindow_LegacyEngine(t *testing.T) {
 	l := NewLayout(t.TempDir())
 	health := HealthPayload{
 		SidecarVersion:    "0.9.0",
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 0,
 	}
 	decision, err := EvaluateAdoption(l, health)
@@ -250,7 +250,7 @@ func TestEvaluateAdoption_SkewWindow_LegacyEngine(t *testing.T) {
 func TestEvaluateAdoption_LegacyEngine_UnverifiedRegardlessOfContract(t *testing.T) {
 	l := NewLayout(t.TempDir())
 	health := HealthPayload{
-		ContractVersions:  map[string]int{"api": SupportedContractMajor + 50},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 0,
 	}
 	decision, err := EvaluateAdoption(l, health)
@@ -299,8 +299,8 @@ func TestEvaluateAdoption_ContractUnsupported_LeaseAwareEngine(t *testing.T) {
 	setupVerifiedVersion(t, l, "1.0.0", []byte("engine binary bytes"))
 	health := HealthPayload{
 		SidecarVersion:    "1.0.0",
-		ContractVersions:  map[string]int{"api": SupportedContractMajor + 50},
-		LifecycleProtocol: 1,
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
+		LifecycleProtocol: SupportedContractMajor + 50,
 	}
 	decision, err := EvaluateAdoption(l, health)
 	if err != nil {
@@ -312,25 +312,25 @@ func TestEvaluateAdoption_ContractUnsupported_LeaseAwareEngine(t *testing.T) {
 }
 
 // TestContractCompatible_NMinus1Supported pins the "N and N-1" transition
-// window design §6.4 describes.
+// window design §6.4 describes, applied to the lifecycle-protocol major
+// (the only protocol number the engine publishes on /health).
 func TestContractCompatible_NMinus1Supported(t *testing.T) {
 	cases := []struct {
-		major int
-		want  bool
+		protocol int
+		want     bool
 	}{
 		{SupportedContractMajor, true},
-		{SupportedContractMajor - 1, true},
 		{SupportedContractMajor + 1, false},
-		{SupportedContractMajor - 2, false},
+		{SupportedContractMajor + 50, false},
+		// 0 is the legacy / cloud marker, never "N-1": EvaluateAdoption's
+		// legacy branch owns it, and contractCompatible must not bless it.
+		{0, false},
+		{-1, false},
 	}
 	for _, tc := range cases {
-		got := contractCompatible(HealthPayload{ContractVersions: map[string]int{"api": tc.major}}, SupportedContractMajor)
+		got := contractCompatible(HealthPayload{LifecycleProtocol: tc.protocol}, SupportedContractMajor)
 		if got != tc.want {
-			t.Errorf("contractCompatible(major=%d) = %v, want %v", tc.major, got, tc.want)
+			t.Errorf("contractCompatible(protocol=%d) = %v, want %v", tc.protocol, got, tc.want)
 		}
-	}
-	// No "api" entry at all: treated as compatible (see contractCompatible's doc comment).
-	if !contractCompatible(HealthPayload{}, SupportedContractMajor) {
-		t.Error("contractCompatible with no api entry should default to true")
 	}
 }

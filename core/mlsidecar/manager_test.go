@@ -83,7 +83,7 @@ func TestManager_EveryStateDistinctlyReachable(t *testing.T) {
 		defer stub.Close()
 		stub.setHealth(HealthPayload{
 			SidecarVersion:    "1.0.0",
-			ContractVersions:  map[string]int{"api": SupportedContractMajor},
+			ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 			LifecycleProtocol: 1,
 		})
 
@@ -106,7 +106,7 @@ func TestManager_EveryStateDistinctlyReachable(t *testing.T) {
 		stub.setHealth(HealthPayload{
 			SidecarVersion:    "9.9.9",
 			ExePath:           "/foreign/kameas-ml",
-			ContractVersions:  map[string]int{"api": SupportedContractMajor},
+			ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 			LifecycleProtocol: 1,
 		})
 		m := NewManager(l, NewClient(stub.URL(), nil), nil, "harness", "0.84.0")
@@ -141,7 +141,7 @@ func TestManager_EveryStateDistinctlyReachable(t *testing.T) {
 		stub.setHealth(HealthPayload{
 			SidecarVersion:    "1.0.0",
 			ExePath:           exePath,
-			ContractVersions:  map[string]int{"api": SupportedContractMajor},
+			ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 			LifecycleProtocol: 1,
 		})
 		m := NewManager(l, NewClient(stub.URL(), nil), nil, "harness", "0.84.0")
@@ -158,8 +158,8 @@ func TestManager_EveryStateDistinctlyReachable(t *testing.T) {
 		defer stub.Close()
 		stub.setHealth(HealthPayload{
 			SidecarVersion:    "1.0.0",
-			ContractVersions:  map[string]int{"api": SupportedContractMajor + 50},
-			LifecycleProtocol: 1,
+			ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
+			LifecycleProtocol: SupportedContractMajor + 50,
 		})
 		m := NewManager(l, NewClient(stub.URL(), nil), nil, "harness", "0.84.0")
 		got := m.Reconcile(context.Background())
@@ -174,7 +174,7 @@ func TestManager_EveryStateDistinctlyReachable(t *testing.T) {
 		defer stub.Close()
 		stub.setHealth(HealthPayload{
 			SidecarVersion:    "0.9.0",
-			ContractVersions:  map[string]int{"api": SupportedContractMajor},
+			ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 			LifecycleProtocol: 0,
 		})
 		m := NewManager(l, NewClient(stub.URL(), nil), nil, "harness", "0.84.0")
@@ -200,7 +200,7 @@ func TestManager_SkewWindow_LegacyEngine_NeverHealthyNeverSpawnsOrDoubles(t *tes
 	defer stub.Close()
 	stub.setHealth(HealthPayload{
 		SidecarVersion:    "0.9.0",
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 0, // legacy: no lease support
 	})
 	spawner := &fakeSpawner{}
@@ -262,7 +262,7 @@ func TestManager_ReconcileRenewsLease(t *testing.T) {
 		SidecarVersion:    "1.0.0",
 		ExePath:           exePath,
 		EngineSHA256:      sha,
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	})
 	m := NewManager(l, NewClient(stub.URL(), nil), nil, "harness", "0.84.0")
@@ -331,7 +331,7 @@ func TestManager_UpdateAndActivate_SwapFlow(t *testing.T) {
 	stub.setHealth(HealthPayload{
 		SidecarVersion:    "2.0.0",
 		ExePath:           v2ExePath,
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	})
 

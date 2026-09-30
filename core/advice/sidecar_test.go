@@ -75,7 +75,7 @@ type fakeEngine struct {
 func servedContracts(kindIDs ...string) map[string]EngineKindContract {
 	m := map[string]EngineKindContract{}
 	for _, id := range kindIDs {
-		m[id] = EngineKindContract{ContractVersion: 3, Available: true}
+		m[id] = EngineKindContract{ContractVersion: "00000000000000c3", Available: true}
 	}
 	return m
 }
@@ -191,7 +191,7 @@ func TestSidecarAdvisor_HappyPath_EngineServes_HonestFields(t *testing.T) {
 	f.engine.mu.Lock()
 	req := f.engine.lastReq
 	f.engine.mu.Unlock()
-	if req.FeatureContractVersion != 3 || req.SessionID != "sess-1" || req.KindID != "sc_happy" || req.Features["n"] != float64(1) {
+	if req.FeatureContractVersion != "00000000000000c3" || req.SessionID != "sess-1" || req.KindID != "sc_happy" || req.Features["n"] != float64(1) {
 		t.Errorf("engine request = %+v, want contract version 3 from /v1/contracts, the session, and the marshaled features", req)
 	}
 }
@@ -245,7 +245,7 @@ func TestSidecarAdvisor_KindNotListedByContracts_RoutesToFallback_NoRecommendCal
 
 func TestSidecarAdvisor_ContractsSayUnavailable_RoutesToFallback(t *testing.T) {
 	f := newSidecarFixture("sc_unavail")
-	f.engine.contracts = map[string]EngineKindContract{"sc_unavail": {ContractVersion: 1, Available: false}}
+	f.engine.contracts = map[string]EngineKindContract{"sc_unavail": {ContractVersion: "00000000000000c1", Available: false}}
 	rec, err := f.recommend(t, toyFeatures{N: 1}, sidecarSess)
 	assertFallbackServed(t, rec, err)
 	if _, r := f.engine.counts(); r != 0 {
@@ -676,4 +676,21 @@ func TestSidecarAdvisor_RaceSafe(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// TestSidecarAdvisor_UnservedKind_ContractsViewStaysCached is the real
+// engine's day-1 shape (interop review 2026-09-30): /v1/contracts lists
+// every kind with available=false. That verdict AGREES with the cached
+// view, so it must not drop it — before the fix every advice call for an
+// unserved kind cost a /v1/contracts round trip, defeating the TTL.
+func TestSidecarAdvisor_UnservedKind_ContractsViewStaysCached(t *testing.T) {
+	f := newSidecarFixture("sc_unserved_cached")
+	f.engine.contracts = map[string]EngineKindContract{"sc_unserved_cached": {ContractVersion: "00000000000000d4", Available: false}}
+	for i := 1; i <= 5; i++ {
+		rec, err := f.recommend(t, toyFeatures{N: i}, sidecarSess)
+		assertFallbackServed(t, rec, err)
+	}
+	if c, r := f.engine.counts(); c != 1 || r != 0 {
+		t.Fatalf("contracts fetched %d times, recommend %d times; want 1 and 0 across 5 calls within the TTL", c, r)
+	}
 }

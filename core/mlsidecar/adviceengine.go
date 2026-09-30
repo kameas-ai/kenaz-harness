@@ -34,7 +34,7 @@ func (e AdviceEngine) Contracts(ctx context.Context) (map[string]advice.EngineKi
 	}
 	out := make(map[string]advice.EngineKindContract, len(payload.Kinds))
 	for id, k := range payload.Kinds {
-		out[id] = advice.EngineKindContract{ContractVersion: k.ContractVersion, Available: k.Available}
+		out[id] = advice.EngineKindContract{ContractVersion: k.Version, Available: k.Available}
 	}
 	return out, nil
 }

@@ -86,9 +86,17 @@ func (l Layout) LeaseFile(client string) string {
 // spawning the engine (design §3.5: "O_EXCL spawn-lock in lease/").
 func (l Layout) SpawnLockFile() string { return filepath.Join(l.LeaseDir(), "spawn.lock") }
 
+// ShutdownTokenFilename is the admin-shutdown token's name inside lease/
+// — a CROSS-REPO frozen value: kenaz-ml reads exactly
+// <install_root>/lease/shutdown.token (config.SHUTDOWN_TOKEN_FILENAME) on
+// every POST /v1/admin/shutdown and fails closed when it is absent. It was
+// "admin.token" until the 2026-09-30 interop review, which meant every
+// token-authorized stop would have been refused (401) by the real engine.
+const ShutdownTokenFilename = "shutdown.token"
+
 // TokenFile is the local, user-read-only token authorizing
 // POST /v1/admin/shutdown (design §3.5's flip-and-respawn update flow).
-func (l Layout) TokenFile() string { return filepath.Join(l.LeaseDir(), "admin.token") }
+func (l Layout) TokenFile() string { return filepath.Join(l.LeaseDir(), ShutdownTokenFilename) }
 
 // InstallJSONPath is install.json's location.
 func (l Layout) InstallJSONPath() string { return filepath.Join(l.Root, "install.json") }

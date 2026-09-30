@@ -54,7 +54,7 @@ func TestManager_SatisfiesAdviceSidecarProbe_LadderPrefersHealthySidecar(t *test
 		SidecarVersion:    "1.0.0",
 		ExePath:           exePath,
 		EngineSHA256:      sha,
-		ContractVersions:  map[string]int{"api": SupportedContractMajor},
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	})
 	m := NewManager(l, NewClient(stub.URL(), nil), nil, "harness", "0.84.0")

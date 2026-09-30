@@ -5,11 +5,16 @@ import (
 	"strings"
 )
 
-// SupportedContractMajor is the `/v1` API contract-major this build of
-// the harness understands (design §6.4: "Contracts — /v1 API
-// contract-major on /health"). A single package constant rather than a
-// per-call parameter, matching how the rest of the harness pins its own
-// protocol version once per build.
+// SupportedContractMajor is the lifecycle-protocol major this build of
+// the harness speaks — compared against /health's `lifecycle_protocol`
+// (design §6.4's "contract-major on /health"). The kenaz-ml engine
+// publishes no API-wide contract number on /health (its
+// `contract_versions` are per-kind feature-contract hashes, negotiated
+// per call through /v1/contracts), so the integer lease protocol is the
+// only protocol version there is to gate adoption on (interop ruling
+// 2026-09-30). A single package constant rather than a per-call
+// parameter, matching how the rest of the harness pins its own protocol
+// version once per build.
 const SupportedContractMajor = 1
 
 // AdoptAction is EvaluateAdoption's verdict.
@@ -152,38 +157,25 @@ func EvaluateAdoption(layout Layout, health HealthPayload) (AdoptDecision, error
 	return AdoptDecision{Action: AdoptAccept, Health: health, Detail: "verified install, verified process identity"}, nil
 }
 
-// contractCompatible reports whether health's advertised API
-// contract-major is one this client build can speak to. Design §6.4:
-// "the engine maintains N and N−1 per-kind feature contracts during
-// transitions" — applied here at the coarser API-contract-major level
-// that gates adoption at all; per-kind N/N−1 handling belongs to the
-// dispatch layer (design §3.2), not to adoption.
-//
-// A HealthPayload with no "api" entry in ContractVersions at all is
-// treated as compatible: the absence of contract information is not
-// itself proof of incompatibility, and refusing every uninstrumented
-// process would make AdoptContractUnsupported swallow AdoptPortConflict's
-// more specific verdict.
+// contractCompatible reports whether health's advertised lifecycle
+// protocol is one this client build can speak to. Design §6.4: "the
+// engine maintains N and N−1 ... during transitions" — applied here to
+// the protocol major that gates adoption at all; per-kind feature-
+// contract negotiation (the 16-hex hashes in /health contract_versions
+// and /v1/contracts) belongs to the dispatch layer (design §3.2) and to
+// SidecarAdvisor's per-call routing, not to adoption.
 //
 // SECURITY NOTE (2026-09-29 review): this function is NEVER consulted
 // for a pre-lease (LifecycleProtocol==0) engine — that branch in
 // EvaluateAdoption returns AdoptLegacyUnverified unconditionally, before
-// this function would ever run. The leniency documented above was, prior
-// to that amendment, exploitable: a bare `{}` /health response has no
-// "api" entry, so this function said "compatible", and the legacy branch
-// used to map a compatible legacy engine straight to an adopted/healthy
-// state. With the legacy branch no longer calling this function at all,
-// the leniency is confirmed benign — every remaining caller is a
-// lease-aware (LifecycleProtocol >= 1) engine that has ALREADY passed
-// (or is about to fail) the unconditional on-disk digest re-verification
-// a few lines below in EvaluateAdoption, so a missing "api" entry alone
-// can never result in an unverified process being adopted.
+// this function would ever run — and every engine that passes it still
+// faces the unconditional on-disk digest re-verification a few lines
+// below in EvaluateAdoption. (The pre-2026-09-30 version read an "api"
+// entry out of contract_versions and treated its absence as compatible;
+// the engine never published one, and the field is per-kind now.)
 func contractCompatible(health HealthPayload, supportedMajor int) bool {
-	major, ok := health.ContractVersions["api"]
-	if !ok {
-		return true
-	}
-	return major == supportedMajor || major == supportedMajor-1
+	p := health.LifecycleProtocol
+	return p == supportedMajor || (p == supportedMajor-1 && p > 0)
 }
 
 // pathIsWithin reports whether target is equal to or nested under root,

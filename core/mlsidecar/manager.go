@@ -2,6 +2,7 @@ package mlsidecar
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -108,6 +109,16 @@ func (m *Manager) reconcileLocked(ctx context.Context) Status {
 		m.status = m.evaluateRunning(health)
 		return m.status
 	}
+	if errors.Is(err, ErrUnusableResponse) {
+		// Something IS listening — it just did not answer /health with a
+		// payload this client can read (a foreign process, or an engine
+		// whose /health shape drifted from this build's). The port is
+		// taken: spawning here would only launch a second engine that
+		// cannot bind. Never adopted, never spawned over, never killed.
+		m.status = Status{State: StateInstalledUnhealthy, Reason: ReasonPortConflict,
+			Detail: "a process answered /health but not with a usable health payload: " + err.Error(), UpdatedAt: time.Now()}
+		return m.status
+	}
 
 	// Nothing answered /health: either nothing is installed, or an
 	// installed engine is not currently running and this client should
@@ -136,7 +147,7 @@ func (m *Manager) evaluateRunning(health HealthPayload) Status {
 	switch decision.Action {
 	case AdoptAccept:
 		m.renewLease()
-		return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.ContractVersions["api"], Detail: decision.Detail, UpdatedAt: now}
+		return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.LifecycleProtocol, Detail: decision.Detail, UpdatedAt: now}
 	case AdoptLegacyUnverified:
 		// Never healthy, never leased: adopt-only in the narrow sense of
 		// "never terminate, never double-spawn" — the advisor ladder must
@@ -193,7 +204,7 @@ func (m *Manager) spawnLocked(ctx context.Context) Status {
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: "spawned but did not become healthy: " + herr.Error(), UpdatedAt: now}
 	}
 	m.renewLease()
-	return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.ContractVersions["api"], Detail: "spawned", UpdatedAt: time.Now()}
+	return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.LifecycleProtocol, Detail: "spawned", UpdatedAt: time.Now()}
 }
 
 // renewLease piggybacks the harness's own file-lease heartbeat onto a

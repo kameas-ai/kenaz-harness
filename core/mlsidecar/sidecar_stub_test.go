@@ -9,14 +9,17 @@ import (
 	"sync"
 )
 
-// stubSidecar is a test-only HTTP server speaking the design's wire
-// shapes (§3.3): /health, /status, /v1/contracts, /v1/clients/lease,
-// /v1/admin/shutdown, /v1/recommend/{kind}, /v1/systemone. The real
-// kenaz-ml sidecar does not serve any of this yet (design §9 Phase 1) —
-// tasks.md's WP12 row requires the harness's lifecycle manager and
-// ladder to be "built against a stub HTTP server ... regardless" of the
-// ml team's packaging choices, so this is the ENTIRE far end every test
-// in this package talks to. No Python, no real network — httptest only.
+// stubSidecar is a test-only HTTP server speaking the kenaz-ml engine's
+// wire shapes: /health, /status, /v1/contracts, /v1/clients/lease,
+// /v1/admin/shutdown, /v1/recommend/{kind}, /v1/labels/{kind},
+// /v1/systemone. It is the CONTRACT MIRROR of the real engine
+// (kenaz-ml two-client-engine-01MSK2EN, routes.py + advice/dispatch.py
+// + advice/label_log.py, interop ruling 2026-09-30): status codes, error
+// envelopes and field names follow the engine, not this package's own
+// guesses — a drift between the two is a bug in whichever side moved,
+// and the 2026-09-30 interop review found six. Keep it in lockstep with
+// the engine's docs/openapi.json. No Python, no real network — httptest
+// only.
 type stubSidecar struct {
 	mu sync.Mutex
 
@@ -37,25 +40,33 @@ type stubSidecar struct {
 	shutdownRequireToken string // "" accepts any Authorization header
 	shutdownCalls        []string
 
-	// /v1/recommend scripting (WP15).
+	// /v1/recommend scripting (WP15). recommendRefused maps a kind to the
+	// typed refusal reason the engine answers it with (kind_not_served,
+	// laya_backend_not_installed, contract_mismatch, ...).
 	recommendCalls   []string
-	recommendRefused map[string]bool
+	recommendRefused map[string]string
 	recommendScript  map[string]RecommendResponse
 	recommendRaw     map[string][]byte // verbatim body, bypassing JSON encoding
 
 	// /v1/labels ingest (WP14): the mirror + fault knobs.
 	labelMirror      map[string]storedLabel
 	labelPosts       []LabelPushRequest
-	labelsFailStatus int       // non-2xx simulates an engine error
-	labelsAckLimit   int       // >0: apply/ack only the first N rows of a batch
-	labelsBogusAck   *LabelAck // non-nil: respond with this ack regardless
+	labelsFailStatus int              // non-2xx simulates an engine error (409/404 carry the refusal envelope)
+	labelsAckLimit   int              // >0: apply/ack only the first N rows of a batch
+	labelsBogusAck   *LabelAck        // non-nil: respond with this ack regardless
+	labelsRefuseRev  map[int64]string // revision -> per-row refusal reason (a poison row)
 
 	srv *httptest.Server
 }
 
 func newStubSidecar() *stubSidecar {
 	s := &stubSidecar{
-		leaseResponse: LeaseWireResponse{LeaseID: "lease-1", ExpiresInS: 90},
+		leaseResponse: LeaseWireResponse{
+			LifecycleProtocol: 1, SidecarVersion: "1.0.0",
+			ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
+			IncompatibleKinds: map[string]string{},
+			Client:            "harness", LiveLeases: 1, ImplicitLeaseSec: 90, IdleExitSec: 120, Managed: true,
+		},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
@@ -175,11 +186,34 @@ func (s *stubSidecar) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	s.shutdownCalls = append(s.shutdownCalls, auth)
 	want := s.shutdownRequireToken
 	s.mu.Unlock()
+	// The engine: no/blank bearer -> 401, wrong token -> 403, both with
+	// {"error": <reason>, "detail": ...}; success -> 202
+	// {"status": "shutting_down"}.
 	if want != "" && auth != "Bearer "+want {
-		w.WriteHeader(http.StatusUnauthorized)
+		code, reason := http.StatusForbidden, "token_mismatch"
+		if !strings.HasPrefix(auth, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == "" {
+			code, reason = http.StatusUnauthorized, "no_token"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": reason, "detail": "shutdown refused: " + reason})
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "shutting_down"})
+}
+
+// writeRefusal writes the engine's typed-refusal envelope: a top-level
+// {"error": <code>} (what newStatusError parses) PLUS the
+// {"refusal": {kind_id, reason, detail}} detail (dispatch.RecommendRefusal).
+func writeRefusal(w http.ResponseWriter, status int, kind, reason, detail string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error":   reason,
+		"refusal": map[string]string{"kind_id": kind, "reason": reason, "detail": detail},
+	})
 }
 
 func (s *stubSidecar) shutdownCallCount() int {
@@ -192,16 +226,16 @@ func (s *stubSidecar) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	kind := strings.TrimPrefix(r.URL.Path, "/v1/recommend/")
 	s.mu.Lock()
 	s.recommendCalls = append(s.recommendCalls, kind)
-	refused := s.recommendRefused[kind]
+	reason, refused := s.recommendRefused[kind]
 	scripted, hasScript := s.recommendScript[kind]
 	s.mu.Unlock()
-	w.Header().Set("Content-Type", "application/json")
 	if refused {
-		// Amendment A3.2: typed "kind not served" refusal.
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": KindNotServedCode})
+		// Amendment A3.2: every typed refusal is HTTP 422 with the
+		// refusal envelope (dispatch.REFUSAL_STATUS_CODE).
+		writeRefusal(w, http.StatusUnprocessableEntity, kind, reason, "kind unavailable: "+reason)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	s.mu.Lock()
 	raw, hasRaw := s.recommendRaw[kind]
 	s.mu.Unlock()
@@ -213,7 +247,10 @@ func (s *stubSidecar) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(scripted)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(RecommendResponse{Confidence: 80, Backend: "heuristic", KindID: "branch_now"})
+	yes := true
+	_ = json.NewEncoder(w).Encode(RecommendResponse{Decision: &yes, Confidence: 80, Backend: "heuristic", KindID: kind,
+		FeatureContractVersion: "0123456789abcdef", Model: "fixture/heuristic", Rung: "heuristic",
+		CheckpointProvenance: "local", Generation: "0", Unbenchmarked: true})
 }
 
 func (s *stubSidecar) setRecommend(kind string, resp RecommendResponse) {
@@ -235,12 +272,16 @@ func (s *stubSidecar) setRecommendRaw(kind string, body []byte) {
 }
 
 func (s *stubSidecar) refuseRecommend(kind string) {
+	s.refuseRecommendWith(kind, KindNotServedCode)
+}
+
+func (s *stubSidecar) refuseRecommendWith(kind, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.recommendRefused == nil {
-		s.recommendRefused = map[string]bool{}
+		s.recommendRefused = map[string]string{}
 	}
-	s.recommendRefused[kind] = true
+	s.recommendRefused[kind] = reason
 }
 
 func (s *stubSidecar) recommendCallCount() int {
@@ -262,15 +303,36 @@ func labelKey(client string, r LabelWireRow) string {
 	return fmt.Sprintf("%s|%s|%s|%d", client, r.Kind, r.FeaturesHash, r.TS)
 }
 
-// handleLabels implements POST /v1/labels/{kind}: revision upsert +
-// cursor ack. The ack is the (ts, revision) of the LAST row of the batch
-// the stub applied — or of the ackLimit-th row when a partial ack is
-// scripted. Every request is recorded (labelPosts) for call-count proofs.
+// labelWireResponse is the engine's LabelBatchResponse as it goes on the
+// wire: acked is a POINTER so a batch whose first row is refused answers
+// `"acked": null`, exactly like the engine (a Go LabelAck value would
+// encode {"ts":0,"revision":0} and hide the null path from every test).
+type labelWireResponse struct {
+	Acked    *LabelAck         `json:"acked"`
+	Applied  int               `json:"applied"`
+	Replaced int               `json:"replaced"`
+	Stale    int               `json:"stale"`
+	Refused  int               `json:"refused"`
+	Refusals []LabelRowRefusal `json:"refusals"`
+	// The engine's extras the harness does not read.
+	RetainedAppended int  `json:"retained_appended"`
+	RetainedRebuilt  bool `json:"retained_rebuilt"`
+}
+
+// handleLabels implements POST /v1/labels/{kind} the way the engine's
+// label_log.ingest does: rows are processed IN THE ORDER SENT; each is
+// applied (new key), replaced (higher revision) or stale; a refused row
+// (labelsRefuseRev) is reported in refusals and closes the acked prefix —
+// acked is the (ts, revision) of the last row of the LEADING run that was
+// not refused, or null when the first row is refused. labelsFailStatus
+// simulates a whole-batch refusal (409 contract/names mismatch, 404
+// unknown kind — both with the refusal envelope) or an I/O error (503).
+// Every request is recorded (labelPosts) for call-count proofs.
 func (s *stubSidecar) handleLabels(w http.ResponseWriter, r *http.Request) {
 	kind := strings.TrimPrefix(r.URL.Path, "/v1/labels/")
 	var req LabelPushRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		w.WriteHeader(http.StatusUnprocessableEntity)
 		return
 	}
 	s.mu.Lock()
@@ -278,20 +340,37 @@ func (s *stubSidecar) handleLabels(w http.ResponseWriter, r *http.Request) {
 	fail := s.labelsFailStatus
 	limit := s.labelsAckLimit
 	badAck := s.labelsBogusAck
+	refuse := s.labelsRefuseRev
 	if fail != 0 {
 		s.mu.Unlock()
-		w.WriteHeader(fail)
+		switch fail {
+		case http.StatusConflict:
+			writeRefusal(w, fail, kind, "contract_mismatch", "features do not match contract")
+		case http.StatusNotFound:
+			writeRefusal(w, fail, kind, "unknown_kind", "unknown kind "+kind)
+		case http.StatusServiceUnavailable:
+			writeRefusal(w, fail, kind, "io_error", "label log I/O failure")
+		default:
+			w.WriteHeader(fail)
+		}
 		return
 	}
 	if s.labelMirror == nil {
 		s.labelMirror = map[string]storedLabel{}
 	}
-	var resp LabelPushResponse
+	resp := labelWireResponse{Refusals: []LabelRowRefusal{}}
 	rows := req.Rows
 	if limit > 0 && len(rows) > limit {
 		rows = rows[:limit]
 	}
-	for _, row := range rows {
+	prefixOpen := true
+	for i, row := range rows {
+		if reason, bad := refuse[row.Revision]; bad {
+			resp.Refused++
+			resp.Refusals = append(resp.Refusals, LabelRowRefusal{Index: i, FeaturesHash: row.FeaturesHash, TS: row.TS, Revision: row.Revision, Reason: reason})
+			prefixOpen = false
+			continue
+		}
 		k := labelKey(req.Client, row)
 		prev, exists := s.labelMirror[k]
 		switch {
@@ -304,18 +383,32 @@ func (s *stubSidecar) handleLabels(w http.ResponseWriter, r *http.Request) {
 		default:
 			resp.Stale++
 		}
-	}
-	if len(rows) > 0 {
-		last := rows[len(rows)-1]
-		resp.Acked = LabelAck{TS: last.TS, Revision: last.Revision}
+		if prefixOpen {
+			resp.Acked = &LabelAck{TS: row.TS, Revision: row.Revision}
+		}
 	}
 	if badAck != nil {
-		resp.Acked = *badAck
+		a := *badAck
+		resp.Acked = &a
 	}
 	s.mu.Unlock()
-	_ = kind
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// setLabelsRefuseRevision makes the stub refuse the row with revision rev
+// (a per-row refusal, e.g. "features_invalid") on every push.
+func (s *stubSidecar) setLabelsRefuseRevision(rev int64, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.labelsRefuseRev == nil {
+		s.labelsRefuseRev = map[int64]string{}
+	}
+	if reason == "" {
+		delete(s.labelsRefuseRev, rev)
+		return
+	}
+	s.labelsRefuseRev[rev] = reason
 }
 
 func (s *stubSidecar) setLabelsFail(code int) {

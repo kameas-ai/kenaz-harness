@@ -28,7 +28,7 @@ func newHangingRecommendServer(released chan<- struct{}) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/contracts", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(ContractsPayload{Kinds: map[string]KindContract{
-			"ae_hung": {ContractVersion: 1, Backend: "classic", Available: true},
+			"ae_hung": {Version: "00000000000000a1", Backend: "classic", Available: true},
 		}})
 	})
 	mux.HandleFunc("/v1/recommend/", func(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +77,7 @@ func newAdviceRig(t *testing.T, kindID string) *adviceRig {
 	t.Cleanup(r.stub.Close)
 	r.probe.healthy.Store(true)
 	r.stub.setContracts(ContractsPayload{Kinds: map[string]KindContract{
-		kindID: {ContractVersion: 2, Backend: "classic", Available: true},
+		kindID: {Version: "00000000000000b2", SupportedVersions: []string{"00000000000000b2"}, Backend: "classic", Available: true},
 	}})
 	fb := advice.NewHeuristicAdvisor()
 	fb.RegisterHeuristic(kindID, func(advice.Features) (bool, int, string, error) {
@@ -94,11 +94,11 @@ func (r *adviceRig) recommend(n int) (advice.Recommendation, error) {
 
 func TestAdviceEngine_ServedKind_EngineFieldsCarriedVerbatim(t *testing.T) {
 	r := newAdviceRig(t, "ae_served")
-	yes, score := true, 80
+	yes := true
 	r.stub.setRecommend("ae_served", RecommendResponse{
-		Decision: &yes, Score: &score, Confidence: 87, KindID: "ae_served", FeatureContractVersion: 2,
+		Decision: &yes, Confidence: 87, KindID: "ae_served", FeatureContractVersion: "00000000000000b2",
 		Model: "kenaz-ml/laya-deadbeef", Rung: "laya", Backend: "laya", ModelIDSha8: "deadbeef",
-		CheckpointProvenance: "base", Generation: 4, Unbenchmarked: true,
+		CheckpointProvenance: "base", Generation: "4", Unbenchmarked: true,
 	})
 	rec, err := r.recommend(1)
 	if err != nil {
@@ -159,8 +159,15 @@ func TestAdviceEngine_StatusErrorIsTyped(t *testing.T) {
 	stub.refuseRecommend("k")
 	_, err := NewClient(stub.URL(), nil).Recommend(context.Background(), "k", RecommendRequest{})
 	var se *StatusError
-	if !errors.As(err, &se) || se.Status != http.StatusConflict || se.Code != KindNotServedCode || !errors.Is(err, ErrKindNotServed) {
-		t.Fatalf("err = %#v, want a *StatusError{409, kind_not_served} satisfying ErrKindNotServed", err)
+	if !errors.As(err, &se) || se.Status != http.StatusUnprocessableEntity || se.Code != KindNotServedCode || !errors.Is(err, ErrKindNotServed) {
+		t.Fatalf("err = %#v, want a *StatusError{422, kind_not_served} satisfying ErrKindNotServed", err)
+	}
+	// laya_backend_not_installed is a DISTINCT typed refusal: typed (the
+	// Code carries it), not kind_not_served.
+	stub.refuseRecommendWith("k2", "laya_backend_not_installed")
+	_, err = NewClient(stub.URL(), nil).Recommend(context.Background(), "k2", RecommendRequest{})
+	if !errors.As(err, &se) || se.Code != "laya_backend_not_installed" || errors.Is(err, ErrKindNotServed) {
+		t.Fatalf("laya refusal err = %#v", err)
 	}
 	// A plain non-2xx keeps the old message shape and is NOT kind-not-served.
 	stub.setLabelsFail(http.StatusInternalServerError)
