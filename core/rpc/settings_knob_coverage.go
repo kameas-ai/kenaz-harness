@@ -261,24 +261,47 @@ func init() {
 	)
 	knobcoverage.Register[settings.Settings](
 		"AdvisorModel",
-		"laya-advisors-01LAYA001 WP02: core/rpc/api.go's newLLMStack "+
-			"(~line 6186) builds the chatAdvisor ProfileResolver closure "+
-			"by reading this field on every advisor-model resolution and "+
-			"feeding it, plus the live personal.Store profile list, into "+
-			"advice.ResolveAdvisorModel — rung 1 (explicit setting) of "+
-			"the laya ladder, mirroring RiskRaterModel's exact pattern. "+
-			"The SAME block also resolves + logs ONCE, unconditionally, "+
-			"at newLLMStack construction time (the "+
-			"'advice.laya_ladder.boot_resolve' slog line) — a real, "+
-			"always-executed call site on every served/desktop boot with "+
-			"reg != nil, independent of whether any AdviceKind has "+
-			"shipped (WP04-06 add branch_now/compact_now/escalate_model "+
-			"as a later mission phase; the seam and the ladder land "+
-			"first with zero kinds registered, mirroring risk.RiskRater's "+
-			"own WP04 staging). No UI picker ships in WP01-03 — the "+
-			"field rides the existing generic Settings_Get/SaveAll "+
-			"bindings, same as RiskRaterModel/CompactionModel; a picker "+
-			"is a later WP's concern.",
+		"laya-advisors-01LAYA001 WP02/WP04-06: core/rpc/api.go's "+
+			"newLLMStack resolves + logs this field ONCE, unconditionally, "+
+			"at construction time (the 'advice.laya_ladder.boot_resolve' "+
+			"slog line) via advice.ResolveAdvisorModel — rung 1 (explicit "+
+			"setting) of the laya ladder, mirroring RiskRaterModel's exact "+
+			"pattern. This is a real, always-executed call site on every "+
+			"served/desktop boot with reg != nil. As of WP04-06 the "+
+			"production chatAdvisor is a *advice.HeuristicAdvisor (rung "+
+			"R1: branch_now/compact_now/escalate_model, zero model calls) "+
+			"which does NOT consult this ladder — RungHeuristic sits "+
+			"outside model resolution entirely (see its doc comment) — so "+
+			"this field's live effect today is the boot-time resolve+log "+
+			"line only, pending a future laya/LLM backend (design §5.4 "+
+			"Phase B/C) that DOES read it per call. No UI picker ships "+
+			"yet — the field rides the existing generic "+
+			"Settings_Get/SaveAll bindings, same as RiskRaterModel/"+
+			"CompactionModel; a picker is a later WP's concern.",
+	)
+	knobcoverage.Register[settings.Settings](
+		"AdviceBranchNowDisabled",
+		"laya-advisors-01LAYA001 WP04-06: core/rpc/api.go's newLLMStack "+
+			"wires a advice.KindGate closure via heuristicAdvisor."+
+			"SetKindGate(advicebranchnow.KindID, ...) that reads this "+
+			"field fresh on every call — false (default) lets "+
+			"HeuristicAdvisor.Recommend serve branch_now; true makes it "+
+			"degrade to ErrNoAdvice, independent of compact_now/"+
+			"escalate_model (spec AC-02: kinds are independently "+
+			"disableable).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"AdviceCompactNowDisabled",
+		"laya-advisors-01LAYA001 WP04-06: same SetKindGate mechanism as "+
+			"AdviceBranchNowDisabled, wired onto advicecompactnow.KindID — "+
+			"gates compact_now independent of branch_now/escalate_model.",
+	)
+	knobcoverage.Register[settings.Settings](
+		"AdviceEscalateModelDisabled",
+		"laya-advisors-01LAYA001 WP04-06: same SetKindGate mechanism as "+
+			"AdviceBranchNowDisabled, wired onto adviceescalatemodel."+
+			"KindID — gates escalate_model independent of branch_now/"+
+			"compact_now.",
 	)
 
 	// ── Compaction dials ─────────────────────────────────────────────

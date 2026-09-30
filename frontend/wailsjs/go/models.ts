@@ -7420,6 +7420,9 @@ export namespace settings {
 	    chatCustomInstructions?: string;
 	    bundleSigningPolicy?: string;
 	    advisorModel?: ProviderProfileRef;
+	    adviceBranchNowDisabled?: boolean;
+	    adviceCompactNowDisabled?: boolean;
+	    adviceEscalateModelDisabled?: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -7511,6 +7514,9 @@ export namespace settings {
 	        this.chatCustomInstructions = source["chatCustomInstructions"];
 	        this.bundleSigningPolicy = source["bundleSigningPolicy"];
 	        this.advisorModel = this.convertValues(source["advisorModel"], ProviderProfileRef);
+	        this.adviceBranchNowDisabled = source["adviceBranchNowDisabled"];
+	        this.adviceCompactNowDisabled = source["adviceCompactNowDisabled"];
+	        this.adviceEscalateModelDisabled = source["adviceEscalateModelDisabled"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
