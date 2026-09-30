@@ -45,6 +45,7 @@ import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
 import AdviceChip from '@/components/chat/AdviceChip.vue';
+import AdviceAutoActedBanner from '@/components/chat/AdviceAutoActedBanner.vue';
 import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
@@ -1426,6 +1427,17 @@ async function onAdviceChipAccept() {
 async function onAdviceChipDismiss() {
   await adviceChips.dismiss();
 }
+// spec §3: "auto-act AND notify (banner + audit event)". Before
+// AdviceAutoActedBanner.vue existed, autoActedBanner/clearAutoActedBanner
+// were computed by useAdviceChips with zero .vue consumers — the app
+// silently branched a session with no visible notice.
+function onAdviceAutoActedOpen(childSessionId: string) {
+  adviceChips.clearAutoActedBanner();
+  onBranchOpen(childSessionId);
+}
+function onAdviceAutoActedDismiss() {
+  adviceChips.clearAutoActedBanner();
+}
 
 // Reset dismiss state when navigating to a different session.
 // FR-020: SessionsView lives inside Shell.vue's <KeepAlive> with no
@@ -2350,9 +2362,18 @@ async function onShared() {
         <AdviceChip
           v-if="adviceChips.activeChip.value"
           :chip="adviceChips.activeChip.value"
-          data-testid="advice-chip-banner"
           @accept="onAdviceChipAccept"
           @dismiss="onAdviceChipDismiss"
+        />
+        <!-- Advisor seam auto-act notice (laya-advisors-01LAYA001 WP07,
+             spec §3: "auto-act AND notify"). Fires when branch_now
+             auto-acts at the Autonomous tier — the ONLY visible signal
+             the user gets that a branch was created on their behalf. -->
+        <AdviceAutoActedBanner
+          v-if="adviceChips.autoActedBanner.value"
+          :notice="adviceChips.autoActedBanner.value"
+          @open="onAdviceAutoActedOpen"
+          @dismiss="onAdviceAutoActedDismiss"
         />
         <!-- SlashArgFill panel (WP06): shown when the user picks a
              user-defined slash command that declares input args.
