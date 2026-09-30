@@ -153,8 +153,14 @@ func TestFireAdvice_SlowAdvisor_BoundedByRecommendBudget(t *testing.T) {
 		t.Fatal("Recommend never observed ctx cancellation — it returned via the 5s delay branch instead, meaning AdviceRecommendBudget's timeout never reached the call")
 	}
 	first := cancelledIn[0]
-	if first < AdviceRecommendBudget {
-		t.Errorf("ctx cancellation observed after %v, want >= AdviceRecommendBudget (%v)", first, AdviceRecommendBudget)
+	// 50ms tolerance on the lower bound: the measurement clock starts
+	// after ctx creation, and timer firing has platform granularity — CI
+	// observed 799.87ms against an 800ms budget (a 130µs undershoot that
+	// failed this as a strict inequality). The property is "the budget
+	// does not cancel EARLY", and 50ms of skew is measurement noise, not
+	// early cancellation.
+	if first < AdviceRecommendBudget-50*time.Millisecond {
+		t.Errorf("ctx cancellation observed after %v, want ~AdviceRecommendBudget (%v) — cancelled early", first, AdviceRecommendBudget)
 	}
 	// Load tolerance: the property under test is that cancellation is
 	// BOUNDED — observed well before the fake's 5s hang — not that
