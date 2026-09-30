@@ -117,10 +117,16 @@ func (m *Manager) reconcileLocked(ctx context.Context) Status {
 }
 
 // evaluateRunning handles the "something answered /health" branch via
-// EvaluateAdoption (design F2), mapping its verdict onto the six-state
-// machine and renewing this client's lease whenever the result is usable
-// (design §3.7 R4: "every /health poll counts as an implicit 90s
-// lease").
+// EvaluateAdoption (design F2), mapping its verdict onto the state
+// machine and renewing this client's lease whenever the result is a
+// verified, usable install (design §3.7 R4: "every /health poll counts
+// as an implicit 90s lease").
+//
+// AMENDED (2026-09-29 security-review ruling): AdoptLegacyUnverified
+// maps to StateLegacyUnverified, NOT StateHealthy, and does NOT renew
+// this client's lease — a legacy engine is never usable for
+// recommendations (see StateLegacyUnverified's doc comment), so this
+// client has no relationship with it worth advertising via a lease.
 func (m *Manager) evaluateRunning(health HealthPayload) Status {
 	decision, err := EvaluateAdoption(m.Layout, health)
 	if err != nil {
@@ -131,12 +137,12 @@ func (m *Manager) evaluateRunning(health HealthPayload) Status {
 	case AdoptAccept:
 		m.renewLease()
 		return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.ContractVersions["api"], Detail: decision.Detail, UpdatedAt: now}
-	case AdoptLegacy:
-		// Bridged via the implicit health-poll lease (design §3.7 R4) —
-		// usable, so it counts as healthy for the advisor ladder, but the
-		// Reason keeps the distinction visible to a settings panel.
-		m.renewLease()
-		return Status{State: StateHealthy, Reason: ReasonLegacyEngine, EngineVersion: health.SidecarVersion, Detail: decision.Detail, UpdatedAt: now}
+	case AdoptLegacyUnverified:
+		// Never healthy, never leased: adopt-only in the narrow sense of
+		// "never terminate, never double-spawn" — the advisor ladder must
+		// fall through to RungNone for this sidecar (SidecarProbe.Healthy()
+		// reads State != StateHealthy).
+		return Status{State: StateLegacyUnverified, Reason: ReasonLegacyEngine, EngineVersion: health.SidecarVersion, Detail: decision.Detail, UpdatedAt: now}
 	case AdoptContractUnsupported:
 		return Status{State: StateContractUnsupported, EngineVersion: health.SidecarVersion, Detail: decision.Detail, UpdatedAt: now}
 	case AdoptPortConflict:

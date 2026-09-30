@@ -27,9 +27,13 @@ const (
 	// resolve to any install this client recognizes at all (foreign
 	// process, or no `current` exists yet). Never killed.
 	AdoptPortConflict AdoptAction = "port_conflict"
-	// AdoptLegacy: a pre-lease engine (design F5/§3.7 R4). Adopt-only:
-	// never terminate it, never spawn a second instance alongside it.
-	AdoptLegacy AdoptAction = "legacy_pre_lease"
+	// AdoptLegacyUnverified: a pre-lease engine (design F5/§3.7 R4,
+	// AMENDED by the 2026-09-29 security-review ruling — see
+	// StateLegacyUnverified's doc comment). Never terminated, never
+	// double-spawned, but NEVER usable for recommendations: it was not
+	// installed by this client, so there is no install.json record to
+	// verify it against, regardless of contract-major.
+	AdoptLegacyUnverified AdoptAction = "legacy_unverified"
 	// AdoptContractUnsupported: the running engine's contract-major is
 	// outside what this client build understands (design §3.7 R7). This
 	// client alone degrades to a read-only stranded state; the shared
@@ -48,11 +52,17 @@ type AdoptDecision struct {
 // EvaluateAdoption implements design F2 ("Adopt-first, verified"): a
 // client NEVER trusts a running process's self-report. It:
 //
-//  1. Checks lifecycle_protocol for the skew-window case (design F5):
-//     a pre-lease engine is adopt-only, contract-compatibility
-//     permitting.
+//  1. Checks lifecycle_protocol for the skew-window case (design F5,
+//     AMENDED 2026-09-29 — see StateLegacyUnverified's doc comment): a
+//     pre-lease engine is ALWAYS unverifiable and therefore never usable
+//     for recommendations, regardless of contract-major. R2's universal-
+//     verification rule ("a process not running from a client-verified
+//     shared-dir install is a port-conflict state, never an adoptee")
+//     applies here without exception — a legacy engine was, by
+//     definition, not installed by this client, so there is no
+//     install.json record to check it against.
 //  2. Checks this client's own contract-major compatibility (design
-//     §3.7 R7) before anything else — an incompatible engine strands
+//     §3.7 R7) for a LEASE-AWARE engine — an incompatible engine strands
 //     this client regardless of how well-verified the binary is.
 //  3. Resolves health.ExePath: it must point inside THIS client's own
 //     `current` version directory. A process running from anywhere
@@ -73,22 +83,23 @@ type AdoptDecision struct {
 // manager_test.go instead.
 func EvaluateAdoption(layout Layout, health HealthPayload) (AdoptDecision, error) {
 	if health.LifecycleProtocol == 0 {
-		// Design F5/§3.7 R4: "a pre-lease engine found running is
-		// adopt-only (never terminate, never double-spawn; use if
-		// contract-compatible else surface 'update Kenaz to share the ML
-		// engine')".
-		if !contractCompatible(health, SupportedContractMajor) {
-			return AdoptDecision{
-				Action: AdoptContractUnsupported,
-				Health: health,
-				Detail: "legacy engine's contract is unsupported by this client — update Kenaz to share the ML engine",
-			}, nil
-		}
+		// AMENDED (2026-09-29 security-review ruling, supersedes the
+		// original F5 text): a pre-lease engine is UNCONDITIONALLY
+		// unverifiable — it was not installed by this client, so no
+		// install.json record exists to check it against, and
+		// contract-major compatibility cannot substitute for that. The
+		// pre-amendment code branched on contractCompatible here and
+		// returned AdoptLegacy (mapped to StateHealthy) for a
+		// "compatible" legacy engine; combined with contractCompatible's
+		// documented "no api entry => compatible" leniency, a process
+		// answering /health with a bare `{}` was adopted as healthy.
+		// This branch no longer consults contractCompatible at all: EVERY
+		// pre-lease engine is AdoptLegacyUnverified, full stop.
 		return AdoptDecision{
-			Action: AdoptLegacy,
+			Action: AdoptLegacyUnverified,
 			Reason: ReasonLegacyEngine,
 			Health: health,
-			Detail: "pre-lease engine (no lifecycle_protocol): adopt-only, never terminated, never double-spawned",
+			Detail: "pre-lease engine (no lifecycle_protocol): unverifiable against this client's install record — update Kenaz to share the ML engine. Never terminated, never double-spawned, never used for recommendations.",
 		}, nil
 	}
 
@@ -151,8 +162,22 @@ func EvaluateAdoption(layout Layout, health HealthPayload) (AdoptDecision, error
 // A HealthPayload with no "api" entry in ContractVersions at all is
 // treated as compatible: the absence of contract information is not
 // itself proof of incompatibility, and refusing every uninstrumented
-// process would make AdoptContractUnsupported swallow AdoptPortConflict
-// / AdoptLegacy's more specific verdicts.
+// process would make AdoptContractUnsupported swallow AdoptPortConflict's
+// more specific verdict.
+//
+// SECURITY NOTE (2026-09-29 review): this function is NEVER consulted
+// for a pre-lease (LifecycleProtocol==0) engine — that branch in
+// EvaluateAdoption returns AdoptLegacyUnverified unconditionally, before
+// this function would ever run. The leniency documented above was, prior
+// to that amendment, exploitable: a bare `{}` /health response has no
+// "api" entry, so this function said "compatible", and the legacy branch
+// used to map a compatible legacy engine straight to an adopted/healthy
+// state. With the legacy branch no longer calling this function at all,
+// the leniency is confirmed benign — every remaining caller is a
+// lease-aware (LifecycleProtocol >= 1) engine that has ALREADY passed
+// (or is about to fail) the unconditional on-disk digest re-verification
+// a few lines below in EvaluateAdoption, so a missing "api" entry alone
+// can never result in an unverified process being adopted.
 func contractCompatible(health HealthPayload, supportedMajor int) bool {
 	major, ok := health.ContractVersions["api"]
 	if !ok {

@@ -45,8 +45,9 @@ func (f *fakeSpawner) Spawn(_ context.Context, exePath string) (int, error) {
 }
 
 // TestManager_EveryStateDistinctlyReachable drives Manager.Reconcile
-// through a real code path for each of the six honestly-surfaced states
-// tasks.md WP12 requires.
+// through a real code path for each of the honestly-surfaced states
+// tasks.md WP12 requires, plus StateLegacyUnverified (added by the
+// 2026-09-29 security-review amendment to design F5).
 func TestManager_EveryStateDistinctlyReachable(t *testing.T) {
 	t.Run(string(StateNotInstalled), func(t *testing.T) {
 		l := NewLayout(t.TempDir())
@@ -166,12 +167,34 @@ func TestManager_EveryStateDistinctlyReachable(t *testing.T) {
 			t.Fatalf("State = %q, want %q (%s)", got.State, StateContractUnsupported, got.Detail)
 		}
 	})
+
+	t.Run(string(StateLegacyUnverified), func(t *testing.T) {
+		l := NewLayout(t.TempDir())
+		stub := newStubSidecar()
+		defer stub.Close()
+		stub.setHealth(HealthPayload{
+			SidecarVersion:    "0.9.0",
+			ContractVersions:  map[string]int{"api": SupportedContractMajor},
+			LifecycleProtocol: 0,
+		})
+		m := NewManager(l, NewClient(stub.URL(), nil), nil, "harness", "0.84.0")
+		got := m.Reconcile(context.Background())
+		if got.State != StateLegacyUnverified {
+			t.Fatalf("State = %q, want %q (%s)", got.State, StateLegacyUnverified, got.Detail)
+		}
+	})
 }
 
-// TestManager_SkewWindow_AdoptOnly is the "skew adopt-only" proof
-// (design F5/§3.7 R4): a pre-lease legacy engine is adopted for use, but
-// the Manager never spawns a second instance alongside it.
-func TestManager_SkewWindow_AdoptOnly(t *testing.T) {
+// TestManager_SkewWindow_LegacyEngine_NeverHealthyNeverSpawnsOrDoubles is
+// the "skew adopt-only" proof (design F5/§3.7 R4), AS AMENDED by the
+// 2026-09-29 security-review ruling: a pre-lease legacy engine is left
+// running untouched (never terminated, never double-spawned — the
+// spawner must never be called), but it is NEVER reported healthy and
+// NEVER usable via the advisor ladder (SidecarProbe.Healthy()==false).
+// The pre-amendment version of this test (formerly
+// TestManager_SkewWindow_AdoptOnly) asserted the opposite — StateHealthy
+// — which was the security-review's critical finding.
+func TestManager_SkewWindow_LegacyEngine_NeverHealthyNeverSpawnsOrDoubles(t *testing.T) {
 	l := NewLayout(t.TempDir())
 	stub := newStubSidecar()
 	defer stub.Close()
@@ -183,14 +206,47 @@ func TestManager_SkewWindow_AdoptOnly(t *testing.T) {
 	spawner := &fakeSpawner{}
 	m := NewManager(l, NewClient(stub.URL(), nil), spawner, "harness", "0.84.0")
 	got := m.Reconcile(context.Background())
-	if got.State != StateHealthy {
-		t.Fatalf("State = %q, want %q (%s)", got.State, StateHealthy, got.Detail)
+	if got.State != StateLegacyUnverified {
+		t.Fatalf("State = %q, want %q (%s)", got.State, StateLegacyUnverified, got.Detail)
+	}
+	if got.State == StateHealthy {
+		t.Fatal("a legacy engine must never be reported healthy")
 	}
 	if got.Reason != ReasonLegacyEngine {
 		t.Errorf("Reason = %q, want %q", got.Reason, ReasonLegacyEngine)
 	}
 	if spawner.called {
 		t.Error("a legacy engine must be adopt-only: the spawner must never be called")
+	}
+	if m.Healthy() {
+		t.Fatal("SidecarProbe.Healthy() must be false for a legacy-unverified engine — the advisor ladder must fall through")
+	}
+}
+
+// TestManager_BareEmptyHealth_NeverReachesStateHealthy is the
+// security-review's planted-style regression pin at the full Manager/
+// stub-integration level: a process answering GET /health with the
+// literal raw bytes `{}` — the reviewer's exact exploit shape — must
+// never resolve to StateHealthy, and SidecarProbe.Healthy() must report
+// false afterward (closing the ladder path the finding was about).
+func TestManager_BareEmptyHealth_NeverReachesStateHealthy(t *testing.T) {
+	l := NewLayout(t.TempDir())
+	setupVerifiedVersion(t, l, "1.0.0", []byte("engine binary bytes"))
+
+	stub := newStubSidecar()
+	defer stub.Close()
+	stub.setHealthRaw([]byte("{}"))
+
+	m := NewManager(l, NewClient(stub.URL(), nil), &fakeSpawner{}, "harness", "0.84.0")
+	got := m.Reconcile(context.Background())
+	if got.State == StateHealthy {
+		t.Fatalf("a bare {} /health response must never resolve to StateHealthy (got Detail=%q)", got.Detail)
+	}
+	if got.State != StateLegacyUnverified {
+		t.Errorf("State = %q, want %q", got.State, StateLegacyUnverified)
+	}
+	if m.Healthy() {
+		t.Fatal("SidecarProbe.Healthy() must be false after a bare {} /health response")
 	}
 }
 
