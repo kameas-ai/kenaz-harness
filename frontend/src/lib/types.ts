@@ -1336,6 +1336,17 @@ export interface Settings {
   bundleSigningPolicy?: string;
 
   /**
+   * Explicit (provider, model) choice for laya-advisors-01LAYA001's
+   * advisor seam (branch_now / compact_now / escalate_model, WP04-06).
+   * Empty == no explicit choice: the backend's laya ladder
+   * (core/advice.ResolveAdvisorModel) falls back to a detected local
+   * laya model, then to disabled. Mirrors riskRaterModel /
+   * compactionModel exactly; no dedicated picker ships in WP01-03 — the
+   * field rides the generic settings get/save round-trip.
+   */
+  advisorModel?: ProviderProfileRef;
+
+  /**
    * GraphAuthoringEnabled — the model-authored-agent-graphs consent
    * dial (model-authored-graphs-01PMGA01 UNIT-4/UNIT-6, FR-006).
    * Default false: a fresh install, and any install upgraded from a
@@ -3796,6 +3807,42 @@ export interface PermissionRequest {
  * PermissionMode — the three global permission posture values.
  */
 export type PermissionMode = 'strict' | 'normal' | 'permissive';
+
+// ── Advisor seam (laya-advisors-01LAYA001 WP07) ────────────────────────
+
+/**
+ * AdviceChipPayload — the `advice:recommendation` broker/WS event
+ * payload (mirrors core/rpc/views/agentgraph/chat.AdviceChipPayload).
+ * Rendered only at confidence >= 75 with decision === true (the backend
+ * only ever PUBLISHES a chip-worthy recommendation — see
+ * advice.ShouldShowChip — so every payload that arrives on this topic is
+ * already chip-eligible; the frontend does not re-filter).
+ */
+export interface AdviceChipPayload {
+  session_id: string;
+  kind_id: 'branch_now' | 'compact_now' | 'escalate_model' | string;
+  decision: boolean;
+  confidence: number;
+  model: string;
+  rung: string;
+  title: string;
+  body: string;
+  prompt_version: string;
+}
+
+/**
+ * AdviceAutoActedPayload — the `advice:auto-acted` broker/WS event
+ * payload, fired alongside branch_now's Autonomous-tier auto-act
+ * (mirrors core/rpc/views/agentgraph/chat.AdviceAutoActedPayload).
+ */
+export interface AdviceAutoActedPayload {
+  session_id: string;
+  kind_id: string;
+  child_session_id: string;
+  confidence: number;
+  model: string;
+}
+
 // ── Branch Advisor (branch-as-subagent-recommendation WP02/WP03/WP06/WP07) ─
 
 /**

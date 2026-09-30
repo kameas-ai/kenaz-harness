@@ -1180,3 +1180,31 @@
 "Compliance_SkipToID"
 "Sites_EnvList"
 "Sites_EnvSet"
+
+# CLASS: untriaged -- laya-advisors-01LAYA001 WP07, 2026-09-29.
+# 1 entries.
+#
+# Advice_Respond backs the advisor-seam chip's accept/dismiss buttons
+# (AdviceChip.vue) and the auto-act banner's "View branch" action
+# (AdviceAutoActedBanner.vue), both mounted in SessionsView.vue with no
+# NotAvailableInServedMode guard -- the chip and banner DO render in
+# served mode: TopicAdviceRecommendation/TopicAdviceAutoActed are in
+# core/serve/wsstream.go's passthroughTopics and delivery is verified end
+# to end (wsstream_advice_topic_test.go). Only the interactive round trip
+# is unported: harnessClient.ts's served overlay deliberately does NOT
+# override `advice.respond` the way ConfirmClient's served override does
+# for Confirm_Resolve/ResolveAlways/ApproveBatch/CancelBatch/ListPending
+# (all four have real serve dispatch cases, hence no entry here) --
+# createUnsupportedServedClient's reflection leaves it on the generic
+# ServedUnsupportedError path, so a served user who clicks accept/dismiss/
+# View branch gets an honest rejection today rather than a hang or a
+# silent no-op. Same shape as the Planmode_{Approve,Discard,Edit} trio
+# above: a live, served-routed chat-surface affordance whose action
+# buttons reject with ServedUnsupportedError, needing the same port-or-
+# gate call -- deliberately NOT made here; this WP's scope was the
+# desktop round trip end to end.
+#
+# Blocker: a served dispatch case for Advice_Respond (or a served-mode
+# gate on the two components' accept/dismiss/open handlers). Dated
+# 2026-09-29. Owner: alec.
+"Advice_Respond"

@@ -7419,7 +7419,12 @@ export namespace settings {
 	    firstRunOnboardingCompleted?: boolean;
 	    chatCustomInstructions?: string;
 	    bundleSigningPolicy?: string;
-	
+	    advisorModel?: ProviderProfileRef;
+	    adviceBranchNowDisabled?: boolean;
+	    adviceCompactNowDisabled?: boolean;
+	    adviceEscalateModelDisabled?: boolean;
+	    adviceLabelCaptureDisabled?: boolean;
+
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
@@ -7509,8 +7514,13 @@ export namespace settings {
 	        this.firstRunOnboardingCompleted = source["firstRunOnboardingCompleted"];
 	        this.chatCustomInstructions = source["chatCustomInstructions"];
 	        this.bundleSigningPolicy = source["bundleSigningPolicy"];
+	        this.advisorModel = this.convertValues(source["advisorModel"], ProviderProfileRef);
+	        this.adviceBranchNowDisabled = source["adviceBranchNowDisabled"];
+	        this.adviceCompactNowDisabled = source["adviceCompactNowDisabled"];
+	        this.adviceEscalateModelDisabled = source["adviceEscalateModelDisabled"];
+	        this.adviceLabelCaptureDisabled = source["adviceLabelCaptureDisabled"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

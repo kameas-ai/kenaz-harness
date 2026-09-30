@@ -259,6 +259,61 @@ func init() {
 			"model). Settings UI: SettingsView.vue's risk-rater-model "+
 			"section, mirroring CompactionModel's picker pattern.",
 	)
+	knobcoverage.Register[settings.Settings](
+		"AdvisorModel",
+		"laya-advisors-01LAYA001 WP02/WP04-06: core/rpc/api.go's "+
+			"newLLMStack resolves + logs this field ONCE, unconditionally, "+
+			"at construction time (the 'advice.laya_ladder.boot_resolve' "+
+			"slog line) via advice.ResolveAdvisorModel — rung 1 (explicit "+
+			"setting) of the laya ladder, mirroring RiskRaterModel's exact "+
+			"pattern. This is a real, always-executed call site on every "+
+			"served/desktop boot with reg != nil. As of WP04-06 the "+
+			"production chatAdvisor is a *advice.HeuristicAdvisor (rung "+
+			"R1: branch_now/compact_now/escalate_model, zero model calls) "+
+			"which does NOT consult this ladder — RungHeuristic sits "+
+			"outside model resolution entirely (see its doc comment) — so "+
+			"this field's live effect today is the boot-time resolve+log "+
+			"line only, pending a future laya/LLM backend (design §5.4 "+
+			"Phase B/C) that DOES read it per call. No UI picker ships "+
+			"yet — the field rides the existing generic "+
+			"Settings_Get/SaveAll bindings, same as RiskRaterModel/"+
+			"CompactionModel; a picker is a later WP's concern.",
+	)
+	knobcoverage.Register[settings.Settings](
+		"AdviceBranchNowDisabled",
+		"laya-advisors-01LAYA001 WP04-06: core/rpc/api.go's newLLMStack "+
+			"wires a advice.KindGate closure via heuristicAdvisor."+
+			"SetKindGate(advicebranchnow.KindID, ...) that reads this "+
+			"field fresh on every call — false (default) lets "+
+			"HeuristicAdvisor.Recommend serve branch_now; true makes it "+
+			"degrade to ErrNoAdvice, independent of compact_now/"+
+			"escalate_model (spec AC-02: kinds are independently "+
+			"disableable).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"AdviceCompactNowDisabled",
+		"laya-advisors-01LAYA001 WP04-06: same SetKindGate mechanism as "+
+			"AdviceBranchNowDisabled, wired onto advicecompactnow.KindID — "+
+			"gates compact_now independent of branch_now/escalate_model.",
+	)
+	knobcoverage.Register[settings.Settings](
+		"AdviceEscalateModelDisabled",
+		"laya-advisors-01LAYA001 WP04-06: same SetKindGate mechanism as "+
+			"AdviceBranchNowDisabled, wired onto adviceescalatemodel."+
+			"KindID — gates escalate_model independent of branch_now/"+
+			"compact_now.",
+	)
+	knobcoverage.Register[settings.Settings](
+		"AdviceLabelCaptureDisabled",
+		"laya-advisors-01LAYA001 WP08: core/rpc/api.go's newLLMStack "+
+			"wraps chatAdvisor in core/advice/labels.CaptureAdvisor and "+
+			"reads this field fresh on every Recommend/Dismiss call via "+
+			"the `enabled` closure passed to NewCaptureAdvisor — false "+
+			"(default) captures every recommendation + user action into "+
+			"the local advice_labels table; true makes CaptureAdvisor "+
+			"skip the underlying Store entirely (AC-06: a call-count "+
+			"proof on the store, not a row-count check).",
+	)
 
 	// ── Compaction dials ─────────────────────────────────────────────
 	knobcoverage.Register[settings.Settings](

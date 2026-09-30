@@ -77,6 +77,17 @@ var CanonicalBlocks = map[string]VersionBlock{
 	// The policy_decisions table backing core/policy/cedar.SQLDecisionStore
 	// — the durable Cedar audit-decision log (see core/policy/cedar/migrations.go).
 	"cedar-policy": {Min: 1300, Max: 1399},
+	// laya-advisors-01LAYA001 WP08: 1600-1699. The advice_labels table
+	// backing core/advice/labels.SQLStore — the training-label capture
+	// bridge for the advisor seam (core/advice). Checked against
+	// finding #55's collisions before claiming this range: 600-699 is
+	// shared by a2a/signed-cards-trust (a2a keeps it, signed-cards-trust
+	// moved to 1400-1499) and 700-799 is shared by bundle/shared-context-
+	// distribution (bundle keeps it, shared-context-distribution moved to
+	// 1500-1599) — both already resolved above. The highest claimed block
+	// at the time this was reserved was 1500-1599, so 1600-1699 is the
+	// first free range; nothing else in this table touches it.
+	"laya-advisors": {Min: 1600, Max: 1699},
 }
 
 // LookupBlock returns the reserved block for the given owning-mission

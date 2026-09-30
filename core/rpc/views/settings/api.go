@@ -801,6 +801,87 @@ type Settings struct {
 	// upgrade would turn off a working feature for every user with an
 	// unsigned local bundle. See EffectiveBundleSigningPolicy.
 	BundleSigningPolicy string `json:"bundleSigningPolicy,omitempty"`
+
+	// AdvisorModel is the user's explicit (provider, model) choice for
+	// laya-advisors-01LAYA001's advisor seam — the small-model binary
+	// recommendation calls (branch_now / compact_now / escalate_model,
+	// WP04-06) resolve their model through this field via
+	// core/advice.ResolveAdvisorModel's laya ladder, mirroring
+	// RiskRaterModel / CompactionModel exactly: empty (the zero value)
+	// means "no explicit choice" — the ladder falls through to a
+	// detected local laya model (rung 2), then to disabled (rung 4;
+	// rung 3, fleet-hosted laya, is compiled but unreachable pending
+	// OQ-2). A provider ID with no matching profile, or a model not in
+	// that profile's AvailableModels(), is NOT an error: the ladder logs
+	// the miss and falls through, exactly like RiskRaterModel.
+	//
+	// Wire shape mirrors ProviderProfileRef (same type as CompactionModel
+	// / RiskRaterModel above).
+	AdvisorModel ProviderProfileRef `json:"advisorModel,omitempty"`
+
+	// ── Per-kind advisor disable switches (laya-advisors-01LAYA001
+	// WP04-06, spec AC-02: "kinds are independently disableable") ──
+	//
+	// Each field's zero value (false) means ENABLED — mirrors
+	// HarnessSelfMCPDisabled's "*Disabled, default false" polarity rather
+	// than BranchAdvisorEnabled's "*Enabled, default false" polarity,
+	// because these heuristic backends make zero model calls and zero
+	// I/O (core/advice/heuristic.go's HeuristicAdvisor), so there is no
+	// cost/latency reason to default a kind off the way an LLM-backed
+	// advisor would need to be. Read by core/rpc/api.go's newLLMStack,
+	// which wires one advice.KindGate closure per kind onto the
+	// production HeuristicAdvisor (chatAdvisor) via SetKindGate — see
+	// that call site's own comment for the exact line.
+	//
+	// This does NOT gate whether the kind is REGISTERED (registration is
+	// a process-global, init()-time fact scripts/ci/check-advice-kinds.sh
+	// verifies independent of any Settings value) — it gates whether
+	// HeuristicAdvisor.Recommend serves it at all: a disabled kind
+	// degrades to ErrNoAdvice exactly like every other Advisor failure
+	// mode (advice's package doc comment), invisible to the caller beyond
+	// "no advice."
+
+	// AdviceBranchNowDisabled turns off the branch_now advice kind
+	// (core/advice/kinds/branchnow) independent of compact_now/
+	// escalate_model.
+	AdviceBranchNowDisabled bool `json:"adviceBranchNowDisabled,omitempty"`
+
+	// AdviceCompactNowDisabled turns off the compact_now advice kind
+	// (core/advice/kinds/compactnow) independent of branch_now/
+	// escalate_model.
+	AdviceCompactNowDisabled bool `json:"adviceCompactNowDisabled,omitempty"`
+
+	// AdviceEscalateModelDisabled turns off the escalate_model advice
+	// kind (core/advice/kinds/escalatemodel) independent of branch_now/
+	// compact_now.
+	AdviceEscalateModelDisabled bool `json:"adviceEscalateModelDisabled,omitempty"`
+
+	// AdviceLabelCaptureDisabled is laya-advisors-01LAYA001 WP08's
+	// capture toggle (spec §4: "A settings toggle governs capture, ON by
+	// default for local-only storage, honestly labeled"). Zero value
+	// (false) means CAPTURE IS ON — the same "*Disabled, default false"
+	// polarity as AdviceBranchNowDisabled/AdviceCompactNowDisabled/
+	// AdviceEscalateModelDisabled above, chosen for the same reason: the
+	// spec's own default is "on," so the field name must invert to make
+	// the Go zero value match it (a "*Enabled, default false" field would
+	// silently ship capture OFF for every user who never touches
+	// Settings, the opposite of what §4 asks for).
+	//
+	// Honest semantics per spec §4: "stored on this device, used to
+	// improve recommendations; nothing leaves this machine" — capture
+	// writes ONLY to the local advice_labels table
+	// (core/advice/labels.SQLStore); this field has no bearing on any
+	// future export/fleet-contribution consent (spec §8's separate,
+	// per-class, rung-3-only consent surface), which does not exist yet.
+	//
+	// Read by core/rpc/api.go's newLLMStack, which wires a closure onto
+	// core/advice/labels.NewCaptureAdvisor's `enabled` parameter — read
+	// fresh on every Recommend call, exactly like the three per-kind
+	// gates above, so a toggle flip takes effect on the very next
+	// recommendation with no restart. AC-06's "capture toggle OFF => zero
+	// rows written" is a call-count proof on the underlying Store, not a
+	// row-count check — see labels.CaptureAdvisor's doc comment.
+	AdviceLabelCaptureDisabled bool `json:"adviceLabelCaptureDisabled,omitempty"`
 }
 
 // EffectiveBundleSigningPolicy normalizes BundleSigningPolicy to one of

@@ -79,6 +79,8 @@ export function ACP_RevokePeer(arg1:string):Promise<void>;
 
 export function ACP_TrustPeer(arg1:string):Promise<acp.TrustResult>;
 
+export function Advice_Respond(arg1:string,arg2:string,arg3:string):Promise<string>;
+
 export function Agents_DeleteProfile(arg1:string):Promise<void>;
 
 export function Agents_ListProfiles():Promise<Array<agents.ProfileSummaryWire>>;

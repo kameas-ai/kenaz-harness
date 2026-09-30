@@ -34,6 +34,76 @@ type BranchSuggestion struct {
 	ProposedTitle string
 }
 
+// Signals is the raw positive/negative regex tally for one message,
+// computed BEFORE Detect applies the minConfidence threshold gate or the
+// HARNESS_BRANCH_ADVISOR kill-switch. Exported so a second consumer that
+// needs the tally itself — laya-advisors-01LAYA001 WP04's branch_now
+// advice kind, which uses SignalCount/NoiseCount as two of its own
+// Features fields — can read it without re-implementing the regex
+// tables Detect compiles against (tasks.md WP04: "one detection
+// implementation must remain — adapt or delegate, and record which").
+// This package's own Detect is the adapted form: it now calls
+// ComputeSignals below rather than duplicating the two scan loops.
+type Signals struct {
+	// SignalCount is how many rawPositive patterns matched.
+	SignalCount int
+	// NoiseCount is how many rawNegative patterns matched.
+	NoiseCount int
+	// Labels lists the positive-signal labels that matched, in
+	// pattern-table order (the same slice Detect's own
+	// BranchSuggestion.Signals field carries when the kind fires).
+	Labels []string
+}
+
+// Confidence is the normalized [0,1] score Detect itself gates on:
+// signal_count / (signal_count + noise_count), or 0 when neither table
+// matched a single pattern. A named method (not inlined at each call
+// site) so branch_now's heuristic backend maps the IDENTICAL formula to
+// its own 0-100 confidence rather than a second, potentially-drifting
+// derivation — see core/advice/kinds/branchnow's doc comment for the
+// mapping.
+func (s Signals) Confidence() float64 {
+	total := s.SignalCount + s.NoiseCount
+	if total == 0 {
+		return 0
+	}
+	return float64(s.SignalCount) / float64(total)
+}
+
+// ComputeSignals runs both compiled pattern tables over message and
+// returns the raw tally. Pure (no IO, no goroutines), same per-call cost
+// profile NFR-001 requires of Detect (< 5ms for messages up to ~500
+// chars on any modern CPU) — it IS the entire cost of Detect below plus
+// two comparisons.
+func ComputeSignals(message string) Signals {
+	var signalCount int
+	var matchedLabels []string
+	for _, p := range positivePatterns {
+		if p.re.MatchString(message) {
+			signalCount++
+			matchedLabels = append(matchedLabels, p.label)
+		}
+	}
+
+	var noiseCount int
+	for _, p := range negativePatterns {
+		if p.re.MatchString(message) {
+			noiseCount++
+		}
+	}
+
+	return Signals{SignalCount: signalCount, NoiseCount: noiseCount, Labels: matchedLabels}
+}
+
+// Enabled reports whether the branch advisor's kill-switch is engaged —
+// the same HARNESS_BRANCH_ADVISOR check Detect applies before ever
+// computing a tally, exported so a second caller (branch_now's heuristic
+// backend) honors the IDENTICAL kill-switch rather than growing its own
+// copy of the env-var parsing.
+func Enabled() bool {
+	return !envOff()
+}
+
 // Detect runs the heuristic detector on a single user message and
 // returns a BranchSuggestion when:
 //
@@ -46,7 +116,7 @@ type BranchSuggestion struct {
 // (< 5ms for messages up to ~500 chars on any modern CPU).
 func Detect(message string, minConfidence float64) *BranchSuggestion {
 	// Feature-flag check (DIRECTIVE_001 plan § feature flag section).
-	if envOff() {
+	if !Enabled() {
 		return nil
 	}
 
@@ -54,37 +124,20 @@ func Detect(message string, minConfidence float64) *BranchSuggestion {
 		return nil
 	}
 
-	// Count positive signals.
-	var signalCount int
-	var matchedLabels []string
-	for _, p := range positivePatterns {
-		if p.re.MatchString(message) {
-			signalCount++
-			matchedLabels = append(matchedLabels, p.label)
-		}
-	}
-
-	if signalCount == 0 {
+	sig := ComputeSignals(message)
+	if sig.SignalCount == 0 {
 		return nil
 	}
 
-	// Count negative signals.
-	var noiseCount int
-	for _, p := range negativePatterns {
-		if p.re.MatchString(message) {
-			noiseCount++
-		}
-	}
-
-	confidence := float64(signalCount) / float64(signalCount+noiseCount)
+	confidence := sig.Confidence()
 	if confidence < minConfidence {
 		return nil
 	}
 
 	return &BranchSuggestion{
 		Confidence:    confidence,
-		Rationale:     buildRationale(matchedLabels),
-		Signals:       matchedLabels,
+		Rationale:     buildRationale(sig.Labels),
+		Signals:       sig.Labels,
 		ProposedTitle: proposedTitle(message),
 	}
 }

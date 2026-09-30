@@ -28,6 +28,8 @@ export const SERVED_STREAM_TOPICS = [
   'contextbootstrap:progress',
   'elicit:deferred',
   'elicit:deferred:answered',
+  'advice:recommendation',
+  'advice:auto-acted',
   'fleet:lockdown:changed',
   'fleet:session:expired',
 ] as const;

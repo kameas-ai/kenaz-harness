@@ -257,7 +257,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 blocked_permission_requests (0338, model-scheduled-jobs-01PMSJ01
 	//   WP06) +
 	// 1 scheduled_chat_runs.trigger_kind/.run_at (0339, model-scheduled-
-	//   jobs-01PMSJ01 WP08) = 58.
+	//   jobs-01PMSJ01 WP08) = 58 +
+	// 1 laya-advisors/1600-advice-labels (laya-advisors-01LAYA001 WP08:
+	//   the advice_labels training-label corpus backing
+	//   core/advice/labels.CaptureAdvisor) = 59.
 	//
 	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
 	// before 0336 and bundle/700 landed, so 43+6. The merged tree had all
@@ -265,9 +268,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// top, hence 52; UNIT-2 (01PMZB11) adds one more still, hence 53;
 	// WP09 (0340) adds one more, hence 54; WP05 (0337) adds one more
 	// still, hence 55; cedar-policy/1300 adds one more, hence 56; WP06
-	// (0338) and WP08 (0339) add one more each, hence 58.
-	if count != 58 {
-		t.Errorf("ledger count = %d, want 58", count)
+	// (0338) and WP08 (0339) add one more each, hence 58; laya-advisors/
+	// 1600 adds one more, hence 59.
+	if count != 59 {
+		t.Errorf("ledger count = %d, want 59", count)
 	}
 }
 

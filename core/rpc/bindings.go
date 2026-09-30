@@ -3253,6 +3253,15 @@ func (b *Bindings) Confirm_Resolve(sessionID string, callID string, approved boo
 	return b.api.Confirm().Resolve(b.ctx(), sessionID, callID, approved, reason, rememberSession)
 }
 
+// Advice_Respond is laya-advisors-01LAYA001 WP07's chip response
+// binding: action is "accept" or "dismiss". Returns the newly created
+// child session id for a branch_now accept (empty string otherwise) —
+// see core/rpc/advice_respond.go for the full contract.
+func (b *Bindings) Advice_Respond(sessionID string, kindID string, action string) (string, error) {
+	defer sentry.WrapBinding("Advice_Respond")()
+	return b.api.Advice_Respond(b.ctx(), sessionID, kindID, action)
+}
+
 // Confirm_ResolveAlways approves one row AND writes a DURABLE allow rule
 // for its (server, tool) — the modal's visually-separated "always allow"
 // control.

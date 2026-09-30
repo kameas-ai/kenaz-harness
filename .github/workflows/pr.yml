@@ -253,6 +253,18 @@ jobs:
         # scripts/ci/cmd/checkriskgatedecides/main.go's package doc.
         run: bash scripts/ci/check-risk-gate-decides.sh
 
+      - name: advice-kinds guard
+        # WP03 (laya-advisors-01LAYA001): every registered AdviceKind
+        # carries id/extractor/prompt_version/safety-class, and no
+        # suggest-only kind reaches an advice.RequireCanAutoAct call
+        # site. Zero advice kinds ship until WP04-06 (branch_now /
+        # compact_now / escalate_model) — the seam's own structural
+        # floor (core/advice/kind.go's shape), not a kind-count
+        # threshold, is what keeps this gate non-vacuous in the
+        # meantime. See scripts/ci/cmd/checkadvicekinds/main.go's
+        # package doc.
+        run: bash scripts/ci/check-advice-kinds.sh
+
       - name: structured-output-row-parity guard
         # A capability row cannot silently desynchronize from its own
         # wire-encoding (structured-output-is-reachable-01PMZE14
