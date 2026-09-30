@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -251,5 +252,7 @@ func ReadLocalToken(l Layout) (string, bool, error) {
 		}
 		return "", false, fmt.Errorf("mlsidecar: read token: %w", err)
 	}
-	return string(b), true, nil
+	// The real engine may write the token with a trailing newline; a
+	// Bearer header carrying it would be rejected.
+	return strings.TrimSpace(string(b)), true, nil
 }

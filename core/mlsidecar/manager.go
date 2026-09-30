@@ -2,6 +2,8 @@ package mlsidecar
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -50,8 +52,38 @@ type Manager struct {
 	Creds    secrets.ResolverAPI
 	Verifier Verifier
 
+	// VerifierFunc, when non-nil, resolves the Verifier at install/update
+	// time instead of the static Verifier field — production wiring uses
+	// it because the trust anchors live in a store that is read fresh per
+	// install (WP13). A non-nil error aborts the install with a
+	// verification failure; it never falls back to an unverified install.
+	VerifierFunc func(ctx context.Context) (Verifier, error)
+
+	// Mounter is handed to Install for .dmg artifacts (nil = hdiutil).
+	Mounter DMGMounter
+
+	// StartupWait bounds how long spawnLocked polls /health after
+	// launching the engine. A real PyInstaller engine needs seconds to
+	// come up; the zero value (one probe, no wait) is what the stub-based
+	// tests use. StartupPoll is the poll interval (default 250ms).
+	StartupWait time.Duration
+	StartupPoll time.Duration
+
+	// mu serializes the operations that change the world (Reconcile,
+	// install, update, uninstall, shutdown). smu guards ONLY the status
+	// snapshot, so Status() — which the Settings panel and the advisor
+	// probe call on every poll — never blocks behind a slow spawn-wait or
+	// a 200 MB download.
 	mu     sync.Mutex
+	smu    sync.RWMutex
 	status Status
+}
+
+func (m *Manager) setStatus(s Status) Status {
+	m.smu.Lock()
+	m.status = s
+	m.smu.Unlock()
+	return s
 }
 
 // NewManager constructs a Manager with an initial not_installed status.
@@ -74,8 +106,8 @@ func NewManager(layout Layout, client *Client, spawner Spawner, clientID, versio
 // Reconcile ever run) is the "app boot" case design §2c/§6.2 requires to
 // cost nothing: StateNotInstalled, no probe, no idle RAM.
 func (m *Manager) Status() Status {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.smu.RLock()
+	defer m.smu.RUnlock()
 	return m.status
 }
 
@@ -99,21 +131,18 @@ func (m *Manager) Ensure(ctx context.Context) Status { return m.Reconcile(ctx) }
 
 func (m *Manager) reconcileLocked(ctx context.Context) Status {
 	if m.Client == nil {
-		m.status = Status{State: StateNotInstalled, Detail: "no client configured", UpdatedAt: time.Now()}
-		return m.status
+		return m.setStatus(Status{State: StateNotInstalled, Detail: "no client configured", UpdatedAt: time.Now()})
 	}
 
 	health, err := m.Client.Health(ctx)
 	if err == nil {
-		m.status = m.evaluateRunning(health)
-		return m.status
+		return m.setStatus(m.evaluateRunning(health))
 	}
 
 	// Nothing answered /health: either nothing is installed, or an
 	// installed engine is not currently running and this client should
 	// spawn it (adopt-or-spawn, design §3.5).
-	m.status = m.spawnLocked(ctx)
-	return m.status
+	return m.setStatus(m.spawnLocked(ctx))
 }
 
 // evaluateRunning handles the "something answered /health" branch via
@@ -159,7 +188,8 @@ func (m *Manager) evaluateRunning(health HealthPayload) Status {
 // simply StateNotInstalled (installation is a distinct, explicit user
 // action — design §6.2 — never triggered implicitly by a failed health
 // probe). If an engine IS installed, this client spawns it under the
-// O_EXCL spawn lock (design §3.5), then health-checks once.
+// O_EXCL spawn lock (design §3.5), then health-checks (polling up to
+// StartupWait — a real engine needs seconds to bind its port).
 func (m *Manager) spawnLocked(ctx context.Context) Status {
 	now := time.Now()
 	rec, ok, err := ReadInstallJSON(m.Layout)
@@ -171,6 +201,16 @@ func (m *Manager) spawnLocked(ctx context.Context) Status {
 		return Status{State: StateNotInstalled, Detail: err.Error(), UpdatedAt: now}
 	}
 	exePath := pathUnderVersionsDir(m.Layout, filepath.Base(currentDir))
+
+	// The real engine self-terminates through lease/ under
+	// KENAZ_ML_INSTALL_ROOT, so the CLIENT must have created that
+	// directory before the process exists (kenaz-ml interop invariant —
+	// an engine that finds no lease/ dir could read "no leases" as "no
+	// clients" and exit). AcquireSpawnLock also creates it, but the
+	// invariant is stated and tested here, independent of that detail.
+	if err := os.MkdirAll(m.Layout.LeaseDir(), 0o755); err != nil {
+		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: "create lease dir: " + err.Error(), UpdatedAt: now}
+	}
 
 	lock, lerr := AcquireSpawnLock(m.Layout, os.Getpid(), processAlive)
 	if lerr != nil {
@@ -188,12 +228,43 @@ func (m *Manager) spawnLocked(ctx context.Context) Status {
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: serr.Error(), UpdatedAt: now}
 	}
 
-	health, herr := m.Client.Health(ctx)
+	health, herr := m.awaitHealth(ctx)
 	if herr != nil {
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: "spawned but did not become healthy: " + herr.Error(), UpdatedAt: now}
 	}
 	m.renewLease()
 	return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.ContractVersions["api"], Detail: "spawned", UpdatedAt: time.Now()}
+}
+
+// awaitHealth probes /health once, then keeps polling every StartupPoll
+// (default 250ms) until StartupWait elapses or ctx ends.
+func (m *Manager) awaitHealth(ctx context.Context) (HealthPayload, error) {
+	health, err := m.Client.Health(ctx)
+	if err == nil || m.StartupWait <= 0 {
+		return health, err
+	}
+	poll := m.StartupPoll
+	if poll <= 0 {
+		poll = 250 * time.Millisecond
+	}
+	deadline := time.NewTimer(m.StartupWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(poll)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return HealthPayload{}, ctx.Err()
+		case <-deadline.C:
+			return HealthPayload{}, err
+		case <-tick.C:
+			if h, herr := m.Client.Health(ctx); herr == nil {
+				return h, nil
+			} else {
+				err = herr
+			}
+		}
+	}
 }
 
 // renewLease piggybacks the harness's own file-lease heartbeat onto a
@@ -207,49 +278,105 @@ func (m *Manager) renewLease() {
 	}
 }
 
+// resolveVerifier returns the Verifier an install/update should use.
+func (m *Manager) resolveVerifier(ctx context.Context) (Verifier, error) {
+	if m.VerifierFunc != nil {
+		return m.VerifierFunc(ctx)
+	}
+	return m.Verifier, nil
+}
+
+// installFailureStatus maps a failed Install into an honest Status: a
+// verification failure is ReasonDigestMismatch (the tampered-artifact
+// surface); anything else (network, disk, mount) is reported as what it
+// was. If an engine was already installed it stays installed — a failed
+// re-install never pretends to have uninstalled anything.
+func (m *Manager) installFailureStatus(err error) Status {
+	reason := ReasonNone
+	if errors.Is(err, ErrVerificationFailed) || errors.Is(err, ErrDigestMismatch) {
+		reason = ReasonDigestMismatch
+	}
+	state := StateNotInstalled
+	if rec, ok, _ := ReadInstallJSON(m.Layout); ok && rec.Verified {
+		state = StateInstalledUnhealthy
+	}
+	return Status{State: state, Reason: reason, Detail: "install failed: " + err.Error(), UpdatedAt: time.Now()}
+}
+
 // InstallAndActivate implements the explicit, user-initiated install
 // flow (design §6.2: the "Enable local recommendations" button) —
 // distinct from Reconcile's implicit adopt-or-spawn, which never
 // downloads anything. While the download+verify+unpack is in flight the
-// Manager honestly reports StateInstalling; on success it immediately
-// reconciles (spawns/health-checks the newly-activated version) so the
-// caller gets back a real StateHealthy/StateInstalledUnhealthy rather
-// than having to poll separately.
+// Manager honestly reports StateInstalling (Detail names the sub-phase:
+// downloading / verifying / unpacking / starting); on success it
+// immediately reconciles (spawns/health-checks the newly-activated
+// version) so the caller gets back a real StateHealthy/
+// StateInstalledUnhealthy rather than having to poll separately. A
+// second call while one is in flight returns the in-flight status
+// instead of racing it.
 func (m *Manager) InstallAndActivate(ctx context.Context, req InstallRequest) Status {
-	m.mu.Lock()
-	m.status = Status{State: StateInstalling, Detail: "downloading " + req.Version, UpdatedAt: time.Now()}
-	m.mu.Unlock()
+	if !m.mu.TryLock() {
+		return m.Status()
+	}
+	defer m.mu.Unlock()
 
-	if _, err := Install(ctx, m.Layout, m.Registry, m.Creds, m.Verifier, req); err != nil {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		m.status = Status{State: StateInstalledUnhealthy, Reason: ReasonDigestMismatch, Detail: err.Error(), UpdatedAt: time.Now()}
-		return m.status
+	m.setStatus(Status{State: StateInstalling, Detail: "downloading " + req.Version, UpdatedAt: time.Now()})
+	req.Mounter = firstMounter(req.Mounter, m.Mounter)
+	userPhase := req.Phase
+	req.Phase = func(p string) {
+		m.setStatus(Status{State: StateInstalling, Detail: p + " " + req.Version, UpdatedAt: time.Now()})
+		if userPhase != nil {
+			userPhase(p)
+		}
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	verifier, verr := m.resolveVerifier(ctx)
+	if verr != nil {
+		return m.setStatus(m.installFailureStatus(fmt.Errorf("%w: %w", ErrVerificationFailed, verr)))
+	}
+	if _, err := Install(ctx, m.Layout, m.Registry, m.Creds, verifier, req); err != nil {
+		return m.setStatus(m.installFailureStatus(err))
+	}
+
+	m.setStatus(Status{State: StateInstalling, Detail: "starting " + req.Version, UpdatedAt: time.Now()})
 	return m.reconcileLocked(ctx)
+}
+
+func firstMounter(a, b DMGMounter) DMGMounter {
+	if a != nil {
+		return a
+	}
+	return b
 }
 
 // UpdateAndActivate implements design §3.5/§3.7 R6's flip-and-respawn,
 // through the Manager so the resulting state is observable the same way
 // InstallAndActivate's is.
 func (m *Manager) UpdateAndActivate(ctx context.Context, req InstallRequest) (UpdateResult, Status) {
-	m.mu.Lock()
-	m.status = Status{State: StateInstalling, Reason: ReasonUpdatePending, Detail: "updating to " + req.Version, UpdatedAt: time.Now()}
-	m.mu.Unlock()
-
-	res := Update(ctx, m.Layout, m.Registry, m.Creds, m.Verifier, m.Client, req)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if res.Install.Record.Version == "" {
-		m.status = Status{State: StateInstalledUnhealthy, Reason: ReasonUpdatePending, Detail: "update failed, old version still current", UpdatedAt: time.Now()}
-		return res, m.status
+	if !m.mu.TryLock() {
+		return UpdateResult{}, m.Status()
 	}
-	m.status = m.reconcileLocked(ctx)
-	return res, m.status
+	defer m.mu.Unlock()
+
+	m.setStatus(Status{State: StateInstalling, Reason: ReasonUpdatePending, Detail: "updating to " + req.Version, UpdatedAt: time.Now()})
+	req.Mounter = firstMounter(req.Mounter, m.Mounter)
+
+	verifier, verr := m.resolveVerifier(ctx)
+	if verr != nil {
+		st := m.setStatus(Status{State: StateInstalledUnhealthy, Reason: ReasonUpdatePending, Detail: "update failed, old version still current: " + verr.Error(), UpdatedAt: time.Now()})
+		return UpdateResult{}, st
+	}
+	res := Update(ctx, m.Layout, m.Registry, m.Creds, verifier, m.Client, req)
+
+	if res.Install.Record.Version == "" {
+		detail := "update failed, old version still current"
+		if res.ShutdownErr != nil {
+			detail += ": " + res.ShutdownErr.Error()
+		}
+		st := m.setStatus(Status{State: StateInstalledUnhealthy, Reason: ReasonUpdatePending, Detail: detail, UpdatedAt: time.Now()})
+		return res, st
+	}
+	return res, m.reconcileLocked(ctx)
 }
 
 // Shutdown releases this client's own lease WITHOUT touching the running
@@ -267,10 +394,32 @@ func (m *Manager) Shutdown(_ context.Context) error {
 	return ReleaseLease(m.Layout, m.ClientID)
 }
 
+// Installed reports whether a positively-verified engine install record
+// exists under this Manager's root. Cheap (one small file read) and
+// never touches the network — the Settings panel and DemandProbe use it
+// to decide whether any engine-related work is warranted at all, so a
+// user who never enabled recommendations costs nothing.
+func (m *Manager) Installed() (InstallRecord, bool) {
+	rec, ok, err := ReadInstallJSON(m.Layout)
+	if err != nil || !ok || !rec.Verified {
+		return InstallRecord{}, false
+	}
+	return rec, true
+}
+
 // Uninstall implements the WP12 checklist item (design §6.2 step 5):
 // "release lease + remove version dirs + (if sole leaseholder)
 // token-authorized drained stop". Leaves no process, weights, or config
 // behind under this client's install root.
+//
+// WP13 widening: when the root is the harness-owned "<dataDir>/ml"
+// directory (base name "ml" — the wiring's own choice, per Amendment A2),
+// EVERYTHING under it is removed, because the engine writes its own state
+// (downloaded models, calibration, retained examples) under
+// KENAZ_ML_INSTALL_ROOT and "weights + config gone" must be literally
+// true. For any other root only the known layout entries are removed — a
+// Manager mis-pointed at a directory it does not own must never
+// RemoveAll it.
 func (m *Manager) Uninstall(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -294,7 +443,7 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 		}
 	}
 
-	for _, d := range []string{m.Layout.VersionsDir(), m.Layout.CheckpointsDir(), m.Layout.LeaseDir()} {
+	for _, d := range []string{m.Layout.VersionsDir(), m.Layout.CheckpointsDir(), m.Layout.LeaseDir(), filepath.Join(m.Layout.Root, ".staging")} {
 		if err := os.RemoveAll(d); err != nil {
 			return err
 		}
@@ -305,6 +454,11 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 	if err := os.Remove(m.Layout.InstallJSONPath()); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	m.status = Status{State: StateNotInstalled, UpdatedAt: time.Now()}
+	if filepath.Base(m.Layout.Root) == "ml" {
+		if err := os.RemoveAll(m.Layout.Root); err != nil {
+			return err
+		}
+	}
+	m.setStatus(Status{State: StateNotInstalled, UpdatedAt: time.Now()})
 	return nil
 }

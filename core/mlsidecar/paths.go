@@ -86,9 +86,20 @@ func (l Layout) LeaseFile(client string) string {
 // spawning the engine (design §3.5: "O_EXCL spawn-lock in lease/").
 func (l Layout) SpawnLockFile() string { return filepath.Join(l.LeaseDir(), "spawn.lock") }
 
-// TokenFile is the local, user-read-only token authorizing
-// POST /v1/admin/shutdown (design §3.5's flip-and-respawn update flow).
-func (l Layout) TokenFile() string { return filepath.Join(l.LeaseDir(), "admin.token") }
+// TokenFile is lease/shutdown.token — the real kenaz-ml engine's frozen
+// name (interop value, WP13 2026-09-30; the WP12 stub-era name was
+// admin.token) — the local, user-read-only token authorizing
+// POST /v1/admin/shutdown as `Authorization: Bearer <token>` (design
+// §3.5's flip-and-respawn update flow).
+func (l Layout) TokenFile() string { return filepath.Join(l.LeaseDir(), "shutdown.token") }
+
+// RootEnvVar is the environment variable the harness sets on the engine
+// process it spawns so the engine resolves the SAME install root this
+// Layout describes (design Amendment A2 / kenaz-ml two-client-engine
+// D-A1). The real engine self-terminates via lease/ under this root, so
+// the client must also have CREATED lease/ before spawning
+// (Manager.spawnLocked enforces that ordering).
+const RootEnvVar = "KENAZ_ML_INSTALL_ROOT"
 
 // InstallJSONPath is install.json's location.
 func (l Layout) InstallJSONPath() string { return filepath.Join(l.Root, "install.json") }
