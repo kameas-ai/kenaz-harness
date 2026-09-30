@@ -30,6 +30,15 @@ import (
 	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
 	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
 	"github.com/kameas-ai/kenaz-harness/core/advice"
+	// Imported for both their init()-time advice.MustRegister call
+	// (laya-advisors-01LAYA001 WP04-06: each package registers exactly
+	// one AdviceKind) AND their exported Heuristic function, which
+	// newLLMStack wires onto the production HeuristicAdvisor below
+	// (chatAdvisor) via RegisterHeuristic — see that construction site's
+	// own comment for where each Heuristic gets attached.
+	advicebranchnow "github.com/kameas-ai/kenaz-harness/core/advice/kinds/branchnow"
+	advicecompactnow "github.com/kameas-ai/kenaz-harness/core/advice/kinds/compactnow"
+	adviceescalatemodel "github.com/kameas-ai/kenaz-harness/core/advice/kinds/escalatemodel"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	compactionwiring "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction/wiring"
@@ -46,6 +55,7 @@ import (
 	coreconv "github.com/kameas-ai/kenaz-harness/core/conversation"
 	corecorpus "github.com/kameas-ai/kenaz-harness/core/corpus"
 	credstoreRefs "github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	coredocs "github.com/kameas-ai/kenaz-harness/core/docs"
 	"github.com/kameas-ai/kenaz-harness/core/eval"
 	"github.com/kameas-ai/kenaz-harness/core/event"
 	kindpkg "github.com/kameas-ai/kenaz-harness/core/event/kind"
@@ -97,6 +107,7 @@ import (
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	contextview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
+	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
@@ -110,8 +121,6 @@ import (
 	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/policy"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
-	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
-	coredocs "github.com/kameas-ai/kenaz-harness/core/docs"
 	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
 	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
@@ -492,17 +501,17 @@ type API struct {
 	// WP06).
 	scheduledRunOrigins *ScheduledRunOriginRegistry
 	// logStore + logsAPI back the Settings → Logs panel (mission 01NLOGS01 WP01/WP04).
-	logStore       *logstore.Store
-	logsAPI        logsview.LogsAPI
-	settingsImpl   *settings.API
-	settingsAPI    settings.SettingsAPI
-	memoryAPI      memoryview.MemoryAPI
-	hooksAPI       hooksview.HooksAPI
-	projectsAPI    projectsview.ProjectsAPI
+	logStore     *logstore.Store
+	logsAPI      logsview.LogsAPI
+	settingsImpl *settings.API
+	settingsAPI  settings.SettingsAPI
+	memoryAPI    memoryview.MemoryAPI
+	hooksAPI     hooksview.HooksAPI
+	projectsAPI  projectsview.ProjectsAPI
 	// documentsAPI backs the Documents_* family (contracts/documents-rpc.md).
 	// nil when no database is wired; Documents() then returns
 	// documentsview.Unavailable() so callers get an honest error.
-	documentsAPI documentsview.DocumentsAPI
+	documentsAPI   documentsview.DocumentsAPI
 	attachmentsMgr *coreatt.Manager
 	attachmentsAPI attachmentsview.AttachmentsAPI
 	artifactsMgr   *coreart.Manager
@@ -554,7 +563,7 @@ type API struct {
 	// Folding those in is future work, not a silent omission.
 	autotitleLLM *autotitlewiring.LLMCaller
 	convMgr      *coreconv.Manager
-	branchesAPI     branchesview.BranchesAPI
+	branchesAPI  branchesview.BranchesAPI
 	// branchSeam is the SAME BranchSeamAdapter instance
 	// newGraphManagerWithDeps builds as EnvDeps.Branch for ForkNode /
 	// MergeNode. Held here so New() can late-bind a RunSpawner onto it
@@ -2494,8 +2503,8 @@ func New(c *core.Core, opts ...Option) *API {
 		a.branchSeam.SetRunSpawner(NewSubagentRunSpawner(SubagentRunSpawnerDeps{
 			UsageParent: newFleetUsageObserver(a.settingsImpl).AttributeTo,
 			LLM:         a.llmAPI,
-			Bus:   a.eventBus,
-			Tasks: taskReg,
+			Bus:         a.eventBus,
+			Tasks:       taskReg,
 			// UNIT-7 (FR-007): the SAME process-singleton *hooks.Runner
 			// a.hookRunner already holds (set earlier in this function,
 			// above the background_task_complete SetHookFirer block) —
@@ -6161,13 +6170,19 @@ func newLLMStack(
 		})
 	}
 
-	// Build the advisor LLM caller for laya-advisors-01LAYA001, mirroring
-	// chatRiskRater above. WP01-03 (this seam) ship with ZERO advice
-	// kinds registered (WP04-06 add branch_now/compact_now/
-	// escalate_model as parallel worktree agents once this merges) — see
-	// core/advice's package doc comment, which mirrors risk.RiskRater's
-	// own "until then nothing calls RiskRater in production" staging.
-	// Nothing calls chatAdvisor.Recommend yet.
+	// Build the production Advisor for laya-advisors-01LAYA001. WP01-03
+	// shipped the seam with ZERO advice kinds registered; WP04-06
+	// (tasks.md's DESIGN-LOCKED REVISION) register the v1 trio —
+	// branch_now, compact_now, escalate_model — each in its own
+	// core/advice/kinds/* package, blank/named-imported above for their
+	// init()-time advice.MustRegister call. Per owner ruling 2026-09-29
+	// (spec §2e-0, "no LLMs"), the production backend is
+	// advice.HeuristicAdvisor (heuristic.go) — pure Go arithmetic, zero
+	// model calls — NOT advice.NewLLMAdvisor, which is now a dormant test
+	// double (core/advice/llmadvisor_dormant_test.go). chatAdvisor.Recommend
+	// still has no call site anywhere in a live chat turn — WP07 wires
+	// that; this WP only makes Recommend produce a real answer once
+	// something calls it.
 	//
 	// What IS real today, and what Settings.AdvisorModel's
 	// knobcoverage.Register citation (settings_knob_coverage.go) points
@@ -6175,14 +6190,14 @@ func newLLMStack(
 	// executed call site (once per newLLMStack invocation, i.e. once per
 	// process boot in every served/desktop build with reg != nil) that
 	// reads the live Settings.AdvisorModel value and the live provider
-	// profile list and feeds both into advice.ResolveAdvisorModel — the
-	// SAME resolution the resolver closure below repeats per-Recommend-
-	// call once WP04-06 wire a real call site. This is deliberately NOT
-	// a decorative read: ResolveAdvisorModel's rung switch is a real
-	// branch, and its outcome is a real, observable slog line
-	// ("advice.model_resolve") distinct per rung — an operator can see
-	// today, from a cold boot, which rung of the laya ladder resolved
-	// (or why none did) long before any advice kind ships.
+	// profile list and feeds both into advice.ResolveAdvisorModel. This
+	// ladder is NOT consulted by HeuristicAdvisor (rung R1 predates any
+	// model resolution — see RungHeuristic's doc comment) but stays live
+	// for a future laya/LLM backend (design §5.4 Phase B/C) and keeps
+	// Settings.AdvisorModel's reader real independent of that. This is
+	// deliberately NOT a decorative read: ResolveAdvisorModel's rung
+	// switch is a real branch, and its outcome is a real, observable slog
+	// line ("advice.model_resolve") distinct per rung.
 	var chatAdvisor advice.Advisor
 	if reg != nil {
 		capturedAdvisorStore := store
@@ -6218,23 +6233,66 @@ func newLLMStack(
 			}
 			return setting
 		}
-		advisorModelResolver := func(_ context.Context) (string, string, advice.ModelRung, bool, bool) {
-			return advice.ResolveAdvisorModel(loadAdvisorSetting(), loadAdvisorProfiles(), sidecarProbe)
-		}
-		chatAdvisor = advice.NewLLMAdvisor(reg, advisorModelResolver)
+
+		heuristicAdvisor := advice.NewHeuristicAdvisor()
+		heuristicAdvisor.RegisterHeuristic(advicebranchnow.KindID, advicebranchnow.Heuristic)
+		heuristicAdvisor.RegisterHeuristic(advicecompactnow.KindID, advicecompactnow.Heuristic)
+		heuristicAdvisor.RegisterHeuristic(adviceescalatemodel.KindID, adviceescalatemodel.Heuristic)
+
+		// Per-kind independent disable (spec AC-02) — a REAL branch, not
+		// a registry-level toggle: Settings.AdviceBranchNowDisabled /
+		// AdviceCompactNowDisabled / AdviceEscalateModelDisabled each
+		// gate exactly one kind's HeuristicAdvisor.Recommend, read fresh
+		// on every call (mirrors every other *_knob_coverage.go citation
+		// in this function's own closures: LoadAll() per call, never
+		// cached at construction time, so a Settings change takes effect
+		// on the very next Recommend with no restart).
+		heuristicAdvisor.SetKindGate(advicebranchnow.KindID, func() bool {
+			if settingsImpl == nil || settingsImpl.Store() == nil {
+				return true
+			}
+			s, serr := settingsImpl.Store().LoadAll()
+			if serr != nil {
+				return true
+			}
+			return !s.AdviceBranchNowDisabled
+		})
+		heuristicAdvisor.SetKindGate(advicecompactnow.KindID, func() bool {
+			if settingsImpl == nil || settingsImpl.Store() == nil {
+				return true
+			}
+			s, serr := settingsImpl.Store().LoadAll()
+			if serr != nil {
+				return true
+			}
+			return !s.AdviceCompactNowDisabled
+		})
+		heuristicAdvisor.SetKindGate(adviceescalatemodel.KindID, func() bool {
+			if settingsImpl == nil || settingsImpl.Store() == nil {
+				return true
+			}
+			s, serr := settingsImpl.Store().LoadAll()
+			if serr != nil {
+				return true
+			}
+			return !s.AdviceEscalateModelDisabled
+		})
+
+		chatAdvisor = heuristicAdvisor
 
 		// Boot-time resolve-and-log: executes once per newLLMStack call
-		// (every process boot with reg != nil), independent of whether
-		// any AdviceKind has shipped AND independent of whether any LLM
-		// provider profile is configured at all (rung 2 no longer scans
-		// profiles — WP12 amendment) — this is what makes
-		// Settings.AdvisorModel's reader real today rather than only
-		// real once WP04-06 lands a call site that fires per turn.
+		// (every process boot with reg != nil), independent of whether any
+		// LLM provider profile is configured (rung 2 no longer scans
+		// profiles — WP12 amendment) and independent of which backend
+		// serves the kinds (HeuristicAdvisor does not consult the ladder;
+		// see RungHeuristic). This is what keeps Settings.AdvisorModel's
+		// reader real today, ahead of the Phase-B laya backend.
 		_, _, bootRung, bootUnbenchmarked, bootOK := advice.ResolveAdvisorModel(loadAdvisorSetting(), loadAdvisorProfiles(), sidecarProbe)
 		logging.L().Info("advice.laya_ladder.boot_resolve",
 			"rung", string(bootRung),
 			"unbenchmarked", bootUnbenchmarked,
 			"resolved", bootOK)
+
 	}
 
 	// system-prompt-layers WP03 / spec 089: the workspace line renders the
@@ -10021,6 +10079,7 @@ func (a *API) Hooks() hooksview.HooksAPI {
 	}
 	return a.hooksAPI
 }
+
 // Documents is the Documents_* surface (contracts/documents-rpc.md).
 func (a *API) Documents() documentsview.DocumentsAPI {
 	if a.documentsAPI == nil {

@@ -7,15 +7,23 @@
 // model struggling" — and NEVER blocks anything: every failure mode
 // degrades to "no advice" (see ErrNoAdvice).
 //
-// # What ships in this WP (WP01-03)
+// # What ships in this WP (WP01-03: the seam; WP04-06: the trio)
 //
-// The seam and the laya model-resolution ladder land here with ZERO
-// advice kinds registered in production — mirroring how
+// WP01-03 shipped the seam and the laya model-resolution ladder with
+// ZERO advice kinds registered in production — mirroring how
 // core/policy/risk's WP04 shipped the RiskRater contract and a
-// race-safe fake before WP05 wired a real LLM implementation, and
-// nothing called RiskRater in production until then. The three v1 kinds
-// (branch_now, compact_now, escalate_model — spec.md §2's table) are
-// WP04-06, dispatched as parallel worktree agents once this seam merges.
+// race-safe fake before WP05 wired a real implementation. WP04-06 (this
+// package's kinds/ subpackages: branchnow, compactnow, escalatemodel)
+// register the v1 trio per tasks.md's DESIGN-LOCKED REVISION — but NOT
+// against an LLM or laya. Owner ruling 2026-09-29 (spec §2e-0, "no
+// LLMs — advisors use laya and other ML models only") and the kenaz-ml
+// integration design's five-rung graduation ladder (research/
+// kenaz-ml-integration-design.md §5.4: "R1 Heuristic-live — the rule
+// serves the kind") together mean the trio's day-1 backend is
+// HeuristicAdvisor (heuristic.go): pure Go arithmetic over each kind's
+// Features, zero model calls. Every Recommendation it produces carries
+// Model="heuristic/<name>-v1", Rung=RungHeuristic, Unbenchmarked=true —
+// honest about being a rule, never dressed up as a laya or LLM call.
 //
 // # Contract summary
 //
@@ -29,26 +37,29 @@
 //     ErrNoAdvice. Unlike the rater, NOTHING waits on an Advisor call —
 //     every caller must be prepared for Recommend to be slow, absent, or
 //     wrong, and treat all three identically (no advice shown).
-//   - LLMAdvisor (llmadvisor.go) was built as the production
-//     implementation, but owner ruling 2026-09-29 (spec §2e-0) voids
-//     LLM-backed advisors as a shipping path — advisors use laya and
-//     other non-LLM models only. Its fate (delete vs. dormant reference
-//     double) is decided by the in-flight kenaz-ml integration design;
-//     it has zero production call sites today. As built it carries: an
-//     800ms hard timeout (spec §2's deviation from the rater's 5s — advice
-//     worthless late), a ctx derived from context.Background() (the
-//     v0.78.2 ShutdownServedCore lesson risk/llmrater.go's Rate doc
-//     comment explains in full), a session-scoped LRU cache keyed
-//     (session, kind, featuresHash, promptVersion), and two independent
-//     skip paths that make zero LLM calls: SessionContext.Moot (the
-//     resolved autonomy tier makes the kind's action unreachable) and a
-//     dismissed cache entry (AC-03: a dismissed recommendation is never
-//     re-shown for materially identical features within the session).
+//   - HeuristicAdvisor (heuristic.go) is the production Advisor for the
+//     v1 trio: a per-kind HeuristicFunc registered via RegisterHeuristic,
+//     a per-kind runtime KindGate (SetKindGate) implementing AC-02's
+//     "independently disableable" requirement as a real branch rather
+//     than a registry-level toggle, and the SAME session-scoped LRU
+//     cache + two skip paths (SessionContext.Moot; a dismissed entry,
+//     AC-03) LLMAdvisor established.
+//   - LLMAdvisor (llmadvisor_dormant_test.go) is now a DORMANT TEST
+//     DOUBLE — see that file's own doc comment for the full disposition.
+//     It has zero production call sites; core/rpc/api.go's chatAdvisor is
+//     a *HeuristicAdvisor today. Kept solely for its AC-02-style
+//     fault-injection coverage (timeout, malformed response,
+//     out-of-range confidence) until a future SidecarAdvisor's fake
+//     covers the same matrix (kenaz-ml integration design §9 Phase 0/1).
 //   - ResolveAdvisorModel (model_resolve.go) is the laya ladder: explicit
 //     setting -> local laya -> fleet laya (compiled, unreachable behind
 //     fleetRungEnabled=false pending OQ-2) -> none. No "any available
 //     model" rung exists here — deliberately, so the advisor never
 //     silently repurposes the user's big chat model for a judgment call
 //     the way the pre-01PMRA01 risk rater used to (see
-//     model_resolve_test.go's profiles[0]-regression case).
+//     model_resolve_test.go's profiles[0]-regression case). This ladder
+//     is NOT consulted by HeuristicAdvisor (rung R1 predates any model
+//     resolution) — it remains live for a future laya/LLM backend
+//     (Phase B/C) and for the boot-time resolve-and-log call core/rpc/
+//     api.go's newLLMStack still makes unconditionally.
 package advice

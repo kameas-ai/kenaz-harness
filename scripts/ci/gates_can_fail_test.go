@@ -3684,14 +3684,16 @@ func TestKnobCoverageGate_UnregisteredSettingsFieldFires(t *testing.T) {
 	root := repoRoot(t)
 	apiPath := filepath.Join(root, "core", "rpc", "views", "settings", "api.go")
 
-	// Anchored on AdvisorModel (laya-advisors-01LAYA001 WP02) — the
-	// struct's last field as of this test's most recent update. Content-
-	// anchored, not order-anchored (findings #67/#92): this must be
-	// re-anchored to the real last field whenever a later WP appends one,
-	// the same maintenance TestServedModeTopicForwardingGate_Planted*
+	// Anchored on AdviceEscalateModelDisabled (laya-advisors-01LAYA001
+	// WP04-06) — the struct's last field as of this test's most recent
+	// update (re-anchored from AdvisorModel, WP02's last field, when
+	// WP04-06 appended the three per-kind advisor disable switches).
+	// Content-anchored, not order-anchored (findings #67/#92): this must
+	// be re-anchored to the real last field whenever a later WP appends
+	// one, the same maintenance TestServedModeTopicForwardingGate_Planted*
 	// documents for passthroughTopics' own terminator-anchored proof.
-	const target = "\tAdvisorModel ProviderProfileRef `json:\"advisorModel,omitempty\"`\n}"
-	const mutated = "\tAdvisorModel ProviderProfileRef `json:\"advisorModel,omitempty\"`\n\n" +
+	const target = "\tAdviceEscalateModelDisabled bool `json:\"adviceEscalateModelDisabled,omitempty\"`\n}"
+	const mutated = "\tAdviceEscalateModelDisabled bool `json:\"adviceEscalateModelDisabled,omitempty\"`\n\n" +
 		"\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
 		"\t// to prove check-knob-coverage.sh's real settings.Settings guard\n" +
 		"\t// (TestKnobCoverage_Settings) fails when a field has no\n" +

@@ -818,6 +818,43 @@ type Settings struct {
 	// Wire shape mirrors ProviderProfileRef (same type as CompactionModel
 	// / RiskRaterModel above).
 	AdvisorModel ProviderProfileRef `json:"advisorModel,omitempty"`
+
+	// ── Per-kind advisor disable switches (laya-advisors-01LAYA001
+	// WP04-06, spec AC-02: "kinds are independently disableable") ──
+	//
+	// Each field's zero value (false) means ENABLED — mirrors
+	// HarnessSelfMCPDisabled's "*Disabled, default false" polarity rather
+	// than BranchAdvisorEnabled's "*Enabled, default false" polarity,
+	// because these heuristic backends make zero model calls and zero
+	// I/O (core/advice/heuristic.go's HeuristicAdvisor), so there is no
+	// cost/latency reason to default a kind off the way an LLM-backed
+	// advisor would need to be. Read by core/rpc/api.go's newLLMStack,
+	// which wires one advice.KindGate closure per kind onto the
+	// production HeuristicAdvisor (chatAdvisor) via SetKindGate — see
+	// that call site's own comment for the exact line.
+	//
+	// This does NOT gate whether the kind is REGISTERED (registration is
+	// a process-global, init()-time fact scripts/ci/check-advice-kinds.sh
+	// verifies independent of any Settings value) — it gates whether
+	// HeuristicAdvisor.Recommend serves it at all: a disabled kind
+	// degrades to ErrNoAdvice exactly like every other Advisor failure
+	// mode (advice's package doc comment), invisible to the caller beyond
+	// "no advice."
+
+	// AdviceBranchNowDisabled turns off the branch_now advice kind
+	// (core/advice/kinds/branchnow) independent of compact_now/
+	// escalate_model.
+	AdviceBranchNowDisabled bool `json:"adviceBranchNowDisabled,omitempty"`
+
+	// AdviceCompactNowDisabled turns off the compact_now advice kind
+	// (core/advice/kinds/compactnow) independent of branch_now/
+	// escalate_model.
+	AdviceCompactNowDisabled bool `json:"adviceCompactNowDisabled,omitempty"`
+
+	// AdviceEscalateModelDisabled turns off the escalate_model advice
+	// kind (core/advice/kinds/escalatemodel) independent of branch_now/
+	// compact_now.
+	AdviceEscalateModelDisabled bool `json:"adviceEscalateModelDisabled,omitempty"`
 }
 
 // EffectiveBundleSigningPolicy normalizes BundleSigningPolicy to one of

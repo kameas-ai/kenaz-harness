@@ -52,6 +52,25 @@ const (
 	// calls fire far more frequently than risk-rated dispatches).
 	// model_resolve_test.go's profiles[0]-regression case pins this.
 	RungNone ModelRung = "none"
+	// RungHeuristic marks a Recommendation produced by a HeuristicAdvisor
+	// backend (heuristic.go) — pure Go arithmetic over Features, zero
+	// model calls, zero I/O. Added for tasks.md's DESIGN-LOCKED REVISION
+	// (WP04-06, laya-advisors-01LAYA001): the v1 trio (branch_now,
+	// compact_now, escalate_model) ships at rung R1 of the kenaz-ml
+	// integration design's five-rung graduation ladder
+	// (research/kenaz-ml-integration-design.md §5.4) — "the rule serves
+	// the kind" — which predates any model resolution at all. It is
+	// therefore deliberately NOT a rung ResolveAdvisorModel's ladder ever
+	// returns: nothing about it depends on Settings.AdvisorModel or any
+	// configured provider profile, so it has no place in a function whose
+	// entire job is choosing among MODEL backends. HeuristicAdvisor
+	// stamps this directly onto every Recommendation it produces (see
+	// heuristic.go), alongside Unbenchmarked=true (spec: honest
+	// Model="heuristic/<name>-v1", never claimed as benchmarked) —
+	// mirroring how RungExplicitSetting/RungLocalLaya/RungFleetLaya are
+	// each stamped by ResolveAdvisorModel's own callers, just from a
+	// different source.
+	RungHeuristic ModelRung = "heuristic"
 )
 
 // fleetRungEnabled gates rung 3 (fleet-hosted laya). OQ-2 (owner: fleet
