@@ -801,6 +801,23 @@ type Settings struct {
 	// upgrade would turn off a working feature for every user with an
 	// unsigned local bundle. See EffectiveBundleSigningPolicy.
 	BundleSigningPolicy string `json:"bundleSigningPolicy,omitempty"`
+
+	// AdvisorModel is the user's explicit (provider, model) choice for
+	// laya-advisors-01LAYA001's advisor seam — the small-model binary
+	// recommendation calls (branch_now / compact_now / escalate_model,
+	// WP04-06) resolve their model through this field via
+	// core/advice.ResolveAdvisorModel's laya ladder, mirroring
+	// RiskRaterModel / CompactionModel exactly: empty (the zero value)
+	// means "no explicit choice" — the ladder falls through to a
+	// detected local laya model (rung 2), then to disabled (rung 4;
+	// rung 3, fleet-hosted laya, is compiled but unreachable pending
+	// OQ-2). A provider ID with no matching profile, or a model not in
+	// that profile's AvailableModels(), is NOT an error: the ladder logs
+	// the miss and falls through, exactly like RiskRaterModel.
+	//
+	// Wire shape mirrors ProviderProfileRef (same type as CompactionModel
+	// / RiskRaterModel above).
+	AdvisorModel ProviderProfileRef `json:"advisorModel,omitempty"`
 }
 
 // EffectiveBundleSigningPolicy normalizes BundleSigningPolicy to one of

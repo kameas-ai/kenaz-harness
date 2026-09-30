@@ -259,6 +259,27 @@ func init() {
 			"model). Settings UI: SettingsView.vue's risk-rater-model "+
 			"section, mirroring CompactionModel's picker pattern.",
 	)
+	knobcoverage.Register[settings.Settings](
+		"AdvisorModel",
+		"laya-advisors-01LAYA001 WP02: core/rpc/api.go's newLLMStack "+
+			"(~line 6186) builds the chatAdvisor ProfileResolver closure "+
+			"by reading this field on every advisor-model resolution and "+
+			"feeding it, plus the live personal.Store profile list, into "+
+			"advice.ResolveAdvisorModel — rung 1 (explicit setting) of "+
+			"the laya ladder, mirroring RiskRaterModel's exact pattern. "+
+			"The SAME block also resolves + logs ONCE, unconditionally, "+
+			"at newLLMStack construction time (the "+
+			"'advice.laya_ladder.boot_resolve' slog line) — a real, "+
+			"always-executed call site on every served/desktop boot with "+
+			"reg != nil, independent of whether any AdviceKind has "+
+			"shipped (WP04-06 add branch_now/compact_now/escalate_model "+
+			"as a later mission phase; the seam and the ladder land "+
+			"first with zero kinds registered, mirroring risk.RiskRater's "+
+			"own WP04 staging). No UI picker ships in WP01-03 — the "+
+			"field rides the existing generic Settings_Get/SaveAll "+
+			"bindings, same as RiskRaterModel/CompactionModel; a picker "+
+			"is a later WP's concern.",
+	)
 
 	// ── Compaction dials ─────────────────────────────────────────────
 	knobcoverage.Register[settings.Settings](

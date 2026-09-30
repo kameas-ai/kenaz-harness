@@ -7419,7 +7419,8 @@ export namespace settings {
 	    firstRunOnboardingCompleted?: boolean;
 	    chatCustomInstructions?: string;
 	    bundleSigningPolicy?: string;
-	
+	    advisorModel?: ProviderProfileRef;
+
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
@@ -7509,6 +7510,7 @@ export namespace settings {
 	        this.firstRunOnboardingCompleted = source["firstRunOnboardingCompleted"];
 	        this.chatCustomInstructions = source["chatCustomInstructions"];
 	        this.bundleSigningPolicy = source["bundleSigningPolicy"];
+	        this.advisorModel = this.convertValues(source["advisorModel"], ProviderProfileRef);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

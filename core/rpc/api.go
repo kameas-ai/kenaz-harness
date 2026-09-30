@@ -29,6 +29,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core"
 	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
 	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
+	"github.com/kameas-ai/kenaz-harness/core/advice"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	compactionwiring "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction/wiring"
@@ -5581,6 +5582,14 @@ type llmStack struct {
 	// allow/deny rules are not in force until the file is repaired
 	// (trust-surfaces-that-fire-01PMZ202 WP24 review finding).
 	staticPermsLoadError string
+	// chatAdvisor is laya-advisors-01LAYA001's advisor seam, constructed
+	// with the same (reg, resolver) pattern as chatRiskRater above. Held
+	// here — not yet threaded into buildChatRunner — so WP04-06's advice
+	// kinds (branch_now / compact_now / escalate_model) have a
+	// production Advisor to wire into once they ship; nil when reg is
+	// nil (the nil-core test chassis), mirroring chatRiskRater's own
+	// nil-safety.
+	chatAdvisor advice.Advisor
 }
 
 func newLLMStack(
@@ -6152,6 +6161,75 @@ func newLLMStack(
 		})
 	}
 
+	// Build the advisor LLM caller for laya-advisors-01LAYA001, mirroring
+	// chatRiskRater above. WP01-03 (this seam) ship with ZERO advice
+	// kinds registered (WP04-06 add branch_now/compact_now/
+	// escalate_model as parallel worktree agents once this merges) — see
+	// core/advice's package doc comment, which mirrors risk.RiskRater's
+	// own "until then nothing calls RiskRater in production" staging.
+	// Nothing calls chatAdvisor.Recommend yet.
+	//
+	// What IS real today, and what Settings.AdvisorModel's
+	// knobcoverage.Register citation (settings_knob_coverage.go) points
+	// at: resolveAdvisorModelOnBoot below is a genuine, unconditionally-
+	// executed call site (once per newLLMStack invocation, i.e. once per
+	// process boot in every served/desktop build with reg != nil) that
+	// reads the live Settings.AdvisorModel value and the live provider
+	// profile list and feeds both into advice.ResolveAdvisorModel — the
+	// SAME resolution the resolver closure below repeats per-Recommend-
+	// call once WP04-06 wire a real call site. This is deliberately NOT
+	// a decorative read: ResolveAdvisorModel's rung switch is a real
+	// branch, and its outcome is a real, observable slog line
+	// ("advice.model_resolve") distinct per rung — an operator can see
+	// today, from a cold boot, which rung of the laya ladder resolved
+	// (or why none did) long before any advice kind ships.
+	var chatAdvisor advice.Advisor
+	if reg != nil {
+		capturedAdvisorStore := store
+		advisorModelResolver := func(_ context.Context) (string, string, advice.ModelRung, bool, bool) {
+			if capturedAdvisorStore == nil {
+				return "", "", advice.RungNone, true, false
+			}
+			profs, perr := capturedAdvisorStore.List()
+			if perr != nil || len(profs) == 0 {
+				return "", "", advice.RungNone, true, false
+			}
+			var setting advice.AdvisorModelSetting
+			if settingsImpl != nil && settingsImpl.Store() != nil {
+				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
+					setting = advice.AdvisorModelSetting{
+						ProviderID: s.AdvisorModel.ProviderID,
+						ModelID:    s.AdvisorModel.ModelID,
+					}
+				}
+			}
+			return advice.ResolveAdvisorModel(setting, profs)
+		}
+		chatAdvisor = advice.NewLLMAdvisor(reg, advisorModelResolver)
+
+		// Boot-time resolve-and-log: executes once per newLLMStack call
+		// (every process boot with reg != nil), independent of whether
+		// any AdviceKind has shipped — this is what makes
+		// Settings.AdvisorModel's reader real today rather than only
+		// real once WP04-06 lands a call site that fires per turn.
+		if profs, perr := capturedAdvisorStore.List(); perr == nil && len(profs) > 0 {
+			var setting advice.AdvisorModelSetting
+			if settingsImpl != nil && settingsImpl.Store() != nil {
+				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
+					setting = advice.AdvisorModelSetting{
+						ProviderID: s.AdvisorModel.ProviderID,
+						ModelID:    s.AdvisorModel.ModelID,
+					}
+				}
+			}
+			_, _, bootRung, bootUnbenchmarked, bootOK := advice.ResolveAdvisorModel(setting, profs)
+			logging.L().Info("advice.laya_ladder.boot_resolve",
+				"rung", string(bootRung),
+				"unbenchmarked", bootUnbenchmarked,
+				"resolved", bootOK)
+		}
+	}
+
 	// system-prompt-layers WP03 / spec 089: the workspace line renders the
 	// core's RESOLVED agent workspace — the granted /workspace mount in a
 	// workbench, <DataDir>/agent-workspace otherwise — plus an honest note
@@ -6309,6 +6387,7 @@ func newLLMStack(
 		confirmDeps:          confirmDeps,
 
 		staticPermsLoadError: staticPermsLoadErr,
+		chatAdvisor:          chatAdvisor,
 	}
 }
 
