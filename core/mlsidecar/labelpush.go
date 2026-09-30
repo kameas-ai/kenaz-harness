@@ -139,6 +139,11 @@ type LanePause struct {
 
 // LaneStatus returns a snapshot of every currently-paused kind. An empty
 // map means the lane is flowing (or idle).
+//
+// DATED (2026-09-30, owner: laya-advisors WP13): no production reader yet
+// — the sidecar status surface WP13 builds (the settings panel reading
+// Manager.Status) is its consumer. Until then the live surface is the
+// mlsidecar.labelpush.lane_paused WARN line pause() emits once per pause.
 func (p *LabelPusher) LaneStatus() map[string]LanePause {
 	out := map[string]LanePause{}
 	if p == nil {
