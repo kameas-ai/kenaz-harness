@@ -915,6 +915,9 @@ interface WailsBindingsLike {
   Confirm_ApproveBatch(batchID: string, rememberSession: boolean): Promise<number>;
   Confirm_CancelBatch(batchID: string, reason: string): Promise<number>;
   Confirm_ListPending(sessionID: string): Promise<import('./types').ToolConfirmPending[]>;
+
+  // ── Advisor seam (laya-advisors-01LAYA001 WP07) ──
+  Advice_Respond(sessionID: string, kindID: string, action: string): Promise<string>;
   // WP05 multi-step wizard sequencing. Same value-not-string contract as
   // Elicit_SubmitAnswer above.
   Elicit_SubmitWizardStep(
@@ -3581,6 +3584,31 @@ export interface ConfirmClient {
 }
 
 /**
+ * AdviceClient — laya-advisors-01LAYA001 WP07's chip response surface.
+ * The chip itself arrives via the `advice:recommendation` event topic
+ * (AdviceChipPayload, see types.ts); this is the accept/dismiss round
+ * trip back to the advisor seam.
+ */
+export interface AdviceClient {
+  /**
+   * Respond to the most recently shown recommendation for
+   * (sessionID, kindID). `action` is `"accept"` or `"dismiss"`.
+   *
+   * Returns the newly created child session id for a `branch_now`
+   * accept (spec §2: accept invokes the kind's consumer action — for
+   * branch_now that action IS branch creation); an empty string for
+   * every other case, including a successful dismiss. A benign no-op
+   * (empty string, no error) when the chip has already expired
+   * server-side (e.g. the app restarted since it was shown).
+   */
+  respond(
+    sessionID: string,
+    kindID: string,
+    action: 'accept' | 'dismiss',
+  ): Promise<string>;
+}
+
+/**
  * ConfigClient — feature flag reads.
  * (user-slash-commands-01KQ8TD9 WP09)
  */
@@ -3856,6 +3884,8 @@ export interface HarnessClient {
   elicit: ElicitClient;
   /** Confirm-each tool-confirmation surface (confirm-each-enforcement-01PMAG05 WP02). */
   confirm: ConfirmClient;
+  /** Advisor-seam chip response surface (laya-advisors-01LAYA001 WP07). */
+  advice: AdviceClient;
   /** Config / feature-flag client (slash-commands WP09). */
   config: ConfigClient;
   /** Model-accessible secrets panel client (model-secret-references-01KW7M5A WP10). */
@@ -4680,6 +4710,10 @@ export function createHarnessClient(): HarnessClient {
         b().Confirm_ApproveBatch(batchID, rememberSession),
       cancelBatch: (batchID, reason) => b().Confirm_CancelBatch(batchID, reason),
       listPending: (sessionID) => b().Confirm_ListPending(sessionID),
+    },
+    advice: {
+      respond: (sessionID, kindID, action) =>
+        b().Advice_Respond(sessionID, kindID, action),
     },
     config: {
       getFlags: () => b().Config_GetFlags(),
@@ -6511,6 +6545,12 @@ export function createFakeHarnessClient(
       approveBatch: async () => 0,
       cancelBatch: async () => 0,
       listPending: async () => [],
+    },
+    advice: {
+      // Same reasoning as confirm above: nothing is ever "shown"
+      // server-side in the fake client, so responding is a no-op that
+      // resolves to no new session.
+      respond: async () => '',
     },
     config: {
       getFlags: async () => [

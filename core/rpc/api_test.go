@@ -109,6 +109,9 @@ func (f *fakeHarnessAPI) AppInfo(_ context.Context) (AppInfo, error) { return Ap
 func (f *fakeHarnessAPI) CompactionOverhead(_ context.Context) (CompactionOverheadInfo, error) {
 	return CompactionOverheadInfo{}, nil
 }
+func (f *fakeHarnessAPI) Advice_Respond(_ context.Context, _, _, _ string) (string, error) {
+	return "", nil
+}
 func (f *fakeHarnessAPI) LLMConnector() llm.LLMConnectorAPI        { return f.llmAPI }
 func (f *fakeHarnessAPI) MCP() mcp.MCPAPI                          { return f.mcpAPI }
 func (f *fakeHarnessAPI) MCPImport() *mcp.ImportAPI                { return nil }

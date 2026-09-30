@@ -12,6 +12,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	chatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	mcpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp"
 )
@@ -267,6 +268,20 @@ var passthroughTopics = []string{
 	// connected session would be a cross-session leak of the same shape
 	// D-705 exists to prevent, not a legitimate process-wide signal.
 	elicitview.TopicElicitDeferredAnswered,
+
+	// chatview.TopicAdviceRecommendation / TopicAdviceAutoActed
+	// (laya-advisors-01LAYA001 WP07): the advisor seam's chip delivery +
+	// auto-act banner topics (core/rpc/views/agentgraph/chat/advice_hook.go).
+	// Both payloads (AdviceChipPayload, AdviceAutoActedPayload) carry
+	// session_id — session-scoped, same D-705 disposition as
+	// TopicElicitDeferred above. Verified DELIVERED under served mode (not
+	// just allowlisted here) by
+	// wsstream_advice_topic_test.go's TestServedAdviceRecommendation_ScopedToSubscribedSession
+	// / TestServedAdviceAutoActed_ScopedToSubscribedSession, mirroring
+	// wsstream_gap_topics_test.go's pattern — the served-mode-gaps class
+	// this WP's brief calls out by name.
+	chatview.TopicAdviceRecommendation,
+	chatview.TopicAdviceAutoActed,
 
 	// topicFleetLockdownChanged (mirrors corefleet.TopicFleetLockdownChanged
 	// — see the const block above for why this is a literal, not an

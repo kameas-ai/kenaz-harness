@@ -638,6 +638,45 @@ const (
 	// policy explanation, never tool arguments or file contents) cross
 	// the boundary. Nothing else does.
 	KindBlockedPermissionRequest Kind = "policy.blocked_permission_request"
+
+	// KindModelSwitched fires when a user-initiated model move changes
+	// which (profileID, modelOverride) pair serves a session's next turn
+	// (laya-advisors-01LAYA001 WP08, design §5.2 / §5.1's escalate_model
+	// row: "new model.switched audit + event-log kinds at the
+	// 01PMCH01 move-switch site — a named Phase-0 deliverable; no
+	// capture point exists today"). Fires from
+	// core/rpc/views/agentgraph/chat.ChatRunner.StartStream, comparing
+	// the (profileID, modelOverride) pair the call arrives with against
+	// the pair the SAME session's most recent StartStream used — never
+	// on a session's first turn (there is no prior model to switch away
+	// from). This is a raw behavioral signal for the escalate_model
+	// advice kind's future label corpus (design §5.1's "Unprompted
+	// positives" column), captured as audit+event only in this WP —
+	// see that call site's own comment for why it is not also folded
+	// into an advice_labels row directly.
+	//
+	// Privacy invariant: provider/model identifiers and the session id
+	// only — no message content, no rationale text.
+	KindModelSwitched Kind = "model.switched"
+
+	// KindAdviceAutoActed fires when the advisor seam (core/advice) auto-
+	// acts a SafetyReversible recommendation at the Autonomous tier
+	// (laya-advisors-01LAYA001 WP07, spec §3: "may auto-act and notify
+	// (banner + audit event)"). v1's only auto-act-eligible kind is
+	// branch_now; this kind is deliberately NOT reused from the
+	// pre-existing branch_advisor.* family (KindBranchAdvisorAccepted et
+	// al) — that family is the LEGACY heuristic chip's own suggest/accept/
+	// dismiss lifecycle (core/branchadvisor), a distinct feature from the
+	// advisor seam even though branch_now's rung-R1 heuristic reuses the
+	// SAME detector as a feature extractor (see
+	// core/advice/kinds/branchnow's package doc). Conflating the two
+	// audit trails would make it impossible to tell, from the audit log
+	// alone, which system actually created a given branch. Payload:
+	// AdviceAutoActedPayload.
+	//
+	// Privacy invariant: ids, kind id, model id, and confidence only —
+	// no feature values, no rationale text.
+	KindAdviceAutoActed Kind = "advice.auto_acted"
 )
 
 // BlockedPermissionRequestPayload is the KindBlockedPermissionRequest
@@ -652,6 +691,34 @@ type BlockedPermissionRequestPayload struct {
 	Action    string `json:"action"`
 	Resource  string `json:"resource"`
 	Reason    string `json:"reason"`
+}
+
+// ModelSwitchedPayload is the KindModelSwitched payload
+// (laya-advisors-01LAYA001 WP08). FromProfileID/FromModelID are the
+// prior turn's resolved pair for this session; empty on the very first
+// switch this process observes for a session it has no prior record
+// for locally (the emitter's own call site never fires on a session's
+// genuine first turn — see ChatRunner.StartStream — so in practice these
+// are always populated, but the fields stay non-pointer strings rather
+// than *string to keep JSON decoding simple for the rare degenerate
+// case).
+type ModelSwitchedPayload struct {
+	SessionID     string `json:"session_id"`
+	FromProfileID string `json:"from_profile_id"`
+	FromModelID   string `json:"from_model_id"`
+	ToProfileID   string `json:"to_profile_id"`
+	ToModelID     string `json:"to_model_id"`
+}
+
+// AdviceAutoActedPayload is the KindAdviceAutoActed payload
+// (laya-advisors-01LAYA001 WP07). ChildSessionID is the newly created
+// branch session's id (branch_now is v1's only auto-act-eligible kind).
+type AdviceAutoActedPayload struct {
+	SessionID      string `json:"session_id"`
+	KindID         string `json:"kind_id"`
+	ChildSessionID string `json:"child_session_id"`
+	ModelID        string `json:"model_id"`
+	Confidence     int    `json:"confidence"`
 }
 
 // ToolConfirmPath names which branch of the confirm-each dispatch path

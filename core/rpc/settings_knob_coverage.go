@@ -303,6 +303,17 @@ func init() {
 			"KindID — gates escalate_model independent of branch_now/"+
 			"compact_now.",
 	)
+	knobcoverage.Register[settings.Settings](
+		"AdviceLabelCaptureDisabled",
+		"laya-advisors-01LAYA001 WP08: core/rpc/api.go's newLLMStack "+
+			"wraps chatAdvisor in core/advice/labels.CaptureAdvisor and "+
+			"reads this field fresh on every Recommend/Dismiss call via "+
+			"the `enabled` closure passed to NewCaptureAdvisor — false "+
+			"(default) captures every recommendation + user action into "+
+			"the local advice_labels table; true makes CaptureAdvisor "+
+			"skip the underlying Store entirely (AC-06: a call-count "+
+			"proof on the store, not a row-count check).",
+	)
 
 	// ── Compaction dials ─────────────────────────────────────────────
 	knobcoverage.Register[settings.Settings](

@@ -44,6 +44,7 @@ import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
+import AdviceChip from '@/components/chat/AdviceChip.vue';
 import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
@@ -51,6 +52,7 @@ import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI
 import { useSession, streamTruncatedCopy } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
 import { useLongSessionNudge } from '@/lib/useLongSessionNudge';
+import { useAdviceChips } from '@/lib/useAdviceChips';
 import { countTurns } from '@/lib/transcript';
 import { usePlanMode } from '@/lib/planmode';
 import type {
@@ -1413,6 +1415,18 @@ const longSessionNudge = useLongSessionNudge({
   promptTokens: _nudgeCumulativePromptTokens,
 });
 
+// laya-advisors-01LAYA001 WP07: the advisor seam's passive chip.
+// sessionId is the same reactive ref every other per-session composable
+// on this view reads (useSession, the nudge above) — session-scoping
+// happens inside useAdviceChips itself (payload.session_id === sessionId).
+const adviceChips = useAdviceChips({ sessionID: sessionId });
+async function onAdviceChipAccept() {
+  await adviceChips.accept();
+}
+async function onAdviceChipDismiss() {
+  await adviceChips.dismiss();
+}
+
 // Reset dismiss state when navigating to a different session.
 // FR-020: SessionsView lives inside Shell.vue's <KeepAlive> with no
 // :key, so this component (and useLongSessionNudge's closure) is never
@@ -2329,6 +2343,16 @@ async function onShared() {
           @branch="onNudgeBranch"
           @new-session="onNudgeNewSession"
           @dismiss="onNudgeDismiss"
+        />
+        <!-- Advisor seam chip (laya-advisors-01LAYA001 WP07). Passive
+             inline chip; accept/dismiss round-trips through
+             Advice_Respond via useAdviceChips. -->
+        <AdviceChip
+          v-if="adviceChips.activeChip.value"
+          :chip="adviceChips.activeChip.value"
+          data-testid="advice-chip-banner"
+          @accept="onAdviceChipAccept"
+          @dismiss="onAdviceChipDismiss"
         />
         <!-- SlashArgFill panel (WP06): shown when the user picks a
              user-defined slash command that declares input args.
