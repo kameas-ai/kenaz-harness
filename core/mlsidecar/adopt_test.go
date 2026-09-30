@@ -46,6 +46,43 @@ func setupVerifiedVersion(t *testing.T, l Layout, version string, content []byte
 	return exePath, sha
 }
 
+// setupSeededVersion mirrors setupVerifiedVersion but writes the record
+// the OTHER client (Kenaz) writes: Verified=false, the given provenance
+// — the A5(4) cross-client shape. Acceptance must ride provenance +
+// tree match, never the Verified bit.
+func setupSeededVersion(t *testing.T, l Layout, version string, content []byte, provenance string) (exePath, sha string) {
+	t.Helper()
+	dir := filepath.Join(l.VersionDir(version), "kameas-ml")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	exePath = filepath.Join(dir, EngineExecutableName(""))
+	if err := os.WriteFile(exePath, content, 0o755); err != nil {
+		t.Fatalf("write exe: %v", err)
+	}
+	f, err := os.Open(exePath)
+	if err != nil {
+		t.Fatalf("open exe: %v", err)
+	}
+	sha, _, err = integrity.HashSHA256(f)
+	_ = f.Close()
+	if err != nil {
+		t.Fatalf("hash exe: %v", err)
+	}
+	if err := l.SetCurrent(version); err != nil {
+		t.Fatalf("SetCurrent: %v", err)
+	}
+	tree, err := TreeDigest(l.OnedirPath(version))
+	if err != nil {
+		t.Fatalf("tree digest: %v", err)
+	}
+	if err := WriteInstallJSON(l, InstallRecord{Version: version, EngineSHA256: sha, Verified: false, Source: "kenaz-seed",
+		TreeSHA256: tree, Provenance: provenance, InstalledBy: "kenaz"}); err != nil {
+		t.Fatalf("WriteInstallJSON: %v", err)
+	}
+	return exePath, sha
+}
+
 // TestEvaluateAdoption_AdoptVerified is the "adopt-verified" proof: a
 // process whose exe_path resolves under `current`, whose on-disk bytes
 // hash to the client's own verified install record, and whose

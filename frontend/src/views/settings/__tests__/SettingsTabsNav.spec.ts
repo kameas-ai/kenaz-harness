@@ -38,7 +38,9 @@ describe('SettingsTabs — vertical nav rail', () => {
     // engineer-truth-pass-01PMTP01 WP03: +1 — Branch Advisor sub-tab in Authoring.
     // subagent-control-and-background-tasks-01PMZB11 UNIT-11: +1 — the
     // "Tasks" entry is restored (Runtime group moves 1 -> 2 items).
-    expect(items).toHaveLength(25);
+    // laya-advisors-01LAYA001 WP13: +1 — Recommendations (local ML engine)
+    // sub-tab in Authoring.
+    expect(items).toHaveLength(26);
     for (const item of items) {
       // lucide-vue-next renders an <svg>; every row should carry one.
       expect(item.find('svg').exists()).toBe(true);

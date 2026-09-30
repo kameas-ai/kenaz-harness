@@ -30,6 +30,9 @@ type stubSidecar struct {
 	// bare-{} regression pin to send the reviewer's EXACT exploit bytes
 	// rather than a Go zero-value struct that merely encodes similarly.
 	healthRaw []byte
+	// down makes /health drop the connection (transport error) — 'nothing
+	// usable listening', distinct from an HTTP error status.
+	down bool
 
 	contracts ContractsPayload
 
@@ -93,6 +96,16 @@ func (s *stubSidecar) setHealth(h HealthPayload) {
 	s.health = h
 }
 
+// setDown makes /health drop the connection without a response, so the
+// client sees a transport error — modeling "nothing (usable) listening",
+// distinct from an HTTP error status (ErrUnusableResponse: a live
+// process whose answer this client cannot read).
+func (s *stubSidecar) setDown(down bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.down = down
+}
+
 func (s *stubSidecar) setHealthStatus(code int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -112,7 +125,19 @@ func (s *stubSidecar) handleHealth(w http.ResponseWriter, r *http.Request) {
 	code := s.healthStatus
 	h := s.health
 	raw := s.healthRaw
+	down := s.down
 	s.mu.Unlock()
+	if down {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			panic("stubSidecar.setDown: ResponseWriter is not a Hijacker")
+		}
+		conn, _, err := hj.Hijack()
+		if err == nil {
+			conn.Close()
+		}
+		return
+	}
 	if code != 0 && code != http.StatusOK {
 		w.WriteHeader(code)
 		return

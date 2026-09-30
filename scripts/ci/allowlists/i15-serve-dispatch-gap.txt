@@ -729,7 +729,7 @@
 # TRANSPORT superseded by a different served-mode mechanism providing the
 # identical user-facing behaviour (Sessions_StartStream/StopStream vs the
 # Sessions_Stream WebSocket) -- noted per-entry which applies.
-# 13 entries.
+# 18 entries.
 
 # lib/eventLog.ts calls this exclusively via the raw window.go.rpc.Bindings
 # bridge (bypassing harnessClient.ts's overlay entirely) and explicitly no-ops
@@ -775,6 +775,20 @@
 "Update_StartDownload"
 "Update_Status"
 "Update_UnskipVersion"
+
+# laya-advisors-01LAYA001 WP13 (2026-09-30): the local ML engine install
+# surface. The engine is a notarized macOS arm64 .dmg mounted with hdiutil
+# and run as a detached process on the operator's own machine — a served
+# harness runs on a VM with neither, so there is nothing for a served
+# dispatch case to drive. SettingsView's Recommendations panel gates on
+# isServedMode() and renders an honest "runs in the desktop app" note
+# instead of a dead Enable button (RecommendationsPanel.vue; mounted-view
+# proof in RecommendationsPanel.spec.ts). Capability class, not a gap.
+"Sidecar_Enable"
+"Sidecar_Repair"
+"Sidecar_Status"
+"Sidecar_Uninstall"
+"Sidecar_Update"
 
 
 # CLASS: untriaged -- dated 2026-08-21, owner named per entry (alec unless

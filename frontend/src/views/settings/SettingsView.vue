@@ -48,6 +48,7 @@ import SyncPanel from '@/views/settings/SyncPanel.vue';
 import CompliancePanel from '@/views/settings/CompliancePanel.vue';
 // nav-settings-ia-cleanup WP02 — Crash Reporting panel (PRIVACY group)
 import CrashReportingPanel from '@/views/settings/CrashReportingPanel.vue';
+import RecommendationsPanel from '@/views/settings/RecommendationsPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import BranchAdvisorSettings from '@/components/settings/BranchAdvisorSettings.vue';
 import RiskRaterModelPicker from '@/components/settings/RiskRaterModelPicker.vue';
@@ -232,6 +233,14 @@ const showBranchAdvisorTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'branch-advisor';
 });
 
+// laya-advisors-01LAYA001 WP13 — Recommendations sub-tab: the local ML
+// engine's install / status / uninstall / update surface (spec §2c).
+// Disambiguates via ?tab=recommendations. Mount switch is in <template> below.
+const showRecommendationsTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'recommendations';
+});
+
 // CanvasHead title/subtitle per active query-param sub-tab. The settings
 // sub-panels no longer render their own breadcrumb header (SettingsShell
 // owns it), so the header text has to reflect the current section. General
@@ -258,6 +267,7 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
   compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },
   'crash-reporting': { title: 'Crash Reporting', subtitle: 'Configure error and crash-report telemetry consent.' },
+  recommendations: { title: 'Recommendations', subtitle: 'Install, check and remove the local ML engine that powers branch, compact and model-switch suggestions.' },
 };
 const DEFAULT_HEAD = {
   title: 'App preferences',
@@ -1318,6 +1328,15 @@ onMounted(() => {
       data-testid="settings-branch-advisor-pane"
     >
       <BranchAdvisorSettings />
+    </div>
+
+    <!-- laya-advisors-01LAYA001 WP13 — Recommendations (local ML engine) sub-tab. -->
+    <div
+      v-else-if="showRecommendationsTab"
+      class="px-6 py-4 max-w-3xl"
+      data-testid="settings-recommendations-pane"
+    >
+      <RecommendationsPanel />
     </div>
 
     <div

@@ -57,6 +57,7 @@ import (
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
 	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
 	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
+	sidecarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sidecar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/shell"
@@ -3447,6 +3448,46 @@ func (b *Bindings) Planmode_Discard(req planmodeview.DiscardRequest) (planmodevi
 func (b *Bindings) Planmode_Edit(req planmodeview.EditRequest) (planmodeview.EditResponse, error) {
 	defer sentry.WrapBinding("Planmode_Edit")()
 	return b.api.Planmode_Edit(b.ctx(), req)
+}
+
+// ── Sidecar (local ML engine) bindings (laya-advisors-01LAYA001 WP13) ──
+
+// Sidecar_Status observes (read-only — never spawns) and returns the local
+// ML engine's full picture for Settings → Recommendations: the honest
+// state, the pre-download disclosure (size, version, location), and
+// whether an update is pending.
+func (b *Bindings) Sidecar_Status() (sidecarview.StatusView, error) {
+	defer sentry.WrapBinding("Sidecar_Status")()
+	return b.api.Sidecar().Status(b.ctx())
+}
+
+// Sidecar_Enable downloads, verifies, installs and starts the local ML
+// engine. Blocks for the duration; the panel polls Sidecar_Status for the
+// install phase.
+func (b *Bindings) Sidecar_Enable() (sidecarview.StatusView, error) {
+	defer sentry.WrapBinding("Sidecar_Enable")()
+	return b.api.Sidecar().Enable(b.ctx())
+}
+
+// Sidecar_Update installs the newer pinned engine. Always an explicit
+// user action — the harness never updates the engine silently.
+func (b *Bindings) Sidecar_Update() (sidecarview.StatusView, error) {
+	defer sentry.WrapBinding("Sidecar_Update")()
+	return b.api.Sidecar().Update(b.ctx())
+}
+
+// Sidecar_Repair re-attempts to start an installed engine that is not
+// answering.
+func (b *Bindings) Sidecar_Repair() (sidecarview.StatusView, error) {
+	defer sentry.WrapBinding("Sidecar_Repair")()
+	return b.api.Sidecar().Repair(b.ctx())
+}
+
+// Sidecar_Uninstall stops the engine and removes it, its models and its
+// config from this device.
+func (b *Bindings) Sidecar_Uninstall() (sidecarview.StatusView, error) {
+	defer sentry.WrapBinding("Sidecar_Uninstall")()
+	return b.api.Sidecar().Uninstall(b.ctx())
 }
 
 // ── Sentry crash-reporting bindings (sentry-error-monitoring-01KX5R8G WP05)
