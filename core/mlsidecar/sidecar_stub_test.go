@@ -41,6 +41,7 @@ type stubSidecar struct {
 	recommendCalls   []string
 	recommendRefused map[string]bool
 	recommendScript  map[string]RecommendResponse
+	recommendRaw     map[string][]byte // verbatim body, bypassing JSON encoding
 
 	// /v1/labels ingest (WP14): the mirror + fault knobs.
 	labelMirror      map[string]storedLabel
@@ -201,6 +202,13 @@ func (s *stubSidecar) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": KindNotServedCode})
 		return
 	}
+	s.mu.Lock()
+	raw, hasRaw := s.recommendRaw[kind]
+	s.mu.Unlock()
+	if hasRaw {
+		_, _ = w.Write(raw)
+		return
+	}
 	if hasScript {
 		_ = json.NewEncoder(w).Encode(scripted)
 		return
@@ -215,6 +223,15 @@ func (s *stubSidecar) setRecommend(kind string, resp RecommendResponse) {
 		s.recommendScript = map[string]RecommendResponse{}
 	}
 	s.recommendScript[kind] = resp
+}
+
+func (s *stubSidecar) setRecommendRaw(kind string, body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recommendRaw == nil {
+		s.recommendRaw = map[string][]byte{}
+	}
+	s.recommendRaw[kind] = body
 }
 
 func (s *stubSidecar) refuseRecommend(kind string) {

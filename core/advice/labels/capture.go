@@ -79,6 +79,17 @@ func WithAfterWrite(fn func()) CaptureAdvisorOption {
 // compile-time witness that *CaptureAdvisor satisfies advice.Advisor.
 var _ advice.Advisor = (*CaptureAdvisor)(nil)
 
+// Inner returns the wrapped advisor — the layer CaptureAdvisor decorates.
+// Exposed so the production composition (core/rpc's newLLMStack:
+// Capture -> Sidecar -> Heuristic) can be asserted by a wiring test
+// rather than trusted from a comment.
+func (c *CaptureAdvisor) Inner() advice.Advisor {
+	if c == nil {
+		return nil
+	}
+	return c.inner
+}
+
 func (c *CaptureAdvisor) captureEnabled() bool {
 	if c == nil || c.enabled == nil {
 		return true
