@@ -3692,8 +3692,8 @@ func TestKnobCoverageGate_UnregisteredSettingsFieldFires(t *testing.T) {
 	// be re-anchored to the real last field whenever a later WP appends
 	// one, the same maintenance TestServedModeTopicForwardingGate_Planted*
 	// documents for passthroughTopics' own terminator-anchored proof.
-	const target = "\tAdviceEscalateModelDisabled bool `json:\"adviceEscalateModelDisabled,omitempty\"`\n}"
-	const mutated = "\tAdviceEscalateModelDisabled bool `json:\"adviceEscalateModelDisabled,omitempty\"`\n\n" +
+	const target = "\tAdviceLabelCaptureDisabled bool `json:\"adviceLabelCaptureDisabled,omitempty\"`\n}"
+	const mutated = "\tAdviceLabelCaptureDisabled bool `json:\"adviceLabelCaptureDisabled,omitempty\"`\n\n" +
 		"\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
 		"\t// to prove check-knob-coverage.sh's real settings.Settings guard\n" +
 		"\t// (TestKnobCoverage_Settings) fails when a field has no\n" +
