@@ -111,8 +111,13 @@ func (c *CaptureAdvisor) Recommend(ctx context.Context, kind advice.AdviceKind, 
 	if c == nil || c.inner == nil {
 		return advice.Recommendation{}, ErrCaptureDisabled
 	}
+	// The decision instant is stamped BEFORE the inner call and handed
+	// down on ctx: an engine-routed advisor sends it as the request's ts,
+	// and the row below records the SAME instant as created_at — the
+	// engine's shadow join keys on (features_hash, ts), so the two must be
+	// one value, not two clock reads.
 	start := c.now()
-	rec, err := c.inner.Recommend(ctx, kind, features, sess)
+	rec, err := c.inner.Recommend(advice.WithDecisionTime(ctx, start), kind, features, sess)
 	latencyMS := c.now().Sub(start).Milliseconds()
 	if err != nil {
 		return rec, err
@@ -147,7 +152,7 @@ func (c *CaptureAdvisor) Recommend(ctx context.Context, kind advice.AdviceKind, 
 		UserAction:       ActionIgnored,
 		LatencyMS:        latencyMS,
 		SessionID:        sess.SessionID,
-		CreatedAt:        c.now(),
+		CreatedAt:        start,
 	}
 	if ierr := c.store.Insert(ctx, row); ierr == nil && c.afterWrite != nil {
 		c.afterWrite()

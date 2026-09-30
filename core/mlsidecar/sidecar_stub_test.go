@@ -44,6 +44,7 @@ type stubSidecar struct {
 	// typed refusal reason the engine answers it with (kind_not_served,
 	// laya_backend_not_installed, contract_mismatch, ...).
 	recommendCalls   []string
+	recommendBodies  []RecommendRequest
 	recommendRefused map[string]string
 	recommendScript  map[string]RecommendResponse
 	recommendRaw     map[string][]byte // verbatim body, bypassing JSON encoding
@@ -224,8 +225,11 @@ func (s *stubSidecar) shutdownCallCount() int {
 
 func (s *stubSidecar) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	kind := strings.TrimPrefix(r.URL.Path, "/v1/recommend/")
+	var body RecommendRequest
+	_ = json.NewDecoder(r.Body).Decode(&body)
 	s.mu.Lock()
 	s.recommendCalls = append(s.recommendCalls, kind)
+	s.recommendBodies = append(s.recommendBodies, body)
 	reason, refused := s.recommendRefused[kind]
 	scripted, hasScript := s.recommendScript[kind]
 	s.mu.Unlock()
@@ -282,6 +286,15 @@ func (s *stubSidecar) refuseRecommendWith(kind, reason string) {
 		s.recommendRefused = map[string]string{}
 	}
 	s.recommendRefused[kind] = reason
+}
+
+// recommendBodySnapshot returns a copy of every recorded recommend body.
+func (s *stubSidecar) recommendBodySnapshot() []RecommendRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]RecommendRequest, len(s.recommendBodies))
+	copy(out, s.recommendBodies)
+	return out
 }
 
 func (s *stubSidecar) recommendCallCount() int {

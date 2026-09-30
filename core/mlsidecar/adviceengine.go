@@ -52,6 +52,8 @@ func (e AdviceEngine) Recommend(ctx context.Context, req advice.EngineRequest) (
 		FeatureContractVersion: req.FeatureContractVersion,
 		SessionID:              req.SessionID,
 		KindID:                 req.KindID,
+		FeaturesHash:           req.FeaturesHash,
+		TS:                     req.TS,
 	})
 	if err != nil {
 		if errors.Is(err, ErrKindNotServed) {

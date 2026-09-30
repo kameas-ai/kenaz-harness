@@ -208,11 +208,19 @@ type LeaseWireResponse struct {
 // (design §3.2). FeatureContractVersion is the kind's 16-hex contract
 // hash, echoed from /v1/contracts (KindContract.Version). Generation is
 // the serving manifest's version STRING ("0" when no artifact).
+//
+// FeaturesHash and TS are optional on the wire (the engine tolerates their
+// absence) and are the engine's shadow-join key: the same features_hash
+// and ts (created_at, ms) the harness's advice_labels row for this
+// decision carries, so a served recommendation joins its pushed label
+// exactly (see advice.EngineRequest).
 type RecommendRequest struct {
 	Features               map[string]any `json:"features"`
 	FeatureContractVersion string         `json:"feature_contract_version"`
 	SessionID              string         `json:"session_id"`
 	KindID                 string         `json:"kind_id"`
+	FeaturesHash           string         `json:"features_hash,omitempty"`
+	TS                     int64          `json:"ts,omitempty"`
 }
 
 type RecommendResponse struct {

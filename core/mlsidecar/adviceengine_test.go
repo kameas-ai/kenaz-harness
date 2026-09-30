@@ -243,3 +243,46 @@ func TestAdviceEngine_CapturedLabelRowCarriesEngineModelAndRung(t *testing.T) {
 		t.Errorf("fallback-served row = model %q rung %q, want the heuristic's", rows[1].ModelID, rows[1].Rung)
 	}
 }
+
+// TestAdviceEngine_RequestCarriesTheCapturedRowsHashAndTS is the engine
+// shadow-join key (interop ruling 2026-09-30): through the production
+// composition (CaptureAdvisor -> SidecarAdvisor -> real Client) the
+// recommend request's features_hash and ts are IDENTICAL to the
+// advice_labels row the capture bridge writes for that decision — and
+// that row is what the label lane pushes, so the engine joins the two on
+// (features_hash, ts) exactly.
+func TestAdviceEngine_RequestCarriesTheCapturedRowsHashAndTS(t *testing.T) {
+	h := openPushHarness(t, t.TempDir())
+	defer h.close(t)
+	r := newAdviceRig(t, "ae_join")
+	yes := true
+	r.stub.setRecommend("ae_join", RecommendResponse{Decision: &yes, Confidence: 88, KindID: "ae_join",
+		Model: "kenaz-ml/classic-0badc0de", Rung: "classic", Backend: "classic"})
+	decided := time.UnixMilli(1_759_250_000_123).UTC()
+	capture := labels.NewCaptureAdvisor(r.adv, h.store, nil, labels.WithClock(func() time.Time { return decided }))
+	ctx := context.Background()
+	if _, err := capture.Recommend(ctx, r.kind, toyFeatures{N: 7}, advice.SessionContext{SessionID: "sess"}); err != nil {
+		t.Fatal(err)
+	}
+	bodies := r.stub.recommendBodySnapshot()
+	rows, err := h.store.PendingSince(ctx, "ae_join", 0, 10)
+	if err != nil || len(rows) != 1 || len(bodies) != 1 {
+		t.Fatalf("rows = %d (err %v), recommend bodies = %d; want 1 and 1", len(rows), err, len(bodies))
+	}
+	req, row := bodies[0], rows[0]
+	if req.FeaturesHash == "" || req.FeaturesHash != row.FeaturesHash {
+		t.Errorf("request features_hash %q != captured row's %q", req.FeaturesHash, row.FeaturesHash)
+	}
+	if req.TS == 0 || req.TS != row.TS || req.TS != decided.UnixMilli() {
+		t.Errorf("request ts %d, captured row ts %d, decision instant %d — must be one value", req.TS, row.TS, decided.UnixMilli())
+	}
+	// And the label lane pushes exactly that key.
+	p := newPusher(r.stub, h.store, true)
+	if _, err := p.PushOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	posts := r.stub.labelPostSnapshot()
+	if len(posts) != 1 || posts[0].Rows[0].FeaturesHash != req.FeaturesHash || posts[0].Rows[0].TS != req.TS {
+		t.Fatalf("pushed label key does not match the recommend request's (features_hash, ts): %+v", posts)
+	}
+}

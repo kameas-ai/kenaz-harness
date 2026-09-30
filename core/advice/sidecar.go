@@ -47,11 +47,40 @@ type EngineKindContract struct {
 // EngineRequest is one POST /v1/recommend/{kind} call, advice-side shape
 // (core/mlsidecar.AdviceEngine maps it onto the wire type, so this package
 // never imports the lifecycle manager — advice stays the lighter package).
+//
+// FeaturesHash and TS are the engine shadow-join key (interop ruling
+// 2026-09-30, from kenaz-ml Mission B's shadow-join gap): the SAME
+// features_hash the advice cache keys on and the SAME ts (ms) the label
+// capture bridge stamps on this decision's advice_labels row, so the
+// engine can join a served recommendation to its pushed label exactly on
+// (features_hash, ts) — the label ingest's own key.
 type EngineRequest struct {
 	KindID                 string
 	Features               map[string]any
 	FeatureContractVersion string
 	SessionID              string
+	FeaturesHash           string
+	TS                     int64
+}
+
+type decisionTimeKey struct{}
+
+// WithDecisionTime marks ctx with the instant a recommendation decision is
+// being made. The label-capture bridge (labels.CaptureAdvisor) stamps it
+// BEFORE calling the advisor it wraps and records the same instant as the
+// captured row's created_at, so the engine request's ts and the label
+// row's ts are one value by construction.
+func WithDecisionTime(ctx context.Context, t time.Time) context.Context {
+	return context.WithValue(ctx, decisionTimeKey{}, t)
+}
+
+// DecisionTimeFrom returns the instant WithDecisionTime put on ctx.
+func DecisionTimeFrom(ctx context.Context) (time.Time, bool) {
+	if ctx == nil {
+		return time.Time{}, false
+	}
+	t, ok := ctx.Value(decisionTimeKey{}).(time.Time)
+	return t, ok
 }
 
 // EngineResponse is the engine's answer, advice-side shape. Decision is a
@@ -238,7 +267,11 @@ func (a *SidecarAdvisor) Recommend(ctx context.Context, kind AdviceKind, feature
 	// Route to the engine only while it is healthy. Healthy() is a cheap
 	// cached read (SidecarProbe's contract) — never a probe, never a spawn.
 	if a.engine != nil && a.probe != nil && a.probe.Healthy() {
-		rec, err := a.engineRecommend(kind, features, sess)
+		decided, ok := DecisionTimeFrom(ctx)
+		if !ok {
+			decided = a.now()
+		}
+		rec, err := a.engineRecommend(kind, features, sess, hash, decided.UnixMilli())
 		if err == nil {
 			a.cache.put(key, rec)
 			return rec, nil
@@ -284,7 +317,7 @@ func errNotServedByContract(kindID string) error {
 // engineRecommend performs the contracts check + engine call under ONE
 // budget and validates the answer into a Recommendation. Any error means
 // "fall through"; it never returns a partially-valid Recommendation.
-func (a *SidecarAdvisor) engineRecommend(kind AdviceKind, features Features, sess SessionContext) (Recommendation, error) {
+func (a *SidecarAdvisor) engineRecommend(kind AdviceKind, features Features, sess SessionContext, featuresHash string, ts int64) (Recommendation, error) {
 	callCtx, cancel := context.WithTimeout(context.Background(), a.budget)
 	defer cancel()
 
@@ -306,6 +339,8 @@ func (a *SidecarAdvisor) engineRecommend(kind AdviceKind, features Features, ses
 		Features:               fmap,
 		FeatureContractVersion: c.ContractVersion,
 		SessionID:              sess.SessionID,
+		FeaturesHash:           featuresHash,
+		TS:                     ts,
 	})
 	if err != nil {
 		return Recommendation{}, err
