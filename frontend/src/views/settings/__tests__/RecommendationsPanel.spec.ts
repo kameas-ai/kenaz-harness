@@ -74,7 +74,7 @@ describe('RecommendationsPanel — the status line names every state distinctly'
     { name: 'installed_unhealthy (port_conflict)', v: { state: 'installed_unhealthy', reason: 'port_conflict', installed: true, installedVersion: '1.2.0' }, headline: /^Installed, but not working$/, explain: /Another program is using the engine's port/ },
     { name: 'installed_unhealthy (digest_mismatch)', v: { state: 'installed_unhealthy', reason: 'digest_mismatch', installed: true, installedVersion: '1.2.0' }, headline: /^Installed, but not working$/, explain: /do not match their signature/ },
     { name: 'unverified', v: { state: 'unverified', reason: 'digest_mismatch' }, headline: /could not be verified$/ },
-    { name: 'contract_unsupported', v: { state: 'contract_unsupported' }, headline: /newer than this version of Kenaz supports$/, explain: /Update Kenaz/ },
+    { name: 'contract_unsupported', v: { state: 'contract_unsupported' }, headline: /^The running engine is not compatible with this version of Kenaz Harness$/, explain: /update Kenaz Harness, or update the engine/ },
     { name: 'legacy_unverified', v: { state: 'legacy_unverified', reason: 'legacy_engine' }, headline: /^An older ML engine is running$/, explain: /Update Kenaz to share the ML engine/ },
   ];
 

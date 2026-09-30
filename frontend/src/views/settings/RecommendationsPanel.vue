@@ -116,9 +116,9 @@ const statusLine = computed<{ headline: string; explain: string; tone: 'ok' | 'w
       };
     case 'contract_unsupported':
       return {
-        headline: 'Engine is newer than this version of Kenaz supports',
+        headline: 'The running engine is not compatible with this version of Kenaz Harness',
         explain:
-          'Update Kenaz to use the installed engine. Other apps sharing it are not affected.',
+          'Recommendations use the built-in heuristics until Kenaz Harness and the shared engine are on compatible versions — update Kenaz Harness, or update the engine if it is the older one. The engine is left running for other apps that share it.',
         tone: 'warn',
       };
     case 'legacy_unverified':
@@ -143,7 +143,7 @@ function unhealthyExplain(reason: string, detail: string): string {
     case 'crash':
       return `The engine failed to start. ${detail}`.trim();
     case 'port_conflict':
-      return "Another program is using the engine's port (7774). This app will not stop it or use it.";
+      return "Another program is using the engine's port. This app will not stop it or use it.";
     case 'digest_mismatch':
       return "The engine's files do not match their signature, so they will not be run. Re-download a fresh copy.";
     case 'update_pending':
