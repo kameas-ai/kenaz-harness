@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -414,19 +415,70 @@ func (m *Manager) Installed() (InstallRecord, bool) {
 	return rec, true
 }
 
+// ErrEngineInUse is returned by Uninstall when another client (Kenaz)
+// still holds a live lease on the shared engine: the install root is
+// shared (design Amendment A5(2): ~/.kenaz/ml/<env>), so removing it
+// would pull the engine out from under that app. This client's own lease
+// is released and nothing else is touched.
+var ErrEngineInUse = errors.New("mlsidecar: another app is still using the shared ML engine")
+
+// ownsWholeRoot reports whether root is a directory this harness may
+// remove wholesale on Uninstall: the isolated "<dataDir>/ml" fallback, or
+// the ratified shared "~/.kenaz/ml/<env>" (env in prod|dev|test). Anything
+// else (a Manager mis-pointed at a directory it does not own) gets only
+// its known layout entries removed.
+func ownsWholeRoot(root string) bool {
+	base := filepath.Base(root)
+	if base == "ml" {
+		return true
+	}
+	if filepath.Base(filepath.Dir(root)) != "ml" {
+		return false
+	}
+	switch base {
+	case EngineEnvProd, EngineEnvDev, EngineEnvTest:
+		return true
+	}
+	return false
+}
+
+// otherLiveClients returns the ids of OTHER clients holding a fresh lease
+// (stale-by-mtime and dead-by-pid leases are swept first, exactly as the
+// engine's own sweep would).
+func (m *Manager) otherLiveClients() []string {
+	_, _ = SweepStaleLeases(m.Layout, time.Now(), processAlive)
+	entries, err := os.ReadDir(m.Layout.LeaseDir())
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !isLeaseFileName(e.Name()) {
+			continue
+		}
+		client := e.Name()[:len(e.Name())-len(".lease")]
+		if client != m.ClientID {
+			out = append(out, client)
+		}
+	}
+	return out
+}
+
 // Uninstall implements the WP12 checklist item (design §6.2 step 5):
 // "release lease + remove version dirs + (if sole leaseholder)
 // token-authorized drained stop". Leaves no process, weights, or config
 // behind under this client's install root.
 //
-// WP13 widening: when the root is the harness-owned "<dataDir>/ml"
-// directory (base name "ml" — the wiring's own choice, per Amendment A2),
-// EVERYTHING under it is removed, because the engine writes its own state
+// WP13 widening: when the root is the ratified "~/.kenaz/ml/<env>" (or
+// the isolated "<dataDir>/ml" fallback — see ownsWholeRoot), EVERYTHING
+// under it is removed, because the engine writes its own state
 // (downloaded models, calibration, retained examples) under
 // KENAZ_ML_INSTALL_ROOT and "weights + config gone" must be literally
 // true. For any other root only the known layout entries are removed — a
 // Manager mis-pointed at a directory it does not own must never
-// RemoveAll it.
+// RemoveAll it. The root is SHARED with Kenaz (Amendment A5): if another
+// client still holds a live lease, Uninstall releases ours and returns
+// ErrEngineInUse without removing anything.
 func (m *Manager) Uninstall(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -435,16 +487,14 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 		_ = ReleaseLease(m.Layout, m.ClientID)
 	}
 
-	sole := true
-	if entries, err := os.ReadDir(m.Layout.LeaseDir()); err == nil {
-		for _, e := range entries {
-			if !e.IsDir() && isLeaseFileName(e.Name()) {
-				sole = false
-				break
-			}
-		}
+	// Shared root: never pull the engine out from under another live
+	// client. Our lease is already released; everything else stays.
+	if others := m.otherLiveClients(); len(others) > 0 {
+		return fmt.Errorf("%w (%s) — quit it, then uninstall again", ErrEngineInUse, strings.Join(others, ", "))
 	}
-	if sole && m.Client != nil {
+
+	// Sole leaseholder: ask the engine to stop (token-authorized, drained).
+	if m.Client != nil {
 		if token, ok, _ := ReadLocalToken(m.Layout); ok {
 			_ = m.Client.Shutdown(ctx, token)
 		}
@@ -461,7 +511,7 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 	if err := os.Remove(m.Layout.InstallJSONPath()); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if filepath.Base(m.Layout.Root) == "ml" {
+	if ownsWholeRoot(m.Layout.Root) {
 		if err := os.RemoveAll(m.Layout.Root); err != nil {
 			return err
 		}

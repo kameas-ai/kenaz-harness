@@ -290,7 +290,8 @@ const showUninstall = computed(() => !!view.value?.installed);
         <p class="text-xs text-ink">
           Remove the ML engine? This stops it and deletes the engine, its downloaded models and its
           configuration from <code class="break-all">{{ view.installLocation }}</code>. Recommendations go back
-          to the built-in heuristics.
+          to the built-in heuristics. The engine is shared with other Kenaz apps: if one is using it right
+          now, it stays installed until that app quits.
         </p>
         <div class="flex gap-2">
           <button

@@ -11,10 +11,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/advice"
 	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
+	"github.com/kameas-ai/kenaz-harness/core/paths"
 	sidecarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sidecar"
 )
 
@@ -56,12 +58,54 @@ func newSidecarTestAPI(t *testing.T) (*API, string) {
 	return api, dataDir
 }
 
-func TestSidecarRoot_IsDataDirMl(t *testing.T) {
-	// Manager.Uninstall's "remove everything" branch keys on base name
-	// "ml"; the wiring's root must keep that exact base name.
-	if got := sidecarRoot("/d/harness/prod"); got != filepath.Join("/d/harness/prod", "ml") || filepath.Base(got) != "ml" {
-		t.Fatalf("sidecarRoot = %q", got)
+// TestSidecarRoot pins the ratified root (Amendment A5(2)): the STANDARD
+// profile resolves ~/.kenaz/ml/<env> with <env> mapped from
+// KENAZ_HARNESS_ENV; any custom data dir stays isolated under <dataDir>/ml.
+func TestSidecarRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for raw, env := range map[string]string{"": "prod", "prod": "prod", "stage": "prod", "dev": "dev", "local": "dev", "test": "test"} {
+		t.Setenv("KENAZ_HARNESS_ENV", raw)
+		std, err := paths.DataDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(home, ".kenaz", "ml", env)
+		if got := sidecarRoot(std); got != want {
+			t.Errorf("KENAZ_HARNESS_ENV=%q: sidecarRoot(%s) = %q, want %q", raw, std, got, want)
+		}
+		if !ownsWholeRootForTest(want) {
+			t.Errorf("the ratified root %q must be one Manager.Uninstall owns wholesale", want)
+		}
 	}
+	// A custom data dir never reaches ~/.kenaz/ml.
+	if got, want := sidecarRoot("/custom/data"), filepath.Join("/custom/data", "ml"); got != want {
+		t.Errorf("custom data dir root = %q, want %q", got, want)
+	}
+}
+
+// ownsWholeRootForTest asserts (via the public behavior) that Uninstall
+// removes a root wholesale: a throwaway Manager on a copy of the path
+// shape, with an engine-written file that must disappear.
+func ownsWholeRootForTest(shape string) bool {
+	tmp, err := os.MkdirTemp("", "sidecar-own-")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(tmp)
+	root := filepath.Join(tmp, filepath.Base(filepath.Dir(shape)), filepath.Base(shape))
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return false
+	}
+	if err := os.WriteFile(filepath.Join(root, "engine-state.bin"), []byte("x"), 0o600); err != nil {
+		return false
+	}
+	m := mlsidecar.NewManager(mlsidecar.NewLayout(root), nil, nil, "harness", "v")
+	if err := m.Uninstall(context.Background()); err != nil {
+		return false
+	}
+	_, statErr := os.Stat(root)
+	return os.IsNotExist(statErr)
 }
 
 func TestSidecarWiring_NilCore_NoManagerAndNilInterfaceProbe(t *testing.T) {
@@ -92,7 +136,14 @@ func TestSidecarWiring_RealManagerUnderDataDir(t *testing.T) {
 		t.Fatal("New(c) with a data dir left the sidecar Manager nil")
 	}
 	if got, want := api.sidecarMgr.Layout.Root, filepath.Join(dataDir, "ml"); got != want {
-		t.Fatalf("install root = %q, want %q (the ~/.kenaz per-env data-dir family)", got, want)
+		t.Fatalf("install root = %q, want %q (custom data dir stays isolated; the standard profile resolves ~/.kenaz/ml/<env>, see TestSidecarRoot)", got, want)
+	}
+	env := mlsidecar.EngineEnv()
+	if got, want := api.sidecarMgr.Client.BaseURL, mlsidecar.BaseURLForEnv(env); got != want {
+		t.Fatalf("client dials %q, want the env-mapped %q (Amendment A5(1))", got, want)
+	}
+	if sp, ok := api.sidecarMgr.Spawner.(mlsidecar.ProcessSpawner); !ok || sp.Port != mlsidecar.EnginePort(env) {
+		t.Fatalf("spawner = %#v, want ProcessSpawner passing port %d", api.sidecarMgr.Spawner, mlsidecar.EnginePort(env))
 	}
 	if _, ok := api.sidecarProbe.(*mlsidecar.DemandProbe); !ok {
 		t.Fatalf("sidecarProbe = %T, want the demand-driven *mlsidecar.DemandProbe", api.sidecarProbe)
@@ -190,11 +241,17 @@ func TestSidecarWiring_LadderResolvesRung2ThroughProductionProbe(t *testing.T) {
 	// First advisor demand: falls through (per-call fallback) but starts the
 	// lazy background Ensure; once it lands the ladder resolves rung 2.
 	probe := api.sidecarProbe.(*mlsidecar.DemandProbe)
-	if _, _, _, _, ok := advice.ResolveAdvisorModel(advice.AdvisorModelSetting{}, nil, probe); ok {
-		t.Log("first demand already healthy (engine answered before the call returned) — acceptable")
+	var model string
+	var rung advice.ModelRung
+	var ok bool
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, model, rung, _, ok = advice.ResolveAdvisorModel(advice.AdvisorModelSetting{}, nil, probe)
+		if ok {
+			break
+		}
+		time.Sleep(time.Millisecond)
 	}
-	probe.Wait()
-	_, model, rung, _, ok := advice.ResolveAdvisorModel(advice.AdvisorModelSetting{}, nil, probe)
 	if !ok || rung != advice.RungLocalLaya || model != "kenaz-ml-sidecar@1.0.0" {
 		t.Fatalf("ladder = (%q, %q, %v), want rung 2 via the production probe", model, rung, ok)
 	}

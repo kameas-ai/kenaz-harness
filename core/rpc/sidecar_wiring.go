@@ -3,26 +3,46 @@ package rpc
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/advice"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/channels"
 	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
+	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
 	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 )
 
-// sidecarRootDirName is the install root's directory name under the
-// harness's per-environment data dir (<DataDir>/ml — the ~/.kenaz family,
-// owner ruling 2026-09-30 / design Amendment A2). mlsidecar.Manager.
-// Uninstall keys its "remove everything under the root" behavior on this
-// exact base name, so the two must not drift: see
-// TestSidecarRoot_IsDataDirMl.
+// sidecarRootDirName is the isolated-fallback install root's directory
+// name under a non-standard data dir (<DataDir>/ml). mlsidecar.Manager.
+// Uninstall keys its "remove everything under the root" behavior on base
+// name "ml" (and on ~/.kenaz/ml/<env>) — see mlsidecar.ownsWholeRoot and
+// TestSidecarRoot.
 const sidecarRootDirName = "ml"
 
-// sidecarRoot returns the engine install root for a data dir.
-func sidecarRoot(dataDir string) string { return filepath.Join(dataDir, sidecarRootDirName) }
+// sidecarRoot returns the engine install root.
+//
+// STANDARD PROFILE (dataDir == paths.DataDir(), i.e. ~/.kenaz/harness/
+// <env>): the RATIFIED shared root ~/.kenaz/ml/<env> (design Amendment
+// A5(2)), <env> in {prod, dev, test} mapped from KENAZ_HARNESS_ENV by
+// mlsidecar.EngineEnv — the same root Kenaz resolves, so the two clients
+// share one verified engine and one lease directory.
+//
+// ANYTHING ELSE (a test chassis, an explicit custom data dir): the
+// isolated <dataDir>/ml, so nothing outside that directory is ever read
+// or written — tests never touch the real ~/.kenaz.
+func sidecarRoot(dataDir string) string {
+	if std, err := paths.DataDir(); err == nil && filepath.Clean(dataDir) == filepath.Clean(std) {
+		if home, herr := os.UserHomeDir(); herr == nil {
+			if root, rerr := mlsidecar.DefaultRootFor(home, mlsidecar.EngineEnv()); rerr == nil {
+				return root
+			}
+		}
+	}
+	return filepath.Join(dataDir, sidecarRootDirName)
+}
 
 // newSidecarStack constructs the process's single *mlsidecar.Manager and
 // its advisor-facing probe (laya-advisors-01LAYA001 WP13) — replacing the
@@ -45,9 +65,14 @@ func newSidecarStack(dataDir, buildVersion string) (*mlsidecar.Manager, advice.S
 		return nil, nil
 	}
 	layout := mlsidecar.NewLayout(sidecarRoot(dataDir))
+	// One engine per env per machine (Amendment A5(1)): the client dials,
+	// and the spawner tells the engine to bind, the same env-mapped port
+	// (prod 7774, dev 7775, test 7776), so a dev build never talks to —
+	// or port-conflicts with — the prod engine.
+	env := mlsidecar.EngineEnv()
 	m := mlsidecar.NewManager(layout,
-		mlsidecar.NewClient(mlsidecar.DefaultBaseURL, nil),
-		mlsidecar.ProcessSpawner{Layout: layout},
+		mlsidecar.NewClient(mlsidecar.BaseURLForEnv(env), nil),
+		mlsidecar.ProcessSpawner{Layout: layout, Port: mlsidecar.EnginePort(env)},
 		"harness", buildVersion)
 	// A real PyInstaller engine needs seconds to bind its port.
 	m.StartupWait = 30 * time.Second

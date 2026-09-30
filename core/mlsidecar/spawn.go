@@ -6,7 +6,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 )
+
+// RootEnvVar is the environment variable the harness sets on the engine
+// process it spawns so the engine resolves the SAME install root this
+// Layout describes (design Amendment A2 / kenaz-ml two-client-engine
+// D-A1). The real engine self-terminates via lease/ under this root, so
+// the client must also have CREATED lease/ before spawning
+// (Manager.spawnLocked enforces that ordering).
+const RootEnvVar = "KENAZ_ML_INSTALL_ROOT"
 
 // ProcessSpawner is the production Spawner (laya-advisors-01LAYA001 WP13):
 // it launches the verified engine launcher (versions/<v>/kameas-ml/
@@ -19,6 +28,8 @@ import (
 //     lease/ and the shutdown token under the harness's install root.
 //   - The caller (Manager.spawnLocked) has already created lease/; this
 //     type never spawns into a root without one (it re-checks).
+//   - The engine is started as `<launcher> serve --port <env port>`; it
+//     binds loopback only (the engine refuses anything else).
 //   - stdout/stderr go to <root>/engine.log (append), never to the
 //     harness's own stdio.
 //
@@ -27,6 +38,11 @@ import (
 // advisor call or Settings click triggered the spawn.
 type ProcessSpawner struct {
 	Layout Layout
+	// Port is the loopback port the engine is told to bind (`serve
+	// --port N`): design Amendment A5(1) maps it per env (prod 7774, dev
+	// 7775, test 7776) via EnginePort(EngineEnv()), and the Manager's
+	// Client dials the same one. 0 omits the flag (engine default 7774).
+	Port int
 	// ExtraEnv is appended after the inherited environment (and after
 	// RootEnvVar), for tests and for LAYA_THREADS-style tuning.
 	ExtraEnv []string
@@ -60,7 +76,11 @@ func (p ProcessSpawner) Spawn(_ context.Context, exePath string) (int, error) {
 	}
 	defer logf.Close() // the child holds its own dup of the fd
 
-	cmd := exec.Command(exePath)
+	args := []string{"serve"}
+	if p.Port > 0 {
+		args = append(args, "--port", strconv.Itoa(p.Port))
+	}
+	cmd := exec.Command(exePath, args...)
 	cmd.Dir = filepath.Dir(exePath)
 	cmd.Env = SpawnEnv(os.Environ(), p.Layout.Root, p.ExtraEnv...)
 	cmd.Stdin = nil

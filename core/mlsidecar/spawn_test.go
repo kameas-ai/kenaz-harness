@@ -50,11 +50,12 @@ func TestProcessSpawner_RealProcessSeesRootAndLeaseDir(t *testing.T) {
 	body := "#!/bin/sh\n" +
 		"echo \"root=$" + RootEnvVar + "\" > \"" + out + ".tmp\"\n" +
 		"if [ -d \"$" + RootEnvVar + "/lease\" ]; then echo leasedir=yes >> \"" + out + ".tmp\"; else echo leasedir=no >> \"" + out + ".tmp\"; fi\n" +
+		"echo \"args=$*\" >> \"" + out + ".tmp\"\n" +
 		"mv \"" + out + ".tmp\" \"" + out + "\"\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	pid, err := (ProcessSpawner{Layout: l}).Spawn(context.Background(), script)
+	pid, err := (ProcessSpawner{Layout: l, Port: 7775}).Spawn(context.Background(), script)
 	if err != nil || pid <= 0 {
 		t.Fatalf("Spawn: pid=%d err=%v", pid, err)
 	}
@@ -68,6 +69,9 @@ func TestProcessSpawner_RealProcessSeesRootAndLeaseDir(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "root="+root) || !strings.Contains(string(got), "leasedir=yes") {
 		t.Fatalf("child saw %q, want root=%s and leasedir=yes", got, root)
+	}
+	if !strings.Contains(string(got), "args=serve --port 7775") {
+		t.Fatalf("child saw %q, want the engine started as `serve --port 7775` (A5 per-env port)", got)
 	}
 	if _, err := os.Stat(filepath.Join(root, "engine.log")); err != nil {
 		t.Errorf("engine.log not created: %v", err)

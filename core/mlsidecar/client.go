@@ -14,7 +14,16 @@ import (
 // §3.1: "kameas-ml sidecar ... FastAPI :7774"). Tests always point a
 // Client at an httptest.Server URL instead — nothing in this package's
 // test suite dials the real port.
+//
+// This is the PROD engine's address; design Amendment A5(1) maps the port
+// per env (prod 7774, dev 7775, test 7776). Production wiring dials
+// DefaultEngineBaseURL(), which resolves this process's env.
 const DefaultBaseURL = "http://127.0.0.1:7774"
+
+// DefaultEngineBaseURL is this process's env's loopback engine URL
+// (BaseURLForEnv(EngineEnv())) — what production wiring dials, so a dev
+// build never talks to (or port-conflicts with) the prod engine.
+func DefaultEngineBaseURL() string { return BaseURLForEnv(EngineEnv()) }
 
 // Client speaks the wire shapes design §3.3 specifies. It has no
 // knowledge of whether the far end is the real kenaz-ml sidecar or the
