@@ -443,7 +443,12 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// row's primary key excluded and compare it to the pre-Open digest,
 	// which would close this for all four tables at once. Out of scope for
 	// a chore: snapshot PR. Owner: alec. Dated 2026-09-09.
-	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true, "tasks": true}
+	// advice_labels added 2026-09-30: v0.84.0 is the first tag whose
+	// committed dump already contains the table, so
+	// assertAdviceLabelsTableMigrated's probe insert (the tasks-precedent
+	// pattern, same trade-off as documented above) now appears as a
+	// pre-vs-post change on replay.
+	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true, "tasks": true, "advice_labels": true}
 	for _, tbl := range expectedChangedTables[tag] {
 		changed[tbl] = true
 	}
