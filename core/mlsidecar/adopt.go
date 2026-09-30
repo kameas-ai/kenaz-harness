@@ -1,6 +1,8 @@
 package mlsidecar
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -72,14 +74,18 @@ type AdoptDecision struct {
 //  3. Resolves health.ExePath: it must point inside THIS client's own
 //     `current` version directory. A process running from anywhere
 //     else is a port conflict, never an adoptee.
-//  4. Re-verifies the ON-DISK artifact at that version against the
-//     install.json record THIS client wrote when it last verified that
-//     version (client-side, reusing core/bundle/integrity + core/trust
-//     — no network call, no trusting the remote process).
-//  5. Cross-checks the process's self-reported digest/version against
-//     that independently-verified record. "Reports are cross-checks,
-//     never trust roots" (WP12 brief): a mismatch here is exactly the
-//     F2 planted-violation proof (adopt-refused-on-digest-mismatch).
+//  4. Re-verifies the ON-DISK install at that version against
+//     install.json via VerifyInstalled — the launcher AND the whole
+//     onedir tree, under the cross-client trust rule (design Amendment
+//     A5(3)+(4): a record written by EITHER client, harness
+//     "kameas-channel-manifest" or Kenaz "kenaz-bundle-digest", is
+//     accepted when the bytes match it). No network call, no trusting the
+//     remote process.
+//  5. Cross-checks the process's self-reported digest against that
+//     independently-verified record. "Reports are cross-checks, never
+//     trust roots" (WP12 brief): a mismatch here is exactly the F2
+//     planted-violation proof (adopt-refused-on-digest-mismatch). A
+//     sidecar_version mismatch is only noted (A5(4)).
 //
 // health is the already-fetched /health payload; EvaluateAdoption makes
 // no network call itself so it is trivially unit-testable against
@@ -87,6 +93,12 @@ type AdoptDecision struct {
 // (adopt_test.go) — the stub-backed integration path is covered by
 // manager_test.go instead.
 func EvaluateAdoption(layout Layout, health HealthPayload) (AdoptDecision, error) {
+	return EvaluateAdoptionWith(layout, health, nil)
+}
+
+// EvaluateAdoptionWith is EvaluateAdoption with a per-process tree-verify
+// cache (the Manager's); a nil tv re-hashes the whole tree every call.
+func EvaluateAdoptionWith(layout Layout, health HealthPayload, tv *TreeVerifier) (AdoptDecision, error) {
 	if health.LifecycleProtocol == 0 {
 		// AMENDED (2026-09-29 security-review ruling, supersedes the
 		// original F5 text): a pre-lease engine is UNCONDITIONALLY
@@ -127,34 +139,86 @@ func EvaluateAdoption(layout Layout, health HealthPayload) (AdoptDecision, error
 	}
 
 	version := filepath.Base(currentDir)
-	rec, ok, err := ReadInstallJSON(layout)
-	if err != nil {
-		return AdoptDecision{}, err
-	}
-	if !ok || !rec.Verified || rec.Version != version {
-		return AdoptDecision{Action: AdoptRefuseUnverified, Reason: ReasonDigestMismatch, Health: health, Detail: "no positively-verified install.json record for the running version"}, nil
+	rec, verr := VerifyInstalled(layout, version, tv)
+	if verr != nil {
+		if errors.Is(verr, errInstallRecordUnreadable) {
+			return AdoptDecision{}, verr
+		}
+		return AdoptDecision{Action: AdoptRefuseUnverified, Reason: ReasonDigestMismatch, Health: health, Detail: "install not verifiable: " + verr.Error()}, nil
 	}
 
-	// Re-verify the ON-DISK bytes right now — install.json records what
-	// was true at install time; a file replaced out from under `current`
-	// since then must not be trusted just because the record once said
-	// so.
+	// The file the process actually runs from must itself carry the
+	// verified launcher bytes (the tree check above covers it too; this
+	// pins exe_path to the launcher specifically).
 	if err := VerifyFileSHA256(health.ExePath, rec.EngineSHA256); err != nil {
-		return AdoptDecision{Action: AdoptRefuseUnverified, Reason: ReasonDigestMismatch, Health: health, Detail: "on-disk artifact no longer matches its verified install record: " + err.Error()}, nil
+		return AdoptDecision{Action: AdoptRefuseUnverified, Reason: ReasonDigestMismatch, Health: health, Detail: "the process's executable is not the verified engine launcher: " + err.Error()}, nil
 	}
 
 	// Cross-check the process's self-report against the independently
 	// verified record — a mismatch here means the running process is
 	// lying about what it is, or is a different build entirely that
-	// happens to share the port.
+	// happens to share the port. Reports are cross-checks, never roots.
 	if health.EngineSHA256 != "" && !digestsEqual(health.EngineSHA256, rec.EngineSHA256) {
 		return AdoptDecision{Action: AdoptRefuseUnverified, Reason: ReasonDigestMismatch, Health: health, Detail: "reported engine_sha256 does not match the verified install record"}, nil
 	}
-	if health.SidecarVersion != "" && !versionLabelConsistent(version, health.SidecarVersion) {
-		return AdoptDecision{Action: AdoptRefuseUnverified, Reason: ReasonDigestMismatch, Health: health, Detail: "reported sidecar_version is inconsistent with the verified install's version label"}, nil
-	}
 
-	return AdoptDecision{Action: AdoptAccept, Health: health, Detail: "verified install, verified process identity"}, nil
+	// sidecar_version is NOT a gate (A5(4) relaxed the exact match to
+	// record-vs-directory-label consistency, enforced in VerifyInstalled):
+	// engine builds report 0.1.0 everywhere today and Kenaz labels are
+	// "<semver>+<sha12>", so a mismatch is noted, never refused.
+	detail := "verified install (provenance " + rec.Provenance + "), verified process identity"
+	if health.SidecarVersion != "" && !versionLabelConsistent(version, health.SidecarVersion) {
+		detail += fmt.Sprintf("; note: engine reports %q, version label is %q", health.SidecarVersion, version)
+	}
+	return AdoptDecision{Action: AdoptAccept, Health: health, Detail: detail}, nil
+}
+
+// errInstallRecordUnreadable marks an install.json that exists but could
+// not be read or parsed — an I/O fault, not a verification verdict.
+var errInstallRecordUnreadable = errors.New("mlsidecar: install.json unreadable")
+
+// errNoInstallRecord marks the absence of install.json.
+var errNoInstallRecord = errors.New("mlsidecar: no install.json record")
+
+// VerifyInstalled re-verifies versions/<label> against install.json under
+// the cross-client trust rule (design Amendment A5(3)+(4)), mirroring
+// Kenaz's internal/ml VerifyInstalled so either client adopts (or spawns)
+// the other's install on exactly the same evidence:
+//
+//  1. the record names exactly the version directory `current` points to
+//     (record-vs-directory-label consistency);
+//  2. its provenance is one of the two known values — the Verified bit is
+//     neither required nor sufficient;
+//  3. the launcher re-hashes to engine_sha256;
+//  4. the WHOLE onedir re-hashes to tree_sha256 (a record that predates A5
+//     and carries none is not verifiable). tv caches by stat fingerprint,
+//     per process; nil always re-hashes.
+//
+// Pure on-disk bytes + records: nothing is trusted from a running process.
+func VerifyInstalled(l Layout, label string, tv *TreeVerifier) (InstallRecord, error) {
+	rec, ok, err := ReadInstallJSON(l)
+	if err != nil {
+		return InstallRecord{}, fmt.Errorf("%w: %v", errInstallRecordUnreadable, err)
+	}
+	if !ok {
+		return InstallRecord{}, errNoInstallRecord
+	}
+	if rec.Version != label {
+		return rec, fmt.Errorf("install.json describes %q, current is %q", rec.Version, label)
+	}
+	if !knownProvenance(rec.Provenance) {
+		return rec, fmt.Errorf("install.json provenance %q is not a known installer (verified=%v)", rec.Provenance, rec.Verified)
+	}
+	if err := VerifyFileSHA256(pathUnderVersionsDir(l, label), rec.EngineSHA256); err != nil {
+		return rec, err
+	}
+	if rec.TreeSHA256 == "" {
+		return rec, fmt.Errorf("install record for %q has no tree digest (predates design A5): not verifiable", label)
+	}
+	if err := tv.Verify(l.OnedirPath(label), rec.TreeSHA256); err != nil {
+		return rec, err
+	}
+	return rec, nil
 }
 
 // contractCompatible reports whether health's advertised lifecycle

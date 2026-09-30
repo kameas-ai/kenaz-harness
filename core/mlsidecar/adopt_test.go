@@ -35,7 +35,12 @@ func setupVerifiedVersion(t *testing.T, l Layout, version string, content []byte
 	if err := l.SetCurrent(version); err != nil {
 		t.Fatalf("SetCurrent: %v", err)
 	}
-	if err := WriteInstallJSON(l, InstallRecord{Version: version, EngineSHA256: sha, Verified: true, Source: "test"}); err != nil {
+	tree, err := TreeDigest(l.OnedirPath(version))
+	if err != nil {
+		t.Fatalf("tree digest: %v", err)
+	}
+	if err := WriteInstallJSON(l, InstallRecord{Version: version, EngineSHA256: sha, Verified: true, Source: "test",
+		TreeSHA256: tree, Provenance: ProvenanceChannelManifest, InstalledBy: "harness"}); err != nil {
 		t.Fatalf("WriteInstallJSON: %v", err)
 	}
 	return exePath, sha

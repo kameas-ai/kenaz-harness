@@ -362,21 +362,21 @@ func TestEvaluateAdoption_EngineBareHexDigest_A5(t *testing.T) {
 	}
 }
 
-// TestEvaluateAdoption_VersionLabelConsistency_A5 is Amendment A5(4)'s
-// relaxation: a Kenaz-seeded version dir is labeled "<semver>+<sha12>"
-// while the engine reports "<semver>" — consistent, adopted. A report that
-// is not the label (or its "+build" prefix) is still refused.
-func TestEvaluateAdoption_VersionLabelConsistency_A5(t *testing.T) {
+// TestEvaluateAdoption_SidecarVersionIsNotAGate_A5 is Amendment A5(4)'s
+// relaxation: sidecar_version is a noted detail, never a refusal — engine
+// builds report 0.1.0 everywhere today and Kenaz labels are
+// "<semver>+<sha12>". Record-vs-directory-label consistency is what is
+// enforced (VerifyInstalled).
+func TestEvaluateAdoption_SidecarVersionIsNotAGate_A5(t *testing.T) {
 	l := NewLayout(t.TempDir())
 	exePath, sha := setupVerifiedVersion(t, l, "0.2.0+1a2b3c4d5e6f", []byte("engine binary bytes"))
 	health := HealthPayload{SidecarVersion: "0.2.0", ExePath: exePath, EngineSHA256: sha, LifecycleProtocol: 1}
-	if d, err := EvaluateAdoption(l, health); err != nil || d.Action != AdoptAccept {
-		t.Fatalf("label 0.2.0+build vs report 0.2.0 = %+v, %v; want adopted", d, err)
+	if d, err := EvaluateAdoption(l, health); err != nil || d.Action != AdoptAccept || strings.Contains(d.Detail, "note:") {
+		t.Fatalf("label 0.2.0+build vs report 0.2.0 = %+v, %v; want adopted, no note", d, err)
 	}
-	for _, bad := range []string{"0.2", "0.2.1", "0.2.0+ffffffffffff"} {
-		health.SidecarVersion = bad
-		if d, _ := EvaluateAdoption(l, health); d.Action != AdoptRefuseUnverified {
-			t.Errorf("report %q vs label 0.2.0+1a2b3c4d5e6f = %q; want refused", bad, d.Action)
-		}
+	health.SidecarVersion = "0.1.0"
+	d, err := EvaluateAdoption(l, health)
+	if err != nil || d.Action != AdoptAccept || !strings.Contains(d.Detail, "note:") {
+		t.Fatalf("report 0.1.0 vs label 0.2.0+build = %+v, %v; want adopted WITH a note", d, err)
 	}
 }

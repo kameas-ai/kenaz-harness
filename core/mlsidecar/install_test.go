@@ -89,6 +89,17 @@ func TestInstall_HappyPath_VerifiesUnpacksAndFlipsCurrent(t *testing.T) {
 	if !res.Record.Verified {
 		t.Error("expected Record.Verified=true")
 	}
+	// Design A5(3)+(4): a verified harness install records its provenance
+	// and the whole-tree digest, and is adoptable under the shared rule.
+	if res.Record.Provenance != ProvenanceChannelManifest || res.Record.InstalledBy != "harness" {
+		t.Errorf("record provenance = %q installed_by = %q", res.Record.Provenance, res.Record.InstalledBy)
+	}
+	if tree, terr := TreeDigest(l.OnedirPath("1.0.0")); terr != nil || tree != res.Record.TreeSHA256 {
+		t.Errorf("record tree_sha256 = %q, on-disk tree = %q (%v)", res.Record.TreeSHA256, tree, terr)
+	}
+	if _, verr := VerifyInstalled(l, "1.0.0", nil); verr != nil {
+		t.Errorf("a fresh verified harness install does not pass VerifyInstalled: %v", verr)
+	}
 	unpacked := filepath.Join(res.VersionDir, "kameas-ml", "kameas-ml")
 	got, err := os.ReadFile(unpacked)
 	if err != nil {

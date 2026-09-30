@@ -51,6 +51,10 @@ type Manager struct {
 	Creds    secrets.ResolverAPI
 	Verifier Verifier
 
+	// tv caches whole-tree verifications for this process (design A5(3)):
+	// the first adoption or spawn per boot is a full re-hash.
+	tv *TreeVerifier
+
 	mu     sync.Mutex
 	status Status
 }
@@ -65,6 +69,7 @@ func NewManager(layout Layout, client *Client, spawner Spawner, clientID, versio
 		ClientID: clientID,
 		Version:  version,
 		Spawner:  spawner,
+		tv:       NewTreeVerifier(),
 		status:   Status{State: StateNotInstalled, UpdatedAt: time.Now()},
 	}
 }
@@ -139,7 +144,7 @@ func (m *Manager) reconcileLocked(ctx context.Context) Status {
 // recommendations (see StateLegacyUnverified's doc comment), so this
 // client has no relationship with it worth advertising via a lease.
 func (m *Manager) evaluateRunning(health HealthPayload) Status {
-	decision, err := EvaluateAdoption(m.Layout, health)
+	decision, err := EvaluateAdoptionWith(m.Layout, health, m.tv)
 	if err != nil {
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: err.Error(), UpdatedAt: time.Now()}
 	}
@@ -173,15 +178,22 @@ func (m *Manager) evaluateRunning(health HealthPayload) Status {
 // O_EXCL spawn lock (design §3.5), then health-checks once.
 func (m *Manager) spawnLocked(ctx context.Context) Status {
 	now := time.Now()
-	rec, ok, err := ReadInstallJSON(m.Layout)
-	if err != nil || !ok || !rec.Verified {
+	if _, ok, err := ReadInstallJSON(m.Layout); err != nil || !ok {
 		return Status{State: StateNotInstalled, UpdatedAt: now}
 	}
 	currentDir, err := m.Layout.CurrentVersionDir()
 	if err != nil {
 		return Status{State: StateNotInstalled, Detail: err.Error(), UpdatedAt: now}
 	}
-	exePath := pathUnderVersionsDir(m.Layout, filepath.Base(currentDir))
+	label := filepath.Base(currentDir)
+	// Never exec bytes this client has not just verified (design R2 +
+	// Amendment A5(3)/(4)): the same launcher + whole-tree + provenance
+	// check adoption applies. Before A5 this path only consulted the
+	// record's Verified bit and then exec'd whatever was on disk.
+	if _, verr := VerifyInstalled(m.Layout, label, m.tv); verr != nil {
+		return Status{State: StateUnverified, Reason: ReasonDigestMismatch, Detail: "refusing to spawn an unverifiable install: " + verr.Error(), UpdatedAt: now}
+	}
+	exePath := pathUnderVersionsDir(m.Layout, label)
 
 	lock, lerr := AcquireSpawnLock(m.Layout, os.Getpid(), processAlive)
 	if lerr != nil {

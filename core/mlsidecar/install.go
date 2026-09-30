@@ -130,6 +130,15 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 		return InstallResult{}, fmt.Errorf("mlsidecar: hash unpacked engine executable: %w", err)
 	}
 
+	// Design Amendment A5(3): record the WHOLE onedir's digest, so
+	// adoption and spawn (this client's or Kenaz's) can re-verify the
+	// _internal/ payload the launcher digest never covered.
+	treeDigest, err := TreeDigest(layout.OnedirPath(req.Version))
+	if err != nil {
+		_ = os.RemoveAll(versionDir)
+		return InstallResult{}, fmt.Errorf("mlsidecar: tree digest of unpacked engine: %w", err)
+	}
+
 	if err := layout.SetCurrent(req.Version); err != nil {
 		return InstallResult{}, err
 	}
@@ -140,6 +149,14 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 		Source:       req.Source,
 		InstalledAt:  time.Now(),
 		Verified:     verified,
+		TreeSHA256:   treeDigest,
+		InstalledBy:  "harness",
+	}
+	// Only a POSITIVELY signature-verified artifact may claim the
+	// channel-manifest provenance (A5(4)); an unverified one records no
+	// provenance and is therefore never adoptable, by either client.
+	if verified {
+		rec.Provenance = ProvenanceChannelManifest
 	}
 	if err := WriteInstallJSON(layout, rec); err != nil {
 		return InstallResult{}, err
