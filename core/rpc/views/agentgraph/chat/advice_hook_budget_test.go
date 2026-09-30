@@ -114,7 +114,7 @@ func TestFireAdvice_SlowAdvisor_BoundedByRecommendBudget(t *testing.T) {
 
 	select {
 	case <-launchReturned:
-		if elapsed := time.Since(launchStart); elapsed > 50*time.Millisecond {
+		if elapsed := time.Since(launchStart); elapsed > 500*time.Millisecond { // load-tolerant; proves non-blocking vs the 5s hang
 			t.Errorf("turn-side dispatch took %v to return, want near-instant (it only starts a goroutine)", elapsed)
 		}
 	case <-time.After(1 * time.Second):
@@ -144,7 +144,12 @@ func TestFireAdvice_SlowAdvisor_BoundedByRecommendBudget(t *testing.T) {
 	if first < AdviceRecommendBudget {
 		t.Errorf("ctx cancellation observed after %v, want >= AdviceRecommendBudget (%v)", first, AdviceRecommendBudget)
 	}
-	if first > AdviceRecommendBudget+500*time.Millisecond {
-		t.Errorf("ctx cancellation observed after %v, want within ~%v of AdviceRecommendBudget (%v)", first, 500*time.Millisecond, AdviceRecommendBudget)
+	// Load tolerance: the property under test is that cancellation is
+	// BOUNDED — observed well before the fake's 5s hang — not that
+	// goroutine scheduling is prompt. A budget+500ms bound flaked on the
+	// shared CI runner (PR #358); 3s keeps a decisive 2s margin below
+	// the hang while tolerating scheduler stalls.
+	if first > 3*time.Second {
+		t.Errorf("ctx cancellation observed after %v, want well under the fake's 5s hang (budget %v)", first, AdviceRecommendBudget)
 	}
 }
