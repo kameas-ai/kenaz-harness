@@ -539,8 +539,7 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 	// thing between a mis-pointed Layout and RemoveAll of a directory we
 	// do not own. Captured before the targeted removals delete the
 	// record itself.
-	rec, hadKnownInstall := m.Installed()
-	_ = rec
+	_, hadKnownInstall := m.Installed()
 
 	if m.ClientID != "" {
 		_ = ReleaseLease(m.Layout, m.ClientID)

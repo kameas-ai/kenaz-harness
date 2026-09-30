@@ -115,6 +115,7 @@ func (s *Impl) compose(ctx context.Context, st mlsidecar.Status, running bool) S
 	// "label lane paused" must reach the user, not only a WARN line).
 	if s.Lanes != nil {
 		lanes := s.Lanes()
+		v.LabelLanes = make([]LaneView, 0, len(lanes))
 		kinds := make([]string, 0, len(lanes))
 		for k := range lanes {
 			kinds = append(kinds, k)

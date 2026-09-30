@@ -368,6 +368,17 @@ with a blocker and an owner:
   Recommendations panel). The `main`-only inertness this bullet
   recorded no longer exists anywhere a release is cut from.
 
+- **Half-broken install leaks the shared ml root on uninstall (dated
+  2026-09-30, WP13 merge review F3; owner: the release-channel wiring
+  that makes `PinnedEngineRelease` live).** Uninstall's whole-root
+  RemoveAll requires a KNOWN install record at entry
+  (`core/mlsidecar/manager.go` Uninstall), and the panel only offers
+  Uninstall when `view.installed` is true — so a corrupt/unknown
+  `install.json` leaves engine-written state (models, config, logs)
+  behind with no UI removal path. Unreachable today (no published
+  release means no field installs); the moment the pin goes live, add a
+  "remove anyway" recovery path or a repair-record step.
+
 ### 2026-09-12 (fleet-generic-sync-framework-01NSYNC02 WP03) · `SyncKind.ConflictPolicy` and `.SecretPolicy` were validated-only dials, never consumed — FIXED
 
 Dials-to-consumer trace (CLAUDE.md unwired-sweep pass 4) on the

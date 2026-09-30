@@ -391,3 +391,26 @@ func TestManager_KenazSeededInstall_IsInstalledAndProbeStarts(t *testing.T) {
 		}
 	}
 }
+
+// TestManager_Uninstall_MlShapedRootWithoutRecordKeepsForeignFiles pins
+// the WP13-review hardening (review F1): the ratified path SHAPE alone
+// ("…/ml/<env>") never authorizes whole-root RemoveAll — a known install
+// record must exist at entry. Deleting the hadKnownInstall guard in
+// Uninstall makes this fail.
+func TestManager_Uninstall_MlShapedRootWithoutRecordKeepsForeignFiles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".kenaz", "ml", "prod")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(root, "somebody-elses-notes.txt")
+	if err := os.WriteFile(foreign, []byte("not ours"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(NewLayout(root), nil, nil, "harness", "v")
+	if err := m.Uninstall(context.Background()); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Fatalf("a record-less ml-shaped root was RemoveAll'd (foreign file stat: %v) — path shape alone must never authorize whole-root removal", err)
+	}
+}
