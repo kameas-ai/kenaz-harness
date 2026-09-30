@@ -67,15 +67,6 @@ core/llm/bundleartifact
 core/llm/wirecheck
 core/llm/wirecheck/scrub
 core/mcp/fixture
-core/mlsidecar
-#     Added 2026-09-30 (laya-advisors-01LAYA001 WP12). The kenaz-ml
-#     sidecar install/lease/adopt/verify machinery, built and reviewed
-#     against a protocol stub. Deliberately has no production importer
-#     yet: constructing a real Manager needs the Settings surface +
-#     install-root wiring a later WP owns (core/rpc/api.go's
-#     sidecarProbe carries the dated nil with the same pointer).
-#     Owner: laya-advisors mission. Clears when that WP wires
-#     mlsidecar.Manager into newLLMStack.
 core/otel
 core/policy/engine/opa
 core/policy/lower/schema

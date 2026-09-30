@@ -22,19 +22,24 @@ import (
 
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
+	// A per-test named in-memory DB: migration 1601's ALTER TABLE ADD
+	// COLUMN is not idempotent, so tests must never share one.
+	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+	db, err := sql.Open("sqlite", "file:labels_"+name+"?mode=memory&cache=shared")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	db.SetMaxOpenConns(1)
-	for _, stmt := range strings.Split(sqlAdviceLabelsInit, ";") {
-		s := strings.TrimSpace(stmt)
-		if s == "" {
-			continue
-		}
-		if _, err := db.Exec(s); err != nil {
-			t.Fatalf("exec migration DDL: %v\nstmt: %s", err, s)
+	for _, ddl := range []string{sqlAdviceLabelsInit, sqlAdviceLabelsRevision} {
+		for _, stmt := range strings.Split(ddl, ";") {
+			s := strings.TrimSpace(stmt)
+			if s == "" {
+				continue
+			}
+			if _, err := db.Exec(s); err != nil {
+				t.Fatalf("exec migration DDL: %v\nstmt: %s", err, s)
+			}
 		}
 	}
 	return db

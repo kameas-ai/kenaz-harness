@@ -43,14 +43,15 @@
 //     "independently disableable" requirement as a real branch rather
 //     than a registry-level toggle, and the SAME session-scoped LRU
 //     cache + two skip paths (SessionContext.Moot; a dismissed entry,
-//     AC-03) LLMAdvisor established.
-//   - LLMAdvisor (llmadvisor_dormant_test.go) is now a DORMANT TEST
-//     DOUBLE — see that file's own doc comment for the full disposition.
-//     It has zero production call sites; core/rpc/api.go's chatAdvisor is
-//     a *HeuristicAdvisor today. Kept solely for its AC-02-style
-//     fault-injection coverage (timeout, malformed response,
-//     out-of-range confidence) until a future SidecarAdvisor's fake
-//     covers the same matrix (kenaz-ml integration design §9 Phase 0/1).
+//     AC-03) the original LLM-backed advisor established.
+//   - SidecarAdvisor (sidecar.go, laya-advisors-01LAYA001 WP15) is the
+//     outer production Advisor: it routes a kind to the local ML engine
+//     (core/mlsidecar, over the SidecarEngine port) when the sidecar is
+//     healthy AND /v1/contracts says the engine serves the kind, and
+//     otherwise — per call, never sticky — falls through to the local
+//     HeuristicAdvisor. Its fault-matrix tests (sidecar_test.go) are the
+//     AC-02 coverage the deleted LLMAdvisor test double used to be the
+//     only proof of (design §9's deletion condition, discharged in WP15).
 //   - ResolveAdvisorModel (model_resolve.go) is the laya ladder: explicit
 //     setting -> local laya -> fleet laya (compiled, unreachable behind
 //     fleetRungEnabled=false pending OQ-2) -> none. No "any available

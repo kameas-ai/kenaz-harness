@@ -88,6 +88,7 @@ import (
 	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 	"github.com/kameas-ai/kenaz-harness/core/memory/narrative"
 	"github.com/kameas-ai/kenaz-harness/core/memory/prune"
+	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
 	"github.com/kameas-ai/kenaz-harness/core/policy/blockedrequests"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
@@ -6208,8 +6209,11 @@ func newLLMStack(
 	// init()-time advice.MustRegister call. Per owner ruling 2026-09-29
 	// (spec §2e-0, "no LLMs"), the production backend is
 	// advice.HeuristicAdvisor (heuristic.go) — pure Go arithmetic, zero
-	// model calls — NOT advice.NewLLMAdvisor, which is now a dormant test
-	// double (core/advice/llmadvisor_dormant_test.go). chatAdvisor.Recommend
+	// model calls — NOT an LLM-backed advisor (the dormant LLMAdvisor test
+	// double was deleted in WP15 once SidecarAdvisor's fake covered its
+	// AC-02 fault matrix). WP15 layers advice.SidecarAdvisor OVER that
+	// HeuristicAdvisor below; the heuristic stays the always-available
+	// fallback. chatAdvisor.Recommend
 	// still has no call site anywhere in a live chat turn — WP07 wires
 	// that; this WP only makes Recommend produce a real answer once
 	// something calls it.
@@ -6277,7 +6281,7 @@ func newLLMStack(
 		// in this function's own closures: LoadAll() per call, never
 		// cached at construction time, so a Settings change takes effect
 		// on the very next Recommend with no restart).
-		heuristicAdvisor.SetKindGate(advicebranchnow.KindID, func() bool {
+		branchNowGate := advice.KindGate(func() bool {
 			if settingsImpl == nil || settingsImpl.Store() == nil {
 				return true
 			}
@@ -6287,7 +6291,7 @@ func newLLMStack(
 			}
 			return !s.AdviceBranchNowDisabled
 		})
-		heuristicAdvisor.SetKindGate(advicecompactnow.KindID, func() bool {
+		compactNowGate := advice.KindGate(func() bool {
 			if settingsImpl == nil || settingsImpl.Store() == nil {
 				return true
 			}
@@ -6297,7 +6301,7 @@ func newLLMStack(
 			}
 			return !s.AdviceCompactNowDisabled
 		})
-		heuristicAdvisor.SetKindGate(adviceescalatemodel.KindID, func() bool {
+		escalateModelGate := advice.KindGate(func() bool {
 			if settingsImpl == nil || settingsImpl.Store() == nil {
 				return true
 			}
@@ -6307,6 +6311,35 @@ func newLLMStack(
 			}
 			return !s.AdviceEscalateModelDisabled
 		})
+		heuristicAdvisor.SetKindGate(advicebranchnow.KindID, branchNowGate)
+		heuristicAdvisor.SetKindGate(advicecompactnow.KindID, compactNowGate)
+		heuristicAdvisor.SetKindGate(adviceescalatemodel.KindID, escalateModelGate)
+
+		// laya-advisors-01LAYA001 WP15: SidecarAdvisor is the OUTER
+		// production advisor — Sidecar -> (per-call fallback) ->
+		// Heuristic, with CaptureAdvisor wrapped around the whole stack
+		// below so engine-served and heuristic-served recommendations
+		// alike land their honest Model/Rung in advice_labels (the
+		// flip-back measurement depends on it). A kind routes to the local
+		// ML engine only while the sidecar probe is healthy AND
+		// /v1/contracts lists the kind as available; every other case — and
+		// every engine fault, timeout, malformed answer, or typed
+		// kind_not_served refusal — falls through to heuristicAdvisor for
+		// that one call, never sticky. The same three per-kind Settings
+		// gates guard this layer, so a kind the user disabled is never
+		// sent to the engine either.
+		//
+		// DATED NIL (2026-09-30, owner: laya-advisors WP13): sidecarProbe
+		// is nil until WP13 wires the real *mlsidecar.Manager, and a nil
+		// probe means "never healthy" — so today this layer always falls
+		// through and nothing dials the loopback port. The wiring is real
+		// and reachable; only the probe is pending.
+		sidecarAdvisor := advice.NewSidecarAdvisor(
+			mlsidecar.AdviceEngine{Client: mlsidecar.NewClient(mlsidecar.DefaultBaseURL, nil)},
+			sidecarProbe, heuristicAdvisor)
+		sidecarAdvisor.SetKindGate(advicebranchnow.KindID, branchNowGate)
+		sidecarAdvisor.SetKindGate(advicecompactnow.KindID, compactNowGate)
+		sidecarAdvisor.SetKindGate(adviceescalatemodel.KindID, escalateModelGate)
 
 		// laya-advisors-01LAYA001 WP08: wrap the production HeuristicAdvisor
 		// in the label-capture bridge so every Recommend outcome (including
@@ -6327,7 +6360,7 @@ func newLLMStack(
 				}
 			}
 		}
-		chatAdvisor = advicelabels.NewCaptureAdvisor(heuristicAdvisor, captureStore, func() bool {
+		labelCaptureEnabled := func() bool {
 			if settingsImpl == nil || settingsImpl.Store() == nil {
 				return true
 			}
@@ -6336,7 +6369,33 @@ func newLLMStack(
 				return true
 			}
 			return !s.AdviceLabelCaptureDisabled
-		})
+		}
+
+		// laya-advisors-01LAYA001 WP14: the label push lane. Every label
+		// write (a captured Recommend row, a recorded accept/dismiss/auto-
+		// act) nudges a coalesced background drain of advice_labels to the
+		// sidecar's POST /v1/labels/{kind}, cursor-acked and resumable.
+		// Loopback-only (mlsidecar.NewClient's DefaultBaseURL, re-checked
+		// on every push) — same machine, not egress, so no consent gate;
+		// gated on the SAME capture toggle as the capture itself (capture
+		// off => zero store calls, zero HTTP calls) and on the sidecar
+		// being healthy. sidecarProbe is the dated nil above until WP13
+		// wires the real Manager, so today Healthy() is constant false and
+		// Nudge returns before spawning anything; the lane goes live the
+		// moment that probe does, with no further change here. The
+		// pusher's source is the same *sql.DB-backed store as capture;
+		// nil (nil-core chassis) means there is nothing to push.
+		var captureOpts []advicelabels.CaptureAdvisorOption
+		if pushSource, ok := captureStore.(advicelabels.PushSource); ok {
+			labelPusher := &mlsidecar.LabelPusher{
+				Client:  mlsidecar.NewClient(mlsidecar.DefaultBaseURL, nil),
+				Source:  pushSource,
+				Enabled: labelCaptureEnabled,
+				Healthy: func() bool { return sidecarProbe != nil && sidecarProbe.Healthy() },
+			}
+			captureOpts = append(captureOpts, advicelabels.WithAfterWrite(labelPusher.Nudge))
+		}
+		chatAdvisor = advicelabels.NewCaptureAdvisor(sidecarAdvisor, captureStore, labelCaptureEnabled, captureOpts...)
 
 		// Boot-time resolve-and-log: executes once per newLLMStack call
 		// (every process boot with reg != nil), independent of whether any

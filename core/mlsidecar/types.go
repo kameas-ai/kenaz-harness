@@ -1,6 +1,9 @@
 package mlsidecar
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // State is one of the honestly-surfaced lifecycle states the WP12 brief
 // and design §6.2/§7 require, plus StateLegacyUnverified (added by a
@@ -178,6 +181,59 @@ type RecommendResponse struct {
 	CheckpointProvenance   string `json:"checkpoint_provenance"` // "local" | "org" | "base"
 	Generation             int    `json:"generation"`
 	Unbenchmarked          bool   `json:"unbenchmarked"`
+}
+
+// LabelWireRow is one row of POST /v1/labels/{kind} (WP14; design §5.2 +
+// Amendment A3.3, CONTRACT FROZEN 2026-09-30). The engine upserts on
+// (client, kind, features_hash, ts) and a HIGHER Revision replaces —
+// that is how a post-push user_action change lands. TS is the row's
+// created_at in epoch milliseconds and never changes across revisions.
+//
+// FeaturesComplete rides verbatim (features_complete=false rows are
+// pushed; the engine never trains them). Deliberately ABSENT: the local
+// session_id — the engine's flip-back joins by (features_hash, ts), and
+// a session identifier has no consumer on the ingest side.
+type LabelWireRow struct {
+	Kind             string          `json:"kind"`
+	PromptVersion    string          `json:"prompt_version"`
+	FeaturesHash     string          `json:"features_hash"`
+	TS               int64           `json:"ts"`
+	Revision         int64           `json:"revision"`
+	Features         json.RawMessage `json:"features"`
+	FeaturesComplete bool            `json:"features_complete"`
+	Model            string          `json:"model"`
+	Rung             string          `json:"rung"`
+	Decision         bool            `json:"decision"`
+	Confidence       int             `json:"confidence"`
+	Shown            bool            `json:"shown"`
+	UserAction       string          `json:"user_action"`
+	LatencyMS        int64           `json:"latency_ms"`
+}
+
+// LabelPushRequest is the body of POST /v1/labels/{kind}. Client is the
+// idempotency key's first component (the harness always sends "harness").
+type LabelPushRequest struct {
+	Client string         `json:"client"`
+	Rows   []LabelWireRow `json:"rows"`
+}
+
+// LabelAck is the engine's durable ack position — a cursor over
+// (ts, revision) (Amendment A3.3): every pushed row up to and including
+// it is applied. The harness's own cursor only ever advances to an ack.
+type LabelAck struct {
+	TS       int64 `json:"ts"`
+	Revision int64 `json:"revision"`
+}
+
+// LabelPushResponse is the response of POST /v1/labels/{kind}. Applied
+// counts brand-new (client, kind, features_hash, ts) keys; Replaced
+// counts higher-revision upserts; Stale counts rows whose revision was
+// not higher than the stored one (a harmless duplicate delivery).
+type LabelPushResponse struct {
+	Acked    LabelAck `json:"acked"`
+	Applied  int      `json:"applied"`
+	Replaced int      `json:"replaced"`
+	Stale    int      `json:"stale"`
 }
 
 // SystemOneRequest / SystemOneResponse mirror POST /v1/systemone — raw

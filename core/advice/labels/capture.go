@@ -25,6 +25,9 @@ type CaptureAdvisor struct {
 	store   Store
 	enabled func() bool
 	now     func() time.Time
+	// afterWrite, when set, fires after each successful label write (see
+	// WithAfterWrite).
+	afterWrite func()
 }
 
 // CaptureAdvisorOption tunes a CaptureAdvisor at construction time.
@@ -45,17 +48,47 @@ func WithClock(now func() time.Time) CaptureAdvisorOption {
 // no restart) — nil enabled defaults to "always enabled" so a caller
 // that has no Settings surface yet still captures, matching
 // AdviceLabelCaptureDisabled's spec default (ON).
-func NewCaptureAdvisor(inner advice.Advisor, store Store, enabled func() bool) *CaptureAdvisor {
-	return &CaptureAdvisor{
+func NewCaptureAdvisor(inner advice.Advisor, store Store, enabled func() bool, opts ...CaptureAdvisorOption) *CaptureAdvisor {
+	c := &CaptureAdvisor{
 		inner:   inner,
 		store:   store,
 		enabled: enabled,
 		now:     func() time.Time { return time.Now().UTC() },
 	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
+}
+
+// WithAfterWrite registers fn to be called after every label write this
+// CaptureAdvisor performs (a captured Recommend row or a recorded user
+// action) — and ONLY when capture is on, so a disabled toggle never
+// fires it. The WP14 push lane hangs its coalescing Nudge here: an
+// event-driven trigger with no goroutine lifecycle of its own. fn must
+// be cheap and non-blocking (it runs on the caller's Recommend/click
+// path); nil is ignored.
+func WithAfterWrite(fn func()) CaptureAdvisorOption {
+	return func(c *CaptureAdvisor) {
+		if fn != nil {
+			c.afterWrite = fn
+		}
+	}
 }
 
 // compile-time witness that *CaptureAdvisor satisfies advice.Advisor.
 var _ advice.Advisor = (*CaptureAdvisor)(nil)
+
+// Inner returns the wrapped advisor — the layer CaptureAdvisor decorates.
+// Exposed so the production composition (core/rpc's newLLMStack:
+// Capture -> Sidecar -> Heuristic) can be asserted by a wiring test
+// rather than trusted from a comment.
+func (c *CaptureAdvisor) Inner() advice.Advisor {
+	if c == nil {
+		return nil
+	}
+	return c.inner
+}
 
 func (c *CaptureAdvisor) captureEnabled() bool {
 	if c == nil || c.enabled == nil {
@@ -116,7 +149,9 @@ func (c *CaptureAdvisor) Recommend(ctx context.Context, kind advice.AdviceKind, 
 		SessionID:        sess.SessionID,
 		CreatedAt:        c.now(),
 	}
-	_ = c.store.Insert(ctx, row)
+	if ierr := c.store.Insert(ctx, row); ierr == nil && c.afterWrite != nil {
+		c.afterWrite()
+	}
 	return rec, nil
 }
 
@@ -150,7 +185,9 @@ func (c *CaptureAdvisor) RecordAction(ctx context.Context, sess advice.SessionCo
 	if err != nil {
 		return
 	}
-	_ = c.store.UpdateAction(ctx, sess.SessionID, kind.ID, hash, action)
+	if uerr := c.store.UpdateAction(ctx, sess.SessionID, kind.ID, hash, action); uerr == nil && c.afterWrite != nil {
+		c.afterWrite()
+	}
 }
 
 // RecordActionIfSupported is the call-site-agnostic entry point WP07's

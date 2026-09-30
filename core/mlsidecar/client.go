@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,6 +35,52 @@ func NewClient(baseURL string, httpClient *http.Client) *Client {
 		httpClient = &http.Client{Timeout: 5 * time.Second}
 	}
 	return &Client{BaseURL: baseURL, HTTP: httpClient}
+}
+
+// ErrKindNotServed is the typed refusal the engine returns from
+// /v1/recommend/{kind} for a kind with no graduated model (design
+// Amendment A3.2: "REFUSES a kind with no graduated model, typed 'kind
+// not served'; falling back is the CLIENT's job"). A *StatusError whose
+// Code is "kind_not_served" satisfies errors.Is(err, ErrKindNotServed).
+var ErrKindNotServed = errors.New("mlsidecar: kind not served")
+
+// KindNotServedCode is the wire error code carrying ErrKindNotServed.
+const KindNotServedCode = "kind_not_served"
+
+// StatusError is a non-2xx sidecar response. Code is the engine's typed
+// error code when the body was `{"error": "<code>"}`, else "".
+type StatusError struct {
+	Method string
+	Path   string
+	Status int
+	Code   string
+}
+
+func (e *StatusError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("mlsidecar: %s %s: status %d (%s)", e.Method, e.Path, e.Status, e.Code)
+	}
+	return fmt.Sprintf("mlsidecar: %s %s: status %d", e.Method, e.Path, e.Status)
+}
+
+// Is makes errors.Is(err, ErrKindNotServed) work on a typed refusal.
+func (e *StatusError) Is(target error) bool {
+	return target == ErrKindNotServed && e.Code == KindNotServedCode
+}
+
+func newStatusError(method, path string, resp *http.Response) *StatusError {
+	se := &StatusError{Method: method, Path: path, Status: resp.StatusCode}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	if err != nil {
+		return se
+	}
+	var env struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &env) == nil {
+		se.Code = env.Error
+	}
+	return se
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) (int, error) {
@@ -83,7 +130,7 @@ func (c *Client) postJSON(ctx context.Context, path string, in, out any, headers
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return resp.StatusCode, fmt.Errorf("mlsidecar: POST %s: status %d", path, resp.StatusCode)
+		return resp.StatusCode, newStatusError(http.MethodPost, path, resp)
 	}
 	if out == nil {
 		return resp.StatusCode, nil
@@ -147,10 +194,21 @@ func (c *Client) Shutdown(ctx context.Context, token string) error {
 	return err
 }
 
-// Recommend calls POST /v1/recommend/{kind}. Not used by any production
-// call site in WP12 (design §9 Phase 0's gating note: no kind is
-// sidecar-preferred yet) — included so the stub's shape is provable
-// end-to-end and so WP04-06's later ladder work has a client ready.
+// PushLabels calls POST /v1/labels/{kind} — the WP14 label ingest lane
+// (design §5.2 + Amendment A3.3). Loopback only; see LabelPusher, the
+// sole production caller.
+func (c *Client) PushLabels(ctx context.Context, kind string, req LabelPushRequest) (LabelPushResponse, error) {
+	var out LabelPushResponse
+	if _, err := c.postJSON(ctx, "/v1/labels/"+kind, req, &out, nil); err != nil {
+		return LabelPushResponse{}, err
+	}
+	return out, nil
+}
+
+// Recommend calls POST /v1/recommend/{kind}. Production caller: the
+// AdviceEngine adapter (adviceengine.go) behind advice.SidecarAdvisor
+// (WP15). An engine refusal of an unserved kind surfaces as a
+// *StatusError satisfying errors.Is(err, ErrKindNotServed).
 func (c *Client) Recommend(ctx context.Context, kind string, req RecommendRequest) (RecommendResponse, error) {
 	var out RecommendResponse
 	if _, err := c.postJSON(ctx, "/v1/recommend/"+kind, req, &out, nil); err != nil {
