@@ -188,6 +188,10 @@ func TestSidecarWiring_RealManagerUnderDataDir(t *testing.T) {
 	eng := newCountingEngineRPC(t)
 	api.sidecarMgr.Client = mlsidecar.NewClient(eng.srv.URL, nil)
 	eng.health.Store(mlsidecar.HealthPayload{}) // bare {} health -> never adopted
+	// The platform gate is device-dependent (CI runs linux/arm64, where
+	// compose's !Supported branch correctly wins) — force supported so
+	// the assertions below reach the release-pin reason it pins.
+	api.sidecarAPI.(*sidecarview.Impl).Platform = func() (bool, string) { return true, "" }
 	v, err := api.Sidecar().Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
