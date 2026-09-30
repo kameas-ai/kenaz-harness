@@ -31,30 +31,70 @@ type Layout struct {
 // responsible for choosing it.
 func NewLayout(root string) Layout { return Layout{Root: root} }
 
-// DefaultRootFor returns the conventional per-OS shared install root
-// (design §3.4): $XDG_DATA_HOME/kameas/ml on Linux, ~/Library/Application
-// Support/kameas/ml on macOS. Exposed for the production wiring WP that
-// eventually calls it; NOT called by anything in this package or its
-// tests today (see doc.go's "what this package does NOT do").
-func DefaultRootFor(goos string, homeDir string, xdgDataHome string) (string, error) {
-	switch goos {
-	case "darwin":
-		if homeDir == "" {
-			return "", fmt.Errorf("mlsidecar: darwin default root requires a home dir")
-		}
-		return filepath.Join(homeDir, "Library", "Application Support", "kameas", "ml"), nil
-	case "linux":
-		base := xdgDataHome
-		if base == "" {
-			if homeDir == "" {
-				return "", fmt.Errorf("mlsidecar: linux default root requires XDG_DATA_HOME or a home dir")
-			}
-			base = filepath.Join(homeDir, ".local", "share")
-		}
-		return filepath.Join(base, "kameas", "ml"), nil
+// Engine env segments (design Amendment A5(2)): the shared vocabulary is
+// exactly {prod, dev, test}. Each client maps its own env variable onto
+// it — the harness KENAZ_HARNESS_ENV, Kenaz KENAZ_ENV — so a dev and a
+// prod client on one machine never share a root or a port.
+const (
+	EngineEnvProd = "prod"
+	EngineEnvDev  = "dev"
+	EngineEnvTest = "test"
+)
+
+// EngineEnvFor maps a KENAZ_HARNESS_ENV value onto the engine env
+// vocabulary: "dev" and "local" (a developer machine) -> dev; "test" ->
+// test; everything else ("prod", "stage" — a release channel users
+// install — empty, unrecognized) -> prod. Mirrors Kenaz's envName.
+func EngineEnvFor(raw string) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "dev", "local":
+		return EngineEnvDev
+	case "test":
+		return EngineEnvTest
 	default:
-		return "", fmt.Errorf("mlsidecar: no default install root for GOOS=%q (design §6.3: Windows has no freeze target yet)", goos)
+		return EngineEnvProd
 	}
+}
+
+// EngineEnv is EngineEnvFor(KENAZ_HARNESS_ENV) for this process.
+func EngineEnv() string { return EngineEnvFor(os.Getenv("KENAZ_HARNESS_ENV")) }
+
+// enginePorts is design Amendment A5(1)'s env -> loopback port map: one
+// engine per env per machine. The spawning client passes the port to the
+// engine (`serve --port`) and dials the same.
+var enginePorts = map[string]int{EngineEnvProd: 7774, EngineEnvDev: 7775, EngineEnvTest: 7776}
+
+// EnginePort returns env's loopback engine port (prod's for an unknown env).
+func EnginePort(env string) int {
+	if p, ok := enginePorts[env]; ok {
+		return p
+	}
+	return enginePorts[EngineEnvProd]
+}
+
+// BaseURLForEnv is env's loopback engine URL.
+func BaseURLForEnv(env string) string {
+	return fmt.Sprintf("http://127.0.0.1:%d", EnginePort(env))
+}
+
+// DefaultRootFor returns the shared install root for env:
+// <home>/.kenaz/ml/<env> — RATIFIED by design Amendment A5(2) (the ~/.kenaz
+// family, per ruling A2), identical on every OS and identical to Kenaz's
+// DefaultSharedRoot. It replaced the pre-A5 platform paths
+// (~/Library/Application Support/kameas/ml, $XDG_DATA_HOME/kameas/ml),
+// which contradicted A2 and would have given the two clients different
+// roots. Not called by anything in this package or its tests (see
+// doc.go); the WP13 production wiring resolves it.
+func DefaultRootFor(homeDir, env string) (string, error) {
+	if homeDir == "" {
+		return "", fmt.Errorf("mlsidecar: default root requires a home dir")
+	}
+	switch env {
+	case EngineEnvProd, EngineEnvDev, EngineEnvTest:
+	default:
+		return "", fmt.Errorf("mlsidecar: %q is not an engine env (want prod, dev or test)", env)
+	}
+	return filepath.Join(homeDir, ".kenaz", "ml", env), nil
 }
 
 // VersionsDir is the parent of every installed engine version.

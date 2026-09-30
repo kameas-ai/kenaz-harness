@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -336,5 +337,46 @@ func TestRevision_ConcurrentWritersNeverShareARevision(t *testing.T) {
 			t.Fatalf("revision %d stamped on two rows", r.Revision)
 		}
 		seen[r.Revision] = true
+	}
+}
+
+// TestEvaluateAdoption_EngineBareHexDigest_A5 is design Amendment A5's
+// bug pin: the real engine reports /health engine_sha256 as BARE hex while
+// install.json carries "sha256:<hex>". A raw string compare refused every
+// real adoption; the normalized compare adopts the matching digest and
+// still refuses a different one.
+func TestEvaluateAdoption_EngineBareHexDigest_A5(t *testing.T) {
+	l := NewLayout(t.TempDir())
+	exePath, sha := setupVerifiedVersion(t, l, "1.0.0", []byte("engine binary bytes"))
+	bare := strings.TrimPrefix(sha, "sha256:")
+	if bare == sha {
+		t.Fatalf("fixture digest %q carries no sha256: prefix; the pin needs the prefixed record form", sha)
+	}
+	health := HealthPayload{SidecarVersion: "1.0.0", ExePath: exePath, EngineSHA256: strings.ToUpper(bare), LifecycleProtocol: 1}
+	if d, err := EvaluateAdoption(l, health); err != nil || d.Action != AdoptAccept {
+		t.Fatalf("bare-hex self-report of the RIGHT digest = %+v, %v; want adopted", d, err)
+	}
+	health.EngineSHA256 = strings.Repeat("0", len(bare))
+	if d, _ := EvaluateAdoption(l, health); d.Action != AdoptRefuseUnverified {
+		t.Fatalf("bare-hex self-report of a WRONG digest = %q; want refused", d.Action)
+	}
+}
+
+// TestEvaluateAdoption_VersionLabelConsistency_A5 is Amendment A5(4)'s
+// relaxation: a Kenaz-seeded version dir is labeled "<semver>+<sha12>"
+// while the engine reports "<semver>" — consistent, adopted. A report that
+// is not the label (or its "+build" prefix) is still refused.
+func TestEvaluateAdoption_VersionLabelConsistency_A5(t *testing.T) {
+	l := NewLayout(t.TempDir())
+	exePath, sha := setupVerifiedVersion(t, l, "0.2.0+1a2b3c4d5e6f", []byte("engine binary bytes"))
+	health := HealthPayload{SidecarVersion: "0.2.0", ExePath: exePath, EngineSHA256: sha, LifecycleProtocol: 1}
+	if d, err := EvaluateAdoption(l, health); err != nil || d.Action != AdoptAccept {
+		t.Fatalf("label 0.2.0+build vs report 0.2.0 = %+v, %v; want adopted", d, err)
+	}
+	for _, bad := range []string{"0.2", "0.2.1", "0.2.0+ffffffffffff"} {
+		health.SidecarVersion = bad
+		if d, _ := EvaluateAdoption(l, health); d.Action != AdoptRefuseUnverified {
+			t.Errorf("report %q vs label 0.2.0+1a2b3c4d5e6f = %q; want refused", bad, d.Action)
+		}
 	}
 }

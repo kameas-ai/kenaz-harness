@@ -147,11 +147,11 @@ func EvaluateAdoption(layout Layout, health HealthPayload) (AdoptDecision, error
 	// verified record — a mismatch here means the running process is
 	// lying about what it is, or is a different build entirely that
 	// happens to share the port.
-	if health.EngineSHA256 != "" && health.EngineSHA256 != rec.EngineSHA256 {
+	if health.EngineSHA256 != "" && !digestsEqual(health.EngineSHA256, rec.EngineSHA256) {
 		return AdoptDecision{Action: AdoptRefuseUnverified, Reason: ReasonDigestMismatch, Health: health, Detail: "reported engine_sha256 does not match the verified install record"}, nil
 	}
-	if health.SidecarVersion != "" && health.SidecarVersion != rec.Version {
-		return AdoptDecision{Action: AdoptRefuseUnverified, Reason: ReasonDigestMismatch, Health: health, Detail: "reported sidecar_version does not match the verified install record"}, nil
+	if health.SidecarVersion != "" && !versionLabelConsistent(version, health.SidecarVersion) {
+		return AdoptDecision{Action: AdoptRefuseUnverified, Reason: ReasonDigestMismatch, Health: health, Detail: "reported sidecar_version is inconsistent with the verified install's version label"}, nil
 	}
 
 	return AdoptDecision{Action: AdoptAccept, Health: health, Detail: "verified install, verified process identity"}, nil
@@ -176,6 +176,35 @@ func EvaluateAdoption(layout Layout, health HealthPayload) (AdoptDecision, error
 func contractCompatible(health HealthPayload, supportedMajor int) bool {
 	p := health.LifecycleProtocol
 	return p == supportedMajor || (p == supportedMajor-1 && p > 0)
+}
+
+// normalizeDigest lowercases a digest and strips an optional "sha256:"
+// prefix. The engine reports /health engine_sha256 as BARE hex, while
+// install.json (and core/bundle/integrity) carry the prefixed form — a
+// raw != between the two mismatched on every real engine, refusing every
+// adoption (design Amendment A5; found by Kenaz's second-client
+// implementation, which normalizes the same way).
+func normalizeDigest(d string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(d)), "sha256:")
+}
+
+// digestsEqual compares two digests after normalization; empty never
+// equals anything.
+func digestsEqual(a, b string) bool {
+	na, nb := normalizeDigest(a), normalizeDigest(b)
+	return na != "" && na == nb
+}
+
+// versionLabelConsistent reports whether an engine's self-reported
+// sidecar_version is consistent with the install's version-directory
+// label (design Amendment A5(4): the exact-match requirement is relaxed
+// to record-vs-directory-label consistency). A label is either the bare
+// version ("0.2.0", harness A-1 installs) or the version plus a build
+// suffix ("0.2.0+1a2b3c4d5e6f", Kenaz seeds). The self-report stays a
+// cross-check, never a trust root — the on-disk digest re-verification
+// above is what adoption rests on.
+func versionLabelConsistent(label, reported string) bool {
+	return label == reported || strings.HasPrefix(label, reported+"+")
 }
 
 // pathIsWithin reports whether target is equal to or nested under root,

@@ -6335,7 +6335,7 @@ func newLLMStack(
 		// through and nothing dials the loopback port. The wiring is real
 		// and reachable; only the probe is pending.
 		sidecarAdvisor := advice.NewSidecarAdvisor(
-			mlsidecar.AdviceEngine{Client: mlsidecar.NewClient(mlsidecar.DefaultBaseURL, nil)},
+			mlsidecar.AdviceEngine{Client: mlsidecar.NewClient(mlsidecar.DefaultEngineBaseURL(), nil)},
 			sidecarProbe, heuristicAdvisor)
 		sidecarAdvisor.SetKindGate(advicebranchnow.KindID, branchNowGate)
 		sidecarAdvisor.SetKindGate(advicecompactnow.KindID, compactNowGate)
@@ -6375,7 +6375,8 @@ func newLLMStack(
 		// write (a captured Recommend row, a recorded accept/dismiss/auto-
 		// act) nudges a coalesced background drain of advice_labels to the
 		// sidecar's POST /v1/labels/{kind}, cursor-acked and resumable.
-		// Loopback-only (mlsidecar.NewClient's DefaultBaseURL, re-checked
+		// Loopback-only (mlsidecar.DefaultEngineBaseURL — the per-env
+		// loopback port, design Amendment A5(1) — re-checked
 		// on every push) — same machine, not egress, so no consent gate;
 		// gated on the SAME capture toggle as the capture itself (capture
 		// off => zero store calls, zero HTTP calls) and on the sidecar
@@ -6388,7 +6389,7 @@ func newLLMStack(
 		var captureOpts []advicelabels.CaptureAdvisorOption
 		if pushSource, ok := captureStore.(advicelabels.PushSource); ok {
 			labelPusher := &mlsidecar.LabelPusher{
-				Client:  mlsidecar.NewClient(mlsidecar.DefaultBaseURL, nil),
+				Client:  mlsidecar.NewClient(mlsidecar.DefaultEngineBaseURL(), nil),
 				Source:  pushSource,
 				Enabled: labelCaptureEnabled,
 				Healthy: func() bool { return sidecarProbe != nil && sidecarProbe.Healthy() },
