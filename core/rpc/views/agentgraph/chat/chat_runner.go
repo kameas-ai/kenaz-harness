@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/advice"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
@@ -546,6 +547,20 @@ type Config struct {
 	// real one here: a durable audit sink is
 	// audit-that-tells-the-truth-01PMZA10 territory, not this WP's.
 	SecretAuditEmitter refs.AuditEmitter
+
+	// ── laya-advisors-01LAYA001 WP07: tiered advice delivery ───────────
+	//
+	// Advisor is the production advice.Advisor (core/rpc/api.go's
+	// chatAdvisor — a *labels.CaptureAdvisor wrapping a
+	// *advice.HeuristicAdvisor as of WP04-08). nil disables advice
+	// evaluation entirely: every call site below is nil-guarded, matching
+	// this package's every other optional collaborator.
+	Advisor advice.Advisor
+	// AdviceDeps bundles the session-state accessors and the auto-act
+	// executor the post-turn advice hook needs. nil is equivalent to
+	// Advisor being nil (see fireAdvice's guard) — a caller that wires
+	// Advisor without AdviceDeps gets no chips rather than a panic.
+	AdviceDeps *AdviceDeps
 }
 
 // PartialPersister is the resume-flow persistence seam. Invoked by
@@ -805,6 +820,12 @@ type ChatRunner struct {
 	subs       map[string]*chatSub
 	pausedSubs map[string]*pausedTurn // keyed by profileID; last-write-wins
 	nextID     uint64
+	// adviceStates is laya-advisors-01LAYA001 WP07's per-session,
+	// process-lifetime bookkeeping for the post-turn advice hook (see
+	// advice_hook.go's sessionAdviceState doc comment). Protected by mu
+	// above, not a separate lock — reads/writes are cheap map lookups,
+	// never worth a dedicated mutex's added surface.
+	adviceStates map[string]*sessionAdviceState
 }
 
 // chatSub is the per-StartStream bookkeeping entry.
@@ -914,6 +935,12 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if sessionID == "" {
 		return "", errors.New("chat: session id required")
 	}
+
+	// laya-advisors-01LAYA001 WP08: detect + audit a user-initiated model
+	// switch BEFORE this turn runs — see advice_hook.go's checkModelSwitch
+	// doc comment for why this fires here (synchronously, cheap) rather
+	// than from fireAdvice's goroutine.
+	r.checkModelSwitch(ctx, sessionID, profileID, modelOverride)
 
 	// Persist the user turn so HistoryReadNode sees it on the first
 	// fire of the kernel run.
@@ -1479,6 +1506,24 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 				}
 			})
 		}
+	}
+
+	// laya-advisors-01LAYA001 WP07: the advice seam's turn-path threading
+	// point. Registered on the SAME HookPostLLM boundary as the usage/
+	// post-send/image hooks above (see advice_hook.go's file-header
+	// comment for why this never delays the turn) — but in a SEPARATE,
+	// unconditioned block, since advice evaluation's enablement
+	// (r.cfg.Advisor != nil) is independent of whether usage capture,
+	// post_send, or image capture happen to be wired.
+	if r.cfg.Advisor != nil {
+		if env.Hooks == nil {
+			env.Hooks = coreag.NewHookManager(env.Memory, env.SessionID, env.ProjectID)
+		}
+		capturedTier := resolvedKnobs.EffectiveTier
+		capturedProfileID, capturedModelOverride := profileID, modelOverride
+		env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(_ context.Context, sID, _, _ string) {
+			go r.fireAdvice(sID, capturedProfileID, capturedModelOverride, userMessage, capturedTier)
+		})
 	}
 
 	sub := &chatSub{

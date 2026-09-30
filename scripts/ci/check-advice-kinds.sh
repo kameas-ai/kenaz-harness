@@ -7,10 +7,12 @@
 #
 #   1. core/advice/kind.go's own shape (both SafetyClass values, the
 #      AdviceKind struct's four spec-named fields) is still discoverable
-#      — the non-vacuous floor. Zero advice kinds ship in production
-#      until WP04-06, so "kind count" itself is NOT the floor (see the
-#      tool's package doc for why a >=1-kind gate would break every PR
-#      on this release branch for weeks).
+#      — the non-vacuous floor. The v1 trio (branch_now/compact_now/
+#      escalate_model, WP04-06) ships a real >=1 discovery floor now, but
+#      the structural check #1 stays the gate's real floor rather than a
+#      bare kind-count, so a future release that temporarily drops to
+#      zero registered kinds (e.g. mid-refactor) still fails loudly on
+#      the SHAPE check instead of silently passing an empty registry.
 #   2. every `advice.(Must)?Register(advice.AdviceKind{...})` composite
 #      literal found under core/ and cmd/ carries id, extractor,
 #      prompt_version, and safety class.

@@ -39,6 +39,11 @@ import (
 	advicebranchnow "github.com/kameas-ai/kenaz-harness/core/advice/kinds/branchnow"
 	advicecompactnow "github.com/kameas-ai/kenaz-harness/core/advice/kinds/compactnow"
 	adviceescalatemodel "github.com/kameas-ai/kenaz-harness/core/advice/kinds/escalatemodel"
+	// advicelabels is laya-advisors-01LAYA001 WP08's label-capture
+	// bridge (core/advice/labels.CaptureAdvisor) — wraps chatAdvisor so
+	// every Recommend outcome + user action becomes an advice_labels
+	// row, gated on Settings.AdviceLabelCaptureDisabled.
+	advicelabels "github.com/kameas-ai/kenaz-harness/core/advice/labels"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	compactionwiring "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction/wiring"
@@ -179,6 +184,12 @@ type HarnessAPI interface {
 	// owned by a sibling mission (compaction-strategy-ui-01KQ8TDI) and
 	// this reader has nothing to do with strategy config.
 	CompactionOverhead(ctx context.Context) (CompactionOverheadInfo, error)
+
+	// Advice_Respond is laya-advisors-01LAYA001 WP07's chip response RPC:
+	// action is "accept" or "dismiss". Returns the newly created child
+	// session id for a branch_now accept (empty string otherwise). See
+	// core/rpc/advice_respond.go for the full contract.
+	Advice_Respond(ctx context.Context, sessionID, kindID, action string) (string, error)
 
 	LLMConnector() llm.LLMConnectorAPI
 	MCP() mcp.MCPAPI
@@ -1000,6 +1011,14 @@ type API struct {
 	// real-DataDir test that never called Shutdown (see
 	// core/rpc/blocker2_goroutine_leak_test.go). It is real now.
 	pruneScheduler *prune.Scheduler
+
+	// chatAdvisor / adviceDeps: laya-advisors-01LAYA001 WP07. Copied from
+	// llmStack in New() below; back Advice_Respond
+	// (core/rpc/advice_respond.go), the RPC method a chip's accept/
+	// dismiss click calls. nil-safe throughout — see that file's own
+	// nil guards.
+	chatAdvisor advice.Advisor
+	adviceDeps  *chat.AdviceDeps
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -2457,6 +2476,10 @@ func New(c *core.Core, opts ...Option) *API {
 	// gives CompactionOverhead() something to read.
 	a.compactionLLM = stack.compactionLLM
 	a.compactionAudit = stack.compactionAudit
+	// laya-advisors-01LAYA001 WP07: Advice_Respond (core/rpc/advice_respond.go)
+	// needs both to drive a chip's accept/dismiss click.
+	a.chatAdvisor = stack.chatAdvisor
+	a.adviceDeps = stack.adviceDeps
 	// model-settings-reach-the-model-01PMZ101 WP07: same pattern as the
 	// compaction pair above, for the chat runner's auto-title caller.
 	a.autotitleLLM = stack.autotitleLLM
@@ -5591,14 +5614,21 @@ type llmStack struct {
 	// allow/deny rules are not in force until the file is repaired
 	// (trust-surfaces-that-fire-01PMZ202 WP24 review finding).
 	staticPermsLoadError string
-	// chatAdvisor is laya-advisors-01LAYA001's advisor seam, constructed
-	// with the same (reg, resolver) pattern as chatRiskRater above. Held
-	// here — not yet threaded into buildChatRunner — so WP04-06's advice
-	// kinds (branch_now / compact_now / escalate_model) have a
-	// production Advisor to wire into once they ship; nil when reg is
-	// nil (the nil-core test chassis), mirroring chatRiskRater's own
-	// nil-safety.
+	// chatAdvisor is laya-advisors-01LAYA001's advisor seam — a
+	// *labels.CaptureAdvisor wrapping *advice.HeuristicAdvisor (WP04-08),
+	// threaded into buildChatRunner (chat.Config.Advisor) AND copied onto
+	// the API struct (New(), below) so the Advice_Respond RPC method
+	// (WP07) can drive Dismiss/RecordAction for a chip's accept/dismiss
+	// click without re-deriving the same Advisor buildChatRunner already
+	// has. nil when reg is nil (the nil-core test chassis).
 	chatAdvisor advice.Advisor
+	// adviceDeps mirrors chat.Config.AdviceDeps — copied onto the API
+	// struct for the same reason as chatAdvisor immediately above:
+	// Advice_Respond's "accept" action for branch_now needs the SAME
+	// AutoActBranchNow executor fireAdvice's auto-act path uses, so a
+	// manual chip-accept and an autonomous auto-act create a branch
+	// through the exact same call, never a second implementation.
+	adviceDeps *chat.AdviceDeps
 }
 
 func newLLMStack(
@@ -6278,7 +6308,35 @@ func newLLMStack(
 			return !s.AdviceEscalateModelDisabled
 		})
 
-		chatAdvisor = heuristicAdvisor
+		// laya-advisors-01LAYA001 WP08: wrap the production HeuristicAdvisor
+		// in the label-capture bridge so every Recommend outcome (including
+		// below-75 and decision=false rows the WP07 chip never shows) and
+		// every user action (accept/dismiss/auto-act) lands an
+		// advice_labels row. captureStore is nil when `db` has no
+		// structural SQL() *sql.DB (nil-core test chassis, or a storage.DB
+		// backend that isn't sqlite) — NewCaptureAdvisor degrades to
+		// "capture never writes" in that case (its Recommend/Dismiss guard
+		// on c.store == nil), matching every other optional collaborator
+		// in this function.
+		var captureStore advicelabels.Store
+		if db != nil {
+			type sqlHandle interface{ SQL() *sql.DB }
+			if h, ok := db.(sqlHandle); ok {
+				if rawDB := h.SQL(); rawDB != nil {
+					captureStore = advicelabels.NewSQLStore(rawDB)
+				}
+			}
+		}
+		chatAdvisor = advicelabels.NewCaptureAdvisor(heuristicAdvisor, captureStore, func() bool {
+			if settingsImpl == nil || settingsImpl.Store() == nil {
+				return true
+			}
+			s, serr := settingsImpl.Store().LoadAll()
+			if serr != nil {
+				return true
+			}
+			return !s.AdviceLabelCaptureDisabled
+		})
 
 		// Boot-time resolve-and-log: executes once per newLLMStack call
 		// (every process boot with reg != nil), independent of whether any
@@ -6388,7 +6446,58 @@ func newLLMStack(
 	autonomyKnobsProvider := func(ctx context.Context, sessionID string) autonomy.ResolvedKnobs {
 		return computeAutonomyKnobs(ctx, sessionID, c, settingsImpl)
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatRiskRater, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner)
+	// laya-advisors-01LAYA001 WP07: build the AdviceDeps bundle
+	// buildChatRunner threads onto chat.Config.AdviceDeps. adviceConvMgr
+	// is a SEPARATE *coreconv.Manager instance from a.convMgr (New()'s own
+	// field) — newConversationManager(c) is a stateless wrapper over the
+	// shared storage.DB + session.Manager (branches_wiring.go), so a
+	// second instance reads/writes the SAME branches table; there is no
+	// state to duplicate or desync. Kept separate rather than threading
+	// a.convMgr through newLLMStack's signature to avoid widening an
+	// already-large parameter list for a value this cheap to reconstruct.
+	adviceConvMgr := newConversationManager(c)
+	var adviceDeps *chat.AdviceDeps
+	if chatAdvisor != nil {
+		adviceDeps = &chat.AdviceDeps{
+			BranchCount: func(ctx context.Context, sessionID string) (int, error) {
+				if adviceConvMgr == nil {
+					return 0, nil
+				}
+				branches, err := adviceConvMgr.ListByParent(ctx, sessionID)
+				if err != nil {
+					return 0, err
+				}
+				return len(branches), nil
+			},
+			AutoActBranchNow: func(ctx context.Context, sessionID string) (string, error) {
+				if adviceConvMgr == nil {
+					return "", fmt.Errorf("advice: conversation manager unavailable")
+				}
+				_, child, err := adviceConvMgr.CreateBranch(ctx, coreconv.ForkOptions{
+					ParentSessionID: sessionID,
+					CreationPath:    "auto_act",
+				})
+				if err != nil {
+					return "", err
+				}
+				return child.ID, nil
+			},
+			// AutoActAudit / ModelSwitchAudit reuse the SAME
+			// contextaudit.Emitter as confirmAudit/autoTitleAudit above —
+			// one audit sink, many producers (mirrors this function's own
+			// established pattern for every other optional Emitter param).
+			AutoActAudit:     confirmAudit,
+			ModelSwitchAudit: confirmAudit,
+			// OnShown feeds the Advice_Respond RPC method's lookup
+			// registry (core/rpc/advice_respond.go) so a chip's later
+			// accept/dismiss click can reconstruct the exact Features
+			// value that produced it.
+			OnShown: func(sessionID, kindID string, features advice.Features) {
+				adviceShown.note(sessionID, kindID, features)
+			},
+		}
+	}
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatRiskRater, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner, chatAdvisor, adviceDeps)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -6453,6 +6562,7 @@ func newLLMStack(
 
 		staticPermsLoadError: staticPermsLoadErr,
 		chatAdvisor:          chatAdvisor,
+		adviceDeps:           adviceDeps,
 	}
 }
 
@@ -7192,6 +7302,13 @@ func buildChatRunner(
 	// agent-kernel-graph-chat-migration cutover). nil disables post_send
 	// entirely, same degrade as every other optional collaborator here.
 	hooksRunner llm.HookRunner,
+	// advisor + adviceDeps are laya-advisors-01LAYA001 WP07's turn-path
+	// threading params — see chat.Config.Advisor / chat.AdviceDeps'
+	// own doc comments (core/rpc/views/agentgraph/chat/advice_hook.go).
+	// nil advisor disables the entire post-turn advice hook
+	// (StartStream's `if r.cfg.Advisor != nil` guard).
+	advisor advice.Advisor,
+	adviceDeps *chat.AdviceDeps,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -7721,6 +7838,12 @@ func buildChatRunner(
 		// See RiskGate's own comment for the 2026-09-15 owner ruling
 		// that accepted the measured latency and enabled this path.
 		RiskRater: riskRater,
+		// laya-advisors-01LAYA001 WP07: the advisor seam's turn-path
+		// threading point. advisor is nil when reg == nil (mirrors
+		// chatAdvisor's own nil-core guard in newLLMStack) — StartStream's
+		// `if r.cfg.Advisor != nil` skips the entire hook in that case.
+		Advisor:    advisor,
+		AdviceDeps: adviceDeps,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())
