@@ -2,50 +2,6 @@ package advice
 
 import "testing"
 
-func TestParseRecommendation_HappyPath(t *testing.T) {
-	decision, confidence, err := ParseRecommendation(`{"decision": true, "confidence": 42}`)
-	if err != nil {
-		t.Fatalf("ParseRecommendation: %v", err)
-	}
-	if !decision || confidence != 42 {
-		t.Errorf("got (%v, %d), want (true, 42)", decision, confidence)
-	}
-}
-
-func TestParseRecommendation_TolerantOfMarkdownFence(t *testing.T) {
-	decision, confidence, err := ParseRecommendation("```json\n{\"decision\": false, \"confidence\": 5}\n```")
-	if err != nil {
-		t.Fatalf("ParseRecommendation: %v", err)
-	}
-	if decision || confidence != 5 {
-		t.Errorf("got (%v, %d), want (false, 5)", decision, confidence)
-	}
-}
-
-func TestParseRecommendation_NoJSONObjectErrors(t *testing.T) {
-	if _, _, err := ParseRecommendation("I refuse to answer in JSON."); err == nil {
-		t.Fatal("expected an error for a response with no JSON object, got nil")
-	}
-}
-
-func TestParseRecommendation_MalformedJSONErrors(t *testing.T) {
-	if _, _, err := ParseRecommendation(`{"decision": true, "confidence": }`); err == nil {
-		t.Fatal("expected an error for malformed JSON, got nil")
-	}
-}
-
-func TestParseRecommendation_OutOfRangeConfidenceErrors(t *testing.T) {
-	cases := []string{
-		`{"decision": true, "confidence": -1}`,
-		`{"decision": true, "confidence": 101}`,
-	}
-	for _, c := range cases {
-		if _, _, err := ParseRecommendation(c); err == nil {
-			t.Errorf("ParseRecommendation(%q) = nil error, want an error (never clamp)", c)
-		}
-	}
-}
-
 func TestValidateConfidence(t *testing.T) {
 	if ValidateConfidence(-1) == nil {
 		t.Error("ValidateConfidence(-1) = nil, want an error")

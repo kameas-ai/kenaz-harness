@@ -58,15 +58,6 @@ const KindAutoTitle = "auto_title"
 // attribution recorded and separable in the usage readout" requirement.
 const KindRiskRating = "risk_rating"
 
-// KindAdvice is the cost-tagging kind laya-advisors-01LAYA001's
-// LLMAdvisor attaches to every advisor LLM call it issues, mirroring the
-// KindCompaction / KindAutoTitle / KindRiskRating convention. Dashboards
-// can use this tag — plus the per-call "advice_kind" debug-log field
-// LLMAdvisor.recordOverhead emits alongside it — to break out advisor
-// overhead, and each individual advice kind's share of it, from regular
-// chat, compaction, auto-title, and risk-rating costs.
-const KindAdvice = "advice"
-
 //go:embed starter_table.yaml
 var starterTable []byte
 

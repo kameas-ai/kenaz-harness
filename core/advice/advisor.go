@@ -35,7 +35,7 @@ type Recommendation struct {
 	Decision bool
 	// Confidence is 0-100. An Advisor implementation MUST reject an
 	// out-of-range confidence with an error rather than clamp it — see
-	// ParseRecommendation's doc comment; clamping would silently hide a
+	// ValidateConfidence's doc comment; clamping would silently hide a
 	// model bug behind a plausible-looking number, the same reasoning
 	// risk.Rating.Score's doc comment gives for risk scores.
 	Confidence int
