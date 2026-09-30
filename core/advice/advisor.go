@@ -49,7 +49,11 @@ type Recommendation struct {
 	// Rung is which rung of ResolveAdvisorModel's ladder resolved Model
 	// (mirrors risk.RaterModelRung's "log which rung resolved" contract,
 	// stamped onto the recommendation itself so a UI or audit trail can
-	// show it without re-deriving it).
+	// show it without re-deriving it). RungHeuristic is the one
+	// exception: a HeuristicAdvisor backend (heuristic.go) stamps it
+	// directly without ever calling ResolveAdvisorModel — see
+	// RungHeuristic's own doc comment for why a rule-based rung sits
+	// outside the model-resolution ladder entirely.
 	Rung ModelRung
 	// Unbenchmarked reports whether Model has no measured row in a
 	// benchmark of record (OQ-3, not yet landed — always true today; the

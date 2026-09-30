@@ -1,3 +1,34 @@
+// LLMAdvisor (this file) is a DORMANT TEST DOUBLE, not a production
+// backend.
+//
+// Owner ruling 2026-09-29 (spec §2e-0): "no LLMs — advisors use laya and
+// other ML models only." The kenaz-ml integration design (research/
+// kenaz-ml-integration-design.md §9 Phase 0) resolves WP01's deferred
+// LLMAdvisor-disposition question this way: "demote to dormant test
+// double now (it is the only in-repo Advisor exercising the port under
+// fault injection); delete once SidecarAdvisor's fake covers the AC-02
+// matrix." This file's suffix (_test.go) is that demotion, mechanically
+// enforced by the Go toolchain rather than by convention: everything
+// below compiles ONLY for `go test`, never into a production binary, so
+// there is no way for core/rpc/api.go (or anything else) to accidentally
+// reintroduce an LLM-backed advisor call site without a compile error.
+//
+// What's still here and why: LLMAdvisor remains the only Advisor
+// implementation in this repo that exercises a REAL model call (timeout,
+// registry error, malformed response, out-of-range confidence) — the
+// exact AC-02-style fault-injection coverage risk.LLMRater's own test
+// suite pioneered. HeuristicAdvisor (heuristic.go) needs none of that
+// surface (no model, no I/O, nothing to time out or mis-parse), so this
+// file's tests (llmadvisor_test.go) are the only place that contract is
+// still proven end to end. Per the design doc, delete both files
+// together once a future SidecarAdvisor ships a fake that covers the
+// same matrix (laya-serve / kenaz-ml, Phase 1+) — not before, or that
+// coverage class silently disappears.
+//
+// Production wiring: core/rpc/api.go's newLLMStack no longer constructs
+// advice.NewLLMAdvisor for chatAdvisor — see the HeuristicAdvisor
+// construction site (~newLLMStack, "laya-advisors-01LAYA001 WP04-06")
+// for what chatAdvisor is today.
 package advice
 
 import (
