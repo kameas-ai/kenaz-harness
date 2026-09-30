@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	advicelabels "github.com/kameas-ai/kenaz-harness/core/advice/labels"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -178,6 +179,19 @@ func Open(cfg storage.Config) (storage.DB, error) {
 	if err := cedarpolicy.RegisterMigrations(registry); err != nil {
 		db.closeOnError()
 		return nil, fmt.Errorf("storage: register cedar-policy migrations: %w", err)
+	}
+	// laya-advisors: laya-advisors-01LAYA001 WP08. Creates advice_labels
+	// (version 1600), the durable training-label corpus backing
+	// core/advice/labels.CaptureAdvisor — every advisor recommendation +
+	// user action becomes a labeled row (spec §4). Registering here is
+	// what makes the table exist on every install, including upgraded
+	// ones whose ledger high-water mark already sits well above the
+	// 1600-1699 block — see core/storage/sqlite/upgrade_path_test.go
+	// (this is the first migration to replay against a snapshot lineage
+	// whose `units` table already carries real rows: v0.83.0).
+	if err := advicelabels.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register laya-advisors migrations: %w", err)
 	}
 	db.registry = registry
 

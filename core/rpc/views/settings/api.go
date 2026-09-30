@@ -855,6 +855,33 @@ type Settings struct {
 	// kind (core/advice/kinds/escalatemodel) independent of branch_now/
 	// compact_now.
 	AdviceEscalateModelDisabled bool `json:"adviceEscalateModelDisabled,omitempty"`
+
+	// AdviceLabelCaptureDisabled is laya-advisors-01LAYA001 WP08's
+	// capture toggle (spec §4: "A settings toggle governs capture, ON by
+	// default for local-only storage, honestly labeled"). Zero value
+	// (false) means CAPTURE IS ON — the same "*Disabled, default false"
+	// polarity as AdviceBranchNowDisabled/AdviceCompactNowDisabled/
+	// AdviceEscalateModelDisabled above, chosen for the same reason: the
+	// spec's own default is "on," so the field name must invert to make
+	// the Go zero value match it (a "*Enabled, default false" field would
+	// silently ship capture OFF for every user who never touches
+	// Settings, the opposite of what §4 asks for).
+	//
+	// Honest semantics per spec §4: "stored on this device, used to
+	// improve recommendations; nothing leaves this machine" — capture
+	// writes ONLY to the local advice_labels table
+	// (core/advice/labels.SQLStore); this field has no bearing on any
+	// future export/fleet-contribution consent (spec §8's separate,
+	// per-class, rung-3-only consent surface), which does not exist yet.
+	//
+	// Read by core/rpc/api.go's newLLMStack, which wires a closure onto
+	// core/advice/labels.NewCaptureAdvisor's `enabled` parameter — read
+	// fresh on every Recommend call, exactly like the three per-kind
+	// gates above, so a toggle flip takes effect on the very next
+	// recommendation with no restart. AC-06's "capture toggle OFF => zero
+	// rows written" is a call-count proof on the underlying Store, not a
+	// row-count check — see labels.CaptureAdvisor's doc comment.
+	AdviceLabelCaptureDisabled bool `json:"adviceLabelCaptureDisabled,omitempty"`
 }
 
 // EffectiveBundleSigningPolicy normalizes BundleSigningPolicy to one of

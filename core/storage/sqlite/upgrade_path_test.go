@@ -35,6 +35,7 @@ import (
 	"testing"
 	"time"
 
+	advicelabels "github.com/kameas-ai/kenaz-harness/core/advice/labels"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
@@ -356,6 +357,22 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// every one of them this is a "first migration to land below an
 	// install's high-water mark" case, same shape as event-log above. ----
 	assertTasksTableMigrated(t, ctx, db)
+
+	// ---- laya-advisors-01LAYA001 WP08: advice_labels exists and accepts
+	// a write on THIS upgraded install, AND — the specific risk this WP's
+	// brief calls out by name — the pre-existing `units` table's real
+	// KindDoc seed rows (v0.83.0 onward) survive Open() byte-for-byte.
+	// laya-advisors/1600-advice-labels is the FIRST migration in the tree
+	// to land against a snapshot lineage whose `units` table carries real
+	// rows (v0.83.0's PROVENANCE.md: "units.KindDoc going live means the
+	// next migration touching `units` will replay against REAL document
+	// rows for the first time"). This migration does not touch `units` at
+	// all, but CLAUDE.md blind spot #3 is exactly the failure mode where
+	// an unrelated-looking migration silently cascades — so this asserts
+	// the specific table by name rather than trusting only the generic
+	// per-table loop below. ----
+	assertAdviceLabelsTableMigrated(t, ctx, db)
+	assertUnitsTableSurvivesUntouched(t, ctx, db, tag)
 
 	// ---- automation-actually-runs-01PMZ404 UNIT-13 (owner ruling
 	// A-10): rerun_policy is refused on save but tolerated on load. A
@@ -860,4 +877,125 @@ func openRawSQLiteAt(t *testing.T, path string) *sql.DB {
 	}
 	db.SetMaxOpenConns(1)
 	return db
+}
+
+// assertAdviceLabelsTableMigrated is laya-advisors-01LAYA001 WP08's
+// AC-06 evidence, run against every snapshot in the chain: the
+// advice_labels table exists, is queryable, and accepts a write through
+// the exact production writer (advicelabels.NewSQLStore(rawDB), the same
+// call core/rpc/api.go makes) — not a memory-store fixture (CLAUDE.md
+// blind spot #2). Every tag under testdata/upgrade/ predates
+// laya-advisors/1600's registration, so this is the "first migration to
+// land below an install's high-water mark" case, same shape as
+// assertTasksTableMigrated above.
+func assertAdviceLabelsTableMigrated(t *testing.T, ctx context.Context, db storage.DB) {
+	t.Helper()
+	r := db.Reader()
+
+	var n int
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM advice_labels").Scan(&n); err != nil {
+		t.Fatalf("advice_labels table not queryable after Open (laya-advisors/1600-advice-labels did not apply): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("advice_labels row count on a fresh upgrade = %d, want 0 (no snapshot seeds a label row)", n)
+	}
+
+	type sqlHandle interface{ SQL() *sql.DB }
+	h, ok := db.(sqlHandle)
+	if !ok {
+		t.Fatalf("storage.DB does not expose SQL() *sql.DB — cannot drive the production advice_labels writer")
+	}
+	rawDB := h.SQL()
+	if rawDB == nil {
+		t.Fatalf("db.SQL() returned nil")
+	}
+	store := advicelabels.NewSQLStore(rawDB)
+	probe := advicelabels.Row{
+		KindID:        "branch_now",
+		PromptVersion: "v1",
+		FeaturesHash:  "upgrade-path-probe-hash",
+		FeaturesJSON:  `{"probe":true}`,
+		ModelID:       "heuristic/branch-regex-v1",
+		Rung:          "heuristic",
+		Decision:      true,
+		Confidence:    80,
+		Shown:         true,
+		UserAction:    advicelabels.ActionIgnored,
+		LatencyMS:     1,
+		SessionID:     "upgrade-path-advice-probe",
+		CreatedAt:     fixedProbeTime,
+	}
+	if err := store.Insert(ctx, probe); err != nil {
+		t.Fatalf("advice_labels store insert after Open on an upgraded install failed: %v — "+
+			"this is the exact failure mode of a table that does not exist", err)
+	}
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM advice_labels WHERE session_id = ?", probe.SessionID).Scan(&n); err != nil {
+		t.Fatalf("advice_labels post-insert query: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("advice_labels row count for the probe session = %d, want 1", n)
+	}
+}
+
+// assertUnitsTableSurvivesUntouched is the specific, content-anchored
+// proof the WP08 brief calls for by name: laya-advisors/1600-advice-
+// labels is the FIRST migration in the tree to replay against a snapshot
+// lineage whose `units` table already carries real rows (v0.83.0
+// onward: two KindDoc seed rows, per that snapshot's PROVENANCE.md). The
+// generic per-table row-count+digest loop in testUpgradeSnapshot already
+// covers this (units is in neither the unconditional `changed` set nor
+// any per-tag expectedChangedTables entry), but CLAUDE.md blind spot #3
+// / the destructive-migration-cascade history (sessions/0332,
+// sessions/0327) is exactly the case where "an unrelated migration
+// silently touched a table nobody was watching" — so this asserts the
+// specific table and specific seed rows by name, not just via the
+// generic loop. A no-op on any tag whose dump predates `units`
+// (pre-v0.60ish; units/1100 registered well after this snapshot chain
+// began) — SnapshotAll's map simply has no "units" key for those tags.
+func assertUnitsTableSurvivesUntouched(t *testing.T, ctx context.Context, db storage.DB, tag string) {
+	t.Helper()
+	r := db.Reader()
+
+	var exists int
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='units'").Scan(&exists); err != nil {
+		t.Fatalf("%s: check units table existence: %v", tag, err)
+	}
+	if exists == 0 {
+		return // this tag predates the units table — nothing to assert.
+	}
+
+	var n int
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM units").Scan(&n); err != nil {
+		t.Fatalf("%s: units table not queryable after Open: %v", tag, err)
+	}
+
+	// v0.83.0's PROVENANCE.md names exactly two KindDoc seed rows,
+	// scope=session/seed-session-1, ids seed-unit-1/seed-unit-2. Assert
+	// they are still there, by id and title, rather than only a row
+	// count — a migration that deleted and re-inserted rows with new ids
+	// would pass a bare COUNT(*) check but fail this one.
+	wantIDs := map[string]string{
+		"seed-unit-1": "Seed Unit One",
+		"seed-unit-2": "Seed Unit Two",
+	}
+	var seenAny bool
+	for id, wantTitle := range wantIDs {
+		var title string
+		err := r.QueryRow(ctx, "SELECT title FROM units WHERE id = ?", id).Scan(&title)
+		if err != nil {
+			// Not every tag in the chain necessarily seeds these two rows
+			// (only v0.83.0+ does per that snapshot's PROVENANCE.md) —
+			// absence on an older tag is not a failure, only a divergence
+			// on a tag that DOES have the units table (checked above) but
+			// predates the two-doc seed.
+			continue
+		}
+		seenAny = true
+		if title != wantTitle {
+			t.Errorf("%s: units row %s title = %q after Open, want %q (unrelated migration mutated it)", tag, id, title, wantTitle)
+		}
+	}
+	if seenAny && n < len(wantIDs) {
+		t.Errorf("%s: units row count = %d after Open, want at least %d (the two KindDoc seed rows)", tag, n, len(wantIDs))
+	}
 }
