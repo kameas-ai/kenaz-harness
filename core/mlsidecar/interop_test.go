@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/advice"
+	advescalate "github.com/kameas-ai/kenaz-harness/core/advice/kinds/escalatemodel"
 	"github.com/kameas-ai/kenaz-harness/core/advice/labels"
 )
 
@@ -378,5 +380,122 @@ func TestEvaluateAdoption_SidecarVersionIsNotAGate_A5(t *testing.T) {
 	d, err := EvaluateAdoption(l, health, nil)
 	if err != nil || d.Action != AdoptAccept || !strings.Contains(d.Detail, "note:") {
 		t.Fatalf("report 0.1.0 vs label 0.2.0+build = %+v, %v; want adopted WITH a note", d, err)
+	}
+}
+
+// engineEscalateModelContract is kenaz-ml's escalate_model contract
+// (advice/contracts.py ESCALATE_MODEL_FEATURES), verbatim.
+var engineEscalateModelContract = []string{
+	"consecutive_tool_failures", "retries_in_window", "turn_latency_trend", "current_rung",
+	"error_kind_auth", "error_kind_transient", "error_kind_cancelled", "error_kind_budget", "error_kind_unknown",
+	"budget_remaining_fraction",
+}
+
+// insertEscalate captures one escalate_model row the way the capture
+// bridge does: features from the REAL kind's Extract, the kind's
+// registered PromptVersion.
+func insertEscalate(t *testing.T, h *pushHarness, promptVersion, featuresJSON, hash string, ts int64) {
+	t.Helper()
+	if err := h.store.Insert(context.Background(), labels.Row{KindID: advescalate.KindID, PromptVersion: promptVersion,
+		FeaturesHash: hash, FeaturesJSON: featuresJSON, FeaturesComplete: false, ModelID: advescalate.ModelID,
+		Rung: "heuristic", Confidence: 0, UserAction: labels.ActionIgnored, SessionID: "sess",
+		CreatedAt: time.UnixMilli(ts).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLabelPush_EscalateModelV2_ClearsTheContractPause is the 2026-09-30
+// ruling's un-pause proof. A v1-era corpus row (WP06's improvised
+// doom_loop_* / string current_rung shape) parks the lane on the engine's
+// 409 names_mismatch exactly as it did live. With the v2 catalog Features
+// and the superseded-version skip wired as production wires it, the
+// paused lane — once its backoff elapses — steps past the v1 row, pushes
+// the v2 row, and clears the pause. The v1 row stays in the harness DB.
+func TestLabelPush_EscalateModelV2_ClearsTheContractPause(t *testing.T) {
+	stub := newStubSidecar()
+	defer stub.Close()
+	stub.setLabelsContract(advescalate.KindID, engineEscalateModelContract)
+	h := openPushHarness(t, t.TempDir())
+	defer h.close(t)
+	ctx := context.Background()
+
+	v1 := `{"consecutive_tool_failures":0,"retries_in_window":0,"doom_loop_repeat_count":0,"doom_loop_threshold":3,"current_rung":"","budget_remaining_fraction":0}`
+	insertEscalate(t, h, "v1", v1, "old", 1000)
+
+	now := time.Unix(1_000_000, 0)
+	p := newPusher(stub, h.store, true)
+	p.Now = func() time.Time { return now }
+	if _, err := p.PushOnce(ctx); err == nil || p.LaneStatus()[advescalate.KindID].Reason != PauseContractMismatch {
+		t.Fatalf("the v1 row did not reproduce the live 409 pause: %v / %+v", err, p.LaneStatus())
+	}
+
+	// The release lands: v2 Features, PromptVersion v2, and the
+	// production superseded-version skip.
+	k, ok := advice.Get(advescalate.KindID)
+	if !ok || k.PromptVersion != "v2" {
+		t.Fatalf("escalate_model registered as %+v, want PromptVersion v2", k)
+	}
+	f, err := advescalate.Extract(advescalate.Snapshot{ConsecutiveToolFailures: 1, CurrentRung: 2,
+		ErrorKindCounts: map[string]int{"transient": 1}, FeaturesIncomplete: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, _ := labels.MarshalFeatures(f)
+	insertEscalate(t, h, k.PromptVersion, v2, "new", 2000)
+	p.CurrentPromptVersion = func(kind string) (string, bool) {
+		kk, ok := advice.Get(kind)
+		return kk.PromptVersion, ok
+	}
+
+	posts := stub.labelPostCount()
+	if res, _ := p.PushOnce(ctx); len(res.Paused) != 1 || stub.labelPostCount() != posts {
+		t.Fatalf("inside the backoff: %+v, %d new POSTs; want still paused and silent", res, stub.labelPostCount()-posts)
+	}
+
+	now = now.Add(labelPauseBaseBackoff + time.Second)
+	res, err := p.PushOnce(ctx)
+	if err != nil || res.Pushed != 1 {
+		t.Fatalf("after the backoff = %+v, %v; want the v2 row delivered", res, err)
+	}
+	if len(p.LaneStatus()) != 0 {
+		t.Fatalf("the contract pause did not clear: %+v", p.LaneStatus())
+	}
+	mirror := stub.mirrorSnapshot()
+	if len(mirror) != 1 {
+		t.Fatalf("engine mirror = %d rows, want only the v2 row", len(mirror))
+	}
+	for _, row := range mirror {
+		if row.PromptVersion != "v2" || row.FeaturesHash != "new" {
+			t.Errorf("mirrored %+v, want the v2 row", row)
+		}
+	}
+	all, _ := h.store.PendingSince(ctx, advescalate.KindID, 0, 10)
+	cur, _ := h.store.LoadCursor(ctx, "sidecar", advescalate.KindID)
+	if len(all) != 2 || cur.Revision != all[1].Revision {
+		t.Fatalf("local rows = %d, cursor = %+v; want both rows kept and the cursor past both", len(all), cur)
+	}
+}
+
+// TestLabelPush_SupersededOnlyBatch_StepsCursorWithoutARequest: a batch
+// made entirely of superseded-version rows sends nothing and still
+// advances the cursor.
+func TestLabelPush_SupersededOnlyBatch_StepsCursorWithoutARequest(t *testing.T) {
+	stub := newStubSidecar()
+	defer stub.Close()
+	h := openPushHarness(t, t.TempDir())
+	defer h.close(t)
+	insertEscalate(t, h, "v1", `{}`, "a", 1000)
+	insertEscalate(t, h, "v1", `{}`, "b", 1001)
+	p := newPusher(stub, h.store, true)
+	p.CurrentPromptVersion = func(string) (string, bool) { return "v2", true }
+	if _, err := p.PushOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if stub.labelPostCount() != 0 {
+		t.Fatalf("%d POSTs for superseded-only rows", stub.labelPostCount())
+	}
+	all, _ := h.store.PendingSince(context.Background(), advescalate.KindID, 0, 10)
+	if cur, _ := h.store.LoadCursor(context.Background(), "sidecar", advescalate.KindID); cur.Revision != all[1].Revision {
+		t.Fatalf("cursor = %+v, want past both superseded rows", cur)
 	}
 }

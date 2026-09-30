@@ -52,11 +52,12 @@ type stubSidecar struct {
 	// /v1/labels ingest (WP14): the mirror + fault knobs.
 	labelMirror      map[string]storedLabel
 	labelPosts       []LabelPushRequest
-	labelsFailStatus int              // non-2xx simulates an engine error (409/404 carry the refusal envelope)
-	labelsAckLimit   int              // >0: apply/ack only the first N rows of a batch
-	labelsBogusAck   *LabelAck        // non-nil: respond with this ack regardless
-	labelsRefuseRev  map[int64]string // revision -> PERMANENT per-row refusal reason (A4: acked past)
-	labelsNullAck    bool             // emulate a pre-A4 engine that acks nothing past a leading refused row
+	labelsFailStatus int                 // non-2xx simulates an engine error (409/404 carry the refusal envelope)
+	labelsAckLimit   int                 // >0: apply/ack only the first N rows of a batch
+	labelsBogusAck   *LabelAck           // non-nil: respond with this ack regardless
+	labelsRefuseRev  map[int64]string    // revision -> PERMANENT per-row refusal reason (A4: acked past)
+	labelsNullAck    bool                // emulate a pre-A4 engine that acks nothing past a leading refused row
+	labelsContract   map[string][]string // kind -> contract feature names (engine _contract_refusal)
 
 	srv *httptest.Server
 }
@@ -370,6 +371,38 @@ func (s *stubSidecar) handleLabels(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if names, has := s.labelsContract[kind]; has {
+		// The engine's batch-level contract check (label_log
+		// _contract_refusal): an unexpected feature name — or, for a
+		// features_complete row, a missing one — refuses the WHOLE batch
+		// 409 names_mismatch, nothing written.
+		known := map[string]bool{}
+		for _, n := range names {
+			known[n] = true
+		}
+		for _, row := range req.Rows {
+			var feats map[string]any
+			_ = json.Unmarshal(row.Features, &feats)
+			bad := false
+			for n := range feats {
+				if !known[n] {
+					bad = true
+				}
+			}
+			if row.FeaturesComplete {
+				for _, n := range names {
+					if _, ok := feats[n]; !ok {
+						bad = true
+					}
+				}
+			}
+			if bad {
+				s.mu.Unlock()
+				writeRefusal(w, http.StatusConflict, kind, "names_mismatch", "features do not match contract")
+				return
+			}
+		}
+	}
 	if s.labelMirror == nil {
 		s.labelMirror = map[string]storedLabel{}
 	}
@@ -410,6 +443,17 @@ func (s *stubSidecar) handleLabels(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// setLabelsContract installs kind's contract feature names; pushes are
+// then checked like the engine's batch-level names check.
+func (s *stubSidecar) setLabelsContract(kind string, names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.labelsContract == nil {
+		s.labelsContract = map[string][]string{}
+	}
+	s.labelsContract[kind] = names
 }
 
 // setLabelsNullAck makes the stub behave like a pre-A4 engine: a batch

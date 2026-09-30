@@ -86,6 +86,16 @@ type LabelPusher struct {
 	Healthy func() bool
 	// BatchSize overrides defaultLabelPushBatch when > 0.
 	BatchSize int
+	// CurrentPromptVersion reports a kind's CURRENT prompt/feature-contract
+	// version (production: advice.Get(kind).PromptVersion). When set, rows
+	// captured under a SUPERSEDED version are never pushed: the engine's
+	// contract for a kind describes only the current feature vector, so a
+	// pre-bump row can only be refused whole-batch (409 names_mismatch)
+	// and would park the lane forever ahead of every current row. Such
+	// rows stay in the harness DB (the source of truth, still
+	// distinguishable by prompt_version); the cursor steps past them.
+	// nil pushes every row.
+	CurrentPromptVersion func(kind string) (string, bool)
 	// Now overrides the wall clock for the pause backoff (tests). nil
 	// means time.Now.
 	Now func() time.Time
@@ -307,6 +317,25 @@ func (p *LabelPusher) pushKind(ctx context.Context, kind string) (pushed, batche
 		if len(rows) == 0 {
 			return pushed, batches, refused, nil
 		}
+		batchLast := rows[len(rows)-1]
+		send, superseded := p.splitSuperseded(kind, rows)
+		if len(send) == 0 {
+			// Every pending row in this batch predates the kind's current
+			// contract: step the cursor past them without a request.
+			logging.L().Info("mlsidecar.labelpush.superseded_rows_skipped",
+				"kind", kind, "rows", superseded, "through_revision", batchLast.Revision)
+			if err := p.Source.SaveCursor(ctx, labelPushSink, kind, labels.PushCursor{TS: batchLast.TS, Revision: batchLast.Revision}); err != nil {
+				return pushed, batches, refused, err
+			}
+			if len(rows) < batchSize {
+				return pushed, batches, refused, nil
+			}
+			continue
+		}
+		if superseded > 0 {
+			logging.L().Info("mlsidecar.labelpush.superseded_rows_skipped", "kind", kind, "rows", superseded)
+		}
+		rows = send
 		wire := make([]LabelWireRow, 0, len(rows))
 		for _, r := range rows {
 			wire = append(wire, toWireRow(r))
@@ -353,7 +382,13 @@ func (p *LabelPusher) pushKind(ctx context.Context, kind string) (pushed, batche
 		if resp.Acked.Revision <= cur.Revision || resp.Acked.Revision > last {
 			return pushed, batches, refused, fmt.Errorf("engine ack revision %d outside the pushed window (%d, %d]", resp.Acked.Revision, cur.Revision, last)
 		}
-		if err := p.Source.SaveCursor(ctx, labelPushSink, kind, labels.PushCursor{TS: resp.Acked.TS, Revision: resp.Acked.Revision}); err != nil {
+		next := labels.PushCursor{TS: resp.Acked.TS, Revision: resp.Acked.Revision}
+		if resp.Acked.Revision == last && batchLast.Revision > last {
+			// Everything sent is acked and every row after it in this
+			// batch was a skipped superseded row: step past them too.
+			next = labels.PushCursor{TS: batchLast.TS, Revision: batchLast.Revision}
+		}
+		if err := p.Source.SaveCursor(ctx, labelPushSink, kind, next); err != nil {
 			return pushed, batches, refused, err
 		}
 		refusedRev := make(map[int64]bool, len(resp.Refusals))
@@ -370,10 +405,30 @@ func (p *LabelPusher) pushKind(ctx context.Context, kind string) (pushed, batche
 			}
 			pushed++
 		}
-		if resp.Acked.Revision >= last && len(rows) < batchSize {
+		if resp.Acked.Revision >= last && batchLast.Revision == next.Revision && len(send)+superseded < batchSize {
 			return pushed, batches, refused, nil
 		}
 	}
+}
+
+// splitSuperseded drops rows captured under a superseded prompt_version
+// (see CurrentPromptVersion), returning the rows to send and how many
+// were skipped.
+func (p *LabelPusher) splitSuperseded(kind string, rows []labels.PushRow) ([]labels.PushRow, int) {
+	if p.CurrentPromptVersion == nil {
+		return rows, 0
+	}
+	current, ok := p.CurrentPromptVersion(kind)
+	if !ok || current == "" {
+		return rows, 0
+	}
+	send := rows[:0:0]
+	for _, r := range rows {
+		if r.PromptVersion == current {
+			send = append(send, r)
+		}
+	}
+	return send, len(rows) - len(send)
 }
 
 // logRowRefusals logs each PERMANENTLY refused row distinctly (design

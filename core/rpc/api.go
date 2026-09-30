@@ -6393,6 +6393,14 @@ func newLLMStack(
 				Source:  pushSource,
 				Enabled: labelCaptureEnabled,
 				Healthy: func() bool { return sidecarProbe != nil && sidecarProbe.Healthy() },
+				// Rows captured under a superseded prompt_version (e.g.
+				// escalate_model v1, before its catalog rewrite) are kept
+				// locally but never pushed — the engine's contract only
+				// describes the current feature vector.
+				CurrentPromptVersion: func(kind string) (string, bool) {
+					k, ok := advice.Get(kind)
+					return k.PromptVersion, ok
+				},
 			}
 			captureOpts = append(captureOpts, advicelabels.WithAfterWrite(labelPusher.Nudge))
 		}
