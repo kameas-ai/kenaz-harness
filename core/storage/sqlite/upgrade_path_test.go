@@ -448,7 +448,12 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// assertAdviceLabelsTableMigrated's probe insert (the tasks-precedent
 	// pattern, same trade-off as documented above) now appears as a
 	// pre-vs-post change on replay.
-	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true, "tasks": true, "advice_labels": true}
+	// advice_label_push_cursor added 2026-09-30 (v0.85.0 snapshot PR):
+	// same shape one release later — v0.85.0 is the first tag whose dump
+	// contains the 1601 cursor table, so the probe's production
+	// SaveCursor write (proving the push source works on an upgraded
+	// install) now appears as a 0->1 pre-vs-post change on replay.
+	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true, "tasks": true, "advice_labels": true, "advice_label_push_cursor": true}
 	for _, tbl := range expectedChangedTables[tag] {
 		changed[tbl] = true
 	}
