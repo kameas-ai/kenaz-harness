@@ -48,6 +48,7 @@ import {sentry} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
 import {risk} from '../models';
+import {sidecar} from '../models';
 import {sites} from '../models';
 import {slashcmd} from '../models';
 import {storage} from '../models';
@@ -862,6 +863,16 @@ export function Shell_PathComplete(arg1:string):Promise<Array<string>>;
 export function Shell_PickFile(arg1:string,arg2:string,arg3:Array<string>):Promise<string>;
 
 export function Shell_ReadFile(arg1:string):Promise<rpc.ShellReadFileResult>;
+
+export function Sidecar_Enable():Promise<sidecar.StatusView>;
+
+export function Sidecar_Repair():Promise<sidecar.StatusView>;
+
+export function Sidecar_Status():Promise<sidecar.StatusView>;
+
+export function Sidecar_Uninstall():Promise<sidecar.StatusView>;
+
+export function Sidecar_Update():Promise<sidecar.StatusView>;
 
 export function Sites_Delete(arg1:string):Promise<void>;
 

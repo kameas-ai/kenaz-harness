@@ -112,6 +112,61 @@ const sqlAdviceLabelsInit = `
 	  ON advice_labels(kind, created_at DESC);
 `
 
+// migrationIDAdviceLabelsRevision is the stable migration ID for the
+// label push lane's revision column + push-cursor table (version 1601).
+const migrationIDAdviceLabelsRevision = "laya-advisors/1601-advice-labels-revision"
+
+// sqlAdviceLabelsRevision is the DDL for migration 1601
+// (laya-advisors-01LAYA001 WP14, design Amendment A3.3 "label ingest
+// contract frozen: rows carry a monotonic revision").
+//
+// WHY A MIGRATION (derivation was exhausted first): advice_labels has no
+// updated-at / action-version column, and UpdateAction rewrites
+// user_action in place, leaving NO trace that a row changed. A revision
+// cannot be derived from id/created_at (constant per row) nor from
+// user_action alone (accepted -> dismissed would not be monotonic), and
+// without a change marker the push lane cannot even FIND a row whose
+// action changed after its first push. 1600 shipped in v0.84.0, so it
+// cannot be amended in place.
+//
+// revision is a TABLE-GLOBAL monotonic change counter: an insert takes
+// MAX(revision)+1 and an action change takes MAX(revision)+1 again, so
+// every row's revision strictly increases each time it changes AND an
+// updated old row sorts AFTER every already-pushed row. That is what
+// makes the frozen "ack = cursor over (ts, revision)" work with one
+// durable cursor per kind: ordering by revision alone is total, ts rides
+// along on the wire. Existing rows backfill revision = id (insertion
+// order == id order, so the counter stays monotonic).
+//
+// advice_label_push_cursor is the durable, per-(sink, kind) ack cursor.
+// sink names the consumer ("sidecar" today) so a later export lane can
+// keep its own cursor without a schema change. The harness DB stays the
+// source of truth: deleting this table's rows is a full re-push from
+// zero (mirror loss).
+//
+// Purely additive (ALTER ADD COLUMN, UPDATE of the new column only,
+// CREATE ... IF NOT EXISTS) — nothing destructive in Up.
+const sqlAdviceLabelsRevision = `
+	ALTER TABLE advice_labels ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+
+	UPDATE advice_labels SET revision = id;
+
+	CREATE INDEX IF NOT EXISTS idx_advice_labels_revision
+	  ON advice_labels(revision);
+
+	CREATE INDEX IF NOT EXISTS idx_advice_labels_kind_revision
+	  ON advice_labels(kind, revision);
+
+	CREATE TABLE IF NOT EXISTS advice_label_push_cursor (
+	  sink             TEXT NOT NULL,
+	  kind             TEXT NOT NULL,
+	  cursor_ts        INTEGER NOT NULL DEFAULT 0,
+	  cursor_revision  INTEGER NOT NULL DEFAULT 0,
+	  updated_at       INTEGER NOT NULL DEFAULT 0,
+	  PRIMARY KEY (sink, kind)
+	);
+`
+
 // Migrations returns the migration set owned by the laya-advisors
 // mission.
 func Migrations() []migrations.Migration {
@@ -139,6 +194,35 @@ func Migrations() []migrations.Migration {
 					"DROP INDEX IF EXISTS idx_advice_labels_kind_created_at",
 					"DROP INDEX IF EXISTS idx_advice_labels_session_kind_hash",
 					"DROP TABLE IF EXISTS advice_labels",
+				} {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
+		{
+			ID:            migrationIDAdviceLabelsRevision,
+			Version:       1601,
+			OwningMission: MigrationOwner,
+			UpSource:      sqlAdviceLabelsRevision,
+			Up: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range splitAdviceLabelsSQL(sqlAdviceLabelsRevision) {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			// Down is best-effort, same posture as 1600's: the cursor and
+			// the revision column are rebuildable push bookkeeping.
+			Down: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range []string{
+					"DROP TABLE IF EXISTS advice_label_push_cursor",
+					"DROP INDEX IF EXISTS idx_advice_labels_kind_revision",
+					"DROP INDEX IF EXISTS idx_advice_labels_revision",
+					"ALTER TABLE advice_labels DROP COLUMN revision",
 				} {
 					if _, err := tx.Exec(ctx, stmt); err != nil {
 						return err

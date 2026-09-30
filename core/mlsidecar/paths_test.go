@@ -1,6 +1,7 @@
 package mlsidecar
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -104,39 +105,50 @@ func TestInstallJSON_RoundTrip(t *testing.T) {
 }
 
 func TestDefaultRootFor(t *testing.T) {
-	t.Run("darwin", func(t *testing.T) {
-		got, err := DefaultRootFor("darwin", "/Users/alice", "")
+	// Design Amendment A5(2): ~/.kenaz/ml/<env>, the same on every OS and
+	// the same root Kenaz resolves.
+	for _, env := range []string{"prod", "dev", "test"} {
+		got, err := DefaultRootFor("/Users/alice", env)
 		if err != nil {
-			t.Fatalf("DefaultRootFor: %v", err)
+			t.Fatalf("DefaultRootFor(%s): %v", env, err)
 		}
-		want := "/Users/alice/Library/Application Support/kameas/ml"
-		if got != want {
-			t.Errorf("got %s, want %s", got, want)
+		if want := filepath.Join("/Users/alice", ".kenaz", "ml", env); got != want {
+			t.Errorf("DefaultRootFor(%s) = %s, want %s", env, got, want)
 		}
-	})
-	t.Run("linux with XDG_DATA_HOME", func(t *testing.T) {
-		got, err := DefaultRootFor("linux", "/home/alice", "/home/alice/.data")
-		if err != nil {
-			t.Fatalf("DefaultRootFor: %v", err)
+	}
+	if _, err := DefaultRootFor("", "prod"); err == nil {
+		t.Error("expected an error with no home dir")
+	}
+	if _, err := DefaultRootFor("/Users/alice", "stage"); err == nil {
+		t.Error("stage is not an engine env; it must map to prod before reaching DefaultRootFor")
+	}
+}
+
+func TestEngineEnvAndPorts_A5(t *testing.T) {
+	cases := map[string]struct {
+		env  string
+		port int
+	}{
+		"":      {"prod", 7774},
+		"prod":  {"prod", 7774},
+		"stage": {"prod", 7774},
+		"dev":   {"dev", 7775},
+		"local": {"dev", 7775},
+		"test":  {"test", 7776},
+		"TEST ": {"test", 7776},
+		"bogus": {"prod", 7774},
+	}
+	for raw, want := range cases {
+		env := EngineEnvFor(raw)
+		if env != want.env || EnginePort(env) != want.port {
+			t.Errorf("KENAZ_HARNESS_ENV=%q -> env %q port %d, want %q %d", raw, env, EnginePort(env), want.env, want.port)
 		}
-		want := "/home/alice/.data/kameas/ml"
-		if got != want {
-			t.Errorf("got %s, want %s", got, want)
+		if got := BaseURLForEnv(env); got != fmt.Sprintf("http://127.0.0.1:%d", want.port) {
+			t.Errorf("BaseURLForEnv(%q) = %s", env, got)
 		}
-	})
-	t.Run("linux fallback to home", func(t *testing.T) {
-		got, err := DefaultRootFor("linux", "/home/alice", "")
-		if err != nil {
-			t.Fatalf("DefaultRootFor: %v", err)
-		}
-		want := "/home/alice/.local/share/kameas/ml"
-		if got != want {
-			t.Errorf("got %s, want %s", got, want)
-		}
-	})
-	t.Run("windows has no freeze target (design §6.3 / OQ-N8)", func(t *testing.T) {
-		if _, err := DefaultRootFor("windows", "C:\\Users\\alice", ""); err == nil {
-			t.Fatal("expected an error for windows — no kenaz-ml freeze target exists yet")
-		}
-	})
+	}
+	t.Setenv("KENAZ_HARNESS_ENV", "dev")
+	if got := DefaultEngineBaseURL(); got != "http://127.0.0.1:7775" {
+		t.Errorf("DefaultEngineBaseURL under dev = %s", got)
+	}
 }

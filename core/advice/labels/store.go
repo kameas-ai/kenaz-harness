@@ -139,9 +139,10 @@ func (s *SQLStore) Insert(ctx context.Context, row Row) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO advice_labels
 		    (kind, prompt_version, features_hash, features_json, features_complete, model_id, rung,
-		     decision, confidence, shown, user_action, latency_ms, session_id, created_at)
+		     decision, confidence, shown, user_action, latency_ms, session_id, created_at, revision)
 		VALUES
-		    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		     (SELECT COALESCE(MAX(revision), 0) + 1 FROM advice_labels))`,
 		row.KindID, row.PromptVersion, row.FeaturesHash, featuresJSON, boolToInt(row.FeaturesComplete), row.ModelID, row.Rung,
 		boolToInt(row.Decision), row.Confidence, boolToInt(row.Shown), string(action),
 		row.LatencyMS, row.SessionID, createdAt.UnixMilli(),
@@ -165,14 +166,24 @@ func (s *SQLStore) UpdateAction(ctx context.Context, sessionID, kindID, features
 	// non-cache-hit Recommend calls (capture.go skips cache hits), so
 	// "most recent" is unambiguous in the overwhelming common case and
 	// the safest available tie-break otherwise.
+	//
+	// The revision bump (migration 1601) is what makes a post-push action
+	// change visible to the push lane: the row takes the next table-global
+	// revision, so it sorts after everything already acked and re-pushes
+	// with a strictly higher revision (design Amendment A3.3). A write of
+	// the action the row ALREADY carries changes nothing and bumps
+	// nothing, so re-recording the same action never re-pushes.
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE advice_labels SET user_action = ?
+		UPDATE advice_labels
+		SET user_action = ?,
+		    revision = (SELECT COALESCE(MAX(revision), 0) + 1 FROM advice_labels)
 		WHERE id = (
 		    SELECT id FROM advice_labels
 		    WHERE session_id = ? AND kind = ? AND features_hash = ?
 		    ORDER BY id DESC LIMIT 1
-		)`,
-		string(action), sessionID, kindID, featuresHash,
+		)
+		AND user_action <> ?`,
+		string(action), sessionID, kindID, featuresHash, string(action),
 	)
 	if err != nil {
 		return fmt.Errorf("labels: update action: %w", err)

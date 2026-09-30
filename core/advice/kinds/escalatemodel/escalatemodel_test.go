@@ -1,11 +1,15 @@
 package escalatemodel
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/advice"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
 func TestRegistration(t *testing.T) {
@@ -56,16 +60,89 @@ func TestExtract_ExplicitThresholdPreserved(t *testing.T) {
 	}
 }
 
-func TestExtract_CopiesErrorKindCountsDefensively(t *testing.T) {
-	src := map[string]int{"timeout": 2}
-	got, err := Extract(Snapshot{ErrorKindCounts: src})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
+func TestExtract_ErrorKindOneHot(t *testing.T) {
+	cases := []struct {
+		name   string
+		counts map[string]int
+		want   [5]int // auth, transient, cancelled, budget, unknown
+	}{
+		{"no errors", nil, [5]int{}},
+		{"single kind", map[string]int{"transient": 2}, [5]int{0, 1, 0, 0, 0}},
+		{"dominant wins", map[string]int{"auth": 1, "budget": 3}, [5]int{0, 0, 0, 1, 0}},
+		{"tie -> earlier vocabulary entry", map[string]int{"cancelled": 2, "auth": 2}, [5]int{1, 0, 0, 0, 0}},
+		{"unknown keys bucket into unknown", map[string]int{"timeout": 2, "weird": 2, "auth": 3}, [5]int{0, 0, 0, 0, 1}},
+		{"non-positive counts ignored", map[string]int{"auth": 0, "budget": -4}, [5]int{}},
 	}
-	f := got.(Features)
-	src["timeout"] = 999
-	if f.ErrorKindCounts["timeout"] != 2 {
-		t.Errorf("Features.ErrorKindCounts aliases the caller's map — mutating the source changed it to %d", f.ErrorKindCounts["timeout"])
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Extract(Snapshot{ErrorKindCounts: tc.counts})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := got.(Features)
+			have := [5]int{f.ErrorKindAuth, f.ErrorKindTransient, f.ErrorKindCancelled, f.ErrorKindBudget, f.ErrorKindUnknown}
+			if have != tc.want {
+				t.Errorf("one-hot = %v, want %v", have, tc.want)
+			}
+		})
+	}
+}
+
+// TestFeatures_MatchTheEngineContract pins the wire vector to kenaz-ml's
+// escalate_model contract (advice/contracts.py ESCALATE_MODEL_FEATURES,
+// design §4's catalog) — names, order, and nothing else: the engine
+// refuses a batch with any unexpected or (for a complete row) missing
+// name with 409 names_mismatch. Every value must be a JSON number.
+func TestFeatures_MatchTheEngineContract(t *testing.T) {
+	want := []string{
+		"consecutive_tool_failures", "retries_in_window", "turn_latency_trend", "current_rung",
+		"error_kind_auth", "error_kind_transient", "error_kind_cancelled", "error_kind_budget", "error_kind_unknown",
+		"budget_remaining_fraction",
+	}
+	f, _ := Extract(Snapshot{ConsecutiveToolFailures: 2, CurrentRung: 3, ErrorKindCounts: map[string]int{"auth": 1},
+		DoomLoopRepeatCount: 2, FeaturesIncomplete: true})
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	if _, err := dec.Token(); err != nil { // {
+		t.Fatal(err)
+	}
+	var got []string
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			t.Fatal(err)
+		}
+		if _, isNum := v.(json.Number); !isNum {
+			t.Errorf("feature %v = %#v, want a JSON number", tok, v)
+		}
+		got = append(got, tok.(string))
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("wire vector =\n  %v\nwant the engine contract\n  %v", got, want)
+	}
+}
+
+func TestErrorKinds_MatchFleetCategories(t *testing.T) {
+	fleetOrder := []fleet.ErrorCategory{fleet.ErrorCategoryAuth, fleet.ErrorCategoryTransient,
+		fleet.ErrorCategoryCancelled, fleet.ErrorCategoryBudget, fleet.ErrorCategoryUnknown}
+	for i, c := range fleetOrder {
+		if ErrorKinds[i] != string(c) {
+			t.Errorf("ErrorKinds[%d] = %q, want fleet's %q", i, ErrorKinds[i], c)
+		}
+	}
+}
+
+func TestPromptVersionIsV2(t *testing.T) {
+	if k, _ := advice.Get(KindID); k.PromptVersion != "v2" {
+		t.Fatalf("PromptVersion = %q, want v2 (the catalog rewrite must stay distinguishable from v1 label rows)", k.PromptVersion)
 	}
 }
 

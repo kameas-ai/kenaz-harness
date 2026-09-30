@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,7 +40,26 @@ type InstallRequest struct {
 	// Source is a human-readable provenance string recorded into
 	// install.json (e.g. "http_mirror:https://dev.downloads.kameas.ai/...").
 	Source string
+
+	// Mounter mounts a .dmg ArtifactPath (WP13, design Amendment A3(1)).
+	// nil selects DefaultDMGMounter (hdiutil on macOS). Ignored for .zip
+	// artifacts. Tests inject a recording fake to prove the bytes are
+	// verified BEFORE any mount.
+	Mounter DMGMounter
+
+	// Phase, when non-nil, is called with "downloading", "verifying",
+	// "unpacking" at the start of each sub-phase so the Manager (and the
+	// Settings status line) can say which one is in flight. Purely
+	// informational — never consulted for control flow.
+	Phase func(phase string)
 }
+
+// ErrVerificationFailed wraps every Install failure that came from the
+// signature / sha256 verification step (as opposed to a network, disk or
+// mount failure) so callers can surface "the download did not verify"
+// distinctly from "the download failed". The underlying cause (e.g.
+// ErrDigestMismatch) stays reachable via errors.Is.
+var ErrVerificationFailed = errors.New("mlsidecar: engine artifact failed verification")
 
 // InstallResult is what a successful Install produced.
 type InstallResult struct {
@@ -80,19 +100,34 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
 		return InstallResult{}, fmt.Errorf("mlsidecar: mkdir staging: %w", err)
 	}
-	zipPath := filepath.Join(stagingDir, req.Version+".zip")
+	phase := func(p string) {
+		if req.Phase != nil {
+			req.Phase(p)
+		}
+	}
+	dmg := isDMGArtifact(req.ArtifactPath)
+	stagedName := req.Version + ".zip"
+	if dmg {
+		stagedName = req.Version + ".dmg"
+	}
+	zipPath := filepath.Join(stagingDir, stagedName)
+	phase("downloading")
 	if err := fetchToFile(ctx, ch, req.ArtifactPath, zipPath); err != nil {
 		_ = os.Remove(zipPath)
 		return InstallResult{}, fmt.Errorf("mlsidecar: fetch engine artifact: %w", err)
 	}
 
+	// Verification wraps the DOWNLOADED BYTES (the .dmg or .zip exactly as
+	// published) and runs BEFORE any mount, unzip, copy, quarantine clear
+	// or exec — the verify-before-mount ordering WP13 requires.
+	phase("verifying")
 	m := EngineManifest(req.Version, req.ArtifactPath, req.ExpectedSHA256, req.Signature)
 	resolve := channelSignatureResolver(ctx, ch)
 	verified, err := verifier.VerifyEngineArtifact(ctx, m, zipPath, resolve)
 	if err != nil {
 		_ = os.Remove(zipPath)
 		logging.L().Warn("mlsidecar.install.verify_failed", "version", req.Version, "err", err.Error())
-		return InstallResult{}, err
+		return InstallResult{}, fmt.Errorf("%w: %w", ErrVerificationFailed, err)
 	}
 
 	versionDir := layout.VersionDir(req.Version)
@@ -100,10 +135,17 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 		_ = os.Remove(zipPath)
 		return InstallResult{}, fmt.Errorf("mlsidecar: clear stale version dir: %w", err)
 	}
-	if err := unzipTo(zipPath, versionDir); err != nil {
+	phase("unpacking")
+	var unpackErr error
+	if dmg {
+		unpackErr = extractDMG(ctx, req.Mounter, zipPath, versionDir)
+	} else {
+		unpackErr = unzipTo(zipPath, versionDir)
+	}
+	if unpackErr != nil {
 		_ = os.Remove(zipPath)
 		_ = os.RemoveAll(versionDir)
-		return InstallResult{}, fmt.Errorf("mlsidecar: unpack engine artifact: %w", err)
+		return InstallResult{}, fmt.Errorf("mlsidecar: unpack engine artifact: %w", unpackErr)
 	}
 	_ = os.Remove(zipPath)
 
@@ -130,6 +172,15 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 		return InstallResult{}, fmt.Errorf("mlsidecar: hash unpacked engine executable: %w", err)
 	}
 
+	// Design Amendment A5(3): record the WHOLE onedir's digest, so
+	// adoption and spawn (this client's or Kenaz's) can re-verify the
+	// _internal/ payload the launcher digest never covered.
+	treeDigest, err := TreeDigest(layout.OnedirPath(req.Version))
+	if err != nil {
+		_ = os.RemoveAll(versionDir)
+		return InstallResult{}, fmt.Errorf("mlsidecar: tree digest of unpacked engine: %w", err)
+	}
+
 	if err := layout.SetCurrent(req.Version); err != nil {
 		return InstallResult{}, err
 	}
@@ -140,6 +191,14 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 		Source:       req.Source,
 		InstalledAt:  time.Now(),
 		Verified:     verified,
+		TreeSHA256:   treeDigest,
+		InstalledBy:  "harness",
+	}
+	// Only a POSITIVELY signature-verified artifact may claim the
+	// channel-manifest provenance (A5(4)); an unverified one records no
+	// provenance and is therefore never adoptable, by either client.
+	if verified {
+		rec.Provenance = ProvenanceChannelManifest
 	}
 	if err := WriteInstallJSON(layout, rec); err != nil {
 		return InstallResult{}, err

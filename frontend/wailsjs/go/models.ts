@@ -7560,6 +7560,99 @@ export namespace settings {
 
 }
 
+export namespace sidecar {
+
+	export class ReleaseView {
+	    version: string;
+	    sizeMB: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ReleaseView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.sizeMB = source["sizeMB"];
+	    }
+	}
+	export class LaneView {
+	    kind: string;
+	    reason: string;
+	    code: string;
+	    detail: string;
+	    until: string;
+
+	    static createFrom(source: any = {}) {
+	        return new LaneView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.reason = source["reason"];
+	        this.code = source["code"];
+	        this.detail = source["detail"];
+	        this.until = source["until"];
+	    }
+	}
+	export class StatusView {
+	    state: string;
+	    reason: string;
+	    detail: string;
+	    engineVersion: string;
+	    installed: boolean;
+	    installedVersion: string;
+	    supported: boolean;
+	    available: boolean;
+	    unavailableReason: string;
+	    release: ReleaseView;
+	    installLocation: string;
+	    updateAvailable: boolean;
+	    labelLanes: LaneView[];
+
+	    static createFrom(source: any = {}) {
+	        return new StatusView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.reason = source["reason"];
+	        this.detail = source["detail"];
+	        this.engineVersion = source["engineVersion"];
+	        this.installed = source["installed"];
+	        this.installedVersion = source["installedVersion"];
+	        this.supported = source["supported"];
+	        this.available = source["available"];
+	        this.unavailableReason = source["unavailableReason"];
+	        this.release = this.convertValues(source["release"], ReleaseView);
+	        this.installLocation = source["installLocation"];
+	        this.updateAvailable = source["updateAvailable"];
+	        this.labelLanes = this.convertValues(source["labelLanes"], LaneView);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace sites {
 	
 	export class SiteEnvEntry {

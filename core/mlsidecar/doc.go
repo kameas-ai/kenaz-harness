@@ -65,9 +65,19 @@
 //
 // It does not implement the sidecar itself (Python, kenaz-ml repo). It
 // does not implement checkpoint-pack distribution or fine-tuning (design
-// Phase 3). It does not add any Wails binding or UI surface (the
-// settings panel is a later WP, per the WP12 brief). It never writes
-// outside a caller-supplied root — production wiring choosing the real
-// per-OS data directory, and anything touching ~/.kenaz, is explicitly
-// out of scope for this change.
+// Phase 3). It never writes outside a caller-supplied root.
+//
+// # WP13 additions (laya-advisors-01LAYA001)
+//
+// The Settings surface (core/rpc/views/sidecar + the Recommendations
+// panel) and the production wiring (core/rpc/sidecar_wiring.go) now sit
+// on top of this package. What WP13 added here: .dmg artifact handling
+// (dmg.go — verify the DMG BYTES, THEN mount/copy/detach), the
+// production ProcessSpawner (spawn.go — detached, KENAZ_ML_INSTALL_ROOT,
+// lease/ created first), startup health polling, the read-only Observe
+// (observe.go), the demand-driven DemandProbe (demand.go — lazy start on
+// first advisor demand, zero cost when never enabled), the engine pin
+// (release.go — PinnedEngineRelease is honestly unavailable until the
+// release channel publishes the engine) and the real engine's
+// lease/shutdown.token name.
 package mlsidecar

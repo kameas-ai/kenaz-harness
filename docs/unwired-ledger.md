@@ -340,6 +340,45 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-30 (laya-advisors-01LAYA001 WP13) · the dated-nil `sidecarProbe` is replaced; two dated justifications remain
+
+`core/rpc/api.go`'s `sidecarProbe` (nil since WP12, "until the Settings
+surface lands") is now a real `*mlsidecar.Manager` + `DemandProbe`
+(`core/rpc/sidecar_wiring.go`), and `core/mlsidecar` left
+`i7-orphan-packages.txt`. Two things are intentionally still inert, each
+with a blocker and an owner:
+
+- **`mlsidecar.PinnedEngineRelease` returns `ErrNoPublishedRelease`.**
+  The Settings panel therefore reports the install action as unavailable
+  ("not published to the release channel yet") instead of offering a
+  button that cannot work — honest, not decorative. Blocker: the
+  channel-publishing infra task (kenaz-ml CI's
+  `kenaz-ml-macos-arm64-notarized` .dmg published to the env-specific
+  kameas release channel with an A-1 manifest signed by a trusted
+  anchor). Owner: release-infra. Deleted by: the change that makes that
+  function return the pinned `EngineRelease` from the harness release
+  manifest. The whole download -> verify-over-DMG-bytes -> mount -> copy
+  -> clear-quarantine -> start path is exercised against a local fixture
+  (`core/mlsidecar/install_dmg_test.go`, incl. a real-hdiutil test).
+- **(RESOLVED at the WP13 merge into `release/v0.85.0`, 2026-09-30.)**
+  `sidecarProbe`'s consumers (`SidecarAdvisor` WP15, the label pusher
+  WP14) and the real Manager+DemandProbe now live on the same branch;
+  the probe is demand-driven end to end and `LabelPusher.LaneStatus`
+  gained its production reader (`StatusView.LabelLanes` → the
+  Recommendations panel). The `main`-only inertness this bullet
+  recorded no longer exists anywhere a release is cut from.
+
+- **Half-broken install leaks the shared ml root on uninstall (dated
+  2026-09-30, WP13 merge review F3; owner: the release-channel wiring
+  that makes `PinnedEngineRelease` live).** Uninstall's whole-root
+  RemoveAll requires a KNOWN install record at entry
+  (`core/mlsidecar/manager.go` Uninstall), and the panel only offers
+  Uninstall when `view.installed` is true — so a corrupt/unknown
+  `install.json` leaves engine-written state (models, config, logs)
+  behind with no UI removal path. Unreachable today (no published
+  release means no field installs); the moment the pin goes live, add a
+  "remove anyway" recovery path or a repair-record step.
+
 ### 2026-09-12 (fleet-generic-sync-framework-01NSYNC02 WP03) · `SyncKind.ConflictPolicy` and `.SecretPolicy` were validated-only dials, never consumed — FIXED
 
 Dials-to-consumer trace (CLAUDE.md unwired-sweep pass 4) on the
