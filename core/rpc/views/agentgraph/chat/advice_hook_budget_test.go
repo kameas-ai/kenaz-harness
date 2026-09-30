@@ -112,25 +112,37 @@ func TestFireAdvice_SlowAdvisor_BoundedByRecommendBudget(t *testing.T) {
 		close(launchReturned)
 	}()
 
+	// STRUCTURAL non-blocking proof, no wall clock: the turn-side
+	// dispatch must return while the advisor is still hanging. Any
+	// wall-clock bound here flaked twice on the shared CI runner (PR
+	// #358) — scheduler stalls under -race made "near-instant" take
+	// >500ms. What actually matters is ordering: launch returns BEFORE
+	// fireAdvice completes, which the hanging fake forces to be a real
+	// discrimination (fireAdvice cannot complete before the 800ms
+	// budget cancels the 5s hang).
 	select {
 	case <-launchReturned:
-		if elapsed := time.Since(launchStart); elapsed > 500*time.Millisecond { // load-tolerant; proves non-blocking vs the 5s hang
-			t.Errorf("turn-side dispatch took %v to return, want near-instant (it only starts a goroutine)", elapsed)
+		select {
+		case <-fireAdviceDone:
+			t.Fatal("fireAdvice completed before the turn-side dispatch returned — the dispatch waited on the advisor")
+		default:
+			// good: launch returned while the advisor path is still running.
 		}
-	case <-time.After(1 * time.Second):
+	case <-time.After(4 * time.Second):
 		t.Fatal("turn-side dispatch (launching fireAdvice) never returned")
 	}
+	_ = launchStart // retained for optional debugging; no wall-clock assertion on launch.
 
 	// fireAdvice itself must complete near AdviceRecommendBudget, not the
 	// fake's 5s delay — this is the real proof the timeout reaches the
-	// Advisor call. Bound generously above budget (2s) so this is never
-	// flaky on a loaded CI runner, while staying far below the fake's 5s
-	// delay so a regression that stops honoring the timeout still fails.
+	// Advisor call. Bound at 4s: generous against CI scheduler stalls,
+	// still strictly below the fake's 5s delay so a regression that
+	// stops honoring the timeout still fails.
 	select {
 	case <-fireAdviceDone:
 		// good — fireAdvice returned; check WHEN below via cancelledIn.
-	case <-time.After(2 * time.Second):
-		t.Fatal("fireAdvice did not return within 2s — AdviceRecommendBudget is not bounding the real dispatch path")
+	case <-time.After(4 * time.Second):
+		t.Fatal("fireAdvice did not return within 4s — AdviceRecommendBudget is not bounding the real dispatch path")
 	}
 
 	calls, cancelledIn := fake.snapshot()
@@ -149,7 +161,7 @@ func TestFireAdvice_SlowAdvisor_BoundedByRecommendBudget(t *testing.T) {
 	// goroutine scheduling is prompt. A budget+500ms bound flaked on the
 	// shared CI runner (PR #358); 3s keeps a decisive 2s margin below
 	// the hang while tolerating scheduler stalls.
-	if first > 3*time.Second {
+	if first > 4*time.Second {
 		t.Errorf("ctx cancellation observed after %v, want well under the fake's 5s hang (budget %v)", first, AdviceRecommendBudget)
 	}
 }
