@@ -954,6 +954,37 @@ func assertAdviceLabelsTableMigrated(t *testing.T, ctx context.Context, db stora
 	if gotComplete != 1 {
 		t.Errorf("features_complete for the probe row = %d, want 1 (Row.FeaturesComplete=true)", gotComplete)
 	}
+
+	// laya-advisors-01LAYA001 WP14: migration 1601 (revision column +
+	// push-cursor table) landed on THIS upgraded install — every
+	// committed snapshot predates it (v0.84.0 carries 1600 only), so this
+	// is the "first migration to land below the high-water mark" shape.
+	// Proven through the production writer AND the production push
+	// source, not by a schema query alone.
+	var rev int64
+	if err := r.QueryRow(ctx, "SELECT revision FROM advice_labels WHERE session_id = ?", probe.SessionID).Scan(&rev); err != nil {
+		t.Fatalf("advice_labels.revision not queryable after Open (laya-advisors/1601 did not apply): %v", err)
+	}
+	if rev < 1 {
+		t.Errorf("probe row revision = %d, want >= 1 (Insert must stamp the next table-global revision)", rev)
+	}
+	pending, err := store.PendingSince(ctx, "branch_now", 0, 10)
+	if err != nil || len(pending) != 1 || pending[0].Revision != rev {
+		t.Errorf("PendingSince on the upgraded install = %+v, err %v; want the single probe row at revision %d", pending, err, rev)
+	}
+	if err := store.SaveCursor(ctx, "upgrade-probe", "branch_now", advicelabels.PushCursor{TS: 1, Revision: rev}); err != nil {
+		t.Errorf("advice_label_push_cursor not writable after Open: %v", err)
+	}
+	if err := store.UpdateAction(ctx, probe.SessionID, "branch_now", probe.FeaturesHash, advicelabels.ActionDismissed); err != nil {
+		t.Fatalf("UpdateAction on the upgraded install: %v", err)
+	}
+	var rev2 int64
+	if err := r.QueryRow(ctx, "SELECT revision FROM advice_labels WHERE session_id = ?", probe.SessionID).Scan(&rev2); err != nil {
+		t.Fatalf("revision re-read: %v", err)
+	}
+	if rev2 <= rev {
+		t.Errorf("revision after an action change = %d, want > %d", rev2, rev)
+	}
 }
 
 // assertUnitsTableSurvivesUntouched is the specific, content-anchored

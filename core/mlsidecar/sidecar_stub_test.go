@@ -2,8 +2,10 @@ package mlsidecar
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 )
 
@@ -35,6 +37,18 @@ type stubSidecar struct {
 	shutdownRequireToken string // "" accepts any Authorization header
 	shutdownCalls        []string
 
+	// /v1/recommend scripting (WP15).
+	recommendCalls   []string
+	recommendRefused map[string]bool
+	recommendScript  map[string]RecommendResponse
+
+	// /v1/labels ingest (WP14): the mirror + fault knobs.
+	labelMirror      map[string]storedLabel
+	labelPosts       []LabelPushRequest
+	labelsFailStatus int       // non-2xx simulates an engine error
+	labelsAckLimit   int       // >0: apply/ack only the first N rows of a batch
+	labelsBogusAck   *LabelAck // non-nil: respond with this ack regardless
+
 	srv *httptest.Server
 }
 
@@ -49,6 +63,7 @@ func newStubSidecar() *stubSidecar {
 	mux.HandleFunc("/v1/clients/lease", s.handleLease)
 	mux.HandleFunc("/v1/admin/shutdown", s.handleShutdown)
 	mux.HandleFunc("/v1/recommend/", s.handleRecommend)
+	mux.HandleFunc("/v1/labels/", s.handleLabels)
 	mux.HandleFunc("/v1/systemone", s.handleSystemOne)
 	s.srv = httptest.NewServer(mux)
 	return s
@@ -173,8 +188,169 @@ func (s *stubSidecar) shutdownCallCount() int {
 }
 
 func (s *stubSidecar) handleRecommend(w http.ResponseWriter, r *http.Request) {
+	kind := strings.TrimPrefix(r.URL.Path, "/v1/recommend/")
+	s.mu.Lock()
+	s.recommendCalls = append(s.recommendCalls, kind)
+	refused := s.recommendRefused[kind]
+	scripted, hasScript := s.recommendScript[kind]
+	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
+	if refused {
+		// Amendment A3.2: typed "kind not served" refusal.
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": KindNotServedCode})
+		return
+	}
+	if hasScript {
+		_ = json.NewEncoder(w).Encode(scripted)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(RecommendResponse{Confidence: 80, Backend: "heuristic", KindID: "branch_now"})
+}
+
+func (s *stubSidecar) setRecommend(kind string, resp RecommendResponse) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recommendScript == nil {
+		s.recommendScript = map[string]RecommendResponse{}
+	}
+	s.recommendScript[kind] = resp
+}
+
+func (s *stubSidecar) refuseRecommend(kind string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recommendRefused == nil {
+		s.recommendRefused = map[string]bool{}
+	}
+	s.recommendRefused[kind] = true
+}
+
+func (s *stubSidecar) recommendCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.recommendCalls)
+}
+
+// ---- label ingest (WP14; design §5.2 + Amendment A3.3, frozen) ----
+
+// storedLabel is one row of the stub's mirror, keyed exactly like the real
+// engine's ingest: (client, kind, features_hash, ts), higher revision wins.
+type storedLabel struct {
+	client string
+	row    LabelWireRow
+}
+
+func labelKey(client string, r LabelWireRow) string {
+	return fmt.Sprintf("%s|%s|%s|%d", client, r.Kind, r.FeaturesHash, r.TS)
+}
+
+// handleLabels implements POST /v1/labels/{kind}: revision upsert +
+// cursor ack. The ack is the (ts, revision) of the LAST row of the batch
+// the stub applied — or of the ackLimit-th row when a partial ack is
+// scripted. Every request is recorded (labelPosts) for call-count proofs.
+func (s *stubSidecar) handleLabels(w http.ResponseWriter, r *http.Request) {
+	kind := strings.TrimPrefix(r.URL.Path, "/v1/labels/")
+	var req LabelPushRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	s.labelPosts = append(s.labelPosts, req)
+	fail := s.labelsFailStatus
+	limit := s.labelsAckLimit
+	badAck := s.labelsBogusAck
+	if fail != 0 {
+		s.mu.Unlock()
+		w.WriteHeader(fail)
+		return
+	}
+	if s.labelMirror == nil {
+		s.labelMirror = map[string]storedLabel{}
+	}
+	var resp LabelPushResponse
+	rows := req.Rows
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	for _, row := range rows {
+		k := labelKey(req.Client, row)
+		prev, exists := s.labelMirror[k]
+		switch {
+		case !exists:
+			s.labelMirror[k] = storedLabel{client: req.Client, row: row}
+			resp.Applied++
+		case row.Revision > prev.row.Revision:
+			s.labelMirror[k] = storedLabel{client: req.Client, row: row}
+			resp.Replaced++
+		default:
+			resp.Stale++
+		}
+	}
+	if len(rows) > 0 {
+		last := rows[len(rows)-1]
+		resp.Acked = LabelAck{TS: last.TS, Revision: last.Revision}
+	}
+	if badAck != nil {
+		resp.Acked = *badAck
+	}
+	s.mu.Unlock()
+	_ = kind
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *stubSidecar) setLabelsFail(code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.labelsFailStatus = code
+}
+
+func (s *stubSidecar) setLabelsAckLimit(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.labelsAckLimit = n
+}
+
+func (s *stubSidecar) setLabelsBogusAck(a *LabelAck) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.labelsBogusAck = a
+}
+
+// dropLabelMirror simulates mirror loss (the engine's retained set wiped).
+func (s *stubSidecar) dropLabelMirror() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.labelMirror = nil
+}
+
+func (s *stubSidecar) labelPostCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.labelPosts)
+}
+
+// labelPostSnapshot returns a copy of every recorded POST body.
+func (s *stubSidecar) labelPostSnapshot() []LabelPushRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]LabelPushRequest, len(s.labelPosts))
+	copy(out, s.labelPosts)
+	return out
+}
+
+// mirrorSnapshot returns the stub's stored labels keyed by
+// (client|kind|features_hash|ts).
+func (s *stubSidecar) mirrorSnapshot() map[string]LabelWireRow {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]LabelWireRow, len(s.labelMirror))
+	for k, v := range s.labelMirror {
+		out[k] = v.row
+	}
+	return out
 }
 
 func (s *stubSidecar) handleSystemOne(w http.ResponseWriter, r *http.Request) {

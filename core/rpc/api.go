@@ -88,6 +88,7 @@ import (
 	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 	"github.com/kameas-ai/kenaz-harness/core/memory/narrative"
 	"github.com/kameas-ai/kenaz-harness/core/memory/prune"
+	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
 	"github.com/kameas-ai/kenaz-harness/core/policy/blockedrequests"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
@@ -6327,7 +6328,7 @@ func newLLMStack(
 				}
 			}
 		}
-		chatAdvisor = advicelabels.NewCaptureAdvisor(heuristicAdvisor, captureStore, func() bool {
+		labelCaptureEnabled := func() bool {
 			if settingsImpl == nil || settingsImpl.Store() == nil {
 				return true
 			}
@@ -6336,7 +6337,33 @@ func newLLMStack(
 				return true
 			}
 			return !s.AdviceLabelCaptureDisabled
-		})
+		}
+
+		// laya-advisors-01LAYA001 WP14: the label push lane. Every label
+		// write (a captured Recommend row, a recorded accept/dismiss/auto-
+		// act) nudges a coalesced background drain of advice_labels to the
+		// sidecar's POST /v1/labels/{kind}, cursor-acked and resumable.
+		// Loopback-only (mlsidecar.NewClient's DefaultBaseURL, re-checked
+		// on every push) — same machine, not egress, so no consent gate;
+		// gated on the SAME capture toggle as the capture itself (capture
+		// off => zero store calls, zero HTTP calls) and on the sidecar
+		// being healthy. sidecarProbe is the dated nil above until WP13
+		// wires the real Manager, so today Healthy() is constant false and
+		// Nudge returns before spawning anything; the lane goes live the
+		// moment that probe does, with no further change here. The
+		// pusher's source is the same *sql.DB-backed store as capture;
+		// nil (nil-core chassis) means there is nothing to push.
+		var captureOpts []advicelabels.CaptureAdvisorOption
+		if pushSource, ok := captureStore.(advicelabels.PushSource); ok {
+			labelPusher := &mlsidecar.LabelPusher{
+				Client:  mlsidecar.NewClient(mlsidecar.DefaultBaseURL, nil),
+				Source:  pushSource,
+				Enabled: labelCaptureEnabled,
+				Healthy: func() bool { return sidecarProbe != nil && sidecarProbe.Healthy() },
+			}
+			captureOpts = append(captureOpts, advicelabels.WithAfterWrite(labelPusher.Nudge))
+		}
+		chatAdvisor = advicelabels.NewCaptureAdvisor(heuristicAdvisor, captureStore, labelCaptureEnabled, captureOpts...)
 
 		// Boot-time resolve-and-log: executes once per newLLMStack call
 		// (every process boot with reg != nil), independent of whether any
