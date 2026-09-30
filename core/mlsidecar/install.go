@@ -109,15 +109,24 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 
 	// design F3/§3.7 R3: quarantine is cleared ONLY after verification
 	// (already true by this point in the call sequence) — never before.
+	//
+	// On failure, remove the unpacked version dir — this function's own
+	// doc comment promises a refusal "leaves neither a partially-unpacked
+	// version directory nor an install.json record"; a quarantine-clear
+	// failure is a refusal like any other verification-adjacent failure
+	// before `current` has been touched (SetCurrent hasn't run yet).
 	if err := clearQuarantine(versionDir); err != nil {
+		_ = os.RemoveAll(versionDir)
 		return InstallResult{}, fmt.Errorf("mlsidecar: clear quarantine: %w", err)
 	}
 
 	// Record the digest of the ACTUAL UNPACKED EXECUTABLE, not the
 	// (now-deleted) zip's digest — this is what EvaluateAdoption re-hashes
 	// against at adoption time, since the zip no longer exists to re-hash.
+	// Same cleanup discipline: `current` still hasn't been touched here.
 	exeDigest, err := HashFileSHA256(pathUnderVersionsDir(layout, req.Version))
 	if err != nil {
+		_ = os.RemoveAll(versionDir)
 		return InstallResult{}, fmt.Errorf("mlsidecar: hash unpacked engine executable: %w", err)
 	}
 

@@ -2,10 +2,12 @@ package mlsidecar
 
 import "time"
 
-// State is one of the six distinct, honestly-surfaced lifecycle states
-// the WP12 brief and design §6.2/§7 require. Every state is reachable
-// through a real code path exercised by this package's tests
-// (manager_test.go's "every state distinctly reachable" table).
+// State is one of the honestly-surfaced lifecycle states the WP12 brief
+// and design §6.2/§7 require, plus StateLegacyUnverified (added by a
+// 2026-09-29 security-review ruling — see that state's own doc comment).
+// Every state is reachable through a real code path exercised by this
+// package's tests (manager_test.go's "every state distinctly reachable"
+// table).
 type State string
 
 const (
@@ -33,6 +35,35 @@ const (
 	// client alone is stranded read-only; the shared instance is left
 	// untouched for other, compatible clients.
 	StateContractUnsupported State = "contract_unsupported"
+	// StateLegacyUnverified: a pre-lease engine (design F5) is running —
+	// adopt-only in the sense that this client never terminates it and
+	// never double-spawns a second instance on the port, but it is NEVER
+	// usable for recommendations and NEVER reported healthy.
+	//
+	// AMENDS design F5 (coordinator ruling, 2026-09-29 security review):
+	// F5's original text said a pre-lease engine should be "use[d] if
+	// contract-compatible" — i.e. treated as StateHealthy. That
+	// contradicts the design's own universal-verification rule (§3.7 R2:
+	// "Adoption requires client-side Go verification of the on-disk
+	// artifact ... A process not running from a client-verified
+	// shared-dir install is a port-conflict state, never an adoptee");
+	// R2 wins. A legacy engine was, by construction, installed by
+	// something other than this client (an old Kenaz build that predates
+	// the shared install root, or any process this client never staged
+	// into versions/) — there is no install.json record to re-verify it
+	// against, ever. Contract-major compatibility is irrelevant to that
+	// fact, which is why this state does not depend on
+	// contractCompatible at all (adopt.go). Healthy() (probe.go) reports
+	// false for this state, so the advisor ladder falls through to
+	// RungNone — this was the security-review finding: the pre-amendment
+	// code mapped a compatible-looking legacy engine straight to
+	// StateHealthy, and a process answering /health with a bare `{}`
+	// (LifecycleProtocol==0, no "api" contract entry, which
+	// contractCompatible treats as compatible) would have been adopted
+	// as a healthy sidecar. See
+	// TestManager_BareEmptyHealth_NeverReachesStateHealthy for the
+	// planted-style regression pin.
+	StateLegacyUnverified State = "legacy_unverified"
 )
 
 // Reason refines StateInstalledUnhealthy / StateUnverified with WHY,

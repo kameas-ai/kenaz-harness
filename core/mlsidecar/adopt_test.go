@@ -3,6 +3,7 @@ package mlsidecar
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/bundle/integrity"
@@ -206,9 +207,15 @@ func TestEvaluateAdoption_RefusesWhenNeverVerified(t *testing.T) {
 	}
 }
 
-// TestEvaluateAdoption_SkewWindow_LegacyEngine covers design F5/§3.7 R4:
-// a pre-lease engine (LifecycleProtocol==0) with a compatible contract
-// is adopt-only.
+// TestEvaluateAdoption_SkewWindow_LegacyEngine covers design F5/§3.7 R4
+// AS AMENDED by the 2026-09-29 security-review ruling: a pre-lease
+// engine (LifecycleProtocol==0) is ALWAYS AdoptLegacyUnverified —
+// unverifiable against this client's install record, hence never usable
+// for recommendations — even with an otherwise-compatible contract-major
+// and even with NO on-disk install for this client at all. The original
+// F5 text ("use if contract-compatible") contradicted design R2's
+// universal-verification rule; R2 wins (see StateLegacyUnverified's doc
+// comment for the full rationale and the exploit this closes).
 func TestEvaluateAdoption_SkewWindow_LegacyEngine(t *testing.T) {
 	l := NewLayout(t.TempDir())
 	health := HealthPayload{
@@ -220,18 +227,27 @@ func TestEvaluateAdoption_SkewWindow_LegacyEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
-	if decision.Action != AdoptLegacy {
-		t.Fatalf("Action = %q, want %q", decision.Action, AdoptLegacy)
+	if decision.Action != AdoptLegacyUnverified {
+		t.Fatalf("Action = %q, want %q", decision.Action, AdoptLegacyUnverified)
 	}
 	if decision.Reason != ReasonLegacyEngine {
 		t.Errorf("Reason = %q, want %q", decision.Reason, ReasonLegacyEngine)
 	}
+	if !strings.Contains(decision.Detail, "update Kenaz to share the ML engine") {
+		t.Errorf("Detail = %q, want it to surface the 'update Kenaz' message unconditionally", decision.Detail)
+	}
 }
 
-// TestEvaluateAdoption_SkewWindow_LegacyEngineIncompatible covers the
-// "else surface 'update Kenaz to share the ML engine'" half of F5: a
-// pre-lease engine whose contract this client cannot speak at all.
-func TestEvaluateAdoption_SkewWindow_LegacyEngineIncompatible(t *testing.T) {
+// TestEvaluateAdoption_LegacyEngine_UnverifiedRegardlessOfContract proves
+// the amendment's "regardless of contract-major" half directly: a legacy
+// engine advertising a contract this client CANNOT speak at all still
+// resolves to the exact same AdoptLegacyUnverified verdict as a
+// contract-compatible one — contract compatibility is irrelevant once an
+// engine is unconditionally unverifiable. (Superseded test name:
+// TestEvaluateAdoption_SkewWindow_LegacyEngineIncompatible no longer
+// applies — AdoptContractUnsupported is not reachable from the legacy
+// branch post-amendment.)
+func TestEvaluateAdoption_LegacyEngine_UnverifiedRegardlessOfContract(t *testing.T) {
 	l := NewLayout(t.TempDir())
 	health := HealthPayload{
 		ContractVersions:  map[string]int{"api": SupportedContractMajor + 50},
@@ -241,8 +257,37 @@ func TestEvaluateAdoption_SkewWindow_LegacyEngineIncompatible(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
-	if decision.Action != AdoptContractUnsupported {
-		t.Fatalf("Action = %q, want %q", decision.Action, AdoptContractUnsupported)
+	if decision.Action != AdoptLegacyUnverified {
+		t.Fatalf("Action = %q, want %q (contract-major must not change a legacy engine's verdict)", decision.Action, AdoptLegacyUnverified)
+	}
+}
+
+// TestEvaluateAdoption_BareEmptyHealth_NeverAdoptedAsHealthy is the
+// security-review's planted-style regression pin: a process answering
+// /health with a bare `{}` (every field at its JSON zero value —
+// LifecycleProtocol==0, no "api" entry in ContractVersions, empty
+// ExePath) must NEVER resolve to AdoptAccept. Before the 2026-09-29
+// amendment, contractCompatible's "no api entry => compatible" leniency
+// combined with the legacy branch's "use if contract-compatible" rule to
+// adopt exactly this shape as a healthy sidecar.
+func TestEvaluateAdoption_BareEmptyHealth_NeverAdoptedAsHealthy(t *testing.T) {
+	l := NewLayout(t.TempDir())
+	// A layout with a real, verified install present makes this the
+	// STRONGEST version of the pin: even when this client DOES have
+	// something it could legitimately adopt, a bare-{} report must still
+	// never be treated as that verified install (LifecycleProtocol==0
+	// short-circuits before ExePath/current is even consulted).
+	setupVerifiedVersion(t, l, "1.0.0", []byte("engine binary bytes"))
+
+	decision, err := EvaluateAdoption(l, HealthPayload{})
+	if err != nil {
+		t.Fatalf("EvaluateAdoption: %v", err)
+	}
+	if decision.Action == AdoptAccept {
+		t.Fatal("a bare {} /health response must never be adopted as a verified, healthy install")
+	}
+	if decision.Action != AdoptLegacyUnverified {
+		t.Fatalf("Action = %q, want %q", decision.Action, AdoptLegacyUnverified)
 	}
 }
 

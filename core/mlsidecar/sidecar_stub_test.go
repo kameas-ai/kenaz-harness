@@ -20,6 +20,11 @@ type stubSidecar struct {
 
 	health       HealthPayload
 	healthStatus int // 0 defaults to 200; non-2xx simulates "unreachable"/refused
+	// healthRaw, when non-nil, is written to the /health response VERBATIM
+	// instead of encoding `health` — used by the security-review's
+	// bare-{} regression pin to send the reviewer's EXACT exploit bytes
+	// rather than a Go zero-value struct that merely encodes similarly.
+	healthRaw []byte
 
 	contracts ContractsPayload
 
@@ -64,16 +69,29 @@ func (s *stubSidecar) setHealthStatus(code int) {
 	s.healthStatus = code
 }
 
+// setHealthRaw makes /health respond with body verbatim, bypassing JSON
+// encoding of a HealthPayload entirely.
+func (s *stubSidecar) setHealthRaw(body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.healthRaw = body
+}
+
 func (s *stubSidecar) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	code := s.healthStatus
 	h := s.health
+	raw := s.healthRaw
 	s.mu.Unlock()
 	if code != 0 && code != http.StatusOK {
 		w.WriteHeader(code)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if raw != nil {
+		_, _ = w.Write(raw)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(h)
 }
 
