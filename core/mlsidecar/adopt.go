@@ -92,13 +92,10 @@ type AdoptDecision struct {
 // hand-built HealthPayload fixtures, independent of the stub server
 // (adopt_test.go) — the stub-backed integration path is covered by
 // manager_test.go instead.
-func EvaluateAdoption(layout Layout, health HealthPayload) (AdoptDecision, error) {
-	return EvaluateAdoptionWith(layout, health, nil)
-}
-
-// EvaluateAdoptionWith is EvaluateAdoption with a per-process tree-verify
-// cache (the Manager's); a nil tv re-hashes the whole tree every call.
-func EvaluateAdoptionWith(layout Layout, health HealthPayload, tv *TreeVerifier) (AdoptDecision, error) {
+//
+// tv is the per-process whole-tree verify cache (the Manager's, design
+// A5(3)); a nil tv re-hashes the whole tree on every call.
+func EvaluateAdoption(layout Layout, health HealthPayload, tv *TreeVerifier) (AdoptDecision, error) {
 	if health.LifecycleProtocol == 0 {
 		// AMENDED (2026-09-29 security-review ruling, supersedes the
 		// original F5 text): a pre-lease engine is UNCONDITIONALLY

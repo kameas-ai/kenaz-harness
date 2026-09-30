@@ -62,7 +62,7 @@ func TestEvaluateAdoption_AdoptVerified(t *testing.T) {
 		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
-	decision, err := EvaluateAdoption(l, health)
+	decision, err := EvaluateAdoption(l, health, nil)
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestEvaluateAdoption_RefusesOnDigestMismatch(t *testing.T) {
 		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
-	decision, err := EvaluateAdoption(l, health)
+	decision, err := EvaluateAdoption(l, health, nil)
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestEvaluateAdoption_TamperedOnDiskArtifact_NeverAdopted(t *testing.T) {
 		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
-	decision, err := EvaluateAdoption(l, health)
+	decision, err := EvaluateAdoption(l, health, nil)
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestEvaluateAdoption_PortConflict_NoCurrentInstall(t *testing.T) {
 		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
-	decision, err := EvaluateAdoption(l, health)
+	decision, err := EvaluateAdoption(l, health, nil)
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestEvaluateAdoption_PortConflict_ExePathOutsideCurrent(t *testing.T) {
 		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
-	decision, err := EvaluateAdoption(l, health)
+	decision, err := EvaluateAdoption(l, health, nil)
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestEvaluateAdoption_RefusesWhenNeverVerified(t *testing.T) {
 		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 1,
 	}
-	decision, err := EvaluateAdoption(l, health)
+	decision, err := EvaluateAdoption(l, health, nil)
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestEvaluateAdoption_SkewWindow_LegacyEngine(t *testing.T) {
 		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 0,
 	}
-	decision, err := EvaluateAdoption(l, health)
+	decision, err := EvaluateAdoption(l, health, nil)
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestEvaluateAdoption_LegacyEngine_UnverifiedRegardlessOfContract(t *testing
 		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: 0,
 	}
-	decision, err := EvaluateAdoption(l, health)
+	decision, err := EvaluateAdoption(l, health, nil)
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestEvaluateAdoption_BareEmptyHealth_NeverAdoptedAsHealthy(t *testing.T) {
 	// short-circuits before ExePath/current is even consulted).
 	setupVerifiedVersion(t, l, "1.0.0", []byte("engine binary bytes"))
 
-	decision, err := EvaluateAdoption(l, HealthPayload{})
+	decision, err := EvaluateAdoption(l, HealthPayload{}, nil)
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestEvaluateAdoption_ContractUnsupported_LeaseAwareEngine(t *testing.T) {
 		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
 		LifecycleProtocol: SupportedContractMajor + 50,
 	}
-	decision, err := EvaluateAdoption(l, health)
+	decision, err := EvaluateAdoption(l, health, nil)
 	if err != nil {
 		t.Fatalf("EvaluateAdoption: %v", err)
 	}

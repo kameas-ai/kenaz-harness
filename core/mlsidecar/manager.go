@@ -144,7 +144,7 @@ func (m *Manager) reconcileLocked(ctx context.Context) Status {
 // recommendations (see StateLegacyUnverified's doc comment), so this
 // client has no relationship with it worth advertising via a lease.
 func (m *Manager) evaluateRunning(health HealthPayload) Status {
-	decision, err := EvaluateAdoptionWith(m.Layout, health, m.tv)
+	decision, err := EvaluateAdoption(m.Layout, health, m.tv)
 	if err != nil {
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: err.Error(), UpdatedAt: time.Now()}
 	}

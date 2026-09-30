@@ -110,7 +110,7 @@ func TestEvaluateAdoption_AdoptsAKenazSeededEngine_A5(t *testing.T) {
 	exePath, exeSHA, _ := kenazSeed(t, l, "0.2.0+1a2b3c4d5e6f")
 	health := HealthPayload{Product: "kenaz-ml", SidecarVersion: "0.1.0", ExePath: exePath,
 		EngineSHA256: strings.TrimPrefix(exeSHA, "sha256:"), LifecycleProtocol: 1}
-	d, err := EvaluateAdoption(l, health)
+	d, err := EvaluateAdoption(l, health, nil)
 	if err != nil || d.Action != AdoptAccept {
 		t.Fatalf("Kenaz-seeded engine = %+v, %v; want adopted", d, err)
 	}
@@ -130,7 +130,7 @@ func TestEvaluateAdoption_TreeTamper_Refused(t *testing.T) {
 		t.Fatal(err)
 	}
 	health := HealthPayload{ExePath: exePath, EngineSHA256: exeSHA, LifecycleProtocol: 1}
-	if d, _ := EvaluateAdoption(l, health); d.Action != AdoptRefuseUnverified {
+	if d, _ := EvaluateAdoption(l, health, nil); d.Action != AdoptRefuseUnverified {
 		t.Fatalf("tampered _internal/ = %q; want refused", d.Action)
 	}
 	spawner := &fakeSpawner{}

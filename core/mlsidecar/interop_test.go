@@ -353,11 +353,11 @@ func TestEvaluateAdoption_EngineBareHexDigest_A5(t *testing.T) {
 		t.Fatalf("fixture digest %q carries no sha256: prefix; the pin needs the prefixed record form", sha)
 	}
 	health := HealthPayload{SidecarVersion: "1.0.0", ExePath: exePath, EngineSHA256: strings.ToUpper(bare), LifecycleProtocol: 1}
-	if d, err := EvaluateAdoption(l, health); err != nil || d.Action != AdoptAccept {
+	if d, err := EvaluateAdoption(l, health, nil); err != nil || d.Action != AdoptAccept {
 		t.Fatalf("bare-hex self-report of the RIGHT digest = %+v, %v; want adopted", d, err)
 	}
 	health.EngineSHA256 = strings.Repeat("0", len(bare))
-	if d, _ := EvaluateAdoption(l, health); d.Action != AdoptRefuseUnverified {
+	if d, _ := EvaluateAdoption(l, health, nil); d.Action != AdoptRefuseUnverified {
 		t.Fatalf("bare-hex self-report of a WRONG digest = %q; want refused", d.Action)
 	}
 }
@@ -371,11 +371,11 @@ func TestEvaluateAdoption_SidecarVersionIsNotAGate_A5(t *testing.T) {
 	l := NewLayout(t.TempDir())
 	exePath, sha := setupVerifiedVersion(t, l, "0.2.0+1a2b3c4d5e6f", []byte("engine binary bytes"))
 	health := HealthPayload{SidecarVersion: "0.2.0", ExePath: exePath, EngineSHA256: sha, LifecycleProtocol: 1}
-	if d, err := EvaluateAdoption(l, health); err != nil || d.Action != AdoptAccept || strings.Contains(d.Detail, "note:") {
+	if d, err := EvaluateAdoption(l, health, nil); err != nil || d.Action != AdoptAccept || strings.Contains(d.Detail, "note:") {
 		t.Fatalf("label 0.2.0+build vs report 0.2.0 = %+v, %v; want adopted, no note", d, err)
 	}
 	health.SidecarVersion = "0.1.0"
-	d, err := EvaluateAdoption(l, health)
+	d, err := EvaluateAdoption(l, health, nil)
 	if err != nil || d.Action != AdoptAccept || !strings.Contains(d.Detail, "note:") {
 		t.Fatalf("report 0.1.0 vs label 0.2.0+build = %+v, %v; want adopted WITH a note", d, err)
 	}
