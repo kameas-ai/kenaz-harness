@@ -29,7 +29,12 @@
 //     ErrNoAdvice. Unlike the rater, NOTHING waits on an Advisor call —
 //     every caller must be prepared for Recommend to be slow, absent, or
 //     wrong, and treat all three identically (no advice shown).
-//   - LLMAdvisor (llmadvisor.go) is the production implementation: an
+//   - LLMAdvisor (llmadvisor.go) was built as the production
+//     implementation, but owner ruling 2026-09-29 (spec §2e-0) voids
+//     LLM-backed advisors as a shipping path — advisors use laya and
+//     other non-LLM models only. Its fate (delete vs. dormant reference
+//     double) is decided by the in-flight kenaz-ml integration design;
+//     it has zero production call sites today. As built it carries: an
 //     800ms hard timeout (spec §2's deviation from the rater's 5s — advice
 //     worthless late), a ctx derived from context.Background() (the
 //     v0.78.2 ShutdownServedCore lesson risk/llmrater.go's Rate doc
