@@ -6186,14 +6186,27 @@ func newLLMStack(
 	var chatAdvisor advice.Advisor
 	if reg != nil {
 		capturedAdvisorStore := store
-		advisorModelResolver := func(_ context.Context) (string, string, advice.ModelRung, bool, bool) {
+		// sidecarProbe: laya-advisors-01LAYA001 WP12 ships the sidecar
+		// lifecycle manager (core/mlsidecar.Manager, satisfying
+		// advice.SidecarProbe) but a real, running Manager needs the
+		// Settings-surface + install-root decisions a later WP owns (the
+		// WP12 brief scopes this change to "no UI work"). nil here means
+		// rung 2 (RungLocalLaya) is fully wired and reachable in the
+		// ladder's logic — unlike rung 3, which stays behind the literal
+		// `fleetRungEnabled = false` — but never resolves true until that
+		// follow-up wiring constructs a real Manager and reconciles it.
+		var sidecarProbe advice.SidecarProbe
+		loadAdvisorProfiles := func() []corellm.ProviderProfile {
 			if capturedAdvisorStore == nil {
-				return "", "", advice.RungNone, true, false
+				return nil
 			}
 			profs, perr := capturedAdvisorStore.List()
-			if perr != nil || len(profs) == 0 {
-				return "", "", advice.RungNone, true, false
+			if perr != nil {
+				return nil
 			}
+			return profs
+		}
+		loadAdvisorSetting := func() advice.AdvisorModelSetting {
 			var setting advice.AdvisorModelSetting
 			if settingsImpl != nil && settingsImpl.Store() != nil {
 				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
@@ -6203,31 +6216,25 @@ func newLLMStack(
 					}
 				}
 			}
-			return advice.ResolveAdvisorModel(setting, profs)
+			return setting
+		}
+		advisorModelResolver := func(_ context.Context) (string, string, advice.ModelRung, bool, bool) {
+			return advice.ResolveAdvisorModel(loadAdvisorSetting(), loadAdvisorProfiles(), sidecarProbe)
 		}
 		chatAdvisor = advice.NewLLMAdvisor(reg, advisorModelResolver)
 
 		// Boot-time resolve-and-log: executes once per newLLMStack call
 		// (every process boot with reg != nil), independent of whether
-		// any AdviceKind has shipped — this is what makes
+		// any AdviceKind has shipped AND independent of whether any LLM
+		// provider profile is configured at all (rung 2 no longer scans
+		// profiles — WP12 amendment) — this is what makes
 		// Settings.AdvisorModel's reader real today rather than only
 		// real once WP04-06 lands a call site that fires per turn.
-		if profs, perr := capturedAdvisorStore.List(); perr == nil && len(profs) > 0 {
-			var setting advice.AdvisorModelSetting
-			if settingsImpl != nil && settingsImpl.Store() != nil {
-				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
-					setting = advice.AdvisorModelSetting{
-						ProviderID: s.AdvisorModel.ProviderID,
-						ModelID:    s.AdvisorModel.ModelID,
-					}
-				}
-			}
-			_, _, bootRung, bootUnbenchmarked, bootOK := advice.ResolveAdvisorModel(setting, profs)
-			logging.L().Info("advice.laya_ladder.boot_resolve",
-				"rung", string(bootRung),
-				"unbenchmarked", bootUnbenchmarked,
-				"resolved", bootOK)
-		}
+		_, _, bootRung, bootUnbenchmarked, bootOK := advice.ResolveAdvisorModel(loadAdvisorSetting(), loadAdvisorProfiles(), sidecarProbe)
+		logging.L().Info("advice.laya_ladder.boot_resolve",
+			"rung", string(bootRung),
+			"unbenchmarked", bootUnbenchmarked,
+			"resolved", bootOK)
 	}
 
 	// system-prompt-layers WP03 / spec 089: the workspace line renders the
