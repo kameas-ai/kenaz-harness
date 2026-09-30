@@ -7423,6 +7423,7 @@ export namespace settings {
 	    adviceBranchNowDisabled?: boolean;
 	    adviceCompactNowDisabled?: boolean;
 	    adviceEscalateModelDisabled?: boolean;
+	    adviceLabelCaptureDisabled?: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -7517,8 +7518,9 @@ export namespace settings {
 	        this.adviceBranchNowDisabled = source["adviceBranchNowDisabled"];
 	        this.adviceCompactNowDisabled = source["adviceCompactNowDisabled"];
 	        this.adviceEscalateModelDisabled = source["adviceEscalateModelDisabled"];
+	        this.adviceLabelCaptureDisabled = source["adviceLabelCaptureDisabled"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

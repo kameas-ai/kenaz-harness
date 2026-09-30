@@ -38,6 +38,10 @@ export function ACP_TrustPeer(arg1) {
   return window['go']['rpc']['Bindings']['ACP_TrustPeer'](arg1);
 }
 
+export function Advice_Respond(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Advice_Respond'](arg1, arg2, arg3);
+}
+
 export function Agents_DeleteProfile(arg1) {
   return window['go']['rpc']['Bindings']['Agents_DeleteProfile'](arg1);
 }
