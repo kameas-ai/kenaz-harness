@@ -181,6 +181,22 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 		return InstallResult{}, fmt.Errorf("mlsidecar: tree digest of unpacked engine: %w", err)
 	}
 
+	// M1 (kenaz PR #175 review, 2026-10-03): the `current` + install.json
+	// flip must be atomic ACROSS CLIENTS. Without the spawn lock, the
+	// other client (Kenaz) can start between SetCurrent and
+	// WriteInstallJSON, see a `current` the record does not describe,
+	// and re-seed — leaving the shared root with `current` and
+	// install.json describing different versions until a later launch
+	// repairs it. The same lock already serializes spawns; holding it
+	// for the flip closes the window on this side (Kenaz holds it
+	// around its seed flip — the fix lands in both repos together).
+	flipLock, lockErr := acquireSpawnLockBounded(layout, flipLockAttempts, flipLockPause)
+	if lockErr != nil {
+		_ = os.RemoveAll(versionDir) // keep the "no residue on failure" promise (M1-review F4)
+		return InstallResult{}, fmt.Errorf("mlsidecar: install flip: %w", lockErr)
+	}
+	defer flipLock.Release()
+
 	if err := layout.SetCurrent(req.Version); err != nil {
 		return InstallResult{}, err
 	}
@@ -299,4 +315,33 @@ func safeJoin(base, name string) (string, error) {
 		return "", fmt.Errorf("mlsidecar: zip entry %q escapes destination", name)
 	}
 	return filepath.Join(base, clean), nil
+}
+
+// flipLockAttempts/flipLockPause bound the flip's wait for the spawn
+// lock (package vars so tests can shorten the window).
+var (
+	flipLockAttempts = 70
+	flipLockPause    = 500 * time.Millisecond
+)
+
+// acquireSpawnLockBounded retries AcquireSpawnLock for a bounded window,
+// then gives up with ErrSpawnInProgress so the caller fails honestly
+// instead of flipping unlocked. The window must outlast the LONGEST
+// legitimate hold: a spawning client holds the lock through spawn plus
+// its health wait (StartupWait, 30s in production wiring) — M1-review
+// F2. 70×500ms ≈ 35s covers that; a flip hold is milliseconds.
+func acquireSpawnLockBounded(l Layout, attempts int, pause time.Duration) (*SpawnLock, error) {
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		lock, err := AcquireSpawnLock(l, os.Getpid(), processAlive)
+		if err == nil {
+			return lock, nil
+		}
+		lastErr = err
+		if !errors.Is(err, ErrSpawnInProgress) {
+			return nil, err
+		}
+		time.Sleep(pause)
+	}
+	return nil, lastErr
 }
