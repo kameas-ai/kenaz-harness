@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -235,6 +236,15 @@ type Engine struct {
 	filesMu sync.RWMutex
 	files   []PolicyFile
 
+	// snippets retains every source LoadHarnessSnippets installed, keyed
+	// by virtual filename, so Reload can re-apply them into the rebuilt
+	// PolicySet (graph-fs-gate-01GFSG01 WP04). Before this, Reload
+	// rebuilt from embedded + disk only and silently uninstalled the
+	// harness-self and graph-authoring policies — including on the
+	// "fix your policy file and reload" path WP01's banner points at.
+	// Guarded by reloadMu.
+	snippets map[string][]byte
+
 	decisions DecisionStore
 }
 
@@ -327,8 +337,9 @@ func (e *Engine) Reload(ctx context.Context) error {
 		}
 		for _, em := range embedded {
 			sources = append(sources, policySource{
-				name:  em.name,
-				bytes: em.bytes,
+				name:    em.name,
+				bytes:   em.bytes,
+				fileIdx: len(files),
 			})
 			files = append(files, PolicyFile{
 				Name:     em.name,
@@ -366,8 +377,9 @@ func (e *Engine) Reload(ctx context.Context) error {
 					continue
 				}
 				sources = append(sources, policySource{
-					name:  ent.Name(),
-					bytes: body,
+					name:    ent.Name(),
+					bytes:   body,
+					fileIdx: len(files),
 				})
 				files = append(files, PolicyFile{
 					Name:    ent.Name(),
@@ -399,16 +411,14 @@ func (e *Engine) Reload(ctx context.Context) error {
 	for srcIdx, src := range sources {
 		fileSet, perr := cedar.NewPolicySetFromBytes(src.name, src.bytes)
 		if perr != nil {
-			// Mark the file's status as failed; keep going.
-			for i := range files {
-				if files[i].Name == src.name {
-					files[i].ParseOK = false
-					files[i].ParseErr = perr.Error()
-					break
-				}
-			}
+			// Mark THIS source's entry failed (by index — see
+			// policySource.fileIdx); keep going.
+			files[src.fileIdx].ParseOK = false
+			files[src.fileIdx].ParseErr = perr.Error()
 			continue
 		}
+		files[src.fileIdx].ParseOK = true
+		files[src.fileIdx].ParseErr = ""
 		anyOK = true
 		idx := 0
 		for _, p := range fileSet.Map() {
@@ -419,11 +429,30 @@ func (e *Engine) Reload(ctx context.Context) error {
 	}
 
 	if !anyOK && len(sources) > 0 {
-		// Every source failed; keep the prior set active.
+		// Every source failed; keep the prior set active. It already
+		// holds the retained snippets, so only the LISTING is rebuilt —
+		// never write into the live set Evaluate is reading (WP05,
+		// review F2).
+		for name, body := range e.snippets {
+			files = listSnippet(files, name, len(body))
+		}
 		e.filesMu.Lock()
 		e.files = files
 		e.filesMu.Unlock()
 		return errors.New("cedar: every policy source failed to parse")
+	}
+
+	// WP04: re-apply retained LoadHarnessSnippets sources. They parsed
+	// when first installed, so a failure here is not expected; it is
+	// logged and that snippet skipped rather than failing a reload the
+	// on-disk half of which succeeded (Reload's error contract is about
+	// the disk/embedded sources).
+	if len(e.snippets) > 0 {
+		var serr error
+		files, _, serr = applySnippets(ps, files, e.snippets)
+		if serr != nil {
+			slog.Error("cedar.reload_snippet_reapply_failed", "err", serr.Error())
+		}
 	}
 
 	e.policies.Store(ps)
@@ -558,6 +587,12 @@ func (e *PolicyDeniedError) DeniedSummary() string {
 type policySource struct {
 	name  string
 	bytes []byte
+	// fileIdx is this source's own entry in Reload's files slice.
+	// Parse status is attributed by THIS index, never by Name: a user
+	// file may share its name with an embedded default (WP05, review
+	// F1 — name matching pinned the error on the embedded entry and
+	// left the corrupt user file reported ParseOK).
+	fileIdx int
 }
 
 // Context-attr keys consulted by the family-default policies. Exported
@@ -756,40 +791,70 @@ func (e *Engine) LoadHarnessSnippets(snippets map[string][]byte) error {
 	}
 	ps := current
 
+	e.filesMu.Lock()
+	files, applied, err := applySnippets(ps, e.files, snippets)
+	e.files = files
+	e.filesMu.Unlock()
+	// Retain exactly what was applied (on error, the snippets applied
+	// before the failing one stay installed, as before) so Reload
+	// re-applies the same set — graph-fs-gate-01GFSG01 WP04.
+	if e.snippets == nil {
+		e.snippets = make(map[string][]byte, len(snippets))
+	}
+	for _, name := range applied {
+		e.snippets[name] = snippets[name]
+	}
+	if err != nil {
+		return err
+	}
+	e.policies.Store(ps)
+	return nil
+}
+
+// applySnippets adds each snippet's policies to ps under the
+// deterministic "harness-self/<filename>#<n>" IDs and records each in
+// files (marked Embedded, ParseOK) — the shared apply loop for
+// LoadHarnessSnippets and Reload's re-application (WP04). Returns the
+// updated files slice, the names applied, and the first parse error;
+// snippets before the failing one (in map order) stay applied, matching
+// the original LoadHarnessSnippets contract. Caller holds reloadMu.
+func applySnippets(ps *cedar.PolicySet, files []PolicyFile, snippets map[string][]byte) ([]PolicyFile, []string, error) {
+	var applied []string
 	for name, body := range snippets {
 		fileSet, err := cedar.NewPolicySetFromBytes(name, body)
 		if err != nil {
-			return fmt.Errorf("cedar: LoadHarnessSnippets parse %s: %w", name, err)
+			return files, applied, fmt.Errorf("cedar: LoadHarnessSnippets parse %s: %w", name, err)
 		}
+		applied = append(applied, name)
 		idx := 0
 		for _, p := range fileSet.Map() {
 			id := cedar.PolicyID(fmt.Sprintf("harness-self/%s#%d", name, idx))
 			ps.Add(id, p)
 			idx++
 		}
-		// Track in the files list so ListPolicies shows the snippets.
-		e.filesMu.Lock()
-		found := false
-		for i, f := range e.files {
-			if f.Name == name {
-				e.files[i].ParseOK = true
-				e.files[i].ParseErr = ""
-				found = true
-				break
-			}
-		}
-		if !found {
-			e.files = append(e.files, PolicyFile{
-				Name:     name,
-				Bytes:    len(body),
-				Embedded: true,
-				ParseOK:  true,
-			})
-		}
-		e.filesMu.Unlock()
+		files = listSnippet(files, name, len(body))
 	}
-	e.policies.Store(ps)
-	return nil
+	return files, applied, nil
+}
+
+// listSnippet records snippet name as an installed embedded source in
+// files. It matches ONLY an existing Embedded entry of that name — a
+// user file of the same name is a different source, and marking it
+// ParseOK would wipe its parse error on every Reload (WP05, review F1).
+func listSnippet(files []PolicyFile, name string, size int) []PolicyFile {
+	for i, f := range files {
+		if f.Embedded && f.Name == name {
+			files[i].ParseOK = true
+			files[i].ParseErr = ""
+			return files
+		}
+	}
+	return append(files, PolicyFile{
+		Name:     name,
+		Bytes:    size,
+		Embedded: true,
+		ParseOK:  true,
+	})
 }
 
 // isFamilyAction reports whether action is one of the WP01

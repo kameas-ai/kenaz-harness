@@ -263,7 +263,7 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 	if memStore == nil {
 		t.Fatal("openMemoryStore returned nil over a real DataDir")
 	}
-	graphMgr, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil)
+	graphMgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil)
 	if graphMgr == nil {
 		t.Fatal("newGraphManagerWithDeps returned a nil manager")
 	}

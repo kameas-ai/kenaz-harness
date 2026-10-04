@@ -4343,6 +4343,75 @@ semantics from what its doc currently claims.
 
 ## Drained
 
+### 2026-10-03 · CLOSED — graph file nodes bypassed fs.Gate; a corrupt user policy failed the graph path OPEN (`graph-fs-gate-01GFSG01`)
+
+Two findings from the 2026-10-03 peer-session verification pass (the
+kenaz-ml-1c session's read-only pass against main `d4957b04`,
+spot-checked by the implementing session), continuing the August
+node-vs-tool gate asymmetry finding. Owner rulings 2026-10-03: (1) route
+graph file nodes through fs.Gate — one permission model everywhere, no
+second unattended-safety model; (2) a corrupt user policy fails CLOSED.
+
+- **Graph `write_file` / `read_file` never reached `core/tools/fs.Gate`.**
+  `core/agentgraph/exec_state.go` checked only Cedar
+  `file_write`/`file_read` + `state_write`/`state_read`, and
+  `default_policy.cedar` permits `file_write`/`file_read` for every
+  resource (its comment calling user-confirmed roots "the typical
+  targets" was a hope, not enforcement). An unattended graph run's
+  `write_file` wrote any path with no prompt and no confirmed-roots
+  check; the identical write via `kenaz__write_file` went through
+  fs.Gate. The split was recorded as deliberate in
+  `core/policy/cedar/hooks.go` (`trust-surfaces-that-fire-01PMZ202`
+  WP18); ruling (1) supersedes it and that docstring now says so.
+  **Drained — wired** (WP02): optional seam `agentgraph.FileAccessGate`,
+  consulted after both Cedar checks; `PolicyGateAdapter` implements it
+  over the SAME `*corefs.Gate` the fs builtin tools use, late-bound in
+  `rpc.New` via `SetFileGate(stack.fsGate)` (a shared slot, so
+  `WithPostureMode` copies see it). Unattended runs deny through the
+  existing `CedarPrompter` → `Registry.RequestInteractive` runposture
+  check. Pin: `TestGraphWriteFile_UnattendedOutsideConfirmedRoots_Denied`
+  (real API + real Kernel; verified failing on `d4957b04`).
+- **Corrupt `<DataDir>/policy/*.cedar` → graph path fail-open.** The
+  spec located this at `api.go`'s `AllowAll` fallback for a nil engine;
+  the live tree showed that was the smaller half. `Engine.Reload` never
+  aborts on a per-file parse failure (the embedded bundle always
+  parses), so a corrupt user file did not drop the engine — it silently
+  dropped the user's rules while the permissive embedded defaults kept
+  running, with only a per-file `ParseErr` in `ListPolicies` as a trace.
+  **Drained — wired** (WP01): `cedar.FailClosedOnLoadError` (bound for
+  the graph path only) denies `file_read`/`file_write`/`state_write`/
+  `tool_exec`/`use_tool` while `Engine.UserPolicyLoadError()` is
+  non-nil, records each denial in the engine's decision log, and is
+  re-evaluated per call so a fix + reload lifts it. A nil engine with a
+  DataDir (construction failure) also fails closed; no DataDir at all
+  (nil-Core chassis) stays `AllowAll` — absence, not corruption.
+  Settings › Policy shows a banner naming each failing file and its
+  parse error. **Blast radius, stated outright:** chat runs on the same
+  kernel Env, so the `use_tool`/`tool_exec` denial covers EVERY chat
+  turn's tool calls — interactive and scheduled chat alike — not just
+  library-graph runs, until the file is fixed and reloaded. Parse
+  errors are attributed by source (WP05), so a corrupt user file that
+  shares a name with an embedded default or a harness/graph snippet
+  is still reported and still fails closed. Pins: `TestGraphPolicy_CorruptUserPolicyMidSession_FailsClosed`,
+  `TestGraphPolicy_CorruptUserPolicyAtBoot_FailsClosed` (verified failing
+  on `d4957b04`).
+- **Behaviour change (WP04, reviewer F3):** `Engine.Reload` used to
+  rebuild from embedded + disk only and silently uninstall everything
+  `LoadHarnessSnippets` had added — the harness-self and
+  graph-authoring policies, and fleet team rules applied through
+  `ApplyCedarDelta`. Those now SURVIVE a Reload. Arguably a fix (a
+  team forbid no longer evaporates when a user reloads), recorded here
+  because it changes what is enforced after a reload.
+- **Residual, not drained — recorded so the next sweep does not re-find
+  it as new:** the SHARED engine's other consumers (memory write,
+  workflows, scheduled chat, session export, …) keep the documented
+  fail-open posture on a corrupt user policy
+  (`TestCedarHoist_CorruptPolicyMidSession_StaysFailOpen`); ruling (2)
+  named the graph path only. Network/exec node gates and the
+  model-authored-graph `write_file` emission policy (01PMGA01) are out
+  of this mission's scope. **Owner:** alec — a follow-up ruling on
+  whether fail-closed extends engine-wide closes or re-dates this line.
+
 ### 2026-09-12 · CLOSED — `structured-output-is-reachable-01PMZE14`, all six owed ledger entries
 
 The mission's own tasks.md Appendix names six findings this mission owed

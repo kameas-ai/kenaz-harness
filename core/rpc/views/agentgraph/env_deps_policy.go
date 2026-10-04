@@ -3,9 +3,11 @@ package agentgraph
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
 )
 
 // PolicyGateAdapter wraps a cedar.Gate onto the agentgraph.PolicyGate
@@ -16,6 +18,22 @@ import (
 // boot-stage default the chassis ships with.
 type PolicyGateAdapter struct {
 	gate cedar.Gate
+	// fs is the late-bound core/tools/fs.Gate slot
+	// (graph-fs-gate-01GFSG01 WP02). A POINTER to the slot so every
+	// WithPostureMode copy shares it: chat_runner re-wraps the adapter
+	// per session, and a SetFileGate that lands after (or before) a
+	// copy must reach that copy too. Late-bound because the graph
+	// manager's EnvDeps are built before newLLMStack constructs the fs
+	// gate (and newLLMStack takes the graph manager as an argument).
+	fs *fileGateSlot
+}
+
+// fileGateSlot holds the shared *corefs.Gate. The concrete pointer
+// type (not an interface) keeps a nil gate genuinely nil — the
+// test-chassis path has no fs gate, and an interface would box a typed
+// nil.
+type fileGateSlot struct {
+	p atomic.Pointer[corefs.Gate]
 }
 
 // NewPolicyGateAdapter constructs the adapter. nil gate is replaced
@@ -27,7 +45,52 @@ func NewPolicyGateAdapter(g cedar.Gate) *PolicyGateAdapter {
 	if g == nil {
 		g = cedar.AllowAll{}
 	}
-	return &PolicyGateAdapter{gate: g}
+	return &PolicyGateAdapter{gate: g, fs: &fileGateSlot{}}
+}
+
+// SetFileGate binds the fs.Gate instance the fs builtin tools use, so
+// the read_file / write_file executors consult the same confirmed
+// roots, prompt and unattended-deny flow (FileAccessGate). nil unbinds
+// (Cedar-only, the pre-WP02 behaviour). Safe to call concurrently with
+// evaluations and after WithPostureMode copies exist.
+func (a *PolicyGateAdapter) SetFileGate(g *corefs.Gate) {
+	if a == nil || a.fs == nil {
+		return
+	}
+	a.fs.p.Store(g)
+}
+
+// AuthorizeFileRead implements coreag.FileAccessGate.
+func (a *PolicyGateAdapter) AuthorizeFileRead(ctx context.Context, path string) error {
+	return a.authorizeFile(ctx, corefs.OpRead, path)
+}
+
+// AuthorizeFileWrite implements coreag.FileAccessGate.
+func (a *PolicyGateAdapter) AuthorizeFileWrite(ctx context.Context, path string) error {
+	return a.authorizeFile(ctx, corefs.OpWrite, path)
+}
+
+// authorizeFile runs the fs.Gate flow. Anything but Allow becomes a
+// *cedar.PolicyDeniedError carrying the gate's decision, so the
+// executor's error handling (and IsPolicyDenied callers) see the same
+// shape as a Cedar forbid. An invalid path (corefs.ErrInvalidPath) is
+// returned as-is.
+func (a *PolicyGateAdapter) authorizeFile(ctx context.Context, op corefs.Op, path string) error {
+	if a == nil || a.fs == nil {
+		return nil
+	}
+	g := a.fs.p.Load()
+	if g == nil {
+		return nil
+	}
+	d, err := g.Evaluate(ctx, op, path)
+	if err != nil {
+		return err
+	}
+	if d.Outcome != cedar.Allow {
+		return &cedar.PolicyDeniedError{Decision: d}
+	}
+	return nil
 }
 
 // CheckFileRead delegates to cedar.CheckFileRead.
@@ -105,8 +168,17 @@ func (a *PolicyGateAdapter) WithPostureMode(mode string) coreag.PolicyGate {
 	if a == nil {
 		return a
 	}
-	return NewPolicyGateAdapter(cedar.WithPostureMode(mode, a.gate))
+	out := NewPolicyGateAdapter(cedar.WithPostureMode(mode, a.gate))
+	// Share the fs.Gate slot, not a snapshot of it (graph-fs-gate-
+	// 01GFSG01 WP02): the copy must see a SetFileGate on the original.
+	if a.fs != nil {
+		out.fs = a.fs
+	}
+	return out
 }
 
-// Compile-time witness.
-var _ coreag.PolicyGate = (*PolicyGateAdapter)(nil)
+// Compile-time witnesses.
+var (
+	_ coreag.PolicyGate     = (*PolicyGateAdapter)(nil)
+	_ coreag.FileAccessGate = (*PolicyGateAdapter)(nil)
+)

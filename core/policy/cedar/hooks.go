@@ -191,6 +191,18 @@ func CheckFileWrite(ctx context.Context, g Gate, path string) error {
 // through core/tools/fs.Gate, which evaluates
 // ActionReadFilesystem/ActionWriteFilesystem against the FilesystemOp
 // resource family instead (trust-surfaces-that-fire-01PMZ202 WP18).
+//
+// That WP18 split ("graph nodes: Cedar file_read/file_write only;
+// tools: fs.Gate") is SUPERSEDED by graph-fs-gate-01GFSG01 (owner
+// ruling 2026-10-03: one permission model everywhere). The graph
+// read_file / write_file executors still call this and CheckFileWrite
+// first — a Cedar deny short-circuits — and then consult the SAME
+// fs.Gate instance the fs builtin tools use, through the optional
+// agentgraph.FileAccessGate seam the graph PolicyGateAdapter
+// implements. Since the embedded default bundle permits file_read /
+// file_write for every resource, this Cedar check alone is not a
+// confinement boundary; fs.Gate (confirmed roots, prompt when attended,
+// deny when unattended) is. See docs/unwired-ledger.md, 2026-10-03.
 func CheckFileRead(ctx context.Context, g Gate, path string) error {
 	if g == nil {
 		return nil
