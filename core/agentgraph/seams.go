@@ -651,6 +651,43 @@ type PolicyGate interface {
 	CheckTool(ctx context.Context, toolName string) error
 }
 
+// FileAccessGate is the user-facing filesystem permission step the
+// read_file / write_file executors consult AFTER every Cedar check on
+// the PolicyGate has passed (graph-fs-gate-01GFSG01 WP02, FR-1/FR-2,
+// owner ruling 2026-10-03: "route graph file nodes through fs.Gate").
+//
+// It is an OPTIONAL extension of PolicyGate, discovered by type
+// assertion on env.Policy, so every existing PolicyGate fake keeps
+// compiling and keeps its behaviour. Production binds it to the SAME
+// core/tools/fs.Gate instance the fs builtin tools use — so a path the
+// user confirmed for kenaz__write_file is honoured here too, an
+// attended run prompts through the same modal, and an unattended run
+// (runposture.Unattended) resolves NotApplicable to an immediate deny
+// via the gate's existing prompter. Before this seam, a graph
+// write_file node consulted only the Cedar file_write action, which
+// the embedded default bundle permits for every resource: an
+// unattended graph run could write any path with no prompt and no
+// confirmed-roots check.
+//
+// A non-nil error denies; the executor returns it unchanged.
+type FileAccessGate interface {
+	AuthorizeFileRead(ctx context.Context, path string) error
+	AuthorizeFileWrite(ctx context.Context, path string) error
+}
+
+// authorizeFileAccess runs the optional FileAccessGate step for p, if p
+// implements it. write selects the write arm.
+func authorizeFileAccess(ctx context.Context, p PolicyGate, write bool, path string) error {
+	fg, ok := p.(FileAccessGate)
+	if !ok {
+		return nil
+	}
+	if write {
+		return fg.AuthorizeFileWrite(ctx, path)
+	}
+	return fg.AuthorizeFileRead(ctx, path)
+}
+
 // ---- Trace ----
 
 // TraceSink is a thin OTel-shaped sink. The kernel calls Span on every

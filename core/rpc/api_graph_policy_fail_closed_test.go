@@ -137,7 +137,7 @@ func TestGraphPolicy_CorruptUserPolicyAtBoot_FailsClosed(t *testing.T) {
 // No policy configured at all (nil Core / empty DataDir) is absence, not
 // corruption: the graph path keeps its AllowAll posture.
 func TestGraphPolicy_NoPolicyConfigured_StaysPermissive(t *testing.T) {
-	mgr, _, _ := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mgr, _, _, _ := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	env := &coreag.Env{}
 	mgr.EnvDefaults()(env)
 	if env.Policy == nil {

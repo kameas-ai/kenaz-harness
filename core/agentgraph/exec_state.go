@@ -422,6 +422,12 @@ func (readFileExecutor) Execute(ctx context.Context, env *Env, node *Node, _ Por
 		if err := env.Policy.CheckStateRead(ctx, "file"); err != nil {
 			return res, err
 		}
+		// graph-fs-gate-01GFSG01 WP02: then the same fs.Gate the fs
+		// builtin tools use (confirmed roots, prompt when attended,
+		// deny when unattended). Cedar denies above short-circuit first.
+		if err := authorizeFileAccess(ctx, env.Policy, false, cleanPath); err != nil {
+			return res, err
+		}
 	}
 
 	info, err := os.Stat(cleanPath)
@@ -623,6 +629,12 @@ func (writeFileExecutor) Execute(ctx context.Context, env *Env, node *Node, inpu
 			return res, err
 		}
 		if err := env.Policy.CheckStateWrite(ctx, "file"); err != nil {
+			return res, err
+		}
+		// graph-fs-gate-01GFSG01 WP02: then the same fs.Gate the fs
+		// builtin tools use — see FileAccessGate. Before this, an
+		// unattended graph write_file wrote any path silently.
+		if err := authorizeFileAccess(ctx, env.Policy, true, cleanPath); err != nil {
 			return res, err
 		}
 	}

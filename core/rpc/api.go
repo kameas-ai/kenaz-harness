@@ -2437,7 +2437,8 @@ func New(c *core.Core, opts ...Option) *API {
 		settingsImpl.SetEmbedderNotifier(a.RefreshEmbedder)
 	}
 	var compactionPipeline *compaction.Pipeline
-	a.graphMgr, compactionPipeline, a.branchSeam = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner, a.auditImpl)
+	var graphPolicy *graphview.PolicyGateAdapter
+	a.graphMgr, compactionPipeline, a.branchSeam, graphPolicy = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner, a.auditImpl)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -2625,6 +2626,16 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		registerDocumentTools(a.builtins, a.unitsMgr, docSettings, stack.fsGate, workspaceDir)
 	}
+	// graph-fs-gate-01GFSG01 WP02 (FR-1/FR-2, owner ruling 2026-10-03):
+	// the agent-graph read_file / write_file executors consult the SAME
+	// fs.Gate the fs builtin tools use — confirmed roots, the same
+	// prompt modal when attended, an immediate deny when unattended
+	// (CedarPrompter -> Registry.RequestInteractive's runposture check).
+	// Late-bound here because stack.fsGate does not exist until
+	// newLLMStack, which itself takes a.graphMgr. stack.fsGate is nil
+	// on the nil-registry test chassis; SetFileGate(nil) keeps the
+	// Cedar-only behaviour there.
+	graphPolicy.SetFileGate(stack.fsGate)
 	// harness-self-attach-01PMHS01 UNIT-4: hold the merged resolver
 	// newLLMStack constructed so tests can exercise the actual
 	// production wire (see harness_session_kind_resolver_wiring_test.go)
@@ -8827,7 +8838,7 @@ func (a *API) RefreshEmbedder() {
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	return mgr
 }
 
@@ -9014,6 +9025,11 @@ func newLiveDialResolver(inner compaction.Resolver, settingsImpl *settings.API) 
 // 01PMZB11 UNIT-6's caller (New()) needs the concrete instance back so
 // it can late-bind a RunSpawner onto it once the LLM stack exists, and
 // so registerBuiltinTools can be given a real, spawner-capable seam.
+// The fourth return is the *graphview.PolicyGateAdapter installed as
+// EnvDeps.Policy (graph-fs-gate-01GFSG01 WP02): New() late-binds the
+// fs builtin tools' *corefs.Gate onto it via SetFileGate once
+// newLLMStack has built that gate — same late-bind shape as the
+// branch seam above, for the same ordering reason.
 func newGraphManagerWithDeps(
 	c *core.Core,
 	convMgr *coreconv.Manager,
@@ -9043,7 +9059,7 @@ func newGraphManagerWithDeps(
 	// New()'s auditImpl construction failure path); wrapped nil-safely
 	// below.
 	auditImpl *audit.API,
-) (*graphview.Manager, *compaction.Pipeline, *graphview.BranchSeamAdapter) {
+) (*graphview.Manager, *compaction.Pipeline, *graphview.BranchSeamAdapter, *graphview.PolicyGateAdapter) {
 	dataDir := ""
 	if c != nil {
 		dataDir = c.DataDir()
@@ -9114,7 +9130,8 @@ func newGraphManagerWithDeps(
 		graphBootErr = errors.New("cedar policy engine failed to load at boot (see log: cedar engine construction failed)")
 	}
 	graphCedarGate := cedar.FailClosedOnLoadError(cedarEngine, graphBootErr)
-	deps.Policy = graphview.NewPolicyGateAdapter(graphCedarGate)
+	policyAdapter := graphview.NewPolicyGateAdapter(graphCedarGate)
+	deps.Policy = policyAdapter
 	if bashStore != nil {
 		deps.BashStore = bashStore
 		deps.BashOutput = graphview.NewBashOutputStoreAdapter(bashStore)
@@ -9281,9 +9298,9 @@ func newGraphManagerWithDeps(
 	if err != nil {
 		// Construction is best-effort; surface returns
 		// ErrManagerUnavailable when nil.
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	return mgr, compactionPipeline, branchSeam
+	return mgr, compactionPipeline, branchSeam, policyAdapter
 }
 
 // newNodesStack constructs the manifest-catalog view (mission
