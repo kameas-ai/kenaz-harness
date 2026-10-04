@@ -791,12 +791,47 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// file+selector matches NOTHING must fail the gate — the
 			// shrink-monotonically rule enforced mechanically, so a
 			// deleted construction cannot leave a dangling excuse that
-			// would silently cover a future hit.
+			// would silently cover a future hit. The path must be a real
+			// file (otherwise the malformed-path rejection fires first).
 			name:       "cedar-engine-singleton/stale-allowlist-entry-fails",
 			gate:       "check-cedar-engine-singleton.sh",
 			file:       "scripts/ci/allowlists/cedar-engine-singleton.txt",
-			append:     "\nzz/nonexistent/probe.go:zzprobe.NewEngine(\n",
+			append:     "\ncmd/kenaz-ml-sign/main.go:zzprobe.NewEngine(\n",
 			wantOutput: "stale allowlist entry",
+		},
+		{
+			// Review F7 of the allowlist change: an entry with no
+			// ':<selector>' excused the WHOLE file (e_sel degenerated to
+			// the path itself under the old substring matching) — proven
+			// by planting cedar.NewEngine beside it. Malformed entries
+			// are rejected, never skipped.
+			name:       "cedar-engine-singleton/allowlist-entry-without-selector-rejected",
+			gate:       "check-cedar-engine-singleton.sh",
+			file:       "scripts/ci/allowlists/cedar-engine-singleton.txt",
+			append:     "\ncmd/kenaz-ml-sign/main.go\n",
+			wantOutput: "malformed allowlist entry (no ':<selector>')",
+		},
+		{
+			// F7's worst shape: an empty selector made `grep -F ""` match
+			// every hit line, turning the entry into a file-wide (and with
+			// an unanchored path, directory-wide) excuse. The selector must
+			// be exactly '<pkg>.NewEngine('.
+			name:       "cedar-engine-singleton/allowlist-empty-selector-rejected",
+			gate:       "check-cedar-engine-singleton.sh",
+			file:       "scripts/ci/allowlists/cedar-engine-singleton.txt",
+			append:     "\ncmd/kenaz-ml-sign/main.go:\n",
+			wantOutput: "malformed allowlist entry (selector",
+		},
+		{
+			// F7: a path that is not an existing regular file (deleted,
+			// moved, or a directory prefix) is rejected rather than
+			// matched as a substring — under the old matching,
+			// "kenaz-ml-sign/:NewEngine(" excused an entire directory.
+			name:       "cedar-engine-singleton/allowlist-nonfile-path-rejected",
+			gate:       "check-cedar-engine-singleton.sh",
+			file:       "scripts/ci/allowlists/cedar-engine-singleton.txt",
+			append:     "\nzz/nonexistent/probe.go:zzprobe.NewEngine(\n",
+			wantOutput: "malformed allowlist entry (path",
 		},
 		{
 			name: "cedar-engine-singleton/engine-built-outside-core-rpc",

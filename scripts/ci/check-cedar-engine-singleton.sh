@@ -166,11 +166,35 @@ newengine_hits=$(printf '%s\n' "$newengine_hits" | grep -v '^$' || true)
 # is stale and fails the gate.
 ALLOWLIST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/allowlists/cedar-engine-singleton.txt"
 if [[ -f "$ALLOWLIST" ]]; then
-  while IFS= read -r entry; do
+  while IFS= read -r entry || [[ -n "$entry" ]]; do
     case "$entry" in ''|'#'*) continue;; esac
+    # Malformed entries are REJECTED, never skipped: a degenerate shape
+    # (no colon, empty or over-broad selector, non-file path) would
+    # otherwise silently excuse a whole file or directory (review F7,
+    # proven by planting cedar.NewEngine beside each shape).
+    if [[ "$entry" != *:* ]]; then
+      echo "${GATE} FAIL: malformed allowlist entry (no ':<selector>'): ${entry}" >&2
+      exit 1
+    fi
     e_file="${entry%%:*}"
     e_sel="${entry#*:}"
-    matched=$(printf '%s\n' "$newengine_hits" | grep -F "$e_file" | grep -F "$e_sel" || true)
+    if ! [[ "$e_sel" =~ ^[A-Za-z_][A-Za-z0-9_]*\.NewEngine\($ ]]; then
+      echo "${GATE} FAIL: malformed allowlist entry (selector must be '<pkg>.NewEngine('): ${entry}" >&2
+      exit 1
+    fi
+    if [[ ! -f "$e_file" ]]; then
+      echo "${GATE} FAIL: malformed allowlist entry (path is not a regular file): ${entry}" >&2
+      echo "${GATE} If the construction moved or was deleted, delete this line in the same commit." >&2
+      exit 1
+    fi
+    # Exact-path, identifier-boundary match: the hit's path field must
+    # equal e_file exactly, and the selector must not be the tail of a
+    # longer identifier (an aliased import named '...trust' must not be
+    # excused by 'trust.NewEngine(').
+    e_file_re=$(printf '%s' "$e_file" | sed 's/[.[\*^$()+?{|]/\\&/g')
+    e_sel_re=$(printf '%s' "$e_sel" | sed 's/[.[\*^$()+?{|]/\\&/g')
+    match_re="^${e_file_re}:[0-9]+:(.*[^A-Za-z0-9_])?${e_sel_re}"
+    matched=$(printf '%s\n' "$newengine_hits" | grep -E -- "$match_re" || true)
     matched=$(printf '%s\n' "$matched" | grep -v '^$' || true)
     if [[ -z "$matched" ]]; then
       echo "${GATE} FAIL: stale allowlist entry (matches no hit): ${entry}" >&2
@@ -178,12 +202,8 @@ if [[ -f "$ALLOWLIST" ]]; then
       echo "${GATE} that removed its construction." >&2
       exit 1
     fi
-    # Remove ONLY lines matching BOTH file and selector — a different
-    # constructor in the same file (e.g. a planted cedar.NewEngine)
-    # must still be counted.
-    kept_other=$(printf '%s\n' "$newengine_hits" | grep -vF "${e_file}" || true)
-    kept_same_file=$(printf '%s\n' "$newengine_hits" | grep -F "${e_file}" | grep -vF "${e_sel}" || true)
-    newengine_hits=$(printf '%s\n%s\n' "$kept_other" "$kept_same_file" | grep -v '^$' || true)
+    newengine_hits=$(printf '%s\n' "$newengine_hits" | grep -vE -- "$match_re" || true)
+    newengine_hits=$(printf '%s\n' "$newengine_hits" | grep -v '^$' || true)
   done < "$ALLOWLIST"
 fi
 ne_count=0
