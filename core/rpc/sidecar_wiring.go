@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -106,4 +107,35 @@ func attachSidecarInstallDeps(m *mlsidecar.Manager, registry channels.Registry, 
 		}
 		return mlsidecar.DefaultEngineVerifier(v, anchors), nil
 	}
+}
+
+// seedBakedReleaseAnchor installs the compiled-in Kameas ML engine
+// release public key (mlsidecar.BakedReleaseAnchor) into the trust store
+// at boot so an un-enrolled, open-source/local-first install can verify
+// the engine download (engine-publication-01ENPUB01 WP-H2, owner
+// decision 2026-10-03 #4). trust.SeedAnchor yields to every existing
+// row: an operator- or fleet-installed anchor for the same key or id is
+// left alone, and a tombstoned (revoked) one stays revoked across boots.
+// A placeholder build (the checked-in NOT-A-REAL-KEY file, no -ldflags
+// override) seeds nothing. Failures are logged, never fatal: without the
+// anchor an engine install fails closed with anchor_missing.
+func seedBakedReleaseAnchor(ctx context.Context, engine coretrust.TrustEngine) coretrust.SeedOutcome {
+	if engine == nil {
+		return ""
+	}
+	anchor, ok, err := mlsidecar.BakedReleaseAnchor()
+	if err != nil {
+		slog.Warn("baked ML release signing key is malformed; not seeding a trust anchor", "err", err)
+		return ""
+	}
+	if !ok {
+		return ""
+	}
+	outcome, err := coretrust.SeedAnchor(ctx, engine, anchor)
+	if err != nil {
+		slog.Warn("seeding the baked ML release trust anchor failed", "anchor_id", anchor.AnchorID, "err", err)
+		return ""
+	}
+	slog.Info("baked ML release trust anchor", "anchor_id", anchor.AnchorID, "key_id", anchor.PublicKey.Fingerprint, "outcome", string(outcome))
+	return outcome
 }

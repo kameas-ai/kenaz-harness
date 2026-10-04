@@ -1,0 +1,12 @@
+# NOT-A-REAL-KEY — placeholder for the Kameas ML engine release public key
+# (engine-publication-01ENPUB01 WP-H2). While this file holds no key line,
+# the harness seeds NOTHING into the trust store and engine installs keep
+# failing closed (anchor_missing) unless an operator/fleet installs the key.
+#
+# SWAP POINT: replace this file's contents with the `kenaz-ml-release.pub`
+# written by `go run ./cmd/kenaz-ml-sign keygen --out-dir <dir>` (one line,
+# 64 lowercase hex chars), or override per build with
+#   -ldflags "-X github.com/kameas-ai/kenaz-harness/core/mlsidecar.releaseSigningPubKeyHex=<hex>"
+# (see the commented engine-pin step in .github/workflows/release.yml).
+# Lines starting with '#' are ignored. An all-zero key is also treated as
+# a placeholder.
