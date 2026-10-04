@@ -33,7 +33,7 @@ type InstallRequest struct {
 	ChannelPath string
 
 	Version        string // semver, becomes the versions/<Version> dir name
-	ArtifactPath   string // channel-relative path to the engine zip
+	ArtifactPath   string // channel-relative path to the engine artifact (.dmg in production, .zip in tests)
 	ExpectedSHA256 string // "sha256:<hex>" — the pinned digest from the release manifest
 	Signature      *manifest.SignatureRef
 
@@ -67,17 +67,19 @@ type InstallResult struct {
 	Record     InstallRecord
 }
 
-// Install fetches the engine zip via the given core/bundle channel,
-// verifies BEFORE unpacking or running it (signature + sha256, reusing
-// core/bundle/integrity + core/trust — "no second verifier"), clears
-// macOS quarantine ONLY AFTER verification succeeds, unpacks into
-// versions/<Version>/, and rename-swaps `current`. It NEVER execs the
+// Install fetches the engine artifact (the notarized .dmg in production
+// — design Amendment A3(1); a .zip in tests) via the given core/bundle
+// channel, verifies its downloaded bytes BEFORE mounting, unpacking or
+// running it (signature + sha256, reusing core/bundle/integrity +
+// core/trust — "no second verifier"), clears macOS quarantine ONLY AFTER
+// verification succeeds, unpacks into versions/<Version>/, and
+// rename-swaps `current`. It NEVER execs the
 // artifact — spawning is a separate, later step the caller controls
 // (design §3.5: "never exec-in-place").
 //
 // Ordering is load-bearing and matches core/rpc/views/bundle.Install's
 // own "refusal leaves no residue" discipline: a failure at any step
-// removes the staged zip and leaves neither a partially-unpacked version
+// removes the staged artifact and leaves neither a partially-unpacked version
 // directory nor an install.json record.
 func Install(ctx context.Context, layout Layout, registry channels.Registry, creds secrets.ResolverAPI, verifier Verifier, req InstallRequest) (InstallResult, error) {
 	if req.Version == "" {
@@ -163,8 +165,9 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 	}
 
 	// Record the digest of the ACTUAL UNPACKED EXECUTABLE, not the
-	// (now-deleted) zip's digest — this is what EvaluateAdoption re-hashes
-	// against at adoption time, since the zip no longer exists to re-hash.
+	// (now-deleted) downloaded artifact's digest — this is what
+	// EvaluateAdoption re-hashes against at adoption time, since the
+	// .dmg/.zip no longer exists to re-hash.
 	// Same cleanup discipline: `current` still hasn't been touched here.
 	exeDigest, err := HashFileSHA256(pathUnderVersionsDir(layout, req.Version))
 	if err != nil {
