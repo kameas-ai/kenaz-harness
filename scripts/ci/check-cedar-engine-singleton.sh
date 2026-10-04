@@ -158,6 +158,34 @@ fi
 # ---------------------------------------------------------------------------
 newengine_hits=$(grep -rnE '\.NewEngine\(' --include='*.go' "$CORE_ROOT" "$CMD_ROOT" 2>/dev/null | grep -v '_test\.go' || true)
 newengine_hits=$(printf '%s\n' "$newengine_hits" | grep -v '^$' || true)
+
+# Allowlist: non-cedar NewEngine constructors the broad pattern cannot
+# tell apart (see allowlists/cedar-engine-singleton.txt for format and
+# the shrink-monotonically rule). An entry excuses a hit only when BOTH
+# its file path and selector substring match; an entry matching nothing
+# is stale and fails the gate.
+ALLOWLIST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/allowlists/cedar-engine-singleton.txt"
+if [[ -f "$ALLOWLIST" ]]; then
+  while IFS= read -r entry; do
+    case "$entry" in ''|'#'*) continue;; esac
+    e_file="${entry%%:*}"
+    e_sel="${entry#*:}"
+    matched=$(printf '%s\n' "$newengine_hits" | grep -F "$e_file" | grep -F "$e_sel" || true)
+    matched=$(printf '%s\n' "$matched" | grep -v '^$' || true)
+    if [[ -z "$matched" ]]; then
+      echo "${GATE} FAIL: stale allowlist entry (matches no hit): ${entry}" >&2
+      echo "${GATE} Allowlists shrink monotonically — delete the line in the same commit" >&2
+      echo "${GATE} that removed its construction." >&2
+      exit 1
+    fi
+    # Remove ONLY lines matching BOTH file and selector — a different
+    # constructor in the same file (e.g. a planted cedar.NewEngine)
+    # must still be counted.
+    kept_other=$(printf '%s\n' "$newengine_hits" | grep -vF "${e_file}" || true)
+    kept_same_file=$(printf '%s\n' "$newengine_hits" | grep -F "${e_file}" | grep -vF "${e_sel}" || true)
+    newengine_hits=$(printf '%s\n%s\n' "$kept_other" "$kept_same_file" | grep -v '^$' || true)
+  done < "$ALLOWLIST"
+fi
 ne_count=0
 if [[ -n "$newengine_hits" ]]; then
   ne_count=$(printf '%s\n' "$newengine_hits" | wc -l | tr -d '[:space:]')

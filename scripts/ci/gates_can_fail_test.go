@@ -773,6 +773,32 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			wantOutput: "NewEngine( appears 3 time(s)",
 		},
 		{
+			// engine-publication-01ENPUB01 WP-H1 follow-up: the signer CLI's
+			// trust.NewEngine forced an allowlist onto Check 2 (the broad
+			// pattern's first true non-cedar NewEngine). This case proves
+			// the allowlist is SELECTOR-scoped, not file-scoped: a
+			// different constructor planted in the allowlisted file is
+			// still counted. Proven live during the gate change (manual
+			// plant → "appears 3 time(s)" → restored clean).
+			name:       "cedar-engine-singleton/allowlisted-file-different-selector-still-counted",
+			gate:       "check-cedar-engine-singleton.sh",
+			file:       "cmd/kenaz-ml-sign/main.go",
+			append:     "\n\nvar zzGateProbeOtherEngine, _ = zzprobe.NewEngine(struct{}{})\n",
+			wantOutput: "NewEngine( appears 3 time(s)",
+		},
+		{
+			// Same change, other direction: an allowlist line whose
+			// file+selector matches NOTHING must fail the gate — the
+			// shrink-monotonically rule enforced mechanically, so a
+			// deleted construction cannot leave a dangling excuse that
+			// would silently cover a future hit.
+			name:       "cedar-engine-singleton/stale-allowlist-entry-fails",
+			gate:       "check-cedar-engine-singleton.sh",
+			file:       "scripts/ci/allowlists/cedar-engine-singleton.txt",
+			append:     "\nzz/nonexistent/probe.go:zzprobe.NewEngine(\n",
+			wantOutput: "stale allowlist entry",
+		},
+		{
 			name: "cedar-engine-singleton/engine-built-outside-core-rpc",
 			gate: "check-cedar-engine-singleton.sh",
 			// The scope hole: the singleton promise is process-wide, but a
