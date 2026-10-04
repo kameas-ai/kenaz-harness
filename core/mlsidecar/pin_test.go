@@ -21,7 +21,8 @@ const (
 // TestPinnedReleaseGen_NoDrift is the drift guard for the checked-in
 // pinned_release_gen.go: it must be byte-for-byte what pin-gen renders
 // for the value it holds, and a non-zero pin must be exactly what
-// NewHTTPMirrorPin would build from its own fields (so a hand edit that
+// NewHTTPMirrorPin would build from its own fields. Shape/format drift
+// only: a well-formed value swap (another valid sha256) passes. (A hand edit that
 // breaks the publish contract — a locator, a channel kind — fails CI).
 func TestPinnedReleaseGen_NoDrift(t *testing.T) {
 	onDisk, err := os.ReadFile("pinned_release_gen.go")

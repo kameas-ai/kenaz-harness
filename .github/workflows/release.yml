@@ -393,21 +393,42 @@ jobs:
       #     curl -fsSL "${CDN_BASE}/kenaz-ml/index.json" -o "$RUNNER_TEMP/kenaz-ml-index.json"
       #     REL="$(jq -c --arg v "$ENGINE_VERSION" '.releases[] | select(.version == $v)' "$RUNNER_TEMP/kenaz-ml-index.json")"
       #     test -n "$REL" || { echo "::error::version $ENGINE_VERSION not in kenaz-ml/index.json"; exit 1; }
+      #     # The pin DERIVES the filename; the index's url must agree, or
+      #     # the harness would fetch a path the publisher never wrote.
+      #     PUBLISHED="$(basename "$(jq -r .darwin_arm64.url <<<"$REL")")"
+      #     if [ "$PUBLISHED" != "$ARTIFACT" ]; then
+      #       echo "::error::kenaz-ml index url basename '$PUBLISHED' != derived artifact '$ARTIFACT' — publisher/pin naming drift"
+      #       exit 1
+      #     fi
+      #     INDEX_KEY_ID="$(jq -r .darwin_arm64.key_id <<<"$REL")"
       #     go run ./cmd/kenaz-ml-sign pin-gen \
       #       --version       "$ENGINE_VERSION" \
       #       --channel-url   "${CHANNEL_URL}" \
       #       --artifact-path "$ARTIFACT" \
       #       --sha256        "$(jq -r .darwin_arm64.sha256     <<<"$REL")" \
       #       --size          "$(jq -r .darwin_arm64.size_bytes <<<"$REL")" \
-      #       --key-id        "$(jq -r .darwin_arm64.key_id     <<<"$REL")"
+      #       --key-id        "$INDEX_KEY_ID"
       #     # Belt and braces: the published signature must verify under the
-      #     # baked key before this build ships a pin that relies on it.
-      #     curl -fsSL "${CHANNEL_URL}/${ARTIFACT}.sig" -o "$RUNNER_TEMP/kenaz-ml.sig"
-      #     go run ./cmd/kenaz-ml-sign verify \
-      #       --pubkey core/mlsidecar/release_signing_key.pub --sig "$RUNNER_TEMP/kenaz-ml.sig" \
-      #       --version "$ENGINE_VERSION" \
-      #       --artifact-path "$ARTIFACT" \
-      #       --sha256 "$(jq -r .darwin_arm64.sha256 <<<"$REL")"
+      #     # baked key before this build ships a pin that relies on it —
+      #     # when the key is baked via the FILE. The documented alternative
+      #     # (-ldflags releaseSigningPubKeyHex, env-specific key) has no file
+      #     # to verify against here; say so loudly and skip, don't fail.
+      #     KEY_FILE=core/mlsidecar/release_signing_key.pub
+      #     if grep -qvE '^[[:space:]]*(#|$)' "$KEY_FILE"; then
+      #       BAKED_KEY_ID="$(grep -vE '^[[:space:]]*(#|$)' "$KEY_FILE" | tr -d '[:space:]' | xxd -r -p | shasum -a 256 | cut -d' ' -f1)"
+      #       if [ "$INDEX_KEY_ID" != "$BAKED_KEY_ID" ]; then
+      #         echo "::error::index key_id $INDEX_KEY_ID != baked release key $BAKED_KEY_ID — this build could not verify the engine"
+      #         exit 1
+      #       fi
+      #       curl -fsSL "${CHANNEL_URL}/${ARTIFACT}.sig" -o "$RUNNER_TEMP/kenaz-ml.sig"
+      #       go run ./cmd/kenaz-ml-sign verify \
+      #         --pubkey "$KEY_FILE" --sig "$RUNNER_TEMP/kenaz-ml.sig" \
+      #         --version "$ENGINE_VERSION" \
+      #         --artifact-path "$ARTIFACT" \
+      #         --sha256 "$(jq -r .darwin_arm64.sha256 <<<"$REL")"
+      #     else
+      #       echo "::notice::$KEY_FILE holds no key line — the env-key (-ldflags releaseSigningPubKeyHex) route is in use; skipping the file-based signature verify and key_id assert"
+      #     fi
 
       - name: wails build
         shell: bash

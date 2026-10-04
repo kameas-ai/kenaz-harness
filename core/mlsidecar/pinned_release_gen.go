@@ -5,8 +5,8 @@
 // this build": PinnedEngineRelease then reports ErrNoPublishedRelease and
 // Settings honestly offers no install. Release builds regenerate this
 // file from the published engine (see the engine-pin step in
-// .github/workflows/release.yml); TestPinnedReleaseGen_NoDrift fails on
-// any hand edit.
+// .github/workflows/release.yml); TestPinnedReleaseGen_NoDrift catches
+// shape/format drift (not a well-formed value swap).
 
 package mlsidecar
 

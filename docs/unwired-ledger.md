@@ -4406,6 +4406,44 @@ scope, and an unmounted RPC would just move the lie.
   distribution grows a revocation message), with a persisted revocation
   store if key-id revocation (not just anchor tombstoning) is wanted.
 
+**Review follow-ups recorded, not fixed (2026-10-04, branch review of
+WP-H1..H5; WP-H6 fixed the blocking items — bounded sig/manifest/artifact
+fetches and an overall install deadline).**
+
+1. *The baked ML release key is trusted for ALL signature verification.*
+   Anchors carry no purpose scoping: `Metadata["purpose"]` is
+   descriptive only, and `VerifyManifestSignatures` accepts any live
+   anchor — so a manifest signed by the engine-release key would also
+   verify as a **bundle** install. Rotation also deviates from the
+   spec's "rotation via PreviousKey" model: a new baked key seeds a
+   second, KeyID-scoped anchor, and the rotated-away key stays a live
+   anchor with no product removal path (see the no-revocation-path
+   finding above — the two compound).
+   - **Blocker:** purpose-scoped anchors are a `core/trust` model change
+     (anchor ↔ verification-purpose binding consulted by
+     `EngineVerifier`), plus a decision on whether seeding should
+     `BeginRotation` an existing baked anchor instead of adding one.
+   - **Owner:** alec. Resolves when engine verification only accepts
+     anchors scoped to engine releases (and vice versa), and a
+     rotated-away baked key is retired by the store's rotation model.
+2. *Operators cannot see that an anchor is baked.*
+   `trustanchor.toWire` drops `Metadata` and `InstalledBy`, so the
+   `origin=baked_release_key` marking the seed writes never reaches the
+   TrustAnchors RPC or any UI.
+   - **Blocker:** a small RPC wire-shape addition + Wails binding regen +
+     frontend display; out of this mission's scope.
+   - **Owner:** alec. Resolves when the wire `Anchor` carries origin /
+     installed-by and the trust surface renders it.
+3. *`TestPinnedReleaseGen_NoDrift` guards shape, not values.* It
+   catches a hand edit that breaks the render format or the publish
+   contract (locator, channel kind, field validity) but cannot catch a
+   well-formed value swap (another valid sha256/version). The signature
+   check at install time is what actually binds the values. Comment
+   softened accordingly in WP-H6.
+   - **Owner:** alec. Informational; resolves if a release-time
+     cross-check against the published index is added (the commented
+     release.yml step's url/key_id asserts are a start).
+
 ## Drained
 
 ### 2026-10-03 · CLOSED — graph file nodes bypassed fs.Gate; a corrupt user policy failed the graph path OPEN (`graph-fs-gate-01GFSG01`)

@@ -486,7 +486,9 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 	}
 
 	var manifestBuf bytes.Buffer
-	if _, err := ch.Fetch(ctx, channels.ArtifactCoord{Path: manifestFileName}, &manifestBuf); err != nil {
+	// Bounded (engine-publication WP-H6, review F2): http_mirror has no
+	// wall-clock cap on a progressing body, so the buffer is capped here.
+	if _, err := ch.Fetch(ctx, channels.ArtifactCoord{Path: manifestFileName}, channels.CapWriter(&manifestBuf, channels.MaxManifestBytes)); err != nil {
 		return Bundle{}, fmt.Errorf("bundle: fetch manifest: %w", err)
 	}
 	m, err := manifest.Parse(manifestBuf.Bytes())
@@ -684,7 +686,7 @@ func (a *API) fetchArtifactToCAS(ctx context.Context, ch channels.Channel, coord
 func channelSignatureResolver(ctx context.Context, ch channels.Channel) integrity.SignatureResolver {
 	return func(locator string) ([]byte, error) {
 		var buf bytes.Buffer
-		if _, err := ch.Fetch(ctx, channels.ArtifactCoord{Path: locator}, &buf); err != nil {
+		if _, err := ch.Fetch(ctx, channels.ArtifactCoord{Path: locator}, channels.CapWriter(&buf, channels.MaxSignatureBytes)); err != nil {
 			return nil, fmt.Errorf("fetch signature %s: %w", locator, err)
 		}
 		return buf.Bytes(), nil

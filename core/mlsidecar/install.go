@@ -37,6 +37,13 @@ type InstallRequest struct {
 	ExpectedSHA256 string // "sha256:<hex>" — the pinned digest from the release manifest
 	Signature      *manifest.SignatureRef
 
+	// SizeBytes is the pinned artifact size. When > 0 the download is
+	// refused as soon as it exceeds SizeBytes plus artifactSizeSlackPercent —
+	// the pin is authoritative, so a mirror cannot fill the disk
+	// (engine-publication WP-H6, review F2). 0 means unknown/uncapped
+	// (test fixtures; the production pin always sets it).
+	SizeBytes int64
+
 	// Source is a human-readable provenance string recorded into
 	// install.json (e.g. "http_mirror:https://dev.downloads.kameas.ai/...").
 	Source string
@@ -85,6 +92,13 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 	if req.Version == "" {
 		return InstallResult{}, fmt.Errorf("mlsidecar: install requires a version")
 	}
+	// Overall bound (engine-publication WP-H6, review F2). The
+	// http_mirror channel only aborts a STALLED body, so a mirror that
+	// trickles a byte just inside the stall window would otherwise hold
+	// this install — and Manager.InstallAndActivate's mutex, which has no
+	// cancel path — forever. Generous: a 126MB+ DMG on a slow link fits.
+	ctx, cancel := context.WithTimeout(ctx, installDeadline)
+	defer cancel()
 	if err := layout.EnsureDirs(); err != nil {
 		return InstallResult{}, err
 	}
@@ -114,7 +128,7 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 	}
 	zipPath := filepath.Join(stagingDir, stagedName)
 	phase("downloading")
-	if err := fetchToFile(ctx, ch, req.ArtifactPath, zipPath); err != nil {
+	if err := fetchToFile(ctx, ch, req.ArtifactPath, zipPath, artifactCap(req.SizeBytes)); err != nil {
 		_ = os.Remove(zipPath)
 		return InstallResult{}, fmt.Errorf("mlsidecar: fetch engine artifact: %w", err)
 	}
@@ -226,12 +240,32 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 	return InstallResult{VersionDir: versionDir, Record: rec}, nil
 }
 
-func fetchToFile(ctx context.Context, ch channels.Channel, artifactPath, dest string) error {
+// installDeadline bounds one whole Install (download + verify + unpack +
+// flip). Package var so tests can shrink it.
+var installDeadline = 30 * time.Minute
+
+// artifactSizeSlackPercent is the tolerated overrun of a pinned SizeBytes (10%).
+const artifactSizeSlackPercent = 10
+
+// artifactCap returns the byte cap for a download pinned at size bytes,
+// or 0 (uncapped) when the size is unknown.
+func artifactCap(size int64) int64 {
+	if size <= 0 {
+		return 0
+	}
+	return size + size*artifactSizeSlackPercent/100
+}
+
+func fetchToFile(ctx context.Context, ch channels.Channel, artifactPath, dest string, maxBytes int64) error {
 	f, err := os.Create(dest)
 	if err != nil {
 		return fmt.Errorf("create staged file: %w", err)
 	}
-	_, ferr := ch.Fetch(ctx, channels.ArtifactCoord{Path: artifactPath}, f)
+	var sink io.Writer = f
+	if maxBytes > 0 {
+		sink = channels.CapWriter(f, maxBytes)
+	}
+	_, ferr := ch.Fetch(ctx, channels.ArtifactCoord{Path: artifactPath}, sink)
 	cerr := f.Close()
 	if ferr != nil {
 		return ferr
@@ -247,7 +281,7 @@ func fetchToFile(ctx context.Context, ch channels.Channel, artifactPath, dest st
 func channelSignatureResolver(ctx context.Context, ch channels.Channel) func(locator string) ([]byte, error) {
 	return func(locator string) ([]byte, error) {
 		var buf bytes.Buffer
-		if _, err := ch.Fetch(ctx, channels.ArtifactCoord{Path: locator}, &buf); err != nil {
+		if _, err := ch.Fetch(ctx, channels.ArtifactCoord{Path: locator}, channels.CapWriter(&buf, channels.MaxSignatureBytes)); err != nil {
 			return nil, fmt.Errorf("fetch signature %s: %w", locator, err)
 		}
 		return buf.Bytes(), nil

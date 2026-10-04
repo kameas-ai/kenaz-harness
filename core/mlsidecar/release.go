@@ -36,6 +36,7 @@ func (r EngineRelease) InstallRequest() InstallRequest {
 		ArtifactPath:   r.ArtifactPath,
 		ExpectedSHA256: r.ExpectedSHA256,
 		Signature:      r.Signature,
+		SizeBytes:      r.SizeBytes,
 		Source:         r.Source,
 	}
 }
