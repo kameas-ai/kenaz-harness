@@ -458,8 +458,9 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
         data-testid="policy-load-failed"
       >
         <p>
-          A policy file failed to load. Until it is fixed and reloaded, agent-graph
-          file, tool and state-write actions are denied.
+          A policy file failed to load. Until it is fixed and reloaded, chat tool
+          calls (including scheduled chats) and agent-graph file reads and writes
+          are blocked.
         </p>
         <ul>
           <li v-for="f in failedUserPolicies" :key="f.name">

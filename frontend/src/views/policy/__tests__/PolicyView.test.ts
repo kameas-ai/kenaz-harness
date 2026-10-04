@@ -114,6 +114,8 @@ describe('PolicyView (cedar-policy-editor-ui-01KQ8TD6 WP02)', () => {
       expect(banner.exists()).toBe(true);
       expect(banner.text()).toContain('broken.cedar');
       expect(banner.text()).toContain('unexpected token');
+      // Users don't know chat runs on the agent graph — say chat plainly.
+      expect(banner.text()).toContain('chat tool calls');
     });
 
     it('shows no load-failure banner when every policy parsed', async () => {

@@ -134,7 +134,7 @@ func (g *failClosedGate) Evaluate(
 		Principal:     principal.String(),
 		Resource:      resource.String(),
 		MatchedPolicy: "fail-closed/policy-load-error",
-		Reason: fmt.Sprintf("%v — graph file/exec/state-write actions fail closed until the policy is fixed (Policy view lists the failing file)",
+		Reason: fmt.Sprintf("%v — until it is fixed and reloaded, chat tool calls and agent-graph file reads/writes are blocked (Settings › Policy lists the failing file)",
 			loadErr),
 		EvaluatedAt: time.Now().UTC(),
 	}

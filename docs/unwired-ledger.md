@@ -4386,9 +4386,22 @@ second unattended-safety model; (2) a corrupt user policy fails CLOSED.
   DataDir (construction failure) also fails closed; no DataDir at all
   (nil-Core chassis) stays `AllowAll` — absence, not corruption.
   Settings › Policy shows a banner naming each failing file and its
-  parse error. Pins: `TestGraphPolicy_CorruptUserPolicyMidSession_FailsClosed`,
+  parse error. **Blast radius, stated outright:** chat runs on the same
+  kernel Env, so the `use_tool`/`tool_exec` denial covers EVERY chat
+  turn's tool calls — interactive and scheduled chat alike — not just
+  library-graph runs, until the file is fixed and reloaded. Parse
+  errors are attributed by source (WP05), so a corrupt user file that
+  shares a name with an embedded default or a harness/graph snippet
+  is still reported and still fails closed. Pins: `TestGraphPolicy_CorruptUserPolicyMidSession_FailsClosed`,
   `TestGraphPolicy_CorruptUserPolicyAtBoot_FailsClosed` (verified failing
   on `d4957b04`).
+- **Behaviour change (WP04, reviewer F3):** `Engine.Reload` used to
+  rebuild from embedded + disk only and silently uninstall everything
+  `LoadHarnessSnippets` had added — the harness-self and
+  graph-authoring policies, and fleet team rules applied through
+  `ApplyCedarDelta`. Those now SURVIVE a Reload. Arguably a fix (a
+  team forbid no longer evaporates when a user reloads), recorded here
+  because it changes what is enforced after a reload.
 - **Residual, not drained — recorded so the next sweep does not re-find
   it as new:** the SHARED engine's other consumers (memory write,
   workflows, scheduled chat, session export, …) keep the documented
