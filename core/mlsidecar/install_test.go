@@ -3,6 +3,7 @@ package mlsidecar
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -196,5 +197,55 @@ func TestInstall_UnsignedArtifact_RefusedUnderSigningRequired(t *testing.T) {
 	v := DefaultEngineVerifier(fakeTrustVerifier{ok: true}, nil)
 	if _, err := Install(context.Background(), l, testChannelRegistry(), secrets.NoopResolver{}, v, req); err == nil {
 		t.Fatal("expected Install to refuse an unsigned artifact under the default SigningRequired policy")
+	}
+}
+
+// TestInstall_FlipRefusedWhileLiveClientHoldsSpawnLock pins the M1 fix
+// (kenaz PR #175 review): the current+install.json flip runs under the
+// cross-client spawn lock, so an install racing another live client's
+// spawn/seed fails honestly instead of flipping into the window that
+// left current and install.json describing different versions. The
+// bounded wait is ~2s (10×200ms), so a held lock must outlast it.
+func TestInstall_FlipRefusedWhileLiveClientHoldsSpawnLock(t *testing.T) {
+	channelRoot := t.TempDir()
+	_, sha := buildTestEngineZip(t, channelRoot, "engine.zip", []byte("the real engine bytes"))
+	if err := os.WriteFile(filepath.Join(channelRoot, "engine.zip.sig"), []byte("sig-bytes"), 0o600); err != nil {
+		t.Fatalf("write sig: %v", err)
+	}
+	l := NewLayout(t.TempDir())
+
+	// Another LIVE client (this process) holds the spawn lock.
+	held, err := AcquireSpawnLock(l, os.Getpid(), processAlive)
+	if err != nil {
+		t.Fatalf("pre-hold spawn lock: %v", err)
+	}
+	t.Cleanup(func() { held.Release() })
+
+	req := InstallRequest{
+		ChannelKind:    localpath.Kind,
+		ChannelPath:    channelRoot,
+		Version:        "1.0.0",
+		ArtifactPath:   "engine.zip",
+		ExpectedSHA256: sha,
+		Signature:      &manifest.SignatureRef{Kind: "ed25519_detached", Locator: "engine.zip.sig", Algorithm: "ed25519", KeyID: "k1"},
+		Source:         "local_path:" + channelRoot,
+	}
+	v := Verifier{TrustVerifier: fakeTrustVerifier{ok: true, wantBytes: []byte("sig-bytes")}, Policy: integrity.SigningRequired}
+
+	if _, err := Install(context.Background(), l, testChannelRegistry(), secrets.NoopResolver{}, v, req); !errors.Is(err, ErrSpawnInProgress) {
+		t.Fatalf("Install under a held spawn lock: err = %v, want ErrSpawnInProgress", err)
+	}
+	// NOTHING flipped: no current, no record.
+	if _, err := os.Lstat(l.CurrentLink()); !os.IsNotExist(err) {
+		t.Errorf("current link exists after refused flip (lstat err=%v)", err)
+	}
+	if _, ok, _ := ReadInstallJSON(l); ok {
+		t.Error("install.json written despite refused flip")
+	}
+
+	// Lock released → the same install succeeds.
+	held.Release()
+	if _, err := Install(context.Background(), l, testChannelRegistry(), secrets.NoopResolver{}, v, req); err != nil {
+		t.Fatalf("Install after release: %v", err)
 	}
 }

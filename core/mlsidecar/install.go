@@ -181,6 +181,21 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 		return InstallResult{}, fmt.Errorf("mlsidecar: tree digest of unpacked engine: %w", err)
 	}
 
+	// M1 (kenaz PR #175 review, 2026-10-03): the `current` + install.json
+	// flip must be atomic ACROSS CLIENTS. Without the spawn lock, the
+	// other client (Kenaz) can start between SetCurrent and
+	// WriteInstallJSON, see a `current` the record does not describe,
+	// and re-seed — leaving the shared root with `current` and
+	// install.json describing different versions until a later launch
+	// repairs it. The same lock already serializes spawns; holding it
+	// for the flip closes the window on this side (Kenaz holds it
+	// around its seed flip — the fix lands in both repos together).
+	flipLock, lockErr := acquireSpawnLockBounded(layout, 10, 200*time.Millisecond)
+	if lockErr != nil {
+		return InstallResult{}, fmt.Errorf("mlsidecar: install flip: %w", lockErr)
+	}
+	defer flipLock.Release()
+
 	if err := layout.SetCurrent(req.Version); err != nil {
 		return InstallResult{}, err
 	}
@@ -299,4 +314,24 @@ func safeJoin(base, name string) (string, error) {
 		return "", fmt.Errorf("mlsidecar: zip entry %q escapes destination", name)
 	}
 	return filepath.Join(base, clean), nil
+}
+
+// acquireSpawnLockBounded retries AcquireSpawnLock for a bounded window
+// while another live client holds the lock (it is held only for a spawn
+// or a flip, both short), then gives up with ErrSpawnInProgress so the
+// caller fails honestly instead of flipping unlocked.
+func acquireSpawnLockBounded(l Layout, attempts int, pause time.Duration) (*SpawnLock, error) {
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		lock, err := AcquireSpawnLock(l, os.Getpid(), processAlive)
+		if err == nil {
+			return lock, nil
+		}
+		lastErr = err
+		if !errors.Is(err, ErrSpawnInProgress) {
+			return nil, err
+		}
+		time.Sleep(pause)
+	}
+	return nil, lastErr
 }
