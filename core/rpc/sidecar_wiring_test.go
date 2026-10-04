@@ -157,6 +157,9 @@ func TestSidecarWiring_NilCore_NoManagerAndNilInterfaceProbe(t *testing.T) {
 // collaborators — and constructing all of it touches nothing on disk and
 // dials nothing (no boot-time spawn).
 func TestSidecarWiring_RealManagerUnderDataDir(t *testing.T) {
+	// The honest-unavailable assertions below are about a build with NO
+	// engine pin; force that, independent of the checked-in pin.
+	defer mlsidecar.SetPinnedReleaseForTesting(mlsidecar.EngineRelease{})()
 	api, dataDir := newSidecarTestAPI(t)
 	if api.sidecarMgr == nil {
 		t.Fatal("New(c) with a data dir left the sidecar Manager nil")

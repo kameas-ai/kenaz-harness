@@ -356,6 +356,53 @@ jobs:
           jq --arg v "$NUMERIC" '.info.productVersion = $v' wails.json > "$tmp" && mv "$tmp" wails.json
           echo "wails.json info.productVersion → $NUMERIC"
 
+      # ── Kameas ML engine pin (engine-publication-01ENPUB01 WP-H3) ──────────
+      # DATED NOTE (2026-10-04, owner: release-infra): DISABLED until the
+      # external prerequisites land (mission spec §External):
+      #   1. kameas-infra extends gh-deploy-<env> OIDC trust to kenaz-ml, so
+      #      its publish job (WP-M2) can upload kenaz-ml/<ver>/ to
+      #      kameas-ai-<env>-releases-use2.
+      #   2. The owner runs `go run ./cmd/kenaz-ml-sign keygen --out-dir <dir>`,
+      #      sets KENAZ_ML_RELEASE_SIGNING_KEY (the .key file's contents) on
+      #      kenaz-ml, and commits the .pub file's contents into
+      #      core/mlsidecar/release_signing_key.pub (the baked trust anchor,
+      #      WP-H2). An env-specific key can instead be passed by adding
+      #        -X github.com/kameas-ai/kenaz-harness/core/mlsidecar.releaseSigningPubKeyHex=${{ vars.KENAZ_ML_RELEASE_PUBKEY }}
+      #      to the -ldflags of BOTH wails build steps below.
+      #   3. A first signed engine is published (its index.json exists).
+      # Enabling it also needs `resolve-env` added to this job's `needs:`
+      # (for cdn_base) and a KENAZ_ML_ENGINE_VERSION repo variable naming
+      # the engine release this harness build pins. pin-gen validates every
+      # field and fails the build on a bad pin; until this step runs, the
+      # checked-in zero-value pin keeps Settings honestly reporting the
+      # engine as not published. index.json is WP-M2's output:
+      #   {"version","artifact_path","sha256","size","key_id"}
+      #
+      # - name: pin kenaz-ml engine release
+      #   if: vars.KENAZ_ML_ENGINE_VERSION != ''
+      #   shell: bash
+      #   run: |
+      #     set -euo pipefail
+      #     ENGINE_VERSION="${{ vars.KENAZ_ML_ENGINE_VERSION }}"
+      #     CHANNEL_URL="${{ needs.resolve-env.outputs.cdn_base }}/kenaz-ml/${ENGINE_VERSION}"
+      #     curl -fsSL "${CHANNEL_URL}/index.json" -o "$RUNNER_TEMP/kenaz-ml-index.json"
+      #     IDX="$RUNNER_TEMP/kenaz-ml-index.json"
+      #     go run ./cmd/kenaz-ml-sign pin-gen \
+      #       --version       "$(jq -r .version       "$IDX")" \
+      #       --channel-url   "${CHANNEL_URL}" \
+      #       --artifact-path "$(jq -r .artifact_path "$IDX")" \
+      #       --sha256        "$(jq -r .sha256        "$IDX")" \
+      #       --size          "$(jq -r .size          "$IDX")" \
+      #       --key-id        "$(jq -r .key_id        "$IDX")"
+      #     # Belt and braces: the published signature must verify under the
+      #     # baked key before this build ships a pin that relies on it.
+      #     curl -fsSL "${CHANNEL_URL}/$(jq -r .artifact_path "$IDX").sig" -o "$RUNNER_TEMP/kenaz-ml.sig"
+      #     go run ./cmd/kenaz-ml-sign verify \
+      #       --pubkey core/mlsidecar/release_signing_key.pub --sig "$RUNNER_TEMP/kenaz-ml.sig" \
+      #       --version "$(jq -r .version "$IDX")" \
+      #       --artifact-path "$(jq -r .artifact_path "$IDX")" \
+      #       --sha256 "$(jq -r .sha256 "$IDX")"
+
       - name: wails build
         shell: bash
         run: |

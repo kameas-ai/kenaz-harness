@@ -34,6 +34,10 @@
 //	    VerifyManifestSignatures under SigningRequired). Exit 0 = valid,
 //	    1 = invalid, 2 = usage error.
 //
+//	pin-gen (WP-H3)
+//	    Rewrites core/mlsidecar/pinned_release_gen.go, the harness's
+//	    build-time engine pin; see pingen.go.
+//
 // KEY FILE FORMATS (decided here, WP-H1):
 //
 //   - Private key: ONE line of standard base64 encoding the 64-byte
@@ -107,6 +111,8 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		return cmdSign(args[1:], stdout, stderr, getenv)
 	case "verify":
 		return cmdVerify(args[1:], stdout, stderr)
+	case "pin-gen":
+		return cmdPinGen(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		usage(stdout)
 		return exitOK
@@ -123,6 +129,8 @@ func usage(w io.Writer) {
   keygen  --out-dir DIR
   sign    --version V --artifact-path FILE --sha256 sha256:HEX [--key FILE] --out SIGFILE
   verify  --pubkey FILE --sig SIGFILE --version V --artifact-path FILE --sha256 sha256:HEX
+  pin-gen --version V --channel-url URL --artifact-path FILE --sha256 sha256:HEX
+          --size BYTES --key-id HEX [--out FILE]   |   pin-gen --zero [--out FILE]
 `)
 }
 
@@ -298,8 +306,22 @@ func parsePrivateKey(text string) (ed25519.PrivateKey, error) {
 	}
 }
 
+// parsePublicKeyHex reads a public key file: one line of 64 hex chars;
+// lines starting with '#' are ignored, so the harness's
+// core/mlsidecar/release_signing_key.pub (which carries a comment
+// header) can be passed to verify directly.
 func parsePublicKeyHex(text string) (ed25519.PublicKey, error) {
-	raw, err := hex.DecodeString(strings.TrimSpace(text))
+	var keyLines []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			keyLines = append(keyLines, line)
+		}
+	}
+	if len(keyLines) != 1 {
+		return nil, fmt.Errorf("public key file must hold exactly one key line, found %d", len(keyLines))
+	}
+	raw, err := hex.DecodeString(keyLines[0])
 	if err != nil {
 		return nil, fmt.Errorf("public key is not hex: %w", err)
 	}

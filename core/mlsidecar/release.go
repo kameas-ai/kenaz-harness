@@ -50,30 +50,54 @@ func (r EngineRelease) SizeMB() int {
 	return int((r.SizeBytes + mb - 1) / mb)
 }
 
-// ErrNoPublishedRelease is returned by PinnedEngineRelease until the
-// engine artifact is published to the kameas release channel.
+// ErrNoPublishedRelease is returned by PinnedEngineRelease when this
+// build carries no engine pin (the zero-value pinned_release_gen.go).
 var ErrNoPublishedRelease = errors.New("the Kameas ML engine is not published to the release channel yet")
 
 // ReleaseSource resolves the harness's current engine pin.
 type ReleaseSource func(ctx context.Context) (EngineRelease, error)
 
-// PinnedEngineRelease is the production ReleaseSource.
+// PinnedEngineRelease is the production ReleaseSource: the build-time pin
+// in pinned_release_gen.go (engine-publication-01ENPUB01 WP-H3), or
+// ErrNoPublishedRelease when that pin is the zero value.
 //
-// DATED NOTE (2026-09-30, owner: release-infra / laya-advisors WP13
-// follow-up): this returns ErrNoPublishedRelease because the prod
-// download URL + channel wiring does not exist yet. The BLOCKER is the
-// channel-publishing infra task — publishing kenaz-ml CI's
-// `kenaz-ml-macos-arm64-notarized` .dmg into the env-specific kameas
-// release channel WITH an A-1 manifest signed by an anchor the harness
-// trusts. The entire download -> verify-over-DMG-bytes -> mount -> copy ->
-// clear-quarantine -> start flow is built and tested against a local
-// fixture (install_dmg_test.go); this function is the single line that
-// changes (to return the pinned EngineRelease from the harness release
-// manifest) when that infra exists. Until then the Settings surface
-// honestly reports the action as unavailable rather than offering a
-// button that cannot work.
+// The pin is written by `go run ./cmd/kenaz-ml-sign pin-gen` from the
+// engine release the kenaz-ml publish job put on the env-specific
+// channel (https://<env downloads>/kenaz-ml/<ver>/, a .dmg plus its raw
+// ed25519 .sig). The download -> verify-over-DMG-bytes -> mount -> copy
+// -> clear-quarantine -> start flow behind it is built and tested
+// (install_dmg_test.go; cmd/kenaz-ml-sign's sign->Install proof).
+//
+// DATED NOTE (2026-10-04, owner: release-infra): the checked-in pin is
+// zero, so every build still honestly reports the action unavailable.
+// The BLOCKER is external (mission spec §External): kameas-infra must
+// extend gh-deploy-<env> OIDC trust to kenaz-ml, and the owner must
+// generate the release keypair (kenaz-ml-sign keygen), set
+// KENAZ_ML_RELEASE_SIGNING_KEY on kenaz-ml and commit the public key
+// into release_signing_key.pub. When the first signed engine is
+// published, enable the commented engine-pin step in
+// .github/workflows/release.yml (it runs pin-gen before wails build);
+// this note is deleted in that change.
 func PinnedEngineRelease(context.Context) (EngineRelease, error) {
-	return EngineRelease{}, ErrNoPublishedRelease
+	r := pinnedRelease
+	if r.Version == "" {
+		return EngineRelease{}, ErrNoPublishedRelease
+	}
+	if r.Signature != nil {
+		sig := *r.Signature
+		r.Signature = &sig // callers must not be able to mutate the pin
+	}
+	return r, nil
+}
+
+// SetPinnedReleaseForTesting replaces the build-time pin and returns a
+// restore func. Test seam only — production sets the pin exclusively by
+// regenerating pinned_release_gen.go. Exported because the Status/Enable
+// views that consume PinnedEngineRelease live in core/rpc/views/sidecar.
+func SetPinnedReleaseForTesting(r EngineRelease) (restore func()) {
+	saved := pinnedRelease
+	pinnedRelease = r
+	return func() { pinnedRelease = saved }
 }
 
 // PlatformSupport reports whether the engine artifact exists for this
