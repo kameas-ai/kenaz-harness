@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -235,6 +236,15 @@ type Engine struct {
 	filesMu sync.RWMutex
 	files   []PolicyFile
 
+	// snippets retains every source LoadHarnessSnippets installed, keyed
+	// by virtual filename, so Reload can re-apply them into the rebuilt
+	// PolicySet (graph-fs-gate-01GFSG01 WP04). Before this, Reload
+	// rebuilt from embedded + disk only and silently uninstalled the
+	// harness-self and graph-authoring policies — including on the
+	// "fix your policy file and reload" path WP01's banner points at.
+	// Guarded by reloadMu.
+	snippets map[string][]byte
+
 	decisions DecisionStore
 }
 
@@ -419,11 +429,29 @@ func (e *Engine) Reload(ctx context.Context) error {
 	}
 
 	if !anyOK && len(sources) > 0 {
-		// Every source failed; keep the prior set active.
+		// Every source failed; keep the prior set active. It still
+		// carries the retained snippets; re-apply them (idempotent —
+		// same IDs) so the files listing keeps reporting them (WP04).
+		if prior := e.policies.Load(); prior != nil && len(e.snippets) > 0 {
+			files, _, _ = applySnippets(prior, files, e.snippets)
+		}
 		e.filesMu.Lock()
 		e.files = files
 		e.filesMu.Unlock()
 		return errors.New("cedar: every policy source failed to parse")
+	}
+
+	// WP04: re-apply retained LoadHarnessSnippets sources. They parsed
+	// when first installed, so a failure here is not expected; it is
+	// logged and that snippet skipped rather than failing a reload the
+	// on-disk half of which succeeded (Reload's error contract is about
+	// the disk/embedded sources).
+	if len(e.snippets) > 0 {
+		var serr error
+		files, _, serr = applySnippets(ps, files, e.snippets)
+		if serr != nil {
+			slog.Error("cedar.reload_snippet_reapply_failed", "err", serr.Error())
+		}
 	}
 
 	e.policies.Store(ps)
@@ -756,40 +784,66 @@ func (e *Engine) LoadHarnessSnippets(snippets map[string][]byte) error {
 	}
 	ps := current
 
+	e.filesMu.Lock()
+	files, applied, err := applySnippets(ps, e.files, snippets)
+	e.files = files
+	e.filesMu.Unlock()
+	// Retain exactly what was applied (on error, the snippets applied
+	// before the failing one stay installed, as before) so Reload
+	// re-applies the same set — graph-fs-gate-01GFSG01 WP04.
+	if e.snippets == nil {
+		e.snippets = make(map[string][]byte, len(snippets))
+	}
+	for _, name := range applied {
+		e.snippets[name] = snippets[name]
+	}
+	if err != nil {
+		return err
+	}
+	e.policies.Store(ps)
+	return nil
+}
+
+// applySnippets adds each snippet's policies to ps under the
+// deterministic "harness-self/<filename>#<n>" IDs and records each in
+// files (marked Embedded, ParseOK) — the shared apply loop for
+// LoadHarnessSnippets and Reload's re-application (WP04). Returns the
+// updated files slice, the names applied, and the first parse error;
+// snippets before the failing one (in map order) stay applied, matching
+// the original LoadHarnessSnippets contract. Caller holds reloadMu.
+func applySnippets(ps *cedar.PolicySet, files []PolicyFile, snippets map[string][]byte) ([]PolicyFile, []string, error) {
+	var applied []string
 	for name, body := range snippets {
 		fileSet, err := cedar.NewPolicySetFromBytes(name, body)
 		if err != nil {
-			return fmt.Errorf("cedar: LoadHarnessSnippets parse %s: %w", name, err)
+			return files, applied, fmt.Errorf("cedar: LoadHarnessSnippets parse %s: %w", name, err)
 		}
+		applied = append(applied, name)
 		idx := 0
 		for _, p := range fileSet.Map() {
 			id := cedar.PolicyID(fmt.Sprintf("harness-self/%s#%d", name, idx))
 			ps.Add(id, p)
 			idx++
 		}
-		// Track in the files list so ListPolicies shows the snippets.
-		e.filesMu.Lock()
 		found := false
-		for i, f := range e.files {
+		for i, f := range files {
 			if f.Name == name {
-				e.files[i].ParseOK = true
-				e.files[i].ParseErr = ""
+				files[i].ParseOK = true
+				files[i].ParseErr = ""
 				found = true
 				break
 			}
 		}
 		if !found {
-			e.files = append(e.files, PolicyFile{
+			files = append(files, PolicyFile{
 				Name:     name,
 				Bytes:    len(body),
 				Embedded: true,
 				ParseOK:  true,
 			})
 		}
-		e.filesMu.Unlock()
 	}
-	e.policies.Store(ps)
-	return nil
+	return files, applied, nil
 }
 
 // isFamilyAction reports whether action is one of the WP01
