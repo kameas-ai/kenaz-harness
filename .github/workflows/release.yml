@@ -382,7 +382,9 @@ jobs:
       # so the pin derives it rather than parsing URLs.
       #
       # - name: pin kenaz-ml engine release
-      #   if: vars.KENAZ_ML_ENGINE_VERSION != ''
+      #   # macOS only: the engine is darwin-arm64-only (PlatformSupport), and
+      #   # the shasum/xxd key_id assert below is not portable to Windows.
+      #   if: runner.os == 'macOS' && vars.KENAZ_ML_ENGINE_VERSION != ''
       #   shell: bash
       #   run: |
       #     set -euo pipefail

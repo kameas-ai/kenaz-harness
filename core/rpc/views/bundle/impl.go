@@ -451,6 +451,12 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 	if req.Kind == "" {
 		return Bundle{}, fmt.Errorf("bundle: install kind is required")
 	}
+	// Overall bound (engine-publication WP-H7, review D5), mirroring
+	// mlsidecar.Install: http_mirror only aborts a STALLED body, so a
+	// mirror trickling bytes just inside the stall window would otherwise
+	// hold this install open forever.
+	ctx, cancel := context.WithTimeout(ctx, installDeadline)
+	defer cancel()
 	if req.Kind == "local_path" {
 		if req.Path == "" {
 			return Bundle{}, fmt.Errorf("bundle: install path is required")
@@ -642,6 +648,22 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 	return lockedToBundle(lb, a.cas, true), nil
 }
 
+// maxBundleArtifactBytes caps ONE bundle artifact's download (2 GiB).
+// It exists because manifest.ArtifactDescriptor declares no size: the
+// content hash binds WHICH bytes, but nothing binds HOW MANY, and the
+// CAS stages the stream to disk before it can hash-check it — so a
+// hostile mirror could otherwise fill the disk (engine-publication WP-H7,
+// review D5). Tightening this per artifact belongs to a future manifest
+// size field, not to a smaller constant.
+const maxBundleArtifactBytes = 2 << 30
+
+// bundleArtifactCap / installDeadline are package knobs so tests can
+// shrink them; production uses the named defaults.
+var (
+	bundleArtifactCap int64 = maxBundleArtifactBytes
+	installDeadline         = 30 * time.Minute
+)
+
 // fetchArtifactToCAS streams one artifact from ch straight into the
 // CAS via an io.Pipe — no intermediate buffering, no temp file. The
 // CAS's own Put verifies the streamed bytes' SHA-256 against
@@ -663,7 +685,7 @@ func (a *API) fetchArtifactToCAS(ctx context.Context, ch channels.Channel, coord
 	pr, pw := io.Pipe()
 	fetchDone := make(chan error, 1)
 	go func() {
-		_, ferr := ch.Fetch(ctx, coord, pw)
+		_, ferr := ch.Fetch(ctx, coord, channels.CapWriter(pw, bundleArtifactCap))
 		_ = pw.CloseWithError(ferr)
 		fetchDone <- ferr
 	}()
