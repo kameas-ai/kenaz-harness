@@ -100,6 +100,26 @@ describe('PolicyView (cedar-policy-editor-ui-01KQ8TD6 WP02)', () => {
       const { wrapper } = await mountView({ listPolicies: vi.fn().mockResolvedValue([]) });
       expect(wrapper.text()).toContain('No policy files loaded');
     });
+
+    // graph-fs-gate-01GFSG01 WP01: a user policy that failed to load fails
+    // the agent-graph path closed — the view must say so, with the error.
+    it('surfaces a user policy load failure and its parse error', async () => {
+      const { wrapper } = await mountView({
+        listPolicies: vi.fn().mockResolvedValue([
+          { name: 'default_policy.cedar', bytes: 100, embedded: true, parse_ok: true },
+          { name: 'broken.cedar', bytes: 9, embedded: false, parse_ok: false, parse_err: 'unexpected token' },
+        ] satisfies PolicyFile[]),
+      });
+      const banner = wrapper.find('[data-testid="policy-load-failed"]');
+      expect(banner.exists()).toBe(true);
+      expect(banner.text()).toContain('broken.cedar');
+      expect(banner.text()).toContain('unexpected token');
+    });
+
+    it('shows no load-failure banner when every policy parsed', async () => {
+      const { wrapper } = await mountView();
+      expect(wrapper.find('[data-testid="policy-load-failed"]').exists()).toBe(false);
+    });
   });
 
   // ── edit + save flow ────────────────────────────────────────────────

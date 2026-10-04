@@ -9090,13 +9090,30 @@ func newGraphManagerWithDeps(
 	// default policy bundle that permits the five gate categories with
 	// logging — so an empty <DataDir>/policy/ still gives the harness's
 	// "default-allow with audit" stance, not a fail-closed posture.
-	// Falls back to AllowAll when no engine was constructed (e.g. nil
-	// Core, nil DataDir, or a corrupt policy file) so the chassis still
-	// boots; the user sees the failure in the audit log.
-	var graphCedarGate cedar.Gate = cedar.AllowAll{}
-	if cedarEngine != nil {
-		graphCedarGate = cedarEngine
+	//
+	// graph-fs-gate-01GFSG01 WP01 (FR-3, owner ruling 2026-10-03:
+	// "corrupt policy fails closed"): this used to fall back to AllowAll
+	// whenever no engine existed, and — worse — a user .cedar file that
+	// failed to parse never even reached that fallback: Engine.Reload
+	// skips the bad file and keeps running on the embedded defaults,
+	// which permit file_write/file_read for every resource, so the
+	// user's forbid rules silently vanished. cedar.FailClosedOnLoadError
+	// now denies graph file/exec/state-write actions while any user
+	// policy source failed to load (re-checked on every call, so a fix +
+	// ReloadPolicies lifts it), records the denial in the engine's
+	// decision log, and names the failing file — the same per-file
+	// parse_err the Policy view already lists via ListPolicies.
+	//
+	// "No policy configured" stays distinct from "policy failed to
+	// load": buildCedarEngineOrNil returns nil ONLY for an empty
+	// DataDir (the nil-Core test chassis — absence, AllowAll as before)
+	// or a construction failure. So a nil engine WITH a DataDir is a
+	// load failure and fails closed too.
+	var graphBootErr error
+	if cedarEngine == nil && dataDir != "" {
+		graphBootErr = errors.New("cedar policy engine failed to load at boot (see log: cedar engine construction failed)")
 	}
+	graphCedarGate := cedar.FailClosedOnLoadError(cedarEngine, graphBootErr)
 	deps.Policy = graphview.NewPolicyGateAdapter(graphCedarGate)
 	if bashStore != nil {
 		deps.BashStore = bashStore
@@ -9239,9 +9256,10 @@ func newGraphManagerWithDeps(
 		graphview.WithKernel(kernel),
 		graphview.WithEventLog(agEventLog),
 		// model-authored-graphs-01PMGA01 UNIT-4: the same engine
-		// deps.Policy already uses above (graphCedarGate — AllowAll{}
-		// until a real cedarEngine is constructed, reassigned when one
-		// is), so graph.author/graph.run evaluations reach a
+		// deps.Policy already uses above (graphCedarGate — the
+		// fail-closed wrapper over the shared engine; graph.author /
+		// graph.run are not in cedar.FailClosedActions, so they delegate
+		// to the engine unchanged), so graph.author/graph.run evaluations reach a
 		// SavePolicy + Reload-reachable engine like every other gate in
 		// this constructor. check-cedar-gate-arguments.sh clause 4
 		// (UNIT-8(b)) is the CI gate that keeps this argument from

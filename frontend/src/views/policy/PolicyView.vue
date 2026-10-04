@@ -100,6 +100,10 @@ let validateTimer: ReturnType<typeof setTimeout> | null = null;
 // ── computed ──────────────────────────────────────────────────────────
 
 const hasParseErrors = computed(() => parseErrors.value.length > 0);
+/** User (non-embedded) policy files the engine failed to load — mirrors cedar.Engine.UserPolicyLoadError. */
+const failedUserPolicies = computed(() =>
+  policyFiles.value.filter((f) => !f.embedded && !f.parse_ok),
+);
 const isDirty = computed(
   () => selectedFile.value !== null && editorSource.value !== selectedFile.value.source,
 );
@@ -443,6 +447,26 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
           </button>
         </nav>
       </header>
+
+      <!-- graph-fs-gate-01GFSG01 WP01: a user policy file that failed to
+           load fails CLOSED on the agent-graph path (file/exec/state-write
+           denied). Say so, with the parse error, instead of a bare ✕. -->
+      <div
+        v-if="failedUserPolicies.length > 0"
+        class="policy-view__banner policy-view__banner--error"
+        role="alert"
+        data-testid="policy-load-failed"
+      >
+        <p>
+          A policy file failed to load. Until it is fixed and reloaded, agent-graph
+          file, tool and state-write actions are denied.
+        </p>
+        <ul>
+          <li v-for="f in failedUserPolicies" :key="f.name">
+            <strong>{{ f.name }}</strong>: {{ f.parse_err }}
+          </li>
+        </ul>
+      </div>
 
       <!-- ── Decisions panel: a denial says why (FR-007) ─────────────── -->
       <section
