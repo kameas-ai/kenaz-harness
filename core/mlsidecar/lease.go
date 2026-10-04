@@ -195,12 +195,28 @@ func AcquireSpawnLock(l Layout, pid int, isAlive func(pid int) bool) (*SpawnLock
 		}
 		holder, rerr := os.ReadFile(path)
 		if rerr != nil {
+			// M1-review F1: the holder can release between our EEXIST and
+			// this read — that is contention, not an error. Report it as
+			// in-progress so bounded-retry callers keep retrying.
+			if os.IsNotExist(rerr) {
+				return nil, ErrSpawnInProgress
+			}
 			return nil, fmt.Errorf("mlsidecar: read existing spawn lock: %w", rerr)
 		}
 		holderPID, perr := strconv.Atoi(string(holder))
 		if perr != nil || isAlive == nil || !isAlive(holderPID) {
-			// Stale lock (unparsable content, or a dead holder): break it
-			// and retry once.
+			// M1-review F3: unparsable content can be a holder caught in
+			// the microseconds between O_EXCL create and the pid write —
+			// breaking that lock lets two clients both believe they hold
+			// it. Only a lock OLDER than a write could plausibly take is
+			// stale; a fresh one is in progress.
+			if perr != nil {
+				if fi, serr := os.Stat(path); serr == nil && time.Since(fi.ModTime()) < 5*time.Second {
+					return nil, ErrSpawnInProgress
+				}
+			}
+			// Stale lock (unparsable content past the grace window, or a
+			// dead holder): break it and retry once.
 			_ = os.Remove(path)
 			continue
 		}

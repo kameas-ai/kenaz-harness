@@ -190,8 +190,9 @@ func Install(ctx context.Context, layout Layout, registry channels.Registry, cre
 	// repairs it. The same lock already serializes spawns; holding it
 	// for the flip closes the window on this side (Kenaz holds it
 	// around its seed flip — the fix lands in both repos together).
-	flipLock, lockErr := acquireSpawnLockBounded(layout, 10, 200*time.Millisecond)
+	flipLock, lockErr := acquireSpawnLockBounded(layout, flipLockAttempts, flipLockPause)
 	if lockErr != nil {
+		_ = os.RemoveAll(versionDir) // keep the "no residue on failure" promise (M1-review F4)
 		return InstallResult{}, fmt.Errorf("mlsidecar: install flip: %w", lockErr)
 	}
 	defer flipLock.Release()
@@ -316,10 +317,19 @@ func safeJoin(base, name string) (string, error) {
 	return filepath.Join(base, clean), nil
 }
 
-// acquireSpawnLockBounded retries AcquireSpawnLock for a bounded window
-// while another live client holds the lock (it is held only for a spawn
-// or a flip, both short), then gives up with ErrSpawnInProgress so the
-// caller fails honestly instead of flipping unlocked.
+// flipLockAttempts/flipLockPause bound the flip's wait for the spawn
+// lock (package vars so tests can shorten the window).
+var (
+	flipLockAttempts = 70
+	flipLockPause    = 500 * time.Millisecond
+)
+
+// acquireSpawnLockBounded retries AcquireSpawnLock for a bounded window,
+// then gives up with ErrSpawnInProgress so the caller fails honestly
+// instead of flipping unlocked. The window must outlast the LONGEST
+// legitimate hold: a spawning client holds the lock through spawn plus
+// its health wait (StartupWait, 30s in production wiring) — M1-review
+// F2. 70×500ms ≈ 35s covers that; a flip hold is milliseconds.
 func acquireSpawnLockBounded(l Layout, attempts int, pause time.Duration) (*SpawnLock, error) {
 	var lastErr error
 	for i := 0; i < attempts; i++ {

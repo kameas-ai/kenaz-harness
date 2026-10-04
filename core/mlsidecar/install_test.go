@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/bundle/channels"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/channels/localpath"
@@ -205,8 +206,12 @@ func TestInstall_UnsignedArtifact_RefusedUnderSigningRequired(t *testing.T) {
 // cross-client spawn lock, so an install racing another live client's
 // spawn/seed fails honestly instead of flipping into the window that
 // left current and install.json describing different versions. The
-// bounded wait is ~2s (10×200ms), so a held lock must outlast it.
+// bounded wait is shortened via the package knobs so a held lock
+// outlasts it without a 35s test.
 func TestInstall_FlipRefusedWhileLiveClientHoldsSpawnLock(t *testing.T) {
+	oldA, oldP := flipLockAttempts, flipLockPause
+	flipLockAttempts, flipLockPause = 5, 100*time.Millisecond
+	t.Cleanup(func() { flipLockAttempts, flipLockPause = oldA, oldP })
 	channelRoot := t.TempDir()
 	_, sha := buildTestEngineZip(t, channelRoot, "engine.zip", []byte("the real engine bytes"))
 	if err := os.WriteFile(filepath.Join(channelRoot, "engine.zip.sig"), []byte("sig-bytes"), 0o600); err != nil {
@@ -247,5 +252,46 @@ func TestInstall_FlipRefusedWhileLiveClientHoldsSpawnLock(t *testing.T) {
 	held.Release()
 	if _, err := Install(context.Background(), l, testChannelRegistry(), secrets.NoopResolver{}, v, req); err != nil {
 		t.Fatalf("Install after release: %v", err)
+	}
+}
+
+// TestInstall_FlipWaitsOutATransientHolder pins the retry loop itself
+// (M1-review F6: attempts=1 must not pass): a lock released mid-wait
+// lets the same install succeed without error.
+func TestInstall_FlipWaitsOutATransientHolder(t *testing.T) {
+	oldA, oldP := flipLockAttempts, flipLockPause
+	flipLockAttempts, flipLockPause = 30, 100*time.Millisecond
+	t.Cleanup(func() { flipLockAttempts, flipLockPause = oldA, oldP })
+
+	channelRoot := t.TempDir()
+	_, sha := buildTestEngineZip(t, channelRoot, "engine.zip", []byte("the real engine bytes"))
+	if err := os.WriteFile(filepath.Join(channelRoot, "engine.zip.sig"), []byte("sig-bytes"), 0o600); err != nil {
+		t.Fatalf("write sig: %v", err)
+	}
+	l := NewLayout(t.TempDir())
+	held, err := AcquireSpawnLock(l, os.Getpid(), processAlive)
+	if err != nil {
+		t.Fatalf("pre-hold spawn lock: %v", err)
+	}
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		held.Release()
+	}()
+
+	req := InstallRequest{
+		ChannelKind:    localpath.Kind,
+		ChannelPath:    channelRoot,
+		Version:        "1.0.0",
+		ArtifactPath:   "engine.zip",
+		ExpectedSHA256: sha,
+		Signature:      &manifest.SignatureRef{Kind: "ed25519_detached", Locator: "engine.zip.sig", Algorithm: "ed25519", KeyID: "k1"},
+		Source:         "local_path:" + channelRoot,
+	}
+	v := Verifier{TrustVerifier: fakeTrustVerifier{ok: true, wantBytes: []byte("sig-bytes")}, Policy: integrity.SigningRequired}
+	if _, err := Install(context.Background(), l, testChannelRegistry(), secrets.NoopResolver{}, v, req); err != nil {
+		t.Fatalf("Install with a transient holder: %v", err)
+	}
+	if _, verr := VerifyInstalled(l, "1.0.0", nil); verr != nil {
+		t.Fatalf("installed state after waited-out flip: %v", verr)
 	}
 }
