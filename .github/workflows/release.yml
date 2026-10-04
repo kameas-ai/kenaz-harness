@@ -375,8 +375,11 @@ jobs:
       # the engine release this harness build pins. pin-gen validates every
       # field and fails the build on a bad pin; until this step runs, the
       # checked-in zero-value pin keeps Settings honestly reporting the
-      # engine as not published. index.json is WP-M2's output:
-      #   {"version","artifact_path","sha256","size","key_id"}
+      # engine as not published. index.json is WP-M2's output, published at
+      # kenaz-ml/index.json (ALL releases, newest first), per-release shape:
+      #   {"version","released_at","darwin_arm64":{"url","sha256","size_bytes","sig_url","key_id"}}
+      # The artifact filename is deterministic (kenaz-ml-<ver>-darwin-arm64.dmg),
+      # so the pin derives it rather than parsing URLs.
       #
       # - name: pin kenaz-ml engine release
       #   if: vars.KENAZ_ML_ENGINE_VERSION != ''
@@ -384,24 +387,27 @@ jobs:
       #   run: |
       #     set -euo pipefail
       #     ENGINE_VERSION="${{ vars.KENAZ_ML_ENGINE_VERSION }}"
-      #     CHANNEL_URL="${{ needs.resolve-env.outputs.cdn_base }}/kenaz-ml/${ENGINE_VERSION}"
-      #     curl -fsSL "${CHANNEL_URL}/index.json" -o "$RUNNER_TEMP/kenaz-ml-index.json"
-      #     IDX="$RUNNER_TEMP/kenaz-ml-index.json"
+      #     CDN_BASE="${{ needs.resolve-env.outputs.cdn_base }}"
+      #     CHANNEL_URL="${CDN_BASE}/kenaz-ml/${ENGINE_VERSION}"
+      #     ARTIFACT="kenaz-ml-${ENGINE_VERSION}-darwin-arm64.dmg"
+      #     curl -fsSL "${CDN_BASE}/kenaz-ml/index.json" -o "$RUNNER_TEMP/kenaz-ml-index.json"
+      #     REL="$(jq -c --arg v "$ENGINE_VERSION" '.releases[] | select(.version == $v)' "$RUNNER_TEMP/kenaz-ml-index.json")"
+      #     test -n "$REL" || { echo "::error::version $ENGINE_VERSION not in kenaz-ml/index.json"; exit 1; }
       #     go run ./cmd/kenaz-ml-sign pin-gen \
-      #       --version       "$(jq -r .version       "$IDX")" \
+      #       --version       "$ENGINE_VERSION" \
       #       --channel-url   "${CHANNEL_URL}" \
-      #       --artifact-path "$(jq -r .artifact_path "$IDX")" \
-      #       --sha256        "$(jq -r .sha256        "$IDX")" \
-      #       --size          "$(jq -r .size          "$IDX")" \
-      #       --key-id        "$(jq -r .key_id        "$IDX")"
+      #       --artifact-path "$ARTIFACT" \
+      #       --sha256        "$(jq -r .darwin_arm64.sha256     <<<"$REL")" \
+      #       --size          "$(jq -r .darwin_arm64.size_bytes <<<"$REL")" \
+      #       --key-id        "$(jq -r .darwin_arm64.key_id     <<<"$REL")"
       #     # Belt and braces: the published signature must verify under the
       #     # baked key before this build ships a pin that relies on it.
-      #     curl -fsSL "${CHANNEL_URL}/$(jq -r .artifact_path "$IDX").sig" -o "$RUNNER_TEMP/kenaz-ml.sig"
+      #     curl -fsSL "${CHANNEL_URL}/${ARTIFACT}.sig" -o "$RUNNER_TEMP/kenaz-ml.sig"
       #     go run ./cmd/kenaz-ml-sign verify \
       #       --pubkey core/mlsidecar/release_signing_key.pub --sig "$RUNNER_TEMP/kenaz-ml.sig" \
-      #       --version "$(jq -r .version "$IDX")" \
-      #       --artifact-path "$(jq -r .artifact_path "$IDX")" \
-      #       --sha256 "$(jq -r .sha256 "$IDX")"
+      #       --version "$ENGINE_VERSION" \
+      #       --artifact-path "$ARTIFACT" \
+      #       --sha256 "$(jq -r .darwin_arm64.sha256 <<<"$REL")"
 
       - name: wails build
         shell: bash
