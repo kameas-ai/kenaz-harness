@@ -342,6 +342,26 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event; the two pull surfaces are count-only stubs
+
+Three linked findings from kitty-specs/fleet-session-truth-01DOGF0A/
+research/pull-idempotency-audit-2026-10-05.md:
+1. **seq=1 defect (real):** SessionSyncer.AppendEvent constructs a fresh
+   EventStream per call (core/fleet/session_sync.go:201), so every pushed
+   session event leaves with seq=1; "fleet assigns the monotonic seq"
+   (api.go:4352) is an unverified server assumption. Depending on server
+   dedupe the remote stream may hold ONE event total. **Owner:** fleet
+   brief (confirm server (stream_id,seq) semantics), then either carry a
+   real monotonic seq or document renumbering. Blocks any future durable
+   replay watermark.
+2. **SessionSync_ResumeFrom** and **Handoff_Accept** decrypt and COUNT
+   records, persisting nothing (views/contextsync/impl.go:86-89, :213-228,
+   both commented as future-WP). Bindings exist; frontend never calls the
+   first and never calls accept. Dated-justified: the pull writer must not
+   exist until it can be idempotent per the audit's fix shape — do not
+   wire a naive AppendMessage loop. **Owner:** the future session-pull
+   mission; the audit file is its contract.
+
 ### 2026-10-05 (v0.87.0 adversarial review F2) · the repair path's re-application window ends at 0341
 
 Re-running sessions/0332 on a database units/1104 has converted fails
