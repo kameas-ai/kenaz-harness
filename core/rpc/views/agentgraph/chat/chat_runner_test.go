@@ -141,6 +141,12 @@ func (b *recordingBroker) snapshot() []recordedEvent {
 	return out
 }
 
+// recordingHistoryWriter is deliberately in-memory: it pins the runner ->
+// HistoryWriter seam contract (what is written, in what order, with what
+// move metadata), not a storage round trip — the real-sqlite halves are
+// partial_persist_dedup_test.go, assistant_single_final_test.go and
+// core/rpc/chat_single_writer_test.go (WP-PI AC-PI-2, 2026-10-04).
+//
 // recordingHistoryWriter captures append-message calls, and — as the
 // production llmHistoryWriter does — implements UserTurnAnnouncer so a
 // test can see what the runner reported to fleet context-sync.

@@ -52,6 +52,7 @@ import (
 	"time"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/attachments"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
@@ -104,6 +105,13 @@ type singleWriterHarness struct {
 func newSingleWriterHarness(t *testing.T) *singleWriterHarness {
 	t.Helper()
 	sessMgr, attMgr := newSQLTestStores(t)
+	return newSingleWriterHarnessOn(t, sessMgr, attMgr)
+}
+
+// newSingleWriterHarnessOn builds the same chain over caller-supplied
+// managers — the WP-PI variant passes managers over an UPGRADED snapshot.
+func newSingleWriterHarnessOn(t *testing.T, sessMgr *session.Manager, attMgr *attachments.Manager) *singleWriterHarness {
+	t.Helper()
 
 	graphMgr, err := graphview.NewManager()
 	if err != nil {
