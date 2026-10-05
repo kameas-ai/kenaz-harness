@@ -528,11 +528,11 @@ func TestGraphAuthoringTool_AC010_MaterializeRunRedactsArguments(t *testing.T) {
 }
 
 // TestGraphAuthoringTool_AC010_DegradedFallbackProvenanceSurfaces is the
-// second half of AC-010: when the resolved spec is not tracked (the
-// TrackExternalRun/started-run tiers both miss — the eviction/restart
-// case, C-006), the tool's response carries the degraded
-// "library_fallback" provenance rather than silently presenting a
-// tier-3 projection as faithful.
+// second half of AC-010: when a run's resolved spec was never recorded
+// (C-006 — since feat/graph-resolved-spec that means a run from before
+// per-run spec recording; the kernel persists every newer run's spec),
+// the tool's response carries the "library_fallback" provenance rather
+// than silently presenting a reconstruction as faithful.
 func TestGraphAuthoringTool_AC010_DegradedFallbackProvenanceSurfaces(t *testing.T) {
 	api := cedarWiringAPI(t, "")
 	if err := api.settingsImpl.Store().SaveGraphAuthoringEnabled(true); err != nil {
@@ -540,14 +540,12 @@ func TestGraphAuthoringTool_AC010_DegradedFallbackProvenanceSurfaces(t *testing.
 	}
 
 	// Save a real user graph first (via the manager directly — this is
-	// fixture setup, not the property under test), so LoadGraphSpec's
-	// tier-3 fallback in runSpecFor has something to load. Transform-
-	// only (not the "plan"-kind graphAuthoringYAML fixture): tier-3's
-	// projection re-derives each fired node's attrs from this SAME
-	// spec by node id, so the library definition and the run's actual
-	// topology must share node ids/kinds for the projection to
-	// validate — a "plan" node would need a real LLM to fire, which
-	// this test must not depend on.
+	// fixture setup, not the property under test), so the reconstruction
+	// in runSpecFor has something to load. Transform-only (not the
+	// "plan"-kind graphAuthoringYAML fixture): the projection re-derives
+	// each fired node's attrs from this SAME spec by node id, so the
+	// library definition and the run's recorded events must share node
+	// ids/kinds for the projection to validate.
 	libID := "zz_unit7_ac010_fallback_lib"
 	libYAML := `spec_version: "1"
 id: ` + libID + `
@@ -562,26 +560,19 @@ nodes:
 		t.Fatalf("seed library graph: %v", err)
 	}
 
-	// The RUN itself shares the library id and topology exactly, so
-	// runSpecFor's tier-3 fallback (which re-loads the library file
-	// rather than replaying what actually executed) produces a
-	// projection that validates.
+	// The run as a previous release recorded it: its events are in the
+	// shared log, but no spec row exists (a kernel run here would store
+	// one). Deliberately NOT calling TrackExternalRun either — this run
+	// must be found ONLY through runSpecFor's reconstruction.
 	runID := "zz-unit7-ac010-fallback-run"
-	runGraph := coreag.Graph{
-		SpecVersion: coreag.SpecVersion,
-		ID:          libID,
-		Name:        "AC-010 fallback run body",
-		Entrypoints: []string{"first"},
-		Nodes: []coreag.Node{
-			{ID: "first", Kind: coreag.NodeKindTransform, Title: "First", Attrs: coreag.TransformAttrs{Name: "concat"}},
-		},
+	var batch coreag.EventBatch
+	_ = batch.AppendKind(runID, "", coreag.EventRunStart, map[string]any{"graph_id": libID})
+	_ = batch.AppendKind(runID, "first", coreag.EventNodeStart, map[string]any{"kind": "transform"})
+	_ = batch.AppendKind(runID, "first", coreag.EventNodeComplete, map[string]any{"outputs": 1})
+	_ = batch.AppendKind(runID, "", coreag.EventRunComplete, map[string]any{"completed_nodes": 1})
+	if _, err := api.graphMgr.EventLog().Append(batch); err != nil {
+		t.Fatalf("append pre-recording run: %v", err)
 	}
-	env := &coreag.Env{RunID: runID, Graph: &runGraph}
-	if err := api.graphMgr.Kernel().Run(context.Background(), env); err != nil {
-		t.Fatalf("kernel run: %v", err)
-	}
-	// Deliberately NOT calling TrackExternalRun — this run must be
-	// found ONLY through runSpecFor's tier-3 library fallback.
 
 	args, _ := json.Marshal(map[string]string{"run_id": runID})
 	res := callHarnessTool(t, api, harnessmcp.ToolMaterializeRun, args)
@@ -595,7 +586,7 @@ nodes:
 		t.Fatalf("decode GraphMaterializeResult: %v", err)
 	}
 	if got.SpecProvenance != coreag.SpecProvenanceLibraryFallback {
-		t.Errorf("SpecProvenance = %q, want %q (degraded fallback) — the tool must not present a tier-3 projection as faithful", got.SpecProvenance, coreag.SpecProvenanceLibraryFallback)
+		t.Errorf("SpecProvenance = %q, want %q (degraded fallback) — the tool must not present a reconstruction as faithful", got.SpecProvenance, coreag.SpecProvenanceLibraryFallback)
 	}
 }
 

@@ -24,8 +24,6 @@ import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.v
 import WorkflowEditor from './WorkflowEditor.vue';
 import SimpleTemplateEditor from './SimpleTemplateEditor.vue';
 import WorkflowGraphEditor from '@/components/workflows/WorkflowGraphEditor.vue';
-import CatalogView from './CatalogView.vue';
-import CatalogPreviewDrawer from './CatalogPreviewDrawer.vue';
 import RunsHistoryTab from './RunsHistoryTab.vue';
 // nav-ia-sweep-01DOGF0F WP04 — Workflows is the automation home: schedules
 // (workflow cron + scheduled chats) and background tasks moved here from
@@ -43,7 +41,6 @@ import {
   type WorkflowsWorkflow,
   type WorkflowsRunResult,
   type WorkflowsSaveOutput,
-  type WorkflowsCatalogEntry,
   type WorkflowsArtifactOption,
   type WorkflowsProjectOption,
   type WorkflowsScheduleEntry,
@@ -255,10 +252,15 @@ defineExpose({ importFromYaml, deleteSelected });
 
 // WP03: tab navigation. "Library" is the default (preserving existing UX).
 // nav-ia-sweep-01DOGF0F WP04 (FR-3): Schedules + Tasks joined, and the tab is
-// URL-addressable (`/workflows?tab=schedules|runs|tasks|catalog`) so deep
+// URL-addressable (`/workflows?tab=schedules|runs|tasks`) so deep
 // links — the chat header's background-task chip, the legacy
 // /settings?tab=… redirects — land on the right tab.
-const TABS = ['Library', 'Schedules', 'Runs', 'Tasks', 'Catalog'] as const;
+//
+// install-framework-01DOGF0B WP05: the Catalog tab is retired. Workflow
+// templates (and fleet catalog workflows) install from the one "Add
+// capability" surface; `?tab=catalog` redirects there (CATALOG_HOME).
+const TABS = ['Library', 'Schedules', 'Runs', 'Tasks'] as const;
+const CATALOG_HOME = { path: '/tools', query: { kind: 'workflow' } } as const;
 type Tab = (typeof TABS)[number];
 const activeTab = ref<Tab>('Library');
 
@@ -268,16 +270,8 @@ function tabFromQuery(raw: unknown): Tab | null {
   return TABS.find((t) => t.toLowerCase() === v.toLowerCase()) ?? null;
 }
 
-// WP03: catalog selection for the preview drawer.
-const catalogSelectedEntry = ref<WorkflowsCatalogEntry | null>(null);
-
-function onCatalogInstalled(_workflowId: string) {
-  // Refresh the library list so the newly installed workflow shows up.
-  // _workflowId currently unused — kept on the signature for the
-  // event-shape contract so a future "scroll to / highlight newly-
-  // installed row" behaviour doesn't have to change the emit shape.
-  void loadCatalog();
-  catalogSelectedEntry.value = null;
+function browseTemplates() {
+  void router?.push(CATALOG_HOME);
 }
 
 // WP09: editor mode. The catalog is the default surface; "New" or
@@ -518,7 +512,13 @@ const router = (() => {
 const focusRunId = ref<string | null>(null);
 
 function applyTabQuery() {
-  const t = tabFromQuery(route?.query?.tab);
+  const rawTab = route?.query?.tab;
+  if ((Array.isArray(rawTab) ? rawTab[0] : rawTab) === 'catalog') {
+    // Old deep links to the retired Catalog tab land on its replacement.
+    void router?.replace(CATALOG_HOME);
+    return;
+  }
+  const t = tabFromQuery(rawTab);
   if (t) {
     activeTab.value = t;
     return;
@@ -609,23 +609,8 @@ if (route) {
         </button>
       </nav>
 
-      <!-- Catalog tab (WP03) -->
-      <template v-if="activeTab === 'Catalog'">
-        <CatalogView
-          :client="client"
-          @select="catalogSelectedEntry = $event"
-        />
-        <CatalogPreviewDrawer
-          :client="client"
-          :entry="catalogSelectedEntry"
-          @close="catalogSelectedEntry = null"
-          @installed="onCatalogInstalled"
-          @redirect-providers="activeTab = 'Library'"
-        />
-      </template>
-
       <!-- Runs tab (01NBUG04 — execution history + scheduled subsection) -->
-      <template v-else-if="activeTab === 'Runs'">
+      <template v-if="activeTab === 'Runs'">
         <RunsHistoryTab :client="client" :chat-client="chatClient" :focus-run-id="focusRunId" />
       </template>
 
@@ -783,6 +768,14 @@ if (route) {
           Workflows chain agents together: a plan step, a research step, an
           implement step, a review step.
         </p>
+        <button
+          type="button"
+          class="mt-3 font-ui text-sm text-accent hover:text-accent-muted"
+          data-testid="workflows-browse-templates-empty"
+          @click="browseTemplates"
+        >
+          Browse workflow templates →
+        </button>
       </div>
 
       <div v-else class="grid grid-cols-12 gap-4">
@@ -813,6 +806,14 @@ if (route) {
               </button>
             </li>
           </ul>
+          <button
+            type="button"
+            class="mt-3 px-2 font-ui text-xs text-accent hover:text-accent-muted"
+            data-testid="workflows-browse-templates"
+            @click="browseTemplates"
+          >
+            Browse workflow templates →
+          </button>
         </aside>
 
         <section

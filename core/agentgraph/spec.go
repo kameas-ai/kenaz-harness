@@ -331,13 +331,15 @@ type Graph struct {
 	// finding F2). Empty on authored graphs, and on a materialized run
 	// projected against the exact resolved spec that executed.
 	//
-	// `library_fallback` means the run's resolved spec was no longer
-	// available (evicted from the chat-run registry, or the process
-	// restarted) and the projection fell back to the library file the
-	// run_start event names. The TOPOLOGY is then only as accurate as
-	// the library file: per-run dial overrides and the routing-gate
-	// rewrite are unrecoverable, so a routed run can be projected as a
-	// classic one. Silently serving that as if it were the real thing
+	// `library_fallback` means the run's resolved spec was never
+	// recorded — the run predates per-run spec recording
+	// (feat/graph-resolved-spec, agent_graph_run_specs), or its spec was
+	// refused as oversized — and the projection was reconstructed from
+	// the library file the run_start event names, as that file is now.
+	// The TOPOLOGY is then only as accurate as the library file: per-run
+	// dial overrides, the routing-gate rewrite and any edit made since
+	// are unrecoverable, so a routed run can be projected as a classic
+	// one. Silently serving that as if it were the real thing
 	// is the failure this field exists to prevent — the viewer badges
 	// it and the graph description says so in prose.
 	SpecProvenance string `json:"spec_provenance,omitempty" yaml:"spec_provenance,omitempty"`
@@ -487,11 +489,11 @@ func DumpYAML(g Graph) ([]byte, error) {
 // "sha256:<hex>", or "" if the spec cannot be encoded
 // (agentgraph-settings-linkage-01DOGF0D WP03).
 //
-// It identifies WHICH VERSION of a spec a run executed without storing
-// the spec itself: the kernel stamps it on run_start, the chat runner
-// records it against the turn, and materialization compares it with the
-// library file's digest to decide whether a tier-3 fallback is in fact
-// the exact spec. Canvas layout and SpecProvenance are excluded — they
+// It identifies WHICH VERSION of a spec a run executed: the kernel
+// stamps it on run_start, the chat runner records it against the turn,
+// and the run-spec store (run_spec_store.go) stores it beside each
+// persisted spec; materialization holds a persisted spec to run_start's
+// digest before serving it as exact (feat/graph-resolved-spec). Canvas layout and SpecProvenance are excluded — they
 // are presentation / projection metadata, not execution semantics, and
 // a layout-only edit must not make a run look like it used a different
 // graph. JSON encoding sorts map keys, so attrs maps hash stably.

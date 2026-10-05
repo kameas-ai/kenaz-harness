@@ -101,11 +101,12 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = repaired.Close(context.Background()) })
 
-	// 4. The ten missing migrations must be applied (332-340 + 342; 0336 added
+	// 4. The missing migrations must be applied (332-343; 0336 added
 	//    by chat-turn-integrity-01PMZ606 WP02, 0337 added by WP05, 0338
 	//    added by model-scheduled-jobs-01PMSJ01 WP06, 0339 added by the
 	//    same mission's WP08, 0340 added by WP09; 0342 added by
-	//    agentgraph-settings-linkage-01DOGF0D WP03).
+	//    agentgraph-settings-linkage-01DOGF0D WP03; 0343 added by
+	//    feat/graph-resolved-spec WP01).
 	rows, err := repaired.Reader().Query(ctx,
 		"SELECT version FROM harness_migrations WHERE owning_mission='sessions' AND version >= 332 AND action='applied' ORDER BY version")
 	if err != nil {
@@ -123,9 +124,9 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	// 0341 (chat-single-writer-01DOGF0G) is a per-session scan like 0337:
 	// with no doubled turns in this database it finds nothing, so its
 	// re-application here is a no-op by construction. 0342
-	// (agentgraph-settings-linkage-01DOGF0D) re-creates its table
-	// idempotently.
-	want := []int{332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342}
+	// (agentgraph-settings-linkage-01DOGF0D) and 0343
+	// (feat/graph-resolved-spec) re-create their tables idempotently.
+	want := []int{332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343}
 	if len(got) != len(want) {
 		t.Fatalf("re-applied sessions migrations = %v, want %v", got, want)
 	}

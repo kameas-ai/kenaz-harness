@@ -3357,6 +3357,171 @@ export namespace hooks {
 
 }
 
+export namespace install {
+	
+	export class Filter {
+	    kind?: string;
+	    source?: string;
+	    query?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Filter(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.source = source["source"];
+	        this.query = source["query"];
+	    }
+	}
+	export class Requirement {
+	    kind: string;
+	    name: string;
+	    display?: string;
+	    required: boolean;
+	    satisfied: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Requirement(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.name = source["name"];
+	        this.display = source["display"];
+	        this.required = source["required"];
+	        this.satisfied = source["satisfied"];
+	    }
+	}
+	export class State {
+	    installed: boolean;
+	    version?: string;
+	    update_available?: boolean;
+	    consumer?: string;
+	    detail?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new State(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.installed = source["installed"];
+	        this.version = source["version"];
+	        this.update_available = source["update_available"];
+	        this.consumer = source["consumer"];
+	        this.detail = source["detail"];
+	    }
+	}
+	export class Item {
+	    kind: string;
+	    id: string;
+	    version?: string;
+	    name: string;
+	    description?: string;
+	    category?: string;
+	    source: string;
+	    keywords?: string[];
+	    state: State;
+	    read_only?: boolean;
+	    read_only_reason?: string;
+	    requirements?: Requirement[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Item(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.id = source["id"];
+	        this.version = source["version"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.category = source["category"];
+	        this.source = source["source"];
+	        this.keywords = source["keywords"];
+	        this.state = this.convertValues(source["state"], State);
+	        this.read_only = source["read_only"];
+	        this.read_only_reason = source["read_only_reason"];
+	        this.requirements = this.convertValues(source["requirements"], Requirement);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Unavailable {
+	    kind: string;
+	    source: string;
+	    reason: string;
+	    message?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Unavailable(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.source = source["source"];
+	        this.reason = source["reason"];
+	        this.message = source["message"];
+	    }
+	}
+	export class Listing {
+	    items: Item[];
+	    unavailable?: Unavailable[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Listing(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], Item);
+	        this.unavailable = this.convertValues(source["unavailable"], Unavailable);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+
+}
+
 export namespace llm {
 	
 	export class CredentialReference {

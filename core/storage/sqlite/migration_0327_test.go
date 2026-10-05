@@ -89,12 +89,17 @@ func TestMigration0327_PreservesArtifactVersionRows(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close(context.Background()) })
 
+	// Since units/1105 (units-debt-01UNITD01) dropped the *_legacy tables,
+	// the rows 0327 must preserve survive only as their units/1104 copy.
+	// A 0327 cascade would leave one SYNTHESIZED v1 there instead of the
+	// two real versions, so synthesized rows are excluded from the count.
 	var artifacts, versions int
-	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifacts_legacy WHERE id='art-0327'").Scan(&artifacts); err != nil {
-		t.Fatalf("count artifacts: %v", err)
+	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM units WHERE kind='artifact' AND id='art-0327'").Scan(&artifacts); err != nil {
+		t.Fatalf("count artifact units: %v", err)
 	}
-	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifact_versions_legacy WHERE artifact_id='art-0327'").Scan(&versions); err != nil {
-		t.Fatalf("count artifact_versions: %v", err)
+	if err := db.Reader().QueryRow(ctx,
+		"SELECT COUNT(*) FROM unit_versions WHERE unit_id='art-0327' AND json_extract(metadata, '$.synthesized') IS NULL").Scan(&versions); err != nil {
+		t.Fatalf("count artifact unit versions: %v", err)
 	}
 	if artifacts != 1 {
 		t.Errorf("artifacts = %d after the 0327 rebuild, want 1", artifacts)
@@ -108,8 +113,9 @@ func TestMigration0327_PreservesArtifactVersionRows(t *testing.T) {
 	var hash, summary, path string
 	var byteSize, createdAt int64
 	if err := db.Reader().QueryRow(ctx,
-		`SELECT content_hash, summary, path, byte_size, created_at
-         FROM artifact_versions_legacy WHERE artifact_id='art-0327' AND version=2`).
+		`SELECT json_extract(metadata, '$.content_hash'), json_extract(metadata, '$.summary'),
+                json_extract(metadata, '$.path'), json_extract(metadata, '$.byte_size'), created_at
+         FROM unit_versions WHERE unit_id='art-0327' AND version=2`).
 		Scan(&hash, &summary, &path, &byteSize, &createdAt); err != nil {
 		t.Fatalf("read restored version row: %v (0 rows if the cascade fired)", err)
 	}

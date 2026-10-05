@@ -116,6 +116,18 @@ func (r *Registry) Unregister(name string) {
 	delete(r.commands, name)
 }
 
+// unregisterSkill removes name only when it is held by sk itself (same ID
+// and same catalog item) — never a built-in, a user command, or another
+// skill. LiveRegister, LiveUnregister and RenameLocalTrigger all go through
+// it (install-framework-01DOGF0B review H3/L3).
+func (r *Registry) unregisterSkill(name string, sk Skill) {
+	if cmd, ok := r.commands[name]; ok {
+		if sc, ok := cmd.(skillCommand); ok && sc.skill.ID == sk.ID && sc.skill.CatalogID == sk.CatalogID {
+			delete(r.commands, name)
+		}
+	}
+}
+
 // Lookup returns the command registered under name. The bool reports
 // whether a command was found; callers wanting an error-shape
 // response should use Execute or check against ErrUnknownCommand.

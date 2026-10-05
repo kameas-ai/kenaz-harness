@@ -265,6 +265,16 @@ jobs:
         # package doc.
         run: bash scripts/ci/check-advice-kinds.sh
 
+      - name: install-provider-coverage guard
+        # install-framework-01DOGF0B WP03. Every core/fleet CatalogItemKind
+        # maps to an install.Kind; every install.Kind has a production
+        # provider registration under core/rpc/ plus a
+        # TestInstallProvider_<Name>_ConsumerSeesInstall consumer test, or a
+        # dated allowlist line naming its blocker. This is the gate the
+        # badge-only catalog install (docs/unwired-ledger.md, 2026-10-04)
+        # could not have — a provider whose install the consumer never sees.
+        run: bash scripts/ci/check-install-provider-coverage.sh
+
       - name: structured-output-row-parity guard
         # A capability row cannot silently desynchronize from its own
         # wire-encoding (structured-output-is-reachable-01PMZE14

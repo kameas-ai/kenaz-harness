@@ -60,6 +60,24 @@ func NewSQLStore(db storage.DB, opts ...SQLStoreOption) Store {
 // ── Create ─────────────────────────────────────────────────────────────
 
 func (s *sqlStore) Create(ctx context.Context, u Unit) (Unit, error) {
+	u, err := s.prepareCreate(u)
+	if err != nil {
+		return Unit{}, err
+	}
+
+	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		return insertUnitTx(ctx, tx, u)
+	}); err != nil {
+		return Unit{}, err
+	}
+	return u, nil
+}
+
+// prepareCreate validates u and fills the fields Create owns (id,
+// timestamps, Version=0, normalised metadata). Shared by Create,
+// CreateWithEdge and CreateWithSyncState so the three create paths cannot
+// drift (units-debt-01UNITD01 review L3, 2026-10-05).
+func (s *sqlStore) prepareCreate(u Unit) (Unit, error) {
 	if err := validateUnit(u); err != nil {
 		return Unit{}, err
 	}
@@ -77,24 +95,103 @@ func (s *sqlStore) Create(ctx context.Context, u Unit) (Unit, error) {
 	u.UpdatedAt = u.CreatedAt
 	u.Version = 0
 	u.Metadata = normaliseMetadata(u.Metadata)
+	return u, nil
+}
 
-	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
-		_, err := tx.Exec(ctx, `
+// insertUnitTx writes one prepared units row inside tx.
+func insertUnitTx(ctx context.Context, tx storage.WriteTx, u Unit) error {
+	_, err := tx.Exec(ctx, `
             INSERT INTO units
                 (id, kind, scope, scope_id, classification, version,
                  load_policy, title, body, metadata, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
-			u.ID, string(u.Kind), string(u.Scope), u.ScopeID,
-			string(u.Classification), u.Version, string(u.LoadPolicy),
-			u.Title, u.Body, string(u.Metadata),
-			u.CreatedAt.UnixNano(), u.UpdatedAt.UnixNano(),
-		)
-		return err
-	}); err != nil {
-		return Unit{}, err
+		u.ID, string(u.Kind), string(u.Scope), u.ScopeID,
+		string(u.Classification), u.Version, string(u.LoadPolicy),
+		u.Title, u.Body, string(u.Metadata),
+		u.CreatedAt.UnixNano(), u.UpdatedAt.UnixNano(),
+	)
+	return err
+}
+
+// CreateWithSyncState inserts a pulled unit AND its fleet sync sidecar row
+// in ONE WriteTx (units-debt-01UNITD01 FR-4, C-review D-1). Before this,
+// the fleet pull path called Create then UpsertSyncState as two separate
+// transactions: a crash or error between them left a team/org unit with no
+// baseline, which the next PushDirty treats as locally-new (pushes it back)
+// and the next pull cannot resolve to its node (creates a duplicate). See
+// Store.CreateWithSyncState.
+func (s *sqlStore) CreateWithSyncState(ctx context.Context, u Unit, st SyncState) (Unit, SyncState, error) {
+	u, err := s.prepareCreate(u)
+	if err != nil {
+		return Unit{}, SyncState{}, err
 	}
-	return u, nil
+	st.UnitID = u.ID
+	st.SyncedLocalVersion = u.Version
+	st, err = s.prepareSyncState(st)
+	if err != nil {
+		return Unit{}, SyncState{}, err
+	}
+	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		if err := insertUnitTx(ctx, tx, u); err != nil {
+			return fmt.Errorf("units: CreateWithSyncState: insert unit: %w", err)
+		}
+		if err := upsertSyncStateTx(ctx, tx, st); err != nil {
+			return fmt.Errorf("units: CreateWithSyncState: sync state: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return Unit{}, SyncState{}, err
+	}
+	return u, st, nil
+}
+
+// UpdateWithSyncState applies a pulled fast-forward (version bump, history
+// row, body/metadata) AND advances the sync sidecar in ONE WriteTx
+// (units-debt-01UNITD01 FR-4). baseVersion is the local Version the caller
+// observed when it decided the fast-forward was clean; it is re-checked
+// INSIDE the write transaction, so a local edit that lands between the
+// caller's read and this write returns ErrVersionConflict instead of being
+// overwritten and baselined as synced. See Store.UpdateWithSyncState.
+func (s *sqlStore) UpdateWithSyncState(ctx context.Context, id string, baseVersion int, body string, metadata []byte, st SyncState) (Unit, SyncState, error) {
+	if baseVersion < 0 {
+		return Unit{}, SyncState{}, ErrVersionConflict
+	}
+	meta := normaliseMetadata(metadata)
+	now := s.now()
+	newVersion := baseVersion + 1
+	st.UnitID = id
+	st.SyncedLocalVersion = newVersion
+	st, err := s.prepareSyncState(st)
+	if err != nil {
+		return Unit{}, SyncState{}, err
+	}
+	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		var persisted int
+		if err := tx.QueryRow(ctx, "SELECT version FROM units WHERE id = ?", id).Scan(&persisted); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrUnitNotFound
+			}
+			return fmt.Errorf("units: UpdateWithSyncState: read version: %w", err)
+		}
+		if persisted != baseVersion {
+			return ErrVersionConflict
+		}
+		if err := writeUpdateTx(ctx, tx, id, newVersion, body, meta, now); err != nil {
+			return err
+		}
+		if err := upsertSyncStateTx(ctx, tx, st); err != nil {
+			return fmt.Errorf("units: UpdateWithSyncState: sync state: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return Unit{}, SyncState{}, err
+	}
+	updated, err := s.Get(ctx, id)
+	if err != nil {
+		return Unit{}, SyncState{}, err
+	}
+	return updated, st, nil
 }
 
 // ── Get ────────────────────────────────────────────────────────────────
@@ -192,38 +289,7 @@ func (s *sqlStore) update(ctx context.Context, id string, baseVersion int, body 
 	newVersion := current.Version + 1
 
 	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
-		// Append history row first.
-		_, err := tx.Exec(ctx, `
-            INSERT INTO unit_versions
-                (unit_id, version, body, metadata, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        `,
-			id, newVersion, body, string(meta), now.UnixNano(),
-		)
-		if err != nil {
-			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-				return ErrVersionConflict
-			}
-			return fmt.Errorf("units: Update: insert version: %w", err)
-		}
-
-		// Mutate the units row.
-		res, err := tx.Exec(ctx, `
-            UPDATE units
-            SET version = ?, body = ?, metadata = ?, updated_at = ?
-            WHERE id = ?
-        `, newVersion, body, string(meta), now.UnixNano(), id)
-		if err != nil {
-			return fmt.Errorf("units: Update: update row: %w", err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return ErrUnitNotFound
-		}
-		return nil
+		return writeUpdateTx(ctx, tx, id, newVersion, body, meta, now)
 	}); err != nil {
 		return Unit{}, err
 	}
@@ -233,6 +299,44 @@ func (s *sqlStore) update(ctx context.Context, id string, baseVersion int, body 
 	current.Metadata = meta
 	current.UpdatedAt = now
 	return current, nil
+}
+
+// writeUpdateTx appends the history row for newVersion and mutates the
+// units row, inside tx. A concurrent bump of the same version surfaces as
+// ErrVersionConflict (UNIQUE (unit_id, version)).
+func writeUpdateTx(ctx context.Context, tx storage.WriteTx, id string, newVersion int, body string, meta []byte, now time.Time) error {
+	// Append history row first.
+	_, err := tx.Exec(ctx, `
+            INSERT INTO unit_versions
+                (unit_id, version, body, metadata, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        `,
+		id, newVersion, body, string(meta), now.UnixNano(),
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return ErrVersionConflict
+		}
+		return fmt.Errorf("units: Update: insert version: %w", err)
+	}
+
+	// Mutate the units row.
+	res, err := tx.Exec(ctx, `
+            UPDATE units
+            SET version = ?, body = ?, metadata = ?, updated_at = ?
+            WHERE id = ?
+        `, newVersion, body, string(meta), now.UnixNano(), id)
+	if err != nil {
+		return fmt.Errorf("units: Update: update row: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUnitNotFound
+	}
+	return nil
 }
 
 // ── AddEdge ────────────────────────────────────────────────────────────
@@ -292,20 +396,10 @@ func (s *sqlStore) CreateWithEdge(ctx context.Context, u Unit, e Edge) (Unit, Ed
 		return Unit{}, Edge{}, fmt.Errorf("units: CreateWithEdge: to unit: %w", err)
 	}
 
-	if u.ID == "" {
-		id, err := s.idGen()
-		if err != nil {
-			return Unit{}, Edge{}, fmt.Errorf("units: id gen: %w", err)
-		}
-		u.ID = id
+	u, err := s.prepareCreate(u)
+	if err != nil {
+		return Unit{}, Edge{}, err
 	}
-	now := s.now()
-	if u.CreatedAt.IsZero() {
-		u.CreatedAt = now
-	}
-	u.UpdatedAt = u.CreatedAt
-	u.Version = 0
-	u.Metadata = normaliseMetadata(u.Metadata)
 
 	// The edge originates from the freshly-minted unit.
 	e.FromID = u.ID
@@ -322,17 +416,7 @@ func (s *sqlStore) CreateWithEdge(ctx context.Context, u Unit, e Edge) (Unit, Ed
 	e.Version = 1
 
 	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
-		if _, err := tx.Exec(ctx, `
-            INSERT INTO units
-                (id, kind, scope, scope_id, classification, version,
-                 load_policy, title, body, metadata, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-			u.ID, string(u.Kind), string(u.Scope), u.ScopeID,
-			string(u.Classification), u.Version, string(u.LoadPolicy),
-			u.Title, u.Body, string(u.Metadata),
-			u.CreatedAt.UnixNano(), u.UpdatedAt.UnixNano(),
-		); err != nil {
+		if err := insertUnitTx(ctx, tx, u); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `
@@ -404,6 +488,20 @@ const sqlSelectSyncState = `
 `
 
 func (s *sqlStore) UpsertSyncState(ctx context.Context, st SyncState) (SyncState, error) {
+	st, err := s.prepareSyncState(st)
+	if err != nil {
+		return SyncState{}, err
+	}
+	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		return upsertSyncStateTx(ctx, tx, st)
+	}); err != nil {
+		return SyncState{}, fmt.Errorf("units: UpsertSyncState: %w", err)
+	}
+	return st, nil
+}
+
+// prepareSyncState validates st and fills LastSynced (UTC).
+func (s *sqlStore) prepareSyncState(st SyncState) (SyncState, error) {
 	if st.UnitID == "" {
 		return SyncState{}, fmt.Errorf("units: UpsertSyncState: empty UnitID")
 	}
@@ -414,12 +512,15 @@ func (s *sqlStore) UpsertSyncState(ctx context.Context, st SyncState) (SyncState
 		st.LastSynced = s.now()
 	}
 	st.LastSynced = st.LastSynced.UTC()
+	return st, nil
+}
 
-	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
-		// SQLite upsert on the unit_id primary key. node_id carries a UNIQUE
-		// index; a node-id collision with a *different* unit surfaces as a
-		// constraint failure rather than silently re-homing the node.
-		_, err := tx.Exec(ctx, `
+// upsertSyncStateTx writes one prepared sidecar row inside tx.
+func upsertSyncStateTx(ctx context.Context, tx storage.WriteTx, st SyncState) error {
+	// SQLite upsert on the unit_id primary key. node_id carries a UNIQUE
+	// index; a node-id collision with a *different* unit surfaces as a
+	// constraint failure rather than silently re-homing the node.
+	_, err := tx.Exec(ctx, `
             INSERT INTO unit_sync_state
                 (unit_id, node_id, synced_version, classification, last_synced,
                  synced_server_version, synced_local_version)
@@ -432,15 +533,11 @@ func (s *sqlStore) UpsertSyncState(ctx context.Context, st SyncState) (SyncState
                 synced_server_version = excluded.synced_server_version,
                 synced_local_version  = excluded.synced_local_version
         `,
-			st.UnitID, st.NodeID, st.SyncedVersion, st.Classification,
-			st.LastSynced.UnixNano(),
-			st.SyncedServerVersion, st.SyncedLocalVersion,
-		)
-		return err
-	}); err != nil {
-		return SyncState{}, fmt.Errorf("units: UpsertSyncState: %w", err)
-	}
-	return st, nil
+		st.UnitID, st.NodeID, st.SyncedVersion, st.Classification,
+		st.LastSynced.UnixNano(),
+		st.SyncedServerVersion, st.SyncedLocalVersion,
+	)
+	return err
 }
 
 func (s *sqlStore) GetSyncState(ctx context.Context, unitID string) (SyncState, error) {

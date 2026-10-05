@@ -190,7 +190,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 184 entries.
+# 187 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -221,13 +221,15 @@
 "Bundle_List"
 "Bundle_Remove"
 
-# Caller(s) CatalogPreviewDrawer.vue, MarketplaceView.vue span multiple views,
+# Caller(s) MarketplaceView.vue (CatalogPreviewDrawer.vue was retired by
+# install-framework-01DOGF0B WP05, 2026-10-05) spans multiple views,
 # ALL of which are inaccessible in served mode (boundary-panelled and/or
 # unrouted and/or gated) -- no single caller reaches this in a served build via
 # any path.
 "Catalog_Install"
 
-# Caller(s) CatalogView.vue, MarketplaceView.vue span multiple views, ALL of
+# Caller(s) MarketplaceView.vue (workflows' CatalogView.vue was retired by
+# install-framework-01DOGF0B WP05, 2026-10-05) spans multiple views, ALL of
 # which are inaccessible in served mode (boundary-panelled and/or unrouted
 # and/or gated) -- no single caller reaches this in a served build via any path.
 "Catalog_List"
@@ -341,8 +343,19 @@
 "Hooks_RemoveStarterMemory"
 "Settings_SetMemory"
 
-# Caller(s) KenazToolsPanel.vue only reachable from a view that renders
-# NotAvailableInServedMode.
+# Caller(s) CapabilitySurface.vue + its plugins (install-framework-01DOGF0B
+# WP04, 2026-10-05) only reachable from ToolsView.vue, which renders
+# NotAvailableInServedMode. The one install framework's surface is
+# desktop-only until Phase 4 (WP09) decides its served disposition with
+# the rail entry.
+"Capability_Install"
+"Capability_List"
+"Capability_Uninstall"
+"Capability_Update"
+
+# Caller(s) BuiltinToolsPlugin (views/capabilities/plugins/builtinTools.ts,
+# install-framework-01DOGF0B WP04; formerly KenazToolsPanel.vue) only
+# reachable from ToolsView.vue, which renders NotAvailableInServedMode.
 "Settings_GetBash"
 "Settings_GetFSReadEnabled"
 "Settings_GetFSWriteEnabled"
@@ -529,16 +542,19 @@
 
 # Called through workflowsClient.ts, a separate bridge module (not part of
 # HarnessClient/harnessClient.ts). All UI callers are views/workflows/*
-# (WorkflowsView.vue itself, CatalogView.vue, CatalogPreviewDrawer.vue,
-# RunsHistoryTab.vue, ScheduledInbox.vue, WorkflowEditor.vue,
-# SimpleTemplateEditor.vue, WorkflowSchedulesSection.vue) and
-# components/workflows/WorkflowGraphEditor.vue -- all boundary-panelled.
-# (views/settings/WorkflowsSettingsPanel.vue was deleted by
-# nav-ia-sweep-01DOGF0F, 2026-10-04.)
+# (WorkflowsView.vue itself, RunsHistoryTab.vue, ScheduledInbox.vue,
+# WorkflowEditor.vue, SimpleTemplateEditor.vue,
+# WorkflowSchedulesSection.vue), components/workflows/WorkflowGraphEditor.vue
+# and views/capabilities/plugins/WorkflowDetail.vue (Workflows_CatalogGet /
+# _CatalogInstall, the "Add capability" workflow plugin) -- all
+# boundary-panelled. (views/settings/WorkflowsSettingsPanel.vue was deleted
+# by nav-ia-sweep-01DOGF0F, 2026-10-04; CatalogView.vue /
+# CatalogPreviewDrawer.vue and the Workflows_CatalogList binding by
+# install-framework-01DOGF0B WP05, 2026-10-05 — Capability_List is the live
+# substitute.)
 "Workflows_CancelRun"
 "Workflows_CatalogGet"
 "Workflows_CatalogInstall"
-"Workflows_CatalogList"
 "Workflows_Delete"
 "Workflows_Get"
 "Workflows_List"

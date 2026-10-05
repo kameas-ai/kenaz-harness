@@ -57,6 +57,21 @@ func NewMemoryStore(opts ...MemStoreOption) Store {
 }
 
 func (s *memStore) Create(_ context.Context, u Unit) (Unit, error) {
+	u, err := s.prepareCreate(u)
+	if err != nil {
+		return Unit{}, err
+	}
+
+	s.mu.Lock()
+	s.units[u.ID] = u
+	s.mu.Unlock()
+	return u, nil
+}
+
+// prepareCreate mirrors sqlStore.prepareCreate (validate, id, timestamps,
+// Version=0, normalised metadata), shared by the three create paths
+// (units-debt-01UNITD01 review L3, 2026-10-05).
+func (s *memStore) prepareCreate(u Unit) (Unit, error) {
 	if err := validateUnit(u); err != nil {
 		return Unit{}, err
 	}
@@ -74,10 +89,6 @@ func (s *memStore) Create(_ context.Context, u Unit) (Unit, error) {
 	u.UpdatedAt = u.CreatedAt
 	u.Version = 0
 	u.Metadata = normaliseMetadata(u.Metadata)
-
-	s.mu.Lock()
-	s.units[u.ID] = u
-	s.mu.Unlock()
 	return u, nil
 }
 
@@ -217,20 +228,10 @@ func (s *memStore) CreateWithEdge(ctx context.Context, u Unit, e Edge) (Unit, Ed
 		return Unit{}, Edge{}, fmt.Errorf("units: CreateWithEdge: to unit: %w", err)
 	}
 
-	if u.ID == "" {
-		id, err := s.idGen()
-		if err != nil {
-			return Unit{}, Edge{}, fmt.Errorf("units: id gen: %w", err)
-		}
-		u.ID = id
+	u, err := s.prepareCreate(u)
+	if err != nil {
+		return Unit{}, Edge{}, err
 	}
-	now := s.now()
-	if u.CreatedAt.IsZero() {
-		u.CreatedAt = now
-	}
-	u.UpdatedAt = u.CreatedAt
-	u.Version = 0
-	u.Metadata = normaliseMetadata(u.Metadata)
 
 	e.FromID = u.ID
 	if e.ID == "" {
@@ -250,6 +251,76 @@ func (s *memStore) CreateWithEdge(ctx context.Context, u Unit, e Edge) (Unit, Ed
 	s.edges = append(s.edges, e)
 	s.mu.Unlock()
 	return u, e, nil
+}
+
+// CreateWithSyncState inserts the unit and its sidecar under one lock
+// acquisition (validation, including the node_id uniqueness check, happens
+// before either map is touched). See Store.CreateWithSyncState.
+func (s *memStore) CreateWithSyncState(_ context.Context, u Unit, st SyncState) (Unit, SyncState, error) {
+	u, err := s.prepareCreate(u)
+	if err != nil {
+		return Unit{}, SyncState{}, err
+	}
+	st.UnitID = u.ID
+	st.SyncedLocalVersion = u.Version
+	st, err = s.prepareSyncState(st)
+	if err != nil {
+		return Unit{}, SyncState{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkNodeIDLocked(st); err != nil {
+		return Unit{}, SyncState{}, err
+	}
+	s.units[u.ID] = u
+	s.syncState[st.UnitID] = st
+	return u, st, nil
+}
+
+// UpdateWithSyncState bumps the unit and upserts its sidecar under one lock
+// acquisition. See Store.UpdateWithSyncState.
+func (s *memStore) UpdateWithSyncState(_ context.Context, id string, baseVersion int, body string, metadata []byte, st SyncState) (Unit, SyncState, error) {
+	if baseVersion < 0 {
+		return Unit{}, SyncState{}, ErrVersionConflict
+	}
+	meta := normaliseMetadata(metadata)
+	now := s.now()
+	st.UnitID = id
+	st, err := s.prepareSyncState(st)
+	if err != nil {
+		return Unit{}, SyncState{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.units[id]
+	if !ok {
+		return Unit{}, SyncState{}, ErrUnitNotFound
+	}
+	if u.Version != baseVersion {
+		return Unit{}, SyncState{}, ErrVersionConflict
+	}
+	if err := s.checkNodeIDLocked(st); err != nil {
+		return Unit{}, SyncState{}, err
+	}
+	newVersion := u.Version + 1
+	s.versions = append(s.versions, UnitVersion{
+		ID:        int64(len(s.versions) + 1),
+		UnitID:    id,
+		Version:   newVersion,
+		Body:      body,
+		Metadata:  json.RawMessage(meta),
+		CreatedAt: now,
+	})
+	u.Version = newVersion
+	u.Body = body
+	u.Metadata = json.RawMessage(meta)
+	u.UpdatedAt = now
+	s.units[id] = u
+	st.SyncedLocalVersion = newVersion
+	s.syncState[id] = st
+	return u, st, nil
 }
 
 func (s *memStore) ListEdges(_ context.Context, unitID string) ([]Edge, error) {
@@ -285,6 +356,22 @@ func (s *memStore) ListVersions(_ context.Context, unitID string) ([]UnitVersion
 // ── Sync sidecar ───────────────────────────────────────────────────────
 
 func (s *memStore) UpsertSyncState(_ context.Context, st SyncState) (SyncState, error) {
+	st, err := s.prepareSyncState(st)
+	if err != nil {
+		return SyncState{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkNodeIDLocked(st); err != nil {
+		return SyncState{}, err
+	}
+	s.syncState[st.UnitID] = st
+	return st, nil
+}
+
+// prepareSyncState validates st and fills LastSynced (UTC).
+func (s *memStore) prepareSyncState(st SyncState) (SyncState, error) {
 	if st.UnitID == "" {
 		return SyncState{}, fmt.Errorf("units: UpsertSyncState: empty UnitID")
 	}
@@ -298,18 +385,19 @@ func (s *memStore) UpsertSyncState(_ context.Context, st SyncState) (SyncState, 
 		st.LastSynced = s.now()
 	}
 	st.LastSynced = st.LastSynced.UTC()
+	return st, nil
+}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Enforce the node_id UNIQUE invariant: a node id may not map to two
-	// different units. Both backends must behave identically here.
+// checkNodeIDLocked enforces the node_id UNIQUE invariant: a node id may
+// not map to two different units. Both backends must behave identically
+// here. Caller holds s.mu.
+func (s *memStore) checkNodeIDLocked(st SyncState) error {
 	for uid, existing := range s.syncState {
 		if uid != st.UnitID && existing.NodeID == st.NodeID {
-			return SyncState{}, fmt.Errorf("units: UpsertSyncState: node_id %q already mapped to unit %q", st.NodeID, uid)
+			return fmt.Errorf("units: UpsertSyncState: node_id %q already mapped to unit %q", st.NodeID, uid)
 		}
 	}
-	s.syncState[st.UnitID] = st
-	return st, nil
+	return nil
 }
 
 func (s *memStore) GetSyncState(_ context.Context, unitID string) (SyncState, error) {

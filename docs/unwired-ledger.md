@@ -342,6 +342,40 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event; the two pull surfaces are count-only stubs
+
+Three linked findings from kitty-specs/fleet-session-truth-01DOGF0A/
+research/pull-idempotency-audit-2026-10-05.md:
+1. **seq=1 defect (real):** SessionSyncer.AppendEvent constructs a fresh
+   EventStream per call (core/fleet/session_sync.go:201), so every pushed
+   session event leaves with seq=1; "fleet assigns the monotonic seq"
+   (api.go:4352) is an unverified server assumption. Depending on server
+   dedupe the remote stream may hold ONE event total. **Owner:** fleet
+   brief (confirm server (stream_id,seq) semantics), then either carry a
+   real monotonic seq or document renumbering. Blocks any future durable
+   replay watermark.
+2. **SessionSync_ResumeFrom** and **Handoff_Accept** decrypt and COUNT
+   records, persisting nothing (views/contextsync/impl.go:86-89, :213-228,
+   both commented as future-WP). Bindings exist; frontend never calls the
+   first and never calls accept. Dated-justified: the pull writer must not
+   exist until it can be idempotent per the audit's fix shape — do not
+   wire a naive AppendMessage loop. **Owner:** the future session-pull
+   mission; the audit file is its contract.
+
+### 2026-10-05 · contexts per-node publication-state read (blocker for FR-7 pre-run state display) — owner: follow-up WP on knowledge-home (needs a Contexts_NodeStatus binding returning per-node layer/version)
+
+knowledge-home-01DOGF0E FR-7 asks the folder share/promote dialog to show,
+per entry and before the run, whether it is already published and at which
+layer. Nothing can answer that today: `Context_SyncStatus` is an aggregate
+(cursor, pull count, errors) and `Context_ContextSearch` is a title/body
+search — neither is keyed by node id (`core/rpc/views/contexts/api.go`). The
+dialog (`frontend/src/views/contexts/FolderShareDialog.vue`) therefore
+reports each entry's actual landing layer (`effective_layer`) only after the
+run, and says nothing about prior state rather than guessing. Blocker: a
+`Contexts_NodeStatus` binding returning per-node layer/version. Owner: a
+follow-up WP on knowledge-home. Not a lie today — no control claims the
+state — so this is a dated gap, not an inert dial.
+
 ### 2026-10-05 (v0.87.0 adversarial review F2) · the repair path's re-application window ends at 0341
 
 Re-running sessions/0332 on a database units/1104 has converted fails
@@ -354,7 +388,72 @@ IF a future repair feature widens the window below 0341, it must add a
 table-exists guard IN THE REPAIR PATH, not in 0332. **Owner:** whoever
 builds a wider repair. Also noted (F4): the 0341 composition tests pin
 v0.85.2/v0.63.0 while 1104's pin the newest snapshot — re-point 0341's
-at the newest tag when next touched.
+at the newest tag when next touched. **F4 CLOSED 2026-10-05 by
+units-debt-01UNITD01 WP03:** the three 0341 tests now select
+`newestSnapshotBefore0341` (`core/storage/sqlite/migration_0341_test.go`)
+— the newest committed snapshot whose ledger predates 0341 (v0.86.0
+today), not a hard-coded tag; "newest overall" would silently stop
+re-running 0341 once a post-0341 snapshot lands. The repair-window
+finding above (F2) stays open; units/1105 tolerates it — re-applying 1105
+after a ledger rewind is a no-op once the tables are gone
+(`TestMigration1105_FreshInstallAndReopenAfterRewind`), and
+`TestMigration0341_ReapplyAfterUnitsConversionDoesNotBrick` now runs 0341's
+re-application against a database with NO artifacts table of either
+generation.
+
+### 2026-10-05 (install-framework-01DOGF0B review L2) · install consent is UI-enforced only; fleet workflows install unverified until C-2
+
+**Class:** a control that reads as enforced but is enforced only in one
+caller (consent); a verification step that reports, not refuses (C-2).
+
+**(a) Consent (pre-existing, owner: Phase 3 / install-framework-01DOGF0B).**
+`install.RequirementConsent` (an MCP recipe's `Warning`) is declared by the
+MCP provider and routes the "Add capability" row to the key-prompt modal,
+whose acknowledgement checkbox is the only thing that enforces it.
+`install.Framework` deliberately enforces only input-bearing requirements
+(key / config / directory); a direct `Tools_InstallRecipe` or
+`Capability_Install` call installs a warning-bearing recipe without any
+acknowledgement — exactly as `Tools_InstallRecipe` did before the
+framework. Blocker: an acknowledgement token on the install request (a
+binding-signature change) belongs with Phase 3's surface consolidation.
+
+**(b) Fleet workflows join skills' unverified posture (owner: register
+C-2 / the FR-2 fleet payload brief).** Since WP05, org-catalog workflow
+payloads install through `WorkflowsAPI.InstallDocument`, verified by the
+same single `installSignatureVerifier` as skills. With no per-device
+catalog key (C-2) the verifier reports `verified=false` with the C-2
+reason and the install proceeds — recorded on the `capability:installed`
+event and stated in the workflow detail pane, not refused. A workflow can
+carry shell steps and a cron schedule, so this posture is a larger trust
+surface than a text skill; the collision refusal (review H1/H2 — a payload
+can never overwrite a template, a user workflow or another item's
+workflow) bounds it to new ids. Clears when C-2's key source lands in the
+verifier.
+
+### 2026-10-05 (install-framework-01DOGF0B re-review low 3) · templates installed before install provenance are never offered an update
+
+**Class:** a dial with no producer for a subset of rows.
+`installed_outdated` is computed from the install provenance record
+(`core/workflows/provenance.go`, the shipped `v<N>` recorded at install).
+Templates installed by v0.87.0 and earlier (Workflows › Catalog) have no
+record, so they read "installed" forever and are never offered an update —
+the conservative choice: without a recorded version, "outdated" would be a
+guess, and an update overwrites user edits. **Disposition: acceptance note,
+not a backfill WP** — the workaround is to Remove the template in Tools ›
+Add capability and Install it again, which records provenance; a backfill
+would have to guess an installed version from YAML the user may have
+edited. Owner: alec / install-framework-01DOGF0B Phase 3, which revisits it
+with the Marketplace fold-in (release notes carry the workaround).
+
+### 2026-10-05 (install-framework-01DOGF0B review L3) · `slashcmd.Registry` has no mutex
+
+**Class:** latent data race on a live map. `Registry.commands` is read by
+dispatch (`Lookup`/`List`) and mutated by `LiveRegister` /
+`LiveUnregister` / `RenameLocalTrigger` from RPC goroutines and the fleet
+mandated-skill applier, with no lock. Not changed in this review (a
+drive-by lock on a hot dispatch path wants its own race test).
+Owner: Phase 3 (install-framework-01DOGF0B). Blocker: a `-race` test
+driving concurrent install + dispatch, written with the lock.
 
 ### 2026-10-04 (install-framework-01DOGF0B WP01/WP02) · Marketplace "Install" for workflow / agent_pack / bundle was badge-only — nothing consumes `installed/`; the skill badge lied the other way
 
@@ -471,6 +570,43 @@ becomes symbol-gateable at **WP03**: once the provider contract exists,
 is computed from its consumer" is a registration↔consumer pair the
 pass-2 tripwire pattern can enforce. WP03 owns adding that gate, with a
 planted-violation proof in `scripts/ci/gates_can_fail_test.go`.
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored — CLOSED 2026-10-05
+
+
+**Gate added (WP03, 2026-10-05).** `scripts/ci/check-install-provider-coverage.sh`
+(wired into `pr.yml`) pairs, in both directions: every `core/fleet`
+`CatalogItemKind` value ↔ an `install.Kind` (`core/install/provider.go`);
+every `install.Kind` ↔ a production `Register(install.Kind<Name>, …)` under
+`core/rpc/` **plus** a `TestInstallProvider_<Name>_ConsumerSeesInstall`
+consumer test — or a dated line in
+`scripts/ci/allowlists/install-provider-coverage.txt` naming the blocker and
+owner; and every allowlist line ↔ a real, still-unregistered kind (the
+allowlist shrinks as providers land). "InstalledState is computed from its
+consumer" is not grep-checkable, so it is enforced at runtime instead:
+`install.Framework.Install` re-reads `Provider.InstalledState` after every
+install and fails with `install.ErrNotConsumed` when the consumer does not
+list the capability (`TestInstall_BadgeOnly_RefusedWithErrNotConsumed`,
+`core/install/framework_test.go`). Planted proofs:
+`install-provider-coverage/{unregistered-kind,registered-without-consumer-test,catalog-kind-without-install-kind}`.
+
+**Progress (WP04/WP05, 2026-10-05).** `mcp_recipe`, `skill` and `workflow`
+have registered providers with consumer tests and left the coverage
+allowlist: MCP recipes adapt the existing recipe install (consumer: the
+supervisor's persisted enabled list); skills fetch in `Verify`, are checked
+by the single `SignatureVerifier`, and `LiveRegister` the same bytes
+(consumer: skill store + slash registry); workflows install shipped
+templates through wfcatalog `Store.Save` + cron and fleet workflow payloads
+through `WorkflowsAPI.InstallDocument` (consumer: `Workflows_List`). Every
+per-kind install binding (`Tools_InstallRecipe`, `Tools_UninstallRecipe`,
+`Slashcmd_SkillInstall`, `Slashcmd_SkillUninstall`,
+`Workflows_CatalogInstall`) routes through the framework. Still standing:
+`bundle` (WP06) and `agent_pack` (WP07) stay allowlisted, and
+`Catalog_Install` + the Marketplace keep refusing workflow / agent_pack /
+bundle — the Marketplace is folded into the surface in Phase 3, and until
+then its workflow refusal copy still names Workflows › Catalog, which WP05
+retired (`?tab=catalog` now redirects to `/tools?kind=workflow`, so the
+copy's pointer still lands; the wording is Phase 3's to change — the WP02
+copy is frozen for this phase). Owner: alec / install-framework-01DOGF0B.
 ### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored
 
 Every chat turn now links to its run graph (WP04), so materialization
@@ -506,6 +642,44 @@ owner as the redrive-window entry below). Deleted when tier 3 is
 reachable only for runs that predate that store, and a test materializes
 a 65th-turn run with exact provenance after an edit to its library file.
 
+**Closed 2026-10-05** by branch `feat/graph-resolved-spec` (target
+v0.88.0), both halves of the deletion condition met:
+
+- *The store.* Migration `sessions/0343-agent-graph-run-specs`
+  (`core/session/migrations_agent_graph_run_specs.go`):
+  `agent_graph_run_specs(run_id PK, graph_id, spec_digest, spec_json,
+  created_at_ns)`. Written by the kernel itself (`Kernel.Run` →
+  `recordRunSpec`, `core/agentgraph/run_spec_store.go`) once per run,
+  before `run_start`, from `env.Graph` — the spec it executes, post alias
+  / routing gate / dial. Insert-once (Resume and the overflow redrive
+  keep the first row); bounded per row by `MaxRunSpecBytes` (1 MiB;
+  measured 2026-10-05: `chat_default` encodes to ~5.0 KiB of JSON (5028
+  bytes; ~2.7 KiB resolved with the routing gate off), `toolloop_default`
+  ~4.2 KiB (4259 bytes)); digest re-checked on read. An oversized spec is
+  not stored and renders as a labelled reconstruction (pinned by
+  `TestKernel_OversizedSpecRunCompletesAndRendersAsReconstruction`).
+- *Tier 3 reachable only for runs that predate it.* `runSpecFor` reads
+  the persisted spec first and holds it to `run_start`'s `spec_digest`;
+  a run with a stored spec never reaches the library reconstruction.
+  The digest-verified upgrade described above is **deleted** — what
+  remains (`reconstructUnrecordedRunSpec`) always stamps
+  `library_fallback`, and the banners now say the run predates per-run
+  spec recording. Its only reader,
+  `TestMaterializeRun_LibraryFallbackVerifiedBySpecDigest`, is deleted.
+- *The test.* `TestMaterializeRun_65thTurnAfterLibraryEdit_IsExact`
+  (`core/rpc/views/agentgraph/materialize_persisted_spec_test.go`) is
+  the condition verbatim; `TestMaterializeRun_EditedGraphStillShowsWhatRan`
+  does the same across a restart, and
+  `TestMaterializeRun_PreSnapshotRunOnUpgradedInstall_IsLabelledReconstruction`
+  boots the v0.86.0 snapshot to prove pre-store runs still render,
+  labelled.
+
+Not done here, and not a lie: the blocker named a retention policy.
+`agent_graph_run_specs` has the same lifecycle as `agent_graph_events`,
+which has none either; the per-row bound caps the growth rate (one row
+per run). A retention sweep belongs with event-log retention, whenever
+that is specced — not a dated item here because nothing claims it exists.
+
 ### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · a redriven run's status reads "failed" for the seconds before its redrive starts
 
 Between a chat run's failed attempt and the overflow redrive's
@@ -518,6 +692,10 @@ reopening the view shows the redrive. **Blocker:** a durable
 **Owner:** the follow-up to 01DOGF0D that persists exact run state
 (spec §5 follow-up). Deleted when that record exists and the status
 test asserts "running" across the whole redrive window.
+*2026-10-05:* `feat/graph-resolved-spec` — the spec-persistence half of
+that follow-up — persists the resolved **spec**, not run **state**, so
+this entry stays open; its owner is now the redrive-state half alone (a
+durable redrive-pending record), not yet specced.
 ### 2026-10-04 (artifacts-as-units-01DOGF0C review F10) · artifact purge after a session/project delete has no retry — purge-retry
 
 `purgeArtifactsAfterDelete` (`core/rpc/api.go`) runs after the session or
@@ -563,7 +741,7 @@ produced.
 — every capture, revision, promote and delete in production writes
 `kind='artifact'` units. Decision record: `docs/missions/artifacts-as-units.md`.
 
-### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `artifacts_legacy` / `artifact_versions_legacy` retained read-only — DROP due next release
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `artifacts_legacy` / `artifact_versions_legacy` retained read-only — DROP due next release — CLOSED
 
 Migration `units/1104-artifacts-to-units` RENAMES the legacy tables
 instead of dropping them (spec FR-3.3: never drop in the migration that
@@ -580,6 +758,49 @@ first snapshot that carries the `*_legacy` tables, per the I14 gate.
 Blocker: one shipped release of 1104 against real installs. Owner:
 artifacts-as-units-01DOGF0C (filed 2026-10-04). Do not fold it into 1104
 or into the same release.
+
+**Closed 2026-10-05 by units-debt-01UNITD01 WP02** (target: the release
+after v0.87.0 — it must not ship in v0.87.0 itself). Migration
+`units/1105-drop-artifacts-legacy` (`core/units/migration_drop_legacy_artifacts.go`)
+drops both tables child-first, `IF EXISTS`-guarded, after verifying the
+1104 copy in the same transaction: both legacy tables present or neither;
+1104 ledgered `applied`; no legacy id held by a non-artifact unit; every
+legacy version of a still-present artifact unit — and every synthesized v1
+of a version-less one — has its `unit_versions` twin (version, content
+hash, byte size, created_at). Any failure returns
+`ErrLegacyArtifactsUnverified` — Open fails closed, both tables intact.
+Deliberate deviation from the units-debt spec FR-2's literal row-count
+equality (orchestrator ruling, 2026-10-05: QUARANTINE, not refuse): legacy
+rows whose artifact UNIT is absent — deleted on v0.87.0 (artifact delete,
+session / project purge), or lost to a bug/tamper, which looks identical
+— are neither refused (the literal check would fail Open for every user
+who deleted an artifact during the retention release; mutation-tested:
+"literal: 16 legacy vs 11 units") nor silently dropped: each is copied,
+with its legacy versions as JSON, into the retained table
+**`artifacts_legacy_orphans`** (id, title, content_hash, source_ref_json,
+legacy_metadata, quarantined_at) and named at WARN
+(`units.drop_artifacts_legacy.orphan_quarantined`: id, hash, title) before
+the big tables drop. The quarantine table is bounded (only rows orphaned at
+drop time; nothing writes or reads it afterwards) and exists for manual
+recovery. An orphan whose id is already in the quarantine table is
+refused, not skipped (tampering — no legitimate path writes it twice). Tests: `core/storage/sqlite/migration_1105_test.go` (P-1 on a
+reconstructed v0.87.0 state from the newest pre-1104 snapshot + every
+seeded artifact shape, zero delta on the four units tables and every media
+refcount; P-2: seven planted mismatches refuse and boot once repaired;
+check 1 via ledger surgery; deleted-since-copy and mass-loss quarantined;
+fresh install + rewind-reopen).
+**Not a bug — do not "fix" (2026-10-05, units-debt review):**
+`sqlStore.UpdateAtVersion` reads the unit's version OUTSIDE its write
+transaction — the same shape the pull path's `UpdateWithSyncState` had
+(review M3, fixed there by re-checking `baseVersion` inside the tx). It is
+not exploitable: a concurrent bump between the read and the write makes
+the history INSERT hit `UNIQUE(unit_id, version)`, which surfaces as
+`ErrVersionConflict`. Moving the check without keeping that UNIQUE path
+would be the regression.
+**Resolved residual (2026-10-05):** `TestMigration1105_V087SnapshotBoots`
+runs against the real `testdata/upgrade/v0.87.0/` snapshot (committed on
+release/v0.88.0, 3490ee44) and PASSES; the guard fails loudly if a tag
+>= v0.87.0 ever exists without a legacy-carrying snapshot.
 
 ### 2026-10-04 (artifacts-as-units-01DOGF0C WP01, D4) · artifact version history is write-only — `Store.ListVersions` has no production reader
 

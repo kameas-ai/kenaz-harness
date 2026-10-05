@@ -177,7 +177,9 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// below an already-applied version is safe on this runner.
 	// 0341 (chat-single-writer-01DOGF0G) + 0342 (session_turn_runs,
 	// agentgraph-settings-linkage-01DOGF0D WP03) — order G -> D -> C.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342}
+	// 0343 (agent_graph_run_specs) lands with feat/graph-resolved-spec
+	// WP01: the exact resolved spec each agent-graph run executed.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -267,7 +269,9 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	//   WP14: the revision column + push-cursor table behind the label
 	//   push lane) = 60 +
 	// 1 session_turn_runs (0342, agentgraph-settings-linkage-01DOGF0D
-	//   WP03: the chat turn -> agent-graph run mapping) = 61.
+	//   WP03: the chat turn -> agent-graph run mapping) = 61 +
+	// 1 agent_graph_run_specs (0343, feat/graph-resolved-spec WP01: the
+	//   exact resolved spec per agent-graph run) = 62.
 	//
 	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
 	// before 0336 and bundle/700 landed, so 43+6. The merged tree had all
@@ -280,9 +284,13 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// chat-single-writer-01DOGF0G's sessions/0341 one more, hence 61;
 	// agentgraph-settings-linkage-01DOGF0D's sessions/0342 one more,
 	// hence 62; and units/1104-artifacts-to-units
-	// (artifacts-as-units-01DOGF0C WP04) one more, hence 63.
-	if count != 63 {
-		t.Errorf("ledger count = %d, want 63", count)
+	// (artifacts-as-units-01DOGF0C WP04) one more, hence 63; and
+	// units/1105-drop-artifacts-legacy (units-debt-01UNITD01 WP02) and
+	// sessions/0343-agent-graph-run-specs (graph-resolved-spec WP01) one
+	// more EACH, hence 65. (Both branches wrote 64 independently; the
+	// composed truth is 65 — set by hand at the v0.88.0 merge.)
+	if count != 65 {
+		t.Errorf("ledger count = %d, want 65", count)
 	}
 }
 

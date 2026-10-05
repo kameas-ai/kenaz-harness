@@ -167,8 +167,12 @@ const sqlInitSchema = `
 // ledger, not merely argued.
 // 0341 is chat-single-writer-01DOGF0G's destructive cleanup of doubled
 // user turns and kind-less assistant twins (dogfood F12 — see
-// migrations_dedupe_user_turns.go); 0342 is reserved for
-// artifacts-as-units-01DOGF0C.
+// migrations_dedupe_user_turns.go); 0342 is
+// agentgraph-settings-linkage-01DOGF0D's session_turn_runs (see
+// migrations_session_turn_runs.go; artifacts-as-units-01DOGF0C landed
+// in the units block as units/1104 instead). 0343 is the per-run
+// resolved graph spec, agent_graph_run_specs (see
+// migrations_agent_graph_run_specs.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -243,6 +247,7 @@ func Migrations() []migrations.Migration {
 		migration0340(),
 		migration0341(),
 		migration0342(),
+		migration0343(),
 	}
 }
 

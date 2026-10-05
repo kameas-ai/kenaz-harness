@@ -12,6 +12,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/contextbootstrap"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/install"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/llm/gemini" // model-lit-allow: import path into core/llm/** itself, not a literal
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -30,6 +31,7 @@ import (
 	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
+	capabilitiesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/capabilities"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
@@ -2132,21 +2134,34 @@ func (b *Bindings) Tools_ListRecipes() ([]tools.RecipeListing, error) {
 	return b.api.Tools().ListRecipes(b.ctx())
 }
 
+// Tools_InstallRecipe is the MCP key-prompt flow's install: the framework
+// install (install-framework-01DOGF0B WP04) with the env + config the
+// modal collected, returning the supervisor's status snapshot.
 func (b *Bindings) Tools_InstallRecipe(id string, env map[string]string, config map[string]any) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_InstallRecipe")()
-	return b.api.Tools().InstallRecipe(b.ctx(), id, env, config)
+	return installRecipe(b.ctx(), b.api.Capabilities().Framework(), b.api.Tools(), id, env, config)
 }
 
 // Tools_SignInRecipe runs the MCP OAuth sign-in for a remote recipe (opens the
 // system browser), persists the token, and respawns the recipe authenticated.
+// The sign-in installs the recipe itself; the framework then observes the
+// supervisor and announces capability:installed if it is there.
 func (b *Bindings) Tools_SignInRecipe(id string) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_SignInRecipe")()
-	return b.api.Tools().SignInRecipe(b.ctx(), id)
+	return observeRecipeFlow(b.ctx(), b.api.Capabilities().Framework(), id, func() (stdio.RecipeStatus, error) {
+		return b.api.Tools().SignInRecipe(b.ctx(), id)
+	})
 }
 
+// Tools_UninstallRecipe removes a recipe through the framework (consumer
+// confirmation, capability:uninstalled; org-provisioned recipes refused).
 func (b *Bindings) Tools_UninstallRecipe(id string) error {
 	defer sentry.WrapBinding("Tools_UninstallRecipe")()
-	return b.api.Tools().UninstallRecipe(b.ctx(), id)
+	fw := b.api.Capabilities().Framework()
+	if fw == nil {
+		return capabilitiesview.ErrUnavailable
+	}
+	return fw.Uninstall(b.ctx(), install.KindMCPRecipe, id)
 }
 
 func (b *Bindings) Tools_ForgetRecipeKey(id, envName string) error {
@@ -2229,7 +2244,41 @@ func (b *Bindings) Tools_BeginDeviceAuth(id string) (tools.DeviceAuthBeginResult
 // Returns the live RecipeStatus so the frontend can update the Tools panel.
 func (b *Bindings) Tools_PollDeviceAuth(id string) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_PollDeviceAuth")()
-	return b.api.Tools().PollDeviceAuth(b.ctx(), id)
+	return observeRecipeFlow(b.ctx(), b.api.Capabilities().Framework(), id, func() (stdio.RecipeStatus, error) {
+		return b.api.Tools().PollDeviceAuth(b.ctx(), id)
+	})
+}
+
+// ── capabilities: the one install framework (install-framework-01DOGF0B) ──
+
+// Capability_List returns every install provider's items — installed state
+// read from each runtime consumer — plus the sources that could not be
+// listed, each with a reason (rendered as a row, never a hidden tab).
+func (b *Bindings) Capability_List(filter install.Filter) (install.Listing, error) {
+	defer sentry.WrapBinding("Capability_List")()
+	return b.api.Capabilities().List(b.ctx(), filter)
+}
+
+// Capability_Install installs an item whose requirements are all satisfied
+// and returns its refreshed row. Items needing keys, OAuth or a directory
+// go through their per-kind flow binding (e.g. Tools_InstallRecipe), which
+// routes through the same framework.
+func (b *Bindings) Capability_Install(kind, id, version string) (install.Item, error) {
+	defer sentry.WrapBinding("Capability_Install")()
+	return b.api.Capabilities().Install(b.ctx(), kind, id, version)
+}
+
+// Capability_Uninstall removes an item through its provider; the consumer
+// must confirm it is gone.
+func (b *Bindings) Capability_Uninstall(kind, id string) error {
+	defer sentry.WrapBinding("Capability_Uninstall")()
+	return b.api.Capabilities().Uninstall(b.ctx(), kind, id)
+}
+
+// Capability_Update installs the newest version of an installed item.
+func (b *Bindings) Capability_Update(kind, id string) (install.Item, error) {
+	defer sentry.WrapBinding("Capability_Update")()
+	return b.api.Capabilities().Update(b.ctx(), kind, id)
 }
 
 // ── shell escape (chat input `!cmd` feature) ──────────────────────────
@@ -2374,14 +2423,25 @@ func (b *Bindings) Slashcmd_SkillPublish(name, projectID, visibility string) err
 	return b.api.Slash().SkillPublish(b.ctx(), name, projectID, visibility)
 }
 
+// Slashcmd_SkillInstall installs a fleet catalog skill through the install
+// framework (install-framework-01DOGF0B WP05): payload fetched once,
+// verified by the single verifier, live-registered, consumer-confirmed,
+// capability:installed emitted.
 func (b *Bindings) Slashcmd_SkillInstall(catalogID, version string) error {
 	defer sentry.WrapBinding("Slashcmd_SkillInstall")()
-	return b.api.Slash().SkillInstall(b.ctx(), catalogID, version)
+	return installSkill(b.ctx(), b.api.Capabilities().Framework(), catalogID, version)
 }
 
+// Slashcmd_SkillUninstall removes a skill (catalog id or store id) through
+// the install framework: org-mandated skills are refused, the slash
+// registry must confirm it is gone, capability:uninstalled is emitted.
 func (b *Bindings) Slashcmd_SkillUninstall(skillID string) error {
 	defer sentry.WrapBinding("Slashcmd_SkillUninstall")()
-	return b.api.Slash().SkillUninstall(b.ctx(), skillID)
+	fw := b.api.Capabilities().Framework()
+	if fw == nil {
+		return capabilitiesview.ErrUnavailable
+	}
+	return fw.Uninstall(b.ctx(), install.KindSkill, skillID)
 }
 
 func (b *Bindings) Slashcmd_SkillRenameLocalTrigger(skillID, newTrigger string) error {
@@ -2763,14 +2823,10 @@ func (b *Bindings) Workflows_CancelRun(runID string) error {
 }
 
 // ── workflow catalog bindings (p0-wiring-fixes WP02) ──────────────────────
-// Workflows_CatalogList returns the full catalog of installable workflow
-// templates. Delegates to the WorkflowsAPI catalog seam (WP03 of
-// workflows-agentic-01KW2D3X). Returns ErrCatalogUnavailable when no
-// catalog backend is wired.
-func (b *Bindings) Workflows_CatalogList() ([]workflowsview.CatalogEntry, error) {
-	defer sentry.WrapBinding("Workflows_CatalogList")()
-	return b.api.Workflows().Catalog_List(b.ctx())
-}
+// Workflows_CatalogList was deleted by install-framework-01DOGF0B WP05: the
+// shipped templates are listed by Capability_List (the workflow provider
+// reads the same catalog seam), and the Workflows › Catalog browse tab it
+// fed is retired.
 
 // Workflows_CatalogGet returns the full YAML source + entry metadata for
 // the catalog item identified by id. The preview drawer uses this to render
@@ -2786,7 +2842,7 @@ func (b *Bindings) Workflows_CatalogGet(id string) (workflowsview.CatalogPreview
 // catalog backend is wired.
 func (b *Bindings) Workflows_CatalogInstall(id string) (workflowsview.CatalogInstallResult, error) {
 	defer sentry.WrapBinding("Workflows_CatalogInstall")()
-	return b.api.Workflows().Catalog_Install(b.ctx(), id)
+	return installWorkflowTemplate(b.ctx(), b.api.Capabilities().Framework(), id)
 }
 
 // ── scheduled chat runs (scheduled-chat-runs-01KX5R8B, WP04) ──────────
@@ -3625,7 +3681,8 @@ func (b *Bindings) Catalog_List(filter catalogview.CatalogFilter) ([]catalogview
 // Catalog_Install refuses every catalog kind with
 // fleet.ErrCatalogKindNotInstallable (install-framework-01DOGF0B WP02): no
 // kind has an install on this path that a runtime consumer reads. Skills
-// install via Slash_SkillInstall. Writes nothing.
+// install via Slashcmd_SkillInstall, workflows via the Add-capability
+// surface (both through the install framework). Writes nothing.
 func (b *Bindings) Catalog_Install(catalogID, version string) error {
 	defer sentry.WrapBinding("Catalog_Install")()
 	return b.api.Catalog().Catalog_Install(b.ctx(), catalogID, version)

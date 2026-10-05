@@ -98,8 +98,9 @@ const dirty = computed(() => yaml.value !== persistedYAML.value);
 const readOnly = computed(() => scope.value !== 'user');
 const isMaterialized = computed(() => scope.value === 'materialized');
 /**
- * A materialized run whose resolved spec was no longer available is
- * projected against the library file instead, and the backend stamps
+ * A materialized run whose resolved spec was never recorded (runs before
+ * per-run spec recording, or a spec refused for size) is reconstructed from the library file
+ * instead, and the backend stamps
  * `spec_provenance: library_fallback` on the graph
  * (agentgraph-total-convergence-01PMGX01 WP12, review F2). The topology
  * shown may then differ from the topology that ran, so it is badged
@@ -612,11 +613,12 @@ defineExpose({
         data-testid="editor-materialized-degraded"
         role="status"
       >
-        Reconstructed from the library graph — the exact spec for this turn is
-        no longer in memory, and the library file could not be verified as the
-        version that ran.
-        Degraded projection: per-run dial overrides and any gate rewrite are
-        unrecoverable, so the topology shown may differ from the one that ran.
+        Reconstructed from the library graph — this run's exact spec was never
+        recorded (the run predates spec recording, or its spec exceeded the
+        size bound). The graph shown is the library graph as it is now.
+        Degraded projection: per-run dial overrides, any gate rewrite and any
+        edit made since the run are unrecoverable, so the topology shown may
+        differ from the one that ran.
       </div>
       <div
         v-if="isUnreviewed"

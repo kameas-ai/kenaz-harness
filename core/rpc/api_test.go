@@ -19,6 +19,7 @@ import (
 	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
+	capabilitiesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/capabilities"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
@@ -125,6 +126,7 @@ func (f *fakeHarnessAPI) TrustAnchors() trustanchor.TrustAnchorAPI { return trus
 func (f *fakeHarnessAPI) Context() contextview.ContextAPI          { return f.contextAPI }
 func (f *fakeHarnessAPI) Contexts() contextsview.ContextsAPI       { return f.contextsAPI }
 func (f *fakeHarnessAPI) Catalog() catalogview.CatalogAPI          { return nil }
+func (f *fakeHarnessAPI) Capabilities() *capabilitiesview.API      { return capabilitiesview.New(nil) }
 func (f *fakeHarnessAPI) Sync() syncview.SyncAPI                   { return nil }
 func (f *fakeHarnessAPI) CedarPublish() cedarview.CedarAPI         { return nil }
 func (f *fakeHarnessAPI) Bundle() bundle.BundleAPI                 { return f.bundleAPI }

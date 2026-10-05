@@ -404,6 +404,8 @@ type memEventLog struct {
 	mu      sync.Mutex
 	rows    map[string][]Event
 	nextSeq map[string]int64
+	// specs is the RunSpecStore half (run_spec_store.go).
+	specs map[string]memRunSpec
 }
 
 // NewMemoryEventLog returns an EventLog that lives entirely in RAM.

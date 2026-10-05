@@ -87,7 +87,9 @@ EXACT_ALLOWLIST=(
 #   LoadTokens); doc comment already calls out the OSS boundary explicitly.
 # - core/rpc/views/slashcmd   (2026-09-11, finding #72) — skill
 #   publish/install/uninstall delegate to fleet.PublishSkill /
-#   fleet.InstallSkill via *fleet.Client + *fleet.DeviceSigner.
+#   fleet.InstallSkillPayload / fleet.UninstallSkill via *fleet.Client +
+#   *fleet.DeviceSigner (install path routed through the install framework
+#   since install-framework-01DOGF0B WP05).
 # - core/rpc/views/sync       (2026-09-11, finding #72) — API implements
 #   SyncAPI backed directly by *fleet.Syncer / *fleet.SecretPromptQueue;
 #   the package's entire purpose is fleet sync.

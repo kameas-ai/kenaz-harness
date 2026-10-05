@@ -230,6 +230,22 @@ export function Bundle_Remove(arg1) {
   return window['go']['rpc']['Bindings']['Bundle_Remove'](arg1);
 }
 
+export function Capability_Install(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Capability_Install'](arg1, arg2, arg3);
+}
+
+export function Capability_List(arg1) {
+  return window['go']['rpc']['Bindings']['Capability_List'](arg1);
+}
+
+export function Capability_Uninstall(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Capability_Uninstall'](arg1, arg2);
+}
+
+export function Capability_Update(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Capability_Update'](arg1, arg2);
+}
+
 export function Catalog_Install(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Catalog_Install'](arg1, arg2);
 }
@@ -1920,10 +1936,6 @@ export function Workflows_CatalogGet(arg1) {
 
 export function Workflows_CatalogInstall(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_CatalogInstall'](arg1);
-}
-
-export function Workflows_CatalogList() {
-  return window['go']['rpc']['Bindings']['Workflows_CatalogList']();
 }
 
 export function Workflows_Delete(arg1) {

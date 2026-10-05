@@ -2,8 +2,10 @@
  * WorkflowsView.automationHome — nav-ia-sweep-01DOGF0F WP04 (FR-3), pins P-4
  * and P-6.
  *
- * Workflows became the automation home: Library | Schedules | Runs | Tasks |
- * Catalog, URL-addressable via ?tab=. The Schedules tab carries the workflow
+ * Workflows became the automation home: Library | Schedules | Runs | Tasks,
+ * URL-addressable via ?tab=. (The Catalog tab was retired by
+ * install-framework-01DOGF0B WP05 — templates install from the "Add
+ * capability" surface; ?tab=catalog redirects there.) The Schedules tab carries the workflow
  * cron editor that used to exist ONLY in Settings › Workflows
  * (WorkflowsSettingsPanel was the sole caller of scheduleSet/scheduleClear),
  * so the P-4 test below is the proof the capability survived the move.
@@ -76,6 +78,7 @@ async function mountAt(path: string, client: WorkflowsClient) {
     history: createMemoryHistory(),
     routes: [
       { path: '/workflows', component: defineComponent({ render: () => h('div') }) },
+      { path: '/tools', component: defineComponent({ render: () => h('div') }) },
     ],
   });
   await router.push(path);
@@ -92,13 +95,31 @@ async function mountAt(path: string, client: WorkflowsClient) {
 }
 
 describe('Workflows automation home (FR-3)', () => {
-  it('offers Library | Schedules | Runs | Tasks | Catalog', async () => {
+  it('offers Library | Schedules | Runs | Tasks (Catalog retired into Add capability)', async () => {
     const { w } = await mountAt('/workflows', statefulClient().client);
     const labels = w
       .find('[data-testid="workflows-tab-nav"]')
       .findAll('button')
       .map((b) => b.text());
-    expect(labels).toEqual(['Library', 'Schedules', 'Runs', 'Tasks', 'Catalog']);
+    expect(labels).toEqual(['Library', 'Schedules', 'Runs', 'Tasks']);
+  });
+
+  // install-framework-01DOGF0B WP05: the retired Catalog tab's deep link and
+  // the Library's browse affordance both land on the workflow kind of the
+  // one install surface.
+  it('?tab=catalog redirects to the Add-capability surface filtered to workflows', async () => {
+    const { router } = await mountAt('/workflows?tab=catalog', statefulClient().client);
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/tools');
+    expect(router.currentRoute.value.query.kind).toBe('workflow');
+  });
+
+  it('Browse workflow templates goes to the Add-capability surface', async () => {
+    const { w, router } = await mountAt('/workflows', statefulClient().client);
+    await w.get('[data-testid="workflows-browse-templates"]').trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/tools');
+    expect(router.currentRoute.value.query.kind).toBe('workflow');
   });
 
   it.each([

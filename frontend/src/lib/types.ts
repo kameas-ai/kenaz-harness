@@ -2312,8 +2312,8 @@ export interface DryRunResult {
 /**
  * CanonicalRecipeCategory — the 16 canonical MCP-connector categories the
  * registry normalizes to. Display names + icons live in
- * `lib/recipeCategories.ts` (the single source of truth consumed by both
- * `RegistryTab.vue` and `KenazToolsPanel.vue`).
+ * `lib/recipeCategories.ts` (the single source of truth consumed by the
+ * "Add capability" surface and its MCP detail plugin).
  */
 export type CanonicalRecipeCategory =
   | 'automation'
@@ -3147,8 +3147,9 @@ export interface GraphSpec {
    * `yaml` (model-authored-graphs-01PMGA01 UNIT-6) — a convenience
    * projection, not a second source of truth. "model_authored" marks
    * an unreviewed model draft; "library_fallback" marks a materialized
-   * run projected against the library file because the resolved spec
-   * was no longer available.
+   * run reconstructed from the library file because its resolved spec
+   * was never recorded (runs before per-run spec recording, or a spec
+   * refused for size).
    */
   specProvenance?: string;
 }
@@ -5077,4 +5078,86 @@ export interface ComplianceStatus {
   enabled: boolean;
   /** True when the background archiver goroutine is running. */
   archiverRunning: boolean;
+}
+
+// ── Capabilities: the one install framework (install-framework-01DOGF0B) ───
+//
+// Wire shapes of core/install (served by the Capability_* bindings). Field
+// names are the Go json tags verbatim — the generated wailsjs models use
+// the same spelling, so no adapter sits between them.
+
+/** One install path. The four fleet catalog kinds keep their wire values. */
+export type CapabilityKind = 'mcp_recipe' | 'skill' | 'workflow' | 'bundle' | 'agent_pack';
+
+/** FR-4 source filter. */
+export type CapabilitySource = 'builtin' | 'registry' | 'org_catalog' | 'team_catalog' | 'local';
+
+export type CapabilityRequirementKind = 'key' | 'oauth' | 'directory' | 'config' | 'consent' | 'file';
+
+/** One input an install needs; `satisfied` = the device already holds it. */
+export interface CapabilityRequirement {
+  kind: CapabilityRequirementKind;
+  name: string;
+  display?: string;
+  required: boolean;
+  satisfied: boolean;
+}
+
+/** Installed state AS THE RUNTIME CONSUMER REPORTS IT — never a side flag. */
+export interface CapabilityState {
+  installed: boolean;
+  version?: string;
+  update_available?: boolean;
+  /** The consumer that confirmed it, e.g. "MCP supervisor". */
+  consumer?: string;
+  /** Consumer-specific status text (e.g. "running"). */
+  detail?: string;
+}
+
+export interface CapabilityItem {
+  kind: CapabilityKind;
+  id: string;
+  version?: string;
+  name: string;
+  description?: string;
+  category?: string;
+  source: CapabilitySource;
+  keywords?: string[];
+  state: CapabilityState;
+  read_only?: boolean;
+  read_only_reason?: string;
+  requirements?: CapabilityRequirement[];
+}
+
+/** A source a provider could not list — rendered as a reason row (P-5). */
+export interface CapabilityUnavailable {
+  kind: CapabilityKind;
+  source: CapabilitySource | '';
+  /** Stable code: "signed_out" | "fleet_disabled" | "error" | … */
+  reason: string;
+  message?: string;
+}
+
+export interface CapabilityListing {
+  items: CapabilityItem[];
+  unavailable?: CapabilityUnavailable[];
+}
+
+export interface CapabilityFilter {
+  kind?: CapabilityKind;
+  source?: CapabilitySource;
+  query?: string;
+}
+
+/** Payload of `capability:installed` / `capability:uninstalled`. */
+export interface CapabilityEvent {
+  kind: CapabilityKind;
+  id: string;
+  version?: string;
+  installed: boolean;
+  via: 'install' | 'update' | 'uninstall' | 'flow';
+  verify_method?: 'builtin' | 'local' | 'signature';
+  verified: boolean;
+  verify_reason?: string;
+  consumer?: string;
 }
