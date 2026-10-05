@@ -136,3 +136,49 @@ sources connected — connect a source to scan" when `connected_sources` is
 empty. The "Latest run" row is relabelled "Latest bootstrap scan" — the run
 is a fleet context-bootstrap scan (`core/fleet/context_bootstrap.go`
 `BootstrapLatestRun`), which the old copy never said.
+
+## WP-PI — Persistence integrity
+
+**Ran, verbatim.** `go test -count=1 -race -short -run KnowledgeHome -v
+./core/rpc/views/settings/` → 2 passed
+(`TestKnowledgeHome_MemorySetting_RoundTripsFromPreviousReleaseFile`,
+`TestKnowledgeHome_LegacyLastRoute_StoredVerbatim`, both seeded from the
+committed `testdata/upgrade/v0.64.0/settings.json`, reopening a fresh
+`FileStore` after every write). `vitest run
+src/__tests__/lastRoute.knowledgeRedirect.test.ts` → 8 passed (persisted
+`/contexts`, `/memory`, `/memory?scopeKind=…`, `/corpora` restored through
+the real `restoreLastRoute` over both real route tables). Per WP:
+WP01 — docs only, no storage. WP02 — no table, no migration, no setting;
+touches the *persisted* `lastRoute` values `/contexts` / `/memory` (pinned
+above). WP03 — the existing `memoryEnabled` setting via the unchanged
+`Settings_SetMemory` / `Settings_GetMemory` bindings (pinned above); starter
+hooks are the existing registry install/remove, semantics unchanged. WP04 —
+no local storage; fleet publish/promote state is remote. WP05 — no
+storage; no local publish bookkeeping was added, so AC-PI-1's SQL clause
+does not apply. WP06 — one new per-device `localStorage` key
+`harness.knowledge.contextHealthExpanded.v1` (not settings.json, no
+schema); the upgraded-profile case (no key) is pinned to the default,
+collapsed, in `ContextHealthCard.spec.ts`. No migration, no FTS index, no
+sqlite table anywhere in the mission, so `TestUpgradePath` has nothing new
+to cover and AC-PI-3 does not apply.
+
+**Fixtures.** Examined and changed: `src/__tests__/corpora-redirect.test.ts`
+built a hand-copied router that mirrored the redirect it claimed to test —
+it now drives both real route tables. Examined and deliberately NOT
+changed: the in-memory `createFakeHarnessClient` in
+`MemoryCaptureToggle.test.ts` (it pins RPC call order, not storage; a
+one-line comment now says so and points at the Go round trip), and the
+`provide()` fake in `ContextsView.test.ts` (sharing state comes from the
+remote fleet sync status; there is no local row to round-trip). jsdom's
+`localStorage` is a real Storage implementation, not a stub, so the chip
+preference test exercises the actual read/write path.
+
+**Falsifiability — RUN, not predicted.** (1) Mutated `FileStore.SaveMemory`
+to drop the assignment: `TestKnowledgeHome_MemorySetting_…` failed
+("LoadMemory after SaveMemory(true) + reopen = false"); reverted. (2)
+Removed the `/memory/:pathMatch(.*)*` redirect from both `main.ts` and
+`main-served.ts`: 4 of 8 `lastRoute.knowledgeRedirect` cases failed (both
+bundles, `/memory` and `/memory?scopeKind=…`); reverted. (3) Swapped the
+toggle's order to install/remove hooks before `setMemory`: both P-2 order
+tests failed; reverted. AC-PI-5: this mission is not the last before a
+tag; no snapshot run.

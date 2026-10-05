@@ -31,6 +31,10 @@ function starterHooks(opts: { retrieve?: boolean; persist?: boolean } = {}): Hoo
   return out;
 }
 
+// In-memory fake client, DELIBERATELY (WP-PI AC-PI-2): these tests pin which
+// RPCs the UI calls and in what order, not storage. The real-storage round
+// trip of memoryEnabled is core/rpc/views/settings/knowledge_home_pi_test.go
+// (settings.FileStore seeded from the committed v0.64.0 settings.json).
 function makeClient(initial: boolean, hooks: Hook[] = starterHooks()) {
   const base = createFakeHarnessClient();
   const calls: string[] = [];
