@@ -4,9 +4,6 @@ import ContextsView from '@/views/contexts/ContextsView.vue';
 import { createFakeHarnessClient, fakeFleetSession } from '@/lib/harnessClient';
 import { _resetFleetSessionForTest } from '@/lib/fleetSession';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 import type {
   ContextNode,
   ContextSyncStatusView,
@@ -1342,7 +1339,9 @@ describe('ContextsView folder share/promote batch dialog (knowledge-home-01DOGF0
             kind: 'folder',
             children: [{ name: 'notes.md', path: 'kameas-ai/sub/notes.md', kind: 'file', size: 3 }],
           },
-          { name: 'empty.md', path: 'kameas-ai/empty.md', kind: 'file', size: 0 },
+          // Zero-byte file in the REAL wire shape: Go's `size,omitempty`
+          // drops the field entirely (review F2) — no hand-set size: 0.
+          { name: 'empty.md', path: 'kameas-ai/empty.md', kind: 'file' },
         ],
       },
       { name: 'outside.md', path: 'outside.md', kind: 'file', size: 3 },
@@ -1426,10 +1425,10 @@ describe('ContextsView folder share/promote batch dialog (knowledge-home-01DOGF0
     expect(st('kameas-ai/agents.md')).toBe('failed');
     expect(st('kameas-ai/sub/notes.md')).toBe('done');
     expect(st('kameas-ai/empty.md')).toBe('done');
-    expect(w.find('[data-testid="folder-share-message-kameas-ai/agents.md"]').text()).toBe('entry not shared to team yet');
+    expect(w.find('[data-testid="folder-share-message-kameas-ai/agents.md"]').text()).toBe('promote failed: entry not shared to team yet');
     const summary = w.find('[data-testid=folder-share-summary]').text();
     expect(summary).toContain('3 promoted, 1 failed');
-    expect(summary).toContain('agents.md — entry not shared to team yet');
+    expect(summary).toContain('agents.md — promote failed: entry not shared to team yet');
     w.unmount();
   });
 
@@ -1470,12 +1469,126 @@ describe('ContextsView folder share/promote batch dialog (knowledge-home-01DOGF0
       expect(w.find('[data-testid=context-publish-btn]').text()).toBe('Share folder…');
       w.unmount();
     }
-    const source = readFileSync(
-      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ContextsView.vue'),
-      'utf-8',
+  });
+
+  it('(F2) a zero-byte file arriving with NO size field is ineligible before the run', async () => {
+    const publishSpy = vi.fn();
+    const { client } = provide({ tree, files, syncStatus: status(true), publishSpy });
+    const w = await openDialog(client, 'context-publish-btn');
+    const empty = w.find('[data-testid="folder-share-check-kameas-ai/empty.md"]').element as HTMLInputElement;
+    expect(empty.checked).toBe(false);
+    expect(empty.disabled).toBe(true);
+    expect(w.find('[data-testid="folder-share-ineligible-kameas-ai/empty.md"]').text()).toBe('Empty file — nothing to share.');
+    expect(w.find('[data-testid=folder-share-confirm]').text()).toBe('Share 3 files');
+    w.unmount();
+  });
+
+  it('(F3) failures name their stage and never print [object Object]', async () => {
+    const publishSpy = vi.fn(async (req: ContextPublishRequest): Promise<ContextPublishResult> => {
+      if (req.node_id === btoa('kameas-ai/context.md')) throw { code: 'conflict', node: 'c' };
+      return { accepted_nodes: 1, accepted_edges: 0, conflicts: [], effective_layer: req.layer };
+    });
+    // agents.md unreadable: the fake get throws "not found: …".
+    const { 'kameas-ai/agents.md': _drop, ...partial } = files;
+    void _drop;
+    const { client } = provide({ tree, files: partial, syncStatus: status(true), publishSpy });
+    const w = await openDialog(client, 'context-publish-btn');
+    await w.find('[data-testid=folder-share-confirm]').trigger('click');
+    await flushPromises();
+    const msg = (p: string) => w.find(`[data-testid="folder-share-message-${p}"]`).text();
+    expect(msg('kameas-ai/context.md')).toBe('publish rejected: {"code":"conflict","node":"c"}');
+    expect(msg('kameas-ai/agents.md')).toBe('read failed: not found: kameas-ai/agents.md');
+    expect(w.find('[data-testid=folder-share-summary]').text()).toContain('1 shared, 2 failed');
+    expect(w.text()).not.toContain('[object Object]');
+    w.unmount();
+  });
+
+  it('(F7) ESC closes the dialog while choosing, and is ignored mid-batch', async () => {
+    let release: (() => void) | null = null;
+    const publishSpy = vi.fn(
+      (req: ContextPublishRequest) =>
+        new Promise<ContextPublishResult>((resolve) => {
+          release = () => resolve({ accepted_nodes: 1, accepted_edges: 0, conflicts: [], effective_layer: req.layer });
+        }),
     );
-    expect(source).not.toContain('folderShareReason');
-    expect(source).not.toContain('pending a product decision');
+    const { client } = provide({ tree, files, syncStatus: status(true), publishSpy });
+    const w = await openDialog(client, 'context-publish-btn');
+    expect(w.find('[data-testid=folder-share-dialog]').attributes('aria-modal')).toBe('true');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await flushPromises();
+    expect(w.find('[data-testid=folder-share-dialog]').exists()).toBe(false);
+    await w.find('[data-testid=context-publish-btn]').trigger('click');
+    await flushPromises();
+    await w.find('[data-testid=folder-share-confirm]').trigger('click');
+    await flushPromises();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await flushPromises();
+    expect(w.find('[data-testid=folder-share-dialog]').exists()).toBe(true);
+    // Drain the batch.
+    for (let i = 0; i < 3; i++) {
+      release!();
+      await flushPromises();
+    }
+    expect(w.find('[data-testid=folder-share-summary]').text()).toContain('3 shared, 0 failed');
+    w.unmount();
+  });
+
+  describe('(F1) an outside tree change mid-run', () => {
+    let handlers: Record<string, (p: unknown) => void>;
+    const originalRuntime = (window as unknown as { runtime?: unknown }).runtime;
+    beforeEach(() => {
+      handlers = {};
+      (window as unknown as { runtime: unknown }).runtime = {
+        EventsOn: (topic: string, cb: (p: unknown) => void) => {
+          handlers[topic] = cb;
+          return () => delete handlers[topic];
+        },
+      };
+    });
+    afterEach(() => {
+      (window as unknown as { runtime?: unknown }).runtime = originalRuntime;
+    });
+
+    it('keeps the dialog mounted, the batch completes, and the next folder click does not reopen it', async () => {
+      const releases: Array<() => void> = [];
+      const publishSpy = vi.fn(
+        (req: ContextPublishRequest) =>
+          new Promise<ContextPublishResult>((resolve) => {
+            releases.push(() => resolve({ accepted_nodes: 1, accepted_edges: 0, conflicts: [], effective_layer: req.layer }));
+          }),
+      );
+      const { client } = provide({ tree, files, syncStatus: status(true), publishSpy });
+      const w = await openDialog(client, 'context-publish-btn');
+      await w.find('[data-testid=folder-share-confirm]').trigger('click');
+      await flushPromises();
+      expect(publishSpy).toHaveBeenCalledTimes(1);
+      // The folder is renamed away outside the app.
+      const without: ContextNode = { ...tree, children: tree.children!.filter((c) => c.path !== 'kameas-ai') };
+      (client.contexts as any).list = async () => without;
+      handlers['contexts:tree-changed']?.(undefined);
+      await flushPromises();
+      expect(w.find('[data-testid="context-node-kameas-ai"]').exists()).toBe(false);
+      // Still mounted, Stop still reachable, batch runs to the end.
+      expect(w.find('[data-testid=folder-share-dialog]').exists()).toBe(true);
+      expect(w.find('[data-testid=folder-share-cancel]').text()).toBe('Stop');
+      while (releases.length > 0) {
+        releases.shift()!();
+        await flushPromises();
+      }
+      expect(publishSpy).toHaveBeenCalledTimes(3);
+      expect(w.find('[data-testid=folder-share-summary]').text()).toContain('3 shared, 0 failed');
+      await w.find('[data-testid=folder-share-cancel]').trigger('click');
+      await flushPromises();
+      expect(w.find('[data-testid=folder-share-dialog]').exists()).toBe(false);
+      // The folder comes back; clicking it must NOT reopen a stale dialog.
+      (client.contexts as any).list = async () => tree;
+      handlers['contexts:tree-changed']?.(undefined);
+      await flushPromises();
+      await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+      await flushPromises();
+      expect(w.find('[data-testid=folder-share-dialog]').exists()).toBe(false);
+      w.unmount();
+    });
   });
 
   it('cancel while running: the in-flight entry finishes, the rest are not started', async () => {

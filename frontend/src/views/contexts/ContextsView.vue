@@ -254,6 +254,18 @@ const shareBlockedReason = computed<string | null>(() => {
  * share would cover and what would enable it (FR-6 "never hidden").
  */
 const folderDialogMode = ref<FolderBatchMode | null>(null);
+/**
+ * folderDialogNode — the folder node captured when the dialog opened. The
+ * dialog is gated on THIS, not on a recompute from `tree`: a
+ * `contexts:tree-changed` reload (an outside rename/removal) must not
+ * unmount a running batch and orphan it out of sight.
+ */
+const folderDialogNode = ref<ContextNode | null>(null);
+
+function closeFolderDialog() {
+  folderDialogMode.value = null;
+  folderDialogNode.value = null;
+}
 
 const selectedFolderNode = computed<ContextNode | null>(() =>
   selectedFolder.value === null ? null : findNode(tree.value, selectedFolder.value),
@@ -261,6 +273,7 @@ const selectedFolderNode = computed<ContextNode | null>(() =>
 
 function openFolderDialog(mode: FolderBatchMode) {
   if (shareTarget.value !== 'folder' || !selectedFolderNode.value) return;
+  folderDialogNode.value = selectedFolderNode.value;
   folderDialogMode.value = mode;
 }
 
@@ -402,6 +415,7 @@ async function onRenameNode({ path, newName }: { path: string; newName: string }
     }
     if (selectedFolder.value === path) {
       selectedFolder.value = newPath;
+      closeFolderDialog();
     }
     await loadTree();
   } catch (e) {
@@ -427,6 +441,7 @@ async function onDeleteNode(path: string) {
     }
     if (selectedFolder.value === path) {
       selectedFolder.value = null;
+      closeFolderDialog();
     }
     await loadTree();
   } catch (e) {
@@ -915,11 +930,11 @@ onBeforeUnmount(() => {
 
     <!-- Folder share / promote batch dialog (FR-7). -->
     <FolderShareDialog
-      v-if="folderDialogMode && selectedFolderNode"
-      :folder="selectedFolderNode"
+      v-if="folderDialogMode && folderDialogNode"
+      :folder="folderDialogNode"
       :mode="folderDialogMode"
       :disabled-reason="sharingDisabledReason"
-      @close="folderDialogMode = null"
+      @close="closeFolderDialog"
       @finished="loadSyncStatus"
     />
 
@@ -1081,7 +1096,7 @@ onBeforeUnmount(() => {
             v-if="shareTarget"
             type="button"
             class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
-            :disabled="shareTarget === 'folder' ? !selectedFolderNode : shareBlockedReason !== null || publishLoading"
+            :disabled="shareTarget === 'folder' ? !selectedFolderNode || publishLoading || promoteLoading : shareBlockedReason !== null || publishLoading"
             :title="shareBlockedReason ?? undefined"
             data-testid="context-publish-btn"
             @click="onShareClick"
@@ -1097,7 +1112,7 @@ onBeforeUnmount(() => {
             v-if="shareTarget"
             type="button"
             class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
-            :disabled="shareTarget === 'folder' ? !selectedFolderNode : shareBlockedReason !== null || promoteLoading"
+            :disabled="shareTarget === 'folder' ? !selectedFolderNode || publishLoading || promoteLoading : shareBlockedReason !== null || promoteLoading"
             :title="shareBlockedReason ?? undefined"
             data-testid="context-promote-btn"
             @click="onPromoteButton"

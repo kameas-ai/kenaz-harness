@@ -47,8 +47,38 @@ export type FolderBatchMode = 'share' | 'promote';
  * `sharingDisabledReason` in ContextsView), never per entry.
  */
 export function entryIneligibleReason(node: ContextNode, mode: FolderBatchMode): string | null {
-  if (mode === 'share' && node.size === 0) return 'Empty file — nothing to share.';
+  // The wire type is `Size int64 json:"size,omitempty"` — a zero-byte
+  // file arrives with NO size field, so absent means empty.
+  if (mode === 'share' && node.kind === 'file' && (node.size ?? 0) === 0) {
+    return 'Empty file — nothing to share.';
+  }
   return null;
+}
+
+/**
+ * errorText — a rejection as readable text: Error → message, string as-is,
+ * anything else JSON (String() as the last resort). Never "[object Object]".
+ */
+export function errorText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  try {
+    const j = JSON.stringify(err);
+    if (j !== undefined && j !== '{}') return j;
+  } catch {
+    // fall through
+  }
+  const s = String(err);
+  return s === '[object Object]' ? 'unknown error' : s;
+}
+
+/** staged — run one step of an entry op, prefixing its failure with the stage. */
+export async function staged<T>(stage: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    throw new Error(`${stage}: ${errorText(err)}`);
+  }
 }
 
 export type EntryStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped' | 'not_started';
@@ -129,7 +159,7 @@ export async function runBatch(
       }
     } catch (err) {
       e.status = 'failed';
-      e.message = err instanceof Error ? err.message : String(err);
+      e.message = errorText(err);
     }
   }
 }

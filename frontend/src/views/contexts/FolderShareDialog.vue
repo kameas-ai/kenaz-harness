@@ -17,7 +17,7 @@
  * Cancel while running is cancel-safe: the in-flight entry finishes, the
  * rest are marked "not started". The dialog cannot be dismissed mid-entry.
  */
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { ContextNode } from '@/lib/types';
 import {
@@ -25,6 +25,7 @@ import {
   contextEntryTitle,
   contextNodeID,
   runBatch,
+  staged,
   summarize,
   type BatchEntry,
   type FolderBatchMode,
@@ -47,18 +48,9 @@ const client = useHarnessClient();
 
 /** select → running → finished. */
 const phase = ref<'select' | 'running' | 'finished'>('select');
+// The entry list is fixed at open time: files added later are deliberately
+// out of this batch; files deleted since fail honestly at their read step.
 const entries = ref<BatchEntry[]>(buildBatchEntries(props.folder, props.mode));
-// Keyed on the folder PATH, not the node object: a `contexts:tree-changed`
-// reload hands us a fresh node for the same folder, which must not wipe the
-// user's checkbox choices or a finished summary.
-watch(
-  () => [props.folder.path, props.mode] as const,
-  () => {
-    if (phase.value !== 'select') return;
-    entries.value = buildBatchEntries(props.folder, props.mode);
-    phase.value = 'select';
-  },
-);
 
 const stopRequested = ref(false);
 const layer = ref<'team' | 'org'>('team');
@@ -78,16 +70,18 @@ function toggleAll(on: boolean) {
 }
 
 async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
-  const body = await client.contexts.get(e.path);
+  const body = await staged('read failed', () => client.contexts.get(e.path));
   if (!body) return { skipped: 'Empty file — nothing to share.' };
-  const res = await client.contexts.publish({
-    node_id: contextNodeID(e.path),
-    layer: layer.value,
-    kind: 'guidance',
-    title: contextEntryTitle(e.path),
-    body,
-    version: 1,
-  });
+  const res = await staged('publish rejected', () =>
+    client.contexts.publish({
+      node_id: contextNodeID(e.path),
+      layer: layer.value,
+      kind: 'guidance',
+      title: contextEntryTitle(e.path),
+      body,
+      version: 1,
+    }),
+  );
   // effective_layer is the only truth about where it landed (finding #97).
   if (layer.value === 'team' && res.effective_layer === 'org') {
     return 'Published org-wide — team sync is not available yet, so this went to your whole organisation.';
@@ -100,7 +94,7 @@ async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
 }
 
 async function promoteOne(e: BatchEntry): Promise<string> {
-  const res = await client.contexts.promote(contextNodeID(e.path));
+  const res = await staged('promote failed', () => client.contexts.promote(contextNodeID(e.path)));
   return `Promoted to ${res.new_classification}`;
 }
 
@@ -116,6 +110,18 @@ async function confirm() {
   phase.value = 'finished';
   emit('finished');
 }
+
+/** ESC dismisses only while choosing — never mid-batch (no dismiss mid-entry). */
+function onKeydown(ev: KeyboardEvent) {
+  if (ev.key === 'Escape' && phase.value === 'select') emit('close');
+}
+onMounted(() => window.addEventListener('keydown', onKeydown));
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown);
+  // Safety net: if the parent unmounts us mid-batch, halt after the
+  // in-flight entry rather than leave an invisible batch running.
+  if (phase.value === 'running') stopRequested.value = true;
+});
 
 function onCancel() {
   if (phase.value === 'running') {
@@ -151,6 +157,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
     <div
       class="bg-surface-1 rounded-xl shadow-xl border border-border-muted p-6 max-w-lg w-full mx-4 flex flex-col max-h-[80vh]"
       role="dialog"
+      aria-modal="true"
       :aria-label="`${verb} folder ${folderName}`"
       :data-mode="mode"
       :data-disabled="disabled ? 'true' : 'false'"

@@ -138,14 +138,22 @@ finish and marks the rest "not started". The capability gate is the same
 FleetSession-derived `sharingDisabledReason` (passed in, not recomputed):
 signed-out / degraded / needs-reauth / capability-missing render the whole
 dialog disabled with that sentence. `folderShareReason` and its interim
-"pending a product decision" copy are deleted.
+"pending a product decision" copy are deleted. Review fixes (2026-10-05): the
+dialog is gated on the folder node captured at open, so an outside
+rename/removal mid-run cannot unmount a running batch (and an unmount mid-run
+stops after the in-flight entry); a zero-byte file is ineligible even though
+`size` is omitted on the wire; failures name their stage ("read failed" /
+"publish rejected" / "promote failed").
 
 Deferred from FR-7: the spec's "showing which are already published at which
 layer" per entry. Blocker: no per-entry publication-state read exists —
 `Context_SyncStatus` is an aggregate and `Context_ContextSearch` is a
-title/body search, neither keyed by node id. Owner: whichever mission adds a
-per-node fleet status read to `core/rpc/views/contexts`; until then each
-entry reports where it actually landed (`effective_layer`) after the run.
+title/body search, neither keyed by node id. Tracked in
+`docs/unwired-ledger.md` → "2026-10-05 · contexts per-node publication-state
+read (blocker for FR-7 pre-run state display)" — owner: a follow-up WP on
+knowledge-home (needs a `Contexts_NodeStatus` binding returning per-node
+layer/version). Until then each entry reports where it actually landed
+(`effective_layer`) after the run.
 
 ## D5 — Sharing reason source (FR-6)
 
