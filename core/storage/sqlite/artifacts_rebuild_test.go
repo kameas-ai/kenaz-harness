@@ -132,11 +132,19 @@ func TestMigration0332_PreservesArtifactVersionRows(t *testing.T) {
 		t.Error("artifact_versions_0332_backup leaked past the migration")
 	}
 
-	// The point of 0332 in the first place was the widened scope_kind CHECK
-	// on `artifacts`. That table no longer exists at HEAD (renamed by
-	// units/1104, dropped by units/1105), so the CHECK is not observable
-	// here any more; what remains to pin is that 0332 is ledgered and the
-	// legacy tables are gone.
+	// ACKNOWLEDGED COVERAGE LOSS (units-debt-01UNITD01 review L1). The
+	// point of 0332 in the first place was the widened scope_kind CHECK on
+	// `artifacts`, and this test used to assert it directly: the
+	// sqlite_master DDL of artifacts_legacy contained 'global'. That
+	// assertion is UNVERIFIABLE after units/1105 — the table is renamed by
+	// 1104 and dropped by 1105 within this same Open, so no DDL is left to
+	// read and no row can be written against the CHECK. It was not
+	// weakened, it lost its subject. What replaced it: (1) the row-level
+	// contract above, now read from the units/1104 copy (art-keep and both
+	// real versions survive 0332's rebuild, content intact); (2) 0332 is
+	// ledgered applied; (3) no artifact table of either generation remains.
+	// The widened CHECK's purpose — 'global'-scoped artifacts — lives on as
+	// units.scope = 'global', which the units schema's own CHECK admits.
 	var applied, legacy int
 	if err := db.Reader().QueryRow(ctx,
 		"SELECT COUNT(*) FROM harness_migrations WHERE owning_mission='sessions' AND version=332 AND action='applied'").Scan(&applied); err != nil || applied < 1 {

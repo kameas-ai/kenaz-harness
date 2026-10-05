@@ -1283,8 +1283,17 @@ func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storag
 
 // artifactIDsAnyGeneration returns the sorted, de-duplicated artifact ids
 // the database holds across every storage generation present: `artifacts`
-// (pre-units/1104), `artifacts_legacy` (1104's retained copy) and
-// kind='artifact' units. One id per line.
+// (pre-units/1104), `artifacts_legacy` (1104's retained copy),
+// kind='artifact' units, and `artifacts_legacy_orphans` (1105's
+// quarantine). One id per line.
+//
+// Scoping (units-debt-01UNITD01 review L2): on a 1104-era snapshot an id
+// deleted by the user after the copy is in artifacts_legacy but has no
+// unit. 1105 lawfully removes it from the live artifact set — the FR-2
+// deviation — so a units-only "after" set would differ from the "before"
+// set by exactly those ids. They are not lost: 1105 quarantines them, so
+// counting the quarantine as a generation makes before == after exact
+// (every id is still SOMEWHERE) while a genuinely dropped id still fails.
 func artifactIDsAnyGeneration(t *testing.T, ctx context.Context, raw *sql.DB) string {
 	t.Helper()
 	var parts []string
@@ -1292,6 +1301,7 @@ func artifactIDsAnyGeneration(t *testing.T, ctx context.Context, raw *sql.DB) st
 		{"artifacts", "SELECT id FROM artifacts"},
 		{"artifacts_legacy", "SELECT id FROM artifacts_legacy"},
 		{"units", "SELECT id FROM units WHERE kind = 'artifact'"},
+		{"artifacts_legacy_orphans", "SELECT id FROM artifacts_legacy_orphans"},
 	} {
 		var n int
 		if err := raw.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", src.table).Scan(&n); err != nil {

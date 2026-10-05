@@ -57,6 +57,21 @@ func NewMemoryStore(opts ...MemStoreOption) Store {
 }
 
 func (s *memStore) Create(_ context.Context, u Unit) (Unit, error) {
+	u, err := s.prepareCreate(u)
+	if err != nil {
+		return Unit{}, err
+	}
+
+	s.mu.Lock()
+	s.units[u.ID] = u
+	s.mu.Unlock()
+	return u, nil
+}
+
+// prepareCreate mirrors sqlStore.prepareCreate (validate, id, timestamps,
+// Version=0, normalised metadata), shared by the three create paths
+// (units-debt-01UNITD01 review L3, 2026-10-05).
+func (s *memStore) prepareCreate(u Unit) (Unit, error) {
 	if err := validateUnit(u); err != nil {
 		return Unit{}, err
 	}
@@ -74,10 +89,6 @@ func (s *memStore) Create(_ context.Context, u Unit) (Unit, error) {
 	u.UpdatedAt = u.CreatedAt
 	u.Version = 0
 	u.Metadata = normaliseMetadata(u.Metadata)
-
-	s.mu.Lock()
-	s.units[u.ID] = u
-	s.mu.Unlock()
 	return u, nil
 }
 
@@ -217,20 +228,10 @@ func (s *memStore) CreateWithEdge(ctx context.Context, u Unit, e Edge) (Unit, Ed
 		return Unit{}, Edge{}, fmt.Errorf("units: CreateWithEdge: to unit: %w", err)
 	}
 
-	if u.ID == "" {
-		id, err := s.idGen()
-		if err != nil {
-			return Unit{}, Edge{}, fmt.Errorf("units: id gen: %w", err)
-		}
-		u.ID = id
+	u, err := s.prepareCreate(u)
+	if err != nil {
+		return Unit{}, Edge{}, err
 	}
-	now := s.now()
-	if u.CreatedAt.IsZero() {
-		u.CreatedAt = now
-	}
-	u.UpdatedAt = u.CreatedAt
-	u.Version = 0
-	u.Metadata = normaliseMetadata(u.Metadata)
 
 	e.FromID = u.ID
 	if e.ID == "" {
@@ -256,26 +257,13 @@ func (s *memStore) CreateWithEdge(ctx context.Context, u Unit, e Edge) (Unit, Ed
 // acquisition (validation, including the node_id uniqueness check, happens
 // before either map is touched). See Store.CreateWithSyncState.
 func (s *memStore) CreateWithSyncState(_ context.Context, u Unit, st SyncState) (Unit, SyncState, error) {
-	if err := validateUnit(u); err != nil {
+	u, err := s.prepareCreate(u)
+	if err != nil {
 		return Unit{}, SyncState{}, err
 	}
-	if u.ID == "" {
-		id, err := s.idGen()
-		if err != nil {
-			return Unit{}, SyncState{}, fmt.Errorf("units: id gen: %w", err)
-		}
-		u.ID = id
-	}
-	now := s.now()
-	if u.CreatedAt.IsZero() {
-		u.CreatedAt = now
-	}
-	u.UpdatedAt = u.CreatedAt
-	u.Version = 0
-	u.Metadata = normaliseMetadata(u.Metadata)
 	st.UnitID = u.ID
 	st.SyncedLocalVersion = u.Version
-	st, err := s.prepareSyncState(st)
+	st, err = s.prepareSyncState(st)
 	if err != nil {
 		return Unit{}, SyncState{}, err
 	}

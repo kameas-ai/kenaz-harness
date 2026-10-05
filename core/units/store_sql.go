@@ -74,7 +74,9 @@ func (s *sqlStore) Create(ctx context.Context, u Unit) (Unit, error) {
 }
 
 // prepareCreate validates u and fills the fields Create owns (id,
-// timestamps, Version=0, normalised metadata).
+// timestamps, Version=0, normalised metadata). Shared by Create,
+// CreateWithEdge and CreateWithSyncState so the three create paths cannot
+// drift (units-debt-01UNITD01 review L3, 2026-10-05).
 func (s *sqlStore) prepareCreate(u Unit) (Unit, error) {
 	if err := validateUnit(u); err != nil {
 		return Unit{}, err
@@ -394,20 +396,10 @@ func (s *sqlStore) CreateWithEdge(ctx context.Context, u Unit, e Edge) (Unit, Ed
 		return Unit{}, Edge{}, fmt.Errorf("units: CreateWithEdge: to unit: %w", err)
 	}
 
-	if u.ID == "" {
-		id, err := s.idGen()
-		if err != nil {
-			return Unit{}, Edge{}, fmt.Errorf("units: id gen: %w", err)
-		}
-		u.ID = id
+	u, err := s.prepareCreate(u)
+	if err != nil {
+		return Unit{}, Edge{}, err
 	}
-	now := s.now()
-	if u.CreatedAt.IsZero() {
-		u.CreatedAt = now
-	}
-	u.UpdatedAt = u.CreatedAt
-	u.Version = 0
-	u.Metadata = normaliseMetadata(u.Metadata)
 
 	// The edge originates from the freshly-minted unit.
 	e.FromID = u.ID
@@ -424,17 +416,7 @@ func (s *sqlStore) CreateWithEdge(ctx context.Context, u Unit, e Edge) (Unit, Ed
 	e.Version = 1
 
 	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
-		if _, err := tx.Exec(ctx, `
-            INSERT INTO units
-                (id, kind, scope, scope_id, classification, version,
-                 load_policy, title, body, metadata, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-			u.ID, string(u.Kind), string(u.Scope), u.ScopeID,
-			string(u.Classification), u.Version, string(u.LoadPolicy),
-			u.Title, u.Body, string(u.Metadata),
-			u.CreatedAt.UnixNano(), u.UpdatedAt.UnixNano(),
-		); err != nil {
+		if err := insertUnitTx(ctx, tx, u); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `
