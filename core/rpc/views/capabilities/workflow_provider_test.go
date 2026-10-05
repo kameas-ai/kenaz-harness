@@ -495,3 +495,43 @@ func TestWorkflowProvider_TemplateUpdatePreservesSchedule(t *testing.T) {
 		})
 	}
 }
+
+// Re-review low 4: a fleet workflow's own-item update keeps the user's
+// schedule state, like a template update — a cleared schedule stays
+// cleared, a rescheduled one keeps the user's cron.
+func TestWorkflowProvider_OwnItemUpdateKeepsScheduleState(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		userCron string
+	}{{"cleared", ""}, {"rescheduled", "15 8 * * *"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWorkflowFixture(t)
+			ctx := context.Background()
+			f.cat.publish("workflow", capabilities.CatalogEntry{ID: "cat-a", Slug: "own-flow", Version: "1.0.0"}, flowYAML("own-flow", "v1"))
+			if _, err := f.fw.Install(ctx, install.Ref{Kind: install.KindWorkflow, ID: "cat-a", Version: "1.0.0"}, install.Inputs{}); err != nil {
+				t.Fatal(err)
+			}
+			if !f.sched.armed("own-flow") {
+				t.Fatal("a new install should arm the document's schedule")
+			}
+			if tc.userCron == "" {
+				_ = f.sched.Unregister(ctx, "own-flow")
+			} else {
+				_ = f.sched.Register(ctx, "own-flow", tc.userCron, "UTC")
+			}
+			f.cat.publish("workflow", capabilities.CatalogEntry{ID: "cat-a", Slug: "own-flow", Version: "2.0.0"}, flowYAML("own-flow", "v2"))
+			if _, err := f.fw.Install(ctx, install.Ref{Kind: install.KindWorkflow, ID: "cat-a", Version: "2.0.0"}, install.Inputs{}); err != nil {
+				t.Fatal(err)
+			}
+			f.sched.mu.Lock()
+			cron, armed := f.sched.cron["own-flow"]
+			f.sched.mu.Unlock()
+			if tc.userCron == "" && armed {
+				t.Fatal("the update re-armed a schedule the user cleared")
+			}
+			if tc.userCron != "" && cron != tc.userCron {
+				t.Fatalf("cron after update = %q, want the user's %q", cron, tc.userCron)
+			}
+		})
+	}
+}

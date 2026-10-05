@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -163,6 +164,10 @@ func (c *concreteCatalog) Install(ctx context.Context, id string) (InstalledRef,
 		return InstalledRef{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 
+	// created-vs-updated, so a failed provenance write can only remove a
+	// row this call created (never the user's existing copy).
+	_, lerr := c.cfg.Store.Load(ctx, w.ID)
+	created := errors.Is(lerr, corewf.ErrWorkflowNotFound)
 	saved, err := c.cfg.Store.Save(ctx, w)
 	if err != nil {
 		return InstalledRef{}, fmt.Errorf("catalog: install %s: %w", id, err)
@@ -174,6 +179,9 @@ func (c *concreteCatalog) Install(ctx context.Context, id string) (InstalledRef,
 			Slug:       w.ID,
 			Version:    corewf.BuiltinVersionTag(w),
 		}); err != nil {
+			if created {
+				_ = c.cfg.Store.Delete(ctx, saved.ID)
+			}
 			return InstalledRef{}, fmt.Errorf("catalog: install %s: record provenance: %w", id, err)
 		}
 	}

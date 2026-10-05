@@ -430,6 +430,21 @@ can never overwrite a template, a user workflow or another item's
 workflow) bounds it to new ids. Clears when C-2's key source lands in the
 verifier.
 
+### 2026-10-05 (install-framework-01DOGF0B re-review low 3) · templates installed before install provenance are never offered an update
+
+**Class:** a dial with no producer for a subset of rows.
+`installed_outdated` is computed from the install provenance record
+(`core/workflows/provenance.go`, the shipped `v<N>` recorded at install).
+Templates installed by v0.87.0 and earlier (Workflows › Catalog) have no
+record, so they read "installed" forever and are never offered an update —
+the conservative choice: without a recorded version, "outdated" would be a
+guess, and an update overwrites user edits. **Disposition: acceptance note,
+not a backfill WP** — the workaround is to Remove the template in Tools ›
+Add capability and Install it again, which records provenance; a backfill
+would have to guess an installed version from YAML the user may have
+edited. Owner: alec / install-framework-01DOGF0B Phase 3, which revisits it
+with the Marketplace fold-in (release notes carry the workaround).
+
 ### 2026-10-05 (install-framework-01DOGF0B review L3) · `slashcmd.Registry` has no mutex
 
 **Class:** latent data race on a live map. `Registry.commands` is read by

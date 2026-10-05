@@ -498,3 +498,42 @@ func TestResolveSkillStoreID_CatalogIDWinsOverCollidingStoreID(t *testing.T) {
 		t.Error("skill A's trigger was unregistered")
 	}
 }
+
+// Re-review low 5: only an org-mandated push may take a skill id another
+// skill holds. ApplyMandatedSkills over a catalog skill and over a local
+// skill swaps BOTH the store row (now mandated / org-managed) and the
+// dispatch (the trigger now runs the mandated body).
+func TestApplyMandatedSkills_ReplacesCatalogAndLocalSkillsCleanly(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	registry, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	for _, sk := range []slashcmd.Skill{
+		{ID: "from-cat", CatalogID: "cat-1", Source: slashcmd.SkillSourceCatalog, Trigger: "catcmd", Kind: slashcmd.KindText, Body: "catalog", Description: "catalog"},
+		{ID: "from-local", Trigger: "localcmd", Kind: slashcmd.KindText, Body: "local", Description: "local"},
+	} {
+		if err := slashcmd.LiveRegister(store, registry, sk); err != nil {
+			t.Fatalf("setup %s: %v", sk.ID, err)
+		}
+	}
+	var raws []json.RawMessage
+	for _, sk := range []slashcmd.Skill{
+		{ID: "from-cat", Trigger: "catcmd", Kind: slashcmd.KindText, Body: "org", Description: "org-cat"},
+		{ID: "from-local", Trigger: "localcmd", Kind: slashcmd.KindText, Body: "org", Description: "org-local"},
+	} {
+		b, _ := json.Marshal(sk)
+		raws = append(raws, b)
+	}
+	if errs := ApplyMandatedSkills(store, registry, raws); len(errs) != 0 {
+		t.Fatalf("ApplyMandatedSkills: %v", errs)
+	}
+	for id, trig := range map[string]string{"from-cat": "catcmd", "from-local": "localcmd"} {
+		got, err := store.Get(id)
+		if err != nil || got.Source != slashcmd.SkillSourceMandated || !got.OrgManaged || got.Body != "org" {
+			t.Fatalf("%s stored = %+v, %v — want the mandated copy", id, got, err)
+		}
+		cmd, ok := registry.Lookup(trig)
+		if !ok || !strings.HasPrefix(cmd.Description(), "org-") {
+			t.Fatalf("/%s dispatch = %v (found %v) — still the replaced skill", trig, cmd, ok)
+		}
+	}
+}

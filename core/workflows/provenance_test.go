@@ -1,6 +1,8 @@
 package workflows_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/workflows"
@@ -27,5 +29,25 @@ func TestFileProvenanceStore_RoundTripsAcrossRestart(t *testing.T) {
 	}
 	if err := s.Put(workflows.InstallProvenance{}); err == nil {
 		t.Fatal("empty workflow id accepted")
+	}
+}
+
+// Re-review low 1: a corrupt provenance file is an error on every path
+// (fail closed), never an empty store that would let an install pass as
+// "no record".
+func TestFileProvenanceStore_CorruptFileIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "workflows"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "workflows", "install_provenance.json"), []byte("{corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := workflows.NewFileProvenanceStore(dir)
+	if _, _, err := s.Get("x"); err == nil {
+		t.Fatal("Get on a corrupt file returned no error")
+	}
+	if err := s.Put(workflows.InstallProvenance{WorkflowID: "x", Source: workflows.ProvenanceCatalog}); err == nil {
+		t.Fatal("Put on a corrupt file returned no error")
 	}
 }

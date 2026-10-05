@@ -46,7 +46,7 @@ func catalogInstallRefusal(kind CatalogItemKind) error {
 	case CatalogKindBundle:
 		return fmt.Errorf("%w: bundle — nothing on this device would load the download; install a bundle from Settings › Integrations › Bundles instead", ErrCatalogKindNotInstallable)
 	case CatalogKindSkill:
-		return fmt.Errorf("%w: skill — this path would not register it; install the skill through Slashcmd_SkillInstall (the install framework) instead", ErrCatalogKindNotInstallable)
+		return fmt.Errorf("%w: skill — this path would not register it; install it from the skills surface (Tools › Add capability, Skills) instead", ErrCatalogKindNotInstallable)
 	default:
 		return fmt.Errorf("%w: unknown kind %q", ErrCatalogKindNotInstallable, kind)
 	}

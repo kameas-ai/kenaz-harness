@@ -239,6 +239,14 @@ func (f *Framework) install(ctx context.Context, ref Ref, in Inputs, via string)
 		v.Verified = v.Method == VerifyBuiltin
 	}
 
+	// Whether the item was installed BEFORE this call decides whether an
+	// unconfirmed install may be cleaned up: a re-install / update of a
+	// working capability must never be removed because one post-install
+	// consumer read failed (re-review blocker). An unreadable prior state
+	// counts as "maybe installed" — no cleanup.
+	prior, perr := p.InstalledState(ctx, ref.ID)
+	newInstall := perr == nil && !prior.Installed
+
 	detail, err := p.Install(ctx, InstallRequest{Ref: ref, Inputs: in, Verification: v})
 	if err != nil {
 		return Result{}, err
@@ -246,11 +254,15 @@ func (f *Framework) install(ctx context.Context, ref Ref, in Inputs, via string)
 
 	st, err := p.InstalledState(ctx, ref.ID)
 	if err != nil {
-		f.cleanupUnconsumed(ctx, p, ref)
+		if newInstall {
+			f.cleanupUnconsumed(ctx, p, ref)
+		}
 		return Result{}, fmt.Errorf("%w: %s %s: reading consumer state: %v", ErrNotConsumed, ref.Kind, ref.ID, err)
 	}
 	if !st.Installed {
-		f.cleanupUnconsumed(ctx, p, ref)
+		if newInstall {
+			f.cleanupUnconsumed(ctx, p, ref)
+		}
 		return Result{}, fmt.Errorf("%w: %s %s", ErrNotConsumed, ref.Kind, ref.ID)
 	}
 
@@ -356,8 +368,9 @@ func (f *Framework) Observe(ctx context.Context, kind Kind, id string, wasInstal
 
 // cleanupUnconsumed removes what a provider's Install left behind when its
 // consumer did not confirm the capability (review M1): no keychain entry,
-// store row or file is stranded by a refused install. Best effort — a
-// failure is logged; the install still fails and nothing is announced.
+// store row or file is stranded by a refused install. Called only for an
+// item that was NOT installed before the call. Best effort — a failure is
+// logged; the install still fails and nothing is announced.
 func (f *Framework) cleanupUnconsumed(ctx context.Context, p Provider, ref Ref) {
 	if err := p.Uninstall(ctx, ref.ID); err != nil {
 		logging.L().Warn("install.unconsumed_cleanup_failed",

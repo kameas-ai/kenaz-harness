@@ -190,8 +190,12 @@ type Config struct {
 
 // API is the concrete WorkflowsAPI.
 type API struct {
-	cfg  Config
-	mu   sync.RWMutex
+	cfg Config
+	// installMu serialises InstallDocument's resolve → ownership check →
+	// save → provenance write, so two concurrent installs of the same id
+	// cannot both pass as "create" (re-review low 2).
+	installMu sync.Mutex
+	mu        sync.RWMutex
 	byID map[string]corewf.Workflow
 	// source tracks per-id provenance ("builtin" | "user") so List
 	// surfaces the right tag in the catalog after a Save round-trip.
@@ -855,6 +859,8 @@ func (a *API) InstallDocument(ctx context.Context, payload []byte, origin Docume
 	if err != nil {
 		return CatalogInstallResult{}, err
 	}
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
 	if w.ID != origin.Slug {
 		return CatalogInstallResult{}, fmt.Errorf("%w: catalog %q advertises %q, payload is %q", ErrWorkflowIDMismatch, origin.CatalogID, origin.Slug, w.ID)
 	}
@@ -872,6 +878,23 @@ func (a *API) InstallDocument(ctx context.Context, payload []byte, origin Docume
 	}
 	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cedarMode(), corewf.CollectStepKinds(w)); gerr != nil {
 		return CatalogInstallResult{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	// An update of this item's own earlier install keeps the user's
+	// schedule state (rescheduled or cleared), exactly like
+	// Catalog_Update (re-review low 4); only a new install arms the
+	// document's own schedule.
+	var prior *wfsched.ScheduleEntry
+	if !created && a.scheduler != nil {
+		entries, serr := a.scheduler.List(ctx)
+		if serr != nil {
+			return CatalogInstallResult{}, serr
+		}
+		for i := range entries {
+			if entries[i].WorkflowID == w.ID {
+				prior = &entries[i]
+				break
+			}
+		}
 	}
 	saved, err := a.cfg.Store.Save(ctx, w)
 	if err != nil {
@@ -895,7 +918,15 @@ func (a *API) InstallDocument(ctx context.Context, payload []byte, origin Docume
 	a.mu.Unlock()
 	corewf.EmitSaved(ctx, a.cfg.Audit, saved)
 	res := CatalogInstallResult{WorkflowID: saved.ID}
-	if a.scheduler != nil && saved.Schedule != "" {
+	switch {
+	case a.scheduler == nil:
+	case !created && prior != nil:
+		if err := a.scheduler.Register(ctx, saved.ID, prior.Cron, prior.Timezone); err == nil {
+			res.Scheduled = true
+		}
+	case !created:
+		// The user cleared it (or it never had one): leave it cleared.
+	case saved.Schedule != "":
 		if err := a.scheduler.Register(ctx, saved.ID, saved.Schedule, saved.Timezone); err == nil {
 			res.Scheduled = true
 		}

@@ -31,6 +31,10 @@ type fakeProvider struct {
 	updateRef       install.Ref
 	updateErr       error
 	detailErr       error
+	// stateErrAfterInstall makes every InstalledState read after an
+	// Install fail (a transient consumer read error).
+	stateErrAfterInstall bool
+	installed            bool
 	// artifacts stands in for what an install leaves outside the consumer
 	// (a keychain entry, a store row): Install writes, Uninstall clears.
 	artifacts map[string]bool
@@ -101,6 +105,7 @@ func (p *fakeProvider) Install(_ context.Context, req install.InstallRequest) (a
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.installCalls = append(p.installCalls, req)
+	p.installed = true
 	p.artifacts[req.Ref.ID] = true
 	if !p.consumerIgnores {
 		p.consumer[req.Ref.ID] = req.Ref.Version
@@ -122,6 +127,9 @@ func (p *fakeProvider) Uninstall(_ context.Context, id string) error {
 func (p *fakeProvider) InstalledState(_ context.Context, id string) (install.State, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.stateErrAfterInstall && p.installed {
+		return install.State{}, errors.New("consumer read: transient I/O error")
+	}
 	v, ok := p.consumer[id]
 	return install.State{Installed: ok, Version: v, Consumer: "fake consumer"}, nil
 }
@@ -525,6 +533,33 @@ func TestObserve_AnnouncesOnlyWhatTheConsumerConfirms(t *testing.T) {
 	evs := pub.snapshot()
 	if len(evs) != 1 || evs[0].ev.Via != "flow" || !evs[0].ev.Installed {
 		t.Fatalf("events = %+v", evs)
+	}
+}
+
+// Re-review blocker: re-installing (updating) a capability that already
+// works, with one transient consumer read failing afterwards, must report
+// ErrNotConsumed WITHOUT removing the working capability.
+func TestInstall_ReinstallWithTransientReadFailureDoesNotUninstall(t *testing.T) {
+	p := newFake(install.KindMCPRecipe)
+	p.consumer["r1"] = "1"
+	p.artifacts["r1"] = true
+	p.stateErrAfterInstall = true
+	fw, pub := newFramework(t, nil, p)
+	_, err := fw.Install(context.Background(), install.Ref{Kind: install.KindMCPRecipe, ID: "r1", Version: "2"}, install.Inputs{})
+	if !errors.Is(err, install.ErrNotConsumed) {
+		t.Fatalf("got %v, want ErrNotConsumed", err)
+	}
+	if got := p.uninstalls(); len(got) != 0 {
+		t.Fatalf("a re-install with a transient read failure uninstalled the working capability: %v", got)
+	}
+	p.mu.Lock()
+	_, still := p.consumer["r1"]
+	p.mu.Unlock()
+	if !still || !p.hasArtifact("r1") {
+		t.Fatal("the working capability is gone")
+	}
+	if len(pub.snapshot()) != 0 {
+		t.Fatal("announced")
 	}
 }
 

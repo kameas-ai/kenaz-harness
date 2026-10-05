@@ -3,6 +3,8 @@ package workflows
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -463,6 +465,39 @@ func TestInstallDocument_KeepsIDAndRejectsOpaquePayloads(t *testing.T) {
 		if _, err := api.InstallDocument(ctx, []byte(bad), origin); !errors.Is(err, ErrWorkflowPayloadMalformed) {
 			t.Errorf("payload %q: got %v, want ErrWorkflowPayloadMalformed", bad, err)
 		}
+	}
+}
+
+// TestInstallDocument_ConcurrentCreatesOfOneIDAdmitExactlyOne — re-review
+// low 2: two catalog items racing to install the same new id cannot both
+// pass the collision check as "create".
+func TestInstallDocument_ConcurrentCreatesOfOneIDAdmitExactlyOne(t *testing.T) {
+	store := newWP07TestStore(t)
+	api := New(Config{Engine: corewf.NewEngine(), Store: store, Provenance: corewf.NewMemoryProvenanceStore()})
+	doc := []byte("id: race-flow\nname: Race\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n")
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = api.InstallDocument(context.Background(), doc, DocumentOrigin{
+				CatalogID: fmt.Sprintf("cat-%d", i), Slug: "race-flow", Version: "1.0.0",
+			})
+		}(i)
+	}
+	wg.Wait()
+	ok := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			ok++
+		case !errors.Is(err, ErrWorkflowIDCollision):
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("%d concurrent installs of one id succeeded, want exactly 1", ok)
 	}
 }
 

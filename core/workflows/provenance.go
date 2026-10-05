@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // Install provenance (install-framework-01DOGF0B WP05 review, H1/H2/H4).
@@ -63,10 +65,25 @@ type ProvenanceStore interface {
 const provenanceFileName = "workflows/install_provenance.json"
 
 type fileProvenanceStore struct {
-	mu   sync.Mutex
-	path string // "" = in-memory only
-	recs map[string]InstallProvenance
-	load bool
+	mu     sync.Mutex
+	path   string // "" = in-memory only
+	recs   map[string]InstallProvenance
+	load   bool
+	warned bool
+}
+
+// fail logs a provenance failure at WARN the first time it is seen (a
+// corrupt or unreadable file is otherwise permanent and silent: every
+// collision check fails closed and no template update is offered) and
+// returns err.
+func (s *fileProvenanceStore) fail(op string, err error) error {
+	if !s.warned {
+		s.warned = true
+		logging.L().Warn("workflows.install_provenance.unusable",
+			"op", op, "path", s.path, "err", err.Error(),
+			"effect", "fleet workflow installs over existing ids are refused and template updates are not offered until the file is repaired or removed")
+	}
+	return err
 }
 
 // NewFileProvenanceStore returns a store persisted at
@@ -143,7 +160,7 @@ func (s *fileProvenanceStore) Get(id string) (InstallProvenance, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.ensureLoaded(); err != nil {
-		return InstallProvenance{}, false, err
+		return InstallProvenance{}, false, s.fail("get", err)
 	}
 	r, ok := s.recs[id]
 	return r, ok, nil
@@ -157,7 +174,7 @@ func (s *fileProvenanceStore) Put(p InstallProvenance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.ensureLoaded(); err != nil {
-		return err
+		return s.fail("put", err)
 	}
 	if p.InstalledAt.IsZero() {
 		p.InstalledAt = time.Now().UTC()
@@ -170,7 +187,7 @@ func (s *fileProvenanceStore) Put(p InstallProvenance) error {
 		} else {
 			delete(s.recs, p.WorkflowID)
 		}
-		return err
+		return s.fail("put", err)
 	}
 	return nil
 }
@@ -180,7 +197,7 @@ func (s *fileProvenanceStore) Remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.ensureLoaded(); err != nil {
-		return err
+		return s.fail("remove", err)
 	}
 	prev, had := s.recs[id]
 	if !had {
@@ -189,7 +206,7 @@ func (s *fileProvenanceStore) Remove(id string) error {
 	delete(s.recs, id)
 	if err := s.persist(); err != nil {
 		s.recs[id] = prev
-		return err
+		return s.fail("remove", err)
 	}
 	return nil
 }
