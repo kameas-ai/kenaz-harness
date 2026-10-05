@@ -5193,7 +5193,8 @@ func newArtifactsStack(c *core.Core, media coreatt.MediaStore) (coreart.Store, *
 	}
 	// artifacts-as-units-01DOGF0C WP04: artifacts live in the units
 	// tables (kind='artifact') since migration units/1104 copied them out
-	// of the now-renamed artifacts_legacy table. The store switch, the
+	// of the legacy artifacts table (renamed artifacts_legacy by 1104,
+	// dropped by units/1105 one release later). The store switch, the
 	// refcount registration and the delete observers below are ONE change
 	// (spec §2.4/§2.6): switching the store without re-pointing the media
 	// refcount would let media GC see zero references and delete every

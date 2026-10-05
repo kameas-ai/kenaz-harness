@@ -328,18 +328,20 @@ func TestMigration1104_PopulatedSnapshots(t *testing.T) {
 				t.Errorf("unparseable source_ref_json not kept verbatim: %q, %v", brokenRaw, err)
 			}
 
-			// ---- P-3: legacy tables present, same rows, under new names;
-			// the old names are gone.
+			// ---- P-3 (one-release pin, superseded): 1104 retained the
+			// legacy tables under *_legacy names; units/1105
+			// (units-debt-01UNITD01) dropped them in the next release, so
+			// after the full chain no artifact table of either name exists
+			// and every legacy row is accounted for on units (below, and
+			// version-for-version in migration_1105_test.go).
 			var n int
-			if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifacts_legacy").Scan(&n); err != nil || n != legacyArtifacts {
-				t.Errorf("artifacts_legacy = %d, %v; want %d", n, err, legacyArtifacts)
-			}
-			if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifact_versions_legacy").Scan(&n); err != nil || n != legacyVersions {
-				t.Errorf("artifact_versions_legacy = %d, %v; want %d", n, err, legacyVersions)
-			}
 			if err := db.Reader().QueryRow(ctx,
-				"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('artifacts','artifact_versions')").Scan(&n); err != nil || n != 0 {
-				t.Errorf("legacy table names still present: %d, %v", n, err)
+				"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('artifacts','artifact_versions','artifacts_legacy','artifact_versions_legacy')").Scan(&n); err != nil || n != 0 {
+				t.Errorf("legacy artifact tables still present: %d, %v", n, err)
+			}
+			if err := db.Reader().QueryRow(ctx, `SELECT COUNT(*) FROM unit_versions uv JOIN units u ON u.id = uv.unit_id
+			     WHERE u.kind = 'artifact' AND json_extract(uv.metadata, '$.synthesized') IS NULL`).Scan(&n); err != nil || n != legacyVersions {
+				t.Errorf("copied artifact versions = %d, %v; want %d (one per legacy version row)", n, err, legacyVersions)
 			}
 			if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM units WHERE kind='artifact'").Scan(&n); err != nil || n != legacyArtifacts {
 				t.Errorf("artifact units = %d, %v; want %d (one per legacy artifact)", n, err, legacyArtifacts)

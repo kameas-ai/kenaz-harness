@@ -2,7 +2,6 @@ package sqlite_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
@@ -86,12 +85,18 @@ func TestMigration0332_PreservesArtifactVersionRows(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close(context.Background()) })
 
+	// Since units/1105 (units-debt-01UNITD01) dropped the *_legacy tables,
+	// the 0332-preserved rows survive ONLY as their units/1104 copy — so
+	// that copy is what is counted. A 0332 cascade would have emptied
+	// artifact_versions before 1104 ran, leaving one synthesized v1 here
+	// instead of the two real versions.
 	var artifacts, versions int
-	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifacts_legacy").Scan(&artifacts); err != nil {
-		t.Fatalf("count artifacts: %v", err)
+	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM units WHERE kind='artifact' AND id='art-keep'").Scan(&artifacts); err != nil {
+		t.Fatalf("count artifact units: %v", err)
 	}
-	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifact_versions_legacy").Scan(&versions); err != nil {
-		t.Fatalf("count artifact_versions: %v", err)
+	if err := db.Reader().QueryRow(ctx,
+		"SELECT COUNT(*) FROM unit_versions WHERE unit_id='art-keep' AND json_extract(metadata, '$.synthesized') IS NULL").Scan(&versions); err != nil {
+		t.Fatalf("count artifact unit versions: %v", err)
 	}
 	if artifacts != 1 {
 		t.Errorf("artifacts = %d after the 0332 rebuild, want 1", artifacts)
@@ -105,8 +110,9 @@ func TestMigration0332_PreservesArtifactVersionRows(t *testing.T) {
 	var hash, summary, path string
 	var byteSize, createdAt int64
 	if err := db.Reader().QueryRow(ctx,
-		`SELECT content_hash, summary, path, byte_size, created_at
-         FROM artifact_versions_legacy WHERE artifact_id='art-keep' AND version=2`).
+		`SELECT json_extract(metadata, '$.content_hash'), json_extract(metadata, '$.summary'),
+                json_extract(metadata, '$.path'), json_extract(metadata, '$.byte_size'), created_at
+         FROM unit_versions WHERE unit_id='art-keep' AND version=2`).
 		Scan(&hash, &summary, &path, &byteSize, &createdAt); err != nil {
 		t.Fatalf("read restored version row: %v", err)
 	}
@@ -126,13 +132,18 @@ func TestMigration0332_PreservesArtifactVersionRows(t *testing.T) {
 		t.Error("artifact_versions_0332_backup leaked past the migration")
 	}
 
-	// And the point of 0332 in the first place: the widened CHECK is in place.
-	var check string
+	// The point of 0332 in the first place was the widened scope_kind CHECK
+	// on `artifacts`. That table no longer exists at HEAD (renamed by
+	// units/1104, dropped by units/1105), so the CHECK is not observable
+	// here any more; what remains to pin is that 0332 is ledgered and the
+	// legacy tables are gone.
+	var applied, legacy int
 	if err := db.Reader().QueryRow(ctx,
-		"SELECT sql FROM sqlite_master WHERE type='table' AND name='artifacts_legacy'").Scan(&check); err != nil {
-		t.Fatalf("read artifacts ddl: %v", err)
+		"SELECT COUNT(*) FROM harness_migrations WHERE owning_mission='sessions' AND version=332 AND action='applied'").Scan(&applied); err != nil || applied < 1 {
+		t.Errorf("0332 ledger rows = %d, %v; want >= 1", applied, err)
 	}
-	if !strings.Contains(check, "'global'") {
-		t.Errorf("artifacts CHECK does not carry 'global' after 0332:\n%s", check)
+	if err := db.Reader().QueryRow(ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('artifacts','artifacts_legacy','artifact_versions','artifact_versions_legacy')").Scan(&legacy); err != nil || legacy != 0 {
+		t.Errorf("legacy artifact tables at HEAD = %d, %v; want 0", legacy, err)
 	}
 }

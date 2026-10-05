@@ -77,12 +77,14 @@ func TestMigration0304_PreservesArtifactRows(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close(context.Background()) })
 
+	// Since units/1105 dropped artifacts_legacy, the 1104 copy on units is
+	// the row's only home — and the only witness that 0304 kept it.
 	var n int
-	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifacts_legacy WHERE id='art-0304'").Scan(&n); err != nil {
-		t.Fatalf("count artifacts: %v", err)
+	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM units WHERE id='art-0304' AND kind='artifact'").Scan(&n); err != nil {
+		t.Fatalf("count artifact units: %v", err)
 	}
 	if n != 1 {
-		t.Errorf("artifacts_legacy = %d after the 0304 rebuild + 1104 rename, want 1", n)
+		t.Errorf("artifact units for art-0304 = %d after the 0304 rebuild + 1104 copy + 1105 drop, want 1", n)
 	}
 
 	var title string

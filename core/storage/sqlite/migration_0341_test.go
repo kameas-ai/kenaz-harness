@@ -554,7 +554,8 @@ func TestMigration0341_SecondApplicationConvergesOnInterleavedPairs(t *testing.T
 // C-review cross-branch hazard (finding 2, 2026-10-04): the repair path
 // re-applies late sessions migrations, so 0341 can run AGAIN on a
 // database units/1104 has already converted (artifacts renamed to
-// artifacts_legacy). A bare `FROM artifacts` would fail Open there.
+// artifacts_legacy, and since units/1105 dropped). A bare `FROM
+// artifacts` would fail Open there.
 // End-to-end: pass 1 applies 0341 (pair protected via the REAL
 // artifacts-table reference) then 1104 (artifact copied to units,
 // table renamed); the rewind-and-reopen repair shape re-runs 0341 on
@@ -623,10 +624,18 @@ func TestMigration0341_ReapplyAfterUnitsConversionDoesNotBrick(t *testing.T) {
 	if _, err := rawDB.ExecContext(ctx, `DELETE FROM harness_migrations WHERE id = 'sessions/0341-dedupe-user-turns'`); err != nil {
 		t.Fatalf("rewind 0341: %v", err)
 	}
-	var legacy int
+	// Precondition: the database is fully converted — the reference lives
+	// only in units metadata (1104 copied it) and no artifacts table of
+	// either generation exists (1104 renamed it, units/1105 dropped the
+	// rename), the most hostile shape for a re-applied 0341.
+	var legacy, artUnit int
 	if err := rawDB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artifacts_legacy'`).Scan(&legacy); err != nil || legacy != 1 {
-		t.Fatalf("precondition: artifacts_legacy present = %d err=%v, want 1 (1104 ran)", legacy, err)
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('artifacts','artifacts_legacy')`).Scan(&legacy); err != nil || legacy != 0 {
+		t.Fatalf("precondition: artifacts tables present = %d err=%v, want 0 (1104 renamed, 1105 dropped)", legacy, err)
+	}
+	if err := rawDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM units WHERE id='zz-re-art' AND kind='artifact'`).Scan(&artUnit); err != nil || artUnit != 1 {
+		t.Fatalf("precondition: artifact unit zz-re-art = %d err=%v, want 1 (1104 copied it)", artUnit, err)
 	}
 	if err := rawDB.Close(); err != nil {
 		t.Fatalf("close raw: %v", err)

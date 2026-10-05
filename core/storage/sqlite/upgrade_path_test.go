@@ -354,10 +354,11 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// artifacts-as-units-01DOGF0C: the document rows sharing the units
 	// tables, captured BEFORE units/1104 copies artifacts in beside them.
 	preNonArtifactUnits := snapshotNonArtifactUnits(t, ctx, raw)
-	preLegacy := map[string]string{
-		"artifacts":         rowsDigest(t, ctx, raw, "artifacts"),
-		"artifact_versions": rowsDigest(t, ctx, raw, "artifact_versions"),
-	}
+	// units-debt-01UNITD01: every artifact id the snapshot holds, from
+	// whichever storage generation it is on (pre-1104 `artifacts`, a
+	// v0.87.0-era `artifacts_legacy` + artifact units), so the post-Open
+	// assertion can prove the 1105 drop lost no artifact.
+	preArtifactIDs := artifactIDsAnyGeneration(t, ctx, raw)
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -456,7 +457,7 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// per-table loop below. ----
 	assertAdviceLabelsTableMigrated(t, ctx, db)
 	assertUnitsTableSurvivesUntouched(t, ctx, db, tag)
-	assertArtifactsMigratedToUnits(t, ctx, db, rawPath, tag, preNonArtifactUnits, preLegacy)
+	assertArtifactsMigratedToUnits(t, ctx, db, rawPath, tag, preNonArtifactUnits, preArtifactIDs)
 
 	// ---- automation-actually-runs-01PMZ404 UNIT-13 (owner ruling
 	// A-10): rerun_policy is refused on save but tolerated on load. A
@@ -543,6 +544,16 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	}
 	for _, tbl := range expectedChangedTablesArtifactsToUnits[tag] { // see artifactsToUnitsNote
 		changed[tbl] = true
+	}
+	// units/1105-drop-artifacts-legacy (units-debt-01UNITD01) drops the
+	// *_legacy tables on any snapshot taken after 1104 shipped (v0.87.0
+	// onward). Waived here only when the snapshot actually carries them;
+	// assertArtifactsMigratedToUnits replaces the digest check with an
+	// explicit "gone, and every artifact id survives on units" assertion.
+	for _, tbl := range []string{"artifacts_legacy", "artifact_versions_legacy"} {
+		if _, ok := preOpen[tbl]; ok {
+			changed[tbl] = true
+		}
 	}
 	for table, before := range preOpen {
 		if changed[table] {
@@ -658,13 +669,11 @@ func assertSurfaceReads(t *testing.T, ctx context.Context, db storage.DB) {
 		t.Errorf("session_messages for seed-session-1 = %d, want >= 3", n)
 	}
 	// units/1104 (artifacts-as-units-01DOGF0C) moved artifacts onto units
-	// and retained the legacy tables under *_legacy names. Both halves are
-	// read here; assertArtifactsMigratedToUnits checks content.
-	if n := count("artifacts_legacy", "SELECT COUNT(*) FROM artifacts_legacy WHERE id='seed-artifact-1'"); n != 1 {
-		t.Errorf("artifacts_legacy row for seed-artifact-1 = %d, want 1", n)
-	}
-	if n := count("artifact_versions_legacy", "SELECT COUNT(*) FROM artifact_versions_legacy WHERE artifact_id='seed-artifact-1'"); n != 2 {
-		t.Errorf("artifact_versions_legacy for seed-artifact-1 = %d, want 2 (the cascade canary)", n)
+	// and retained the legacy tables under *_legacy names for one release;
+	// units/1105 (units-debt-01UNITD01) dropped them. The units half is
+	// the only home now; assertArtifactsMigratedToUnits checks content.
+	if n := count("legacy artifact tables", "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('artifacts','artifact_versions','artifacts_legacy','artifact_versions_legacy')"); n != 0 {
+		t.Errorf("legacy artifact tables after Open = %d, want 0 (dropped by units/1105)", n)
 	}
 	if n := count("artifact unit", "SELECT COUNT(*) FROM units WHERE id='seed-artifact-1' AND kind='artifact'"); n != 1 {
 		t.Errorf("units row for seed-artifact-1 (kind=artifact) = %d, want 1", n)
@@ -1207,19 +1216,25 @@ func snapshotNonArtifactUnits(t *testing.T, ctx context.Context, raw *sql.DB) ma
 //     every field equal to the snapshot's legacy row, and its two versions
 //     equal to the legacy version rows — no synthesized v1, because this
 //     artifact has real versions;
-//   - the legacy tables are present under *_legacy names with their rows;
+//   - units/1105 is ledgered as applied, the legacy tables are gone under
+//     both names, and every artifact id the snapshot held (in either
+//     storage generation) is a kind='artifact' unit — the drop lost
+//     nothing (units-debt-01UNITD01; this replaced the one-release
+//     "legacy tables present with their rows" check);
 //   - every non-artifact units / unit_versions row is byte-identical to
 //     the pre-Open dump.
-func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storage.DB, rawPath, tag string, pre, preLegacy map[string]string) {
+func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storage.DB, rawPath, tag string, pre map[string]string, preArtifactIDs string) {
 	t.Helper()
 	r := db.Reader()
-	var applied int
-	if err := r.QueryRow(ctx,
-		"SELECT COUNT(*) FROM harness_migrations WHERE id = 'units/1104-artifacts-to-units' AND action = 'applied'").Scan(&applied); err != nil {
-		t.Fatalf("%s: ledger probe for 1104: %v", tag, err)
-	}
-	if applied != 1 {
-		t.Errorf("%s: units/1104-artifacts-to-units ledger rows = %d, want 1", tag, applied)
+	for _, id := range []string{"units/1104-artifacts-to-units", "units/1105-drop-artifacts-legacy"} {
+		var applied int
+		if err := r.QueryRow(ctx,
+			"SELECT COUNT(*) FROM harness_migrations WHERE id = ? AND action = 'applied'", id).Scan(&applied); err != nil {
+			t.Fatalf("%s: ledger probe for %s: %v", tag, id, err)
+		}
+		if applied != 1 {
+			t.Errorf("%s: %s ledger rows = %d, want 1", tag, id, applied)
+		}
 	}
 
 	store := coreart.NewSQLStore(db)
@@ -1247,13 +1262,15 @@ func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storag
 
 	post := openRawSQLiteAt(t, rawPath)
 	defer func() { _ = post.Close() }()
-	// The legacy tables are the recovery copy: their full content must be
-	// the pre-Open tables' content under the new names (review F8 —
-	// replaces a count-only check).
-	for oldName, newName := range map[string]string{"artifacts": "artifacts_legacy", "artifact_versions": "artifact_versions_legacy"} {
-		if got := rowsDigest(t, ctx, post, newName); got != preLegacy[oldName] {
-			t.Errorf("%s: %s content differs from the pre-Open %s content — the retained copy was altered", tag, newName, oldName)
-		}
+	// The legacy tables are gone (units/1105) and no artifact went with
+	// them: every id the snapshot held is an artifact unit.
+	var legacyTables int
+	if err := post.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('artifacts','artifact_versions','artifacts_legacy','artifact_versions_legacy')").Scan(&legacyTables); err != nil || legacyTables != 0 {
+		t.Errorf("%s: legacy artifact tables after Open = %d, %v; want 0", tag, legacyTables, err)
+	}
+	if got := artifactIDsAnyGeneration(t, ctx, post); got != preArtifactIDs {
+		t.Errorf("%s: artifact ids after Open differ from the snapshot's:\nbefore:\n%s\nafter:\n%s", tag, preArtifactIDs, got)
 	}
 	got := snapshotNonArtifactUnits(t, ctx, post)
 	for table, before := range pre {
@@ -1262,6 +1279,49 @@ func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storag
 				tag, table, before, got[table])
 		}
 	}
+}
+
+// artifactIDsAnyGeneration returns the sorted, de-duplicated artifact ids
+// the database holds across every storage generation present: `artifacts`
+// (pre-units/1104), `artifacts_legacy` (1104's retained copy) and
+// kind='artifact' units. One id per line.
+func artifactIDsAnyGeneration(t *testing.T, ctx context.Context, raw *sql.DB) string {
+	t.Helper()
+	var parts []string
+	for _, src := range []struct{ table, q string }{
+		{"artifacts", "SELECT id FROM artifacts"},
+		{"artifacts_legacy", "SELECT id FROM artifacts_legacy"},
+		{"units", "SELECT id FROM units WHERE kind = 'artifact'"},
+	} {
+		var n int
+		if err := raw.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", src.table).Scan(&n); err != nil {
+			t.Fatalf("probe %s: %v", src.table, err)
+		}
+		if n == 1 {
+			parts = append(parts, src.q)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	rows, err := raw.QueryContext(ctx, strings.Join(parts, " UNION ")+" ORDER BY 1")
+	if err != nil {
+		t.Fatalf("artifact ids: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var b strings.Builder
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan artifact id: %v", err)
+		}
+		b.WriteString(id)
+		b.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("artifact id rows: %v", err)
+	}
+	return b.String()
 }
 
 // rowsDigest renders every row of table (all columns, ordered by rowid) as

@@ -27,7 +27,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
+	"github.com/kameas-ai/kenaz-harness/core/units"
 
 	_ "modernc.org/sqlite"
 )
@@ -100,6 +102,10 @@ func rewindLateSessionsSchema(t *testing.T, ctx context.Context, raw *sql.DB) {
 // the full pipeline: old rebuild, then the copy onto units.
 func rewindArtifactsToUnits(t *testing.T, ctx context.Context, raw *sql.DB) {
 	t.Helper()
+	// units/1105 (units-debt-01UNITD01) dropped the *_legacy tables 1104
+	// renamed; give them back (empty — these helpers rewind a database
+	// Open just created) before 1104 is rewound over them.
+	rewindDropArtifactsLegacy(t, ctx, raw)
 	stmts := []string{
 		"DELETE FROM harness_migrations WHERE id = 'units/1104-artifacts-to-units'",
 		"ALTER TABLE artifacts_legacy RENAME TO artifacts",
@@ -221,4 +227,63 @@ func assertLedgerHashesUnchanged(t *testing.T, ctx context.Context, raw *sql.DB,
 	if checked == 0 {
 		t.Errorf("snapshot %s: no ledger row was hash-checked — the assertion is vacuous", tag)
 	}
+}
+
+// rewindDropArtifactsLegacy undoes units/1105-drop-artifacts-legacy on a
+// database migrated through HEAD: it deletes 1105's ledger row and runs
+// the migration's PRODUCTION Down (recreating artifacts_legacy /
+// artifact_versions_legacy with their exact post-1104 schema, EMPTY), so
+// the next Open re-runs 1105. The rows Up dropped are not restored — use
+// this only on a database whose legacy tables were empty, or re-seed them.
+func rewindDropArtifactsLegacy(t *testing.T, ctx context.Context, raw *sql.DB) {
+	t.Helper()
+	var m *migrations.Migration
+	for _, cand := range units.Migrations() {
+		if cand.ID == units.MigrationIDDropArtifactsLegacy {
+			cand := cand
+			m = &cand
+		}
+	}
+	if m == nil {
+		t.Fatalf("%s is not registered in units.Migrations()", units.MigrationIDDropArtifactsLegacy)
+	}
+	tx, err := raw.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("rewind 1105: begin: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM harness_migrations WHERE id = ?", m.ID); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("rewind 1105: delete ledger row: %v", err)
+	}
+	if err := m.Down(ctx, rawMigrationTx{tx}); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("rewind 1105: Down: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("rewind 1105: commit: %v", err)
+	}
+}
+
+// rawMigrationTx adapts a raw *sql.Tx to migrations.WriteTx so a test can
+// run a registered migration's own Up/Down behind the harness's back.
+type rawMigrationTx struct{ tx *sql.Tx }
+
+func (r rawMigrationTx) Exec(ctx context.Context, q string, args ...any) (migrations.Result, error) {
+	res, err := r.tx.ExecContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	return rawMigrationResult{res}, nil
+}
+
+type rawMigrationResult struct{ sql.Result }
+
+func (r rawMigrationResult) LastInsertID() (int64, error) { return r.LastInsertId() }
+
+func (r rawMigrationTx) QueryRow(ctx context.Context, q string, args ...any) migrations.Row {
+	return r.tx.QueryRowContext(ctx, q, args...)
+}
+
+func (r rawMigrationTx) Query(ctx context.Context, q string, args ...any) (migrations.Rows, error) {
+	return r.tx.QueryContext(ctx, q, args...)
 }
