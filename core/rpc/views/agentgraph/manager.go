@@ -1215,9 +1215,148 @@ func (m *Manager) runStatus(runID string) (RunStatus, error) {
 	entry, ok := m.runs[runID]
 	m.mu.RUnlock()
 	if !ok {
+		// agentgraph-settings-linkage-01DOGF0D (review H1): chat turns run
+		// on the shared kernel but never enter m.runs, so before this
+		// fallback RunView — which every transcript turn now links to —
+		// showed "not found" for every chat run. A run whose events are
+		// in the log exists; derive its status from them.
+		if st, found := m.statusFromLog(runID); found {
+			return st, nil
+		}
 		return RunStatus{}, fmt.Errorf("agentgraph: run %q not found", runID)
 	}
 	return m.snapshotStatus(entry), nil
+}
+
+// errRunInterrupted is the status error for a log-only run that has no
+// terminal record and is not running in this process: it was cut off
+// (process exit, crash) before the kernel could write run_complete.
+const errRunInterrupted = "run ended without a completion record (interrupted, or the app exited mid-run)"
+
+// statusFromLog derives a RunStatus for a run this Manager did not start
+// — today every chat turn — from its recorded events
+// (agentgraph-settings-linkage-01DOGF0D, review H1). The second return
+// is false when the log holds nothing for runID.
+//
+// State, in order of precedence:
+//   - run_complete           -> completed
+//   - run_abandoned          -> abandoned
+//   - last lifecycle run_paused -> paused
+//   - any node_error         -> failed (Error = the last node error)
+//   - still registered by the chat runner in this process -> running
+//   - otherwise              -> failed, interrupted: the kernel writes
+//     no terminal event when a run dies with its process, and a chat
+//     run always registers with TrackExternalRun at start, so an
+//     unregistered, unfinished run cannot be live here.
+//
+// Counters come from llm_call / tool_call / node_complete events.
+func (m *Manager) statusFromLog(runID string) (RunStatus, bool) {
+	if m == nil || m.log == nil || runID == "" {
+		return RunStatus{}, false
+	}
+	var (
+		out                     RunStatus
+		seen, completed, paused bool
+		abandoned               bool
+		lastNodeErr             string
+		first, last             time.Time
+	)
+	out.RunID = runID
+	_ = m.log.Replay(runID, func(ev coreag.Event) error {
+		if !seen {
+			first = ev.Timestamp
+		}
+		seen = true
+		last = ev.Timestamp
+		if out.SessionID == "" && ev.SessionID != "" {
+			out.SessionID = ev.SessionID
+		}
+		switch ev.Kind {
+		case coreag.EventRunStart:
+			var p struct {
+				GraphID   string `json:"graph_id"`
+				SessionID string `json:"session_id"`
+			}
+			if json.Unmarshal(ev.Payload, &p) == nil {
+				if out.GraphID == "" {
+					out.GraphID = p.GraphID
+				}
+				if p.SessionID != "" {
+					out.SessionID = p.SessionID
+				}
+			}
+			paused = false
+		case coreag.EventRunComplete:
+			completed = true
+		case coreag.EventRunAbandoned:
+			abandoned = true
+		case coreag.EventRunPaused:
+			paused = true
+		case coreag.EventNodeError:
+			var p struct {
+				Err string `json:"err"`
+			}
+			if json.Unmarshal(ev.Payload, &p) == nil && p.Err != "" {
+				lastNodeErr = p.Err
+			} else {
+				lastNodeErr = "node " + ev.NodeID + " failed"
+			}
+		case coreag.EventNodeComplete:
+			out.NodesComplete++
+		case coreag.EventLLMCall:
+			out.LLMCalls++
+			var p struct {
+				Tokens  int     `json:"tokens"`
+				CostUSD float64 `json:"cost_usd"`
+			}
+			if json.Unmarshal(ev.Payload, &p) == nil {
+				out.LLMTokens += p.Tokens
+				out.CostUSD += p.CostUSD
+			}
+		case coreag.EventToolCall:
+			out.ToolCalls++
+		}
+		return nil
+	})
+	m.mu.RLock()
+	tracked, live := m.externalRuns[runID]
+	m.mu.RUnlock()
+	if !seen {
+		// The chat runner registers a turn's spec BEFORE StartStream
+		// returns, but the kernel appends run_start from the run's own
+		// goroutine a moment later. A link opened in that window is a
+		// live run with nothing recorded yet — not a missing one.
+		if !live {
+			return RunStatus{}, false
+		}
+		now := m.nowFn().Format(time.RFC3339Nano)
+		out.GraphID = tracked.ID
+		out.State = RunStateRunning
+		out.StartedAt, out.UpdatedAt = now, now
+		return out, true
+	}
+	out.StartedAt = first.Format(time.RFC3339Nano)
+	out.UpdatedAt = last.Format(time.RFC3339Nano)
+	switch {
+	case completed:
+		out.State = RunStateCompleted
+		out.CompletedAt = out.UpdatedAt
+	case abandoned:
+		out.State = RunStateAbandoned
+	case paused:
+		out.State = RunStatePaused
+	case lastNodeErr != "":
+		out.State = RunStateFailed
+		out.Error = lastNodeErr
+		out.CompletedAt = out.UpdatedAt
+	case live:
+		out.State = RunStateRunning
+	default:
+		out.State = RunStateFailed
+		out.Error = errRunInterrupted
+		out.CompletedAt = out.UpdatedAt
+	}
+	return out, true
 }
 
 func (m *Manager) snapshotStatus(entry *runEntry) RunStatus {
@@ -1264,7 +1403,14 @@ func (m *Manager) runTrace(runID string, since int64) ([]RunTraceEvent, error) {
 	m.mu.RLock()
 	_, ok := m.runs[runID]
 	m.mu.RUnlock()
+	// Review H1 (01DOGF0D): a chat run never enters m.runs, but its
+	// trace IS the event log — a run with recorded events exists.
 	if !ok {
+		m.mu.RLock()
+		_, ok = m.externalRuns[runID]
+		m.mu.RUnlock()
+	}
+	if !ok && (m.log == nil || m.log.Len(runID) == 0) {
 		return nil, fmt.Errorf("agentgraph: run %q not found", runID)
 	}
 	out := []RunTraceEvent{}

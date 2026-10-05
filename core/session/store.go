@@ -453,6 +453,13 @@ func (s *memStore) Delete(_ context.Context, id string) error {
 	delete(s.records, id)
 	delete(s.messages, id)
 	delete(s.seqByID, id)
+	// Mirror the SQL store's ON DELETE CASCADE on session_turn_runs
+	// (migration 0342): a deleted session's turn -> run links go with it.
+	for runID, tr := range s.turnRuns {
+		if tr.SessionID == id {
+			delete(s.turnRuns, runID)
+		}
+	}
 	return nil
 }
 

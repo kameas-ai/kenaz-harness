@@ -959,8 +959,9 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// counter that restarted at 0 on every boot, so today's chat-1 and
 	// yesterday's chat-1 shared one run id in one durable log and
 	// materializing either projected both turns as one graph. A ULID is
-	// unique across restarts with no coordination. Allocated before the
-	// user turn is persisted so a failure here cannot orphan that row.
+	// unique across restarts with no coordination. Allocated first, before
+	// anything this turn writes, so an allocation failure leaves no
+	// partial state behind (whichever writer owns the user row).
 	subID, err := newChatRunID()
 	if err != nil {
 		return "", err
