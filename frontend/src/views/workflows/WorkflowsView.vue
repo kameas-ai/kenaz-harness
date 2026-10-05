@@ -519,7 +519,15 @@ const focusRunId = ref<string | null>(null);
 
 function applyTabQuery() {
   const t = tabFromQuery(route?.query?.tab);
-  if (t) activeTab.value = t;
+  if (t) {
+    activeTab.value = t;
+    return;
+  }
+  // A bare /workflows (Back, the rail entry) means Library — otherwise the
+  // previous tab keeps showing under a URL that no longer names it. A ?run=
+  // focus owns the tab choice (Runs), so leave it alone then.
+  const run = route?.query?.run;
+  if (run === undefined || run === null || run === '') activeTab.value = 'Library';
 }
 
 /** Tab click: switch, and mirror it into `?tab=` so the URL is shareable. */
@@ -551,10 +559,20 @@ function applyRunQuery() {
 onMounted(() => {
   applyTabQuery();
   applyRunQuery();
+  // Preload so the delete dialog's "active cron schedule" warning is
+  // already decided when it opens — a fast confirm can't skip it.
+  void loadSchedules();
 });
 if (route) {
-  watch(() => route.query.run, applyRunQuery);
-  watch(() => route.query.tab, applyTabQuery);
+  // One watcher over both keys: leaving /workflows?run=x for a bare
+  // /workflows changes only `run`, and must still fall back to Library.
+  watch(
+    () => [route.query.tab, route.query.run],
+    () => {
+      applyTabQuery();
+      applyRunQuery();
+    },
+  );
 }
 </script>
 

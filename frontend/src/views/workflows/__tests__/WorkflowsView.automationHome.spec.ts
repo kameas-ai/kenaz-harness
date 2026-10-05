@@ -135,6 +135,52 @@ describe('Workflows automation home (FR-3)', () => {
   });
 });
 
+describe('?tab= is the source of truth for the active tab', () => {
+  it('a bare /workflows (Back / rail click) resets to Library', async () => {
+    const { w, router } = await mountAt('/workflows?tab=tasks', statefulClient().client);
+    expect(w.find('[data-testid="workflows-tasks-tab"]').exists()).toBe(true);
+    await router.push('/workflows');
+    await flushPromises();
+    expect(w.find('[data-testid="workflows-tasks-tab"]').exists()).toBe(false);
+    expect(w.find('[data-testid="workflows-new-button"]').exists()).toBe(true);
+  });
+
+  it('leaving /workflows?run=x for a bare /workflows also resets to Library', async () => {
+    const { w, router } = await mountAt('/workflows?run=r1', statefulClient().client);
+    expect(w.find('[data-testid="scheduled-inbox"]').exists()).toBe(true);
+    await router.push('/workflows');
+    await flushPromises();
+    expect(w.find('[data-testid="workflows-new-button"]').exists()).toBe(true);
+  });
+
+  it('Back from a tab click returns to the previous tab', async () => {
+    const { w, router } = await mountAt('/workflows?tab=schedules', statefulClient().client);
+    await router.push('/workflows?tab=tasks');
+    await flushPromises();
+    expect(w.find('[data-testid="workflows-tasks-tab"]').exists()).toBe(true);
+    await router.push('/workflows?tab=schedules');
+    await flushPromises();
+    expect(w.find('[data-testid="workflows-schedules-tab"]').exists()).toBe(true);
+  });
+});
+
+describe('WorkflowSchedulesSection states (ported from WorkflowsSettingsPanel.spec)', () => {
+  it('shows the load error when list() rejects', async () => {
+    const client = createFakeWorkflowsClient({
+      list: vi.fn().mockRejectedValue(new Error('store offline')),
+    });
+    const { w } = await mountAt('/workflows?tab=schedules', client);
+    expect(w.find('[data-testid="wf-sched-load-error"]').text()).toContain('store offline');
+  });
+
+  it('shows the empty state when no workflows are installed', async () => {
+    const client = createFakeWorkflowsClient({ list: async () => [] });
+    const { w } = await mountAt('/workflows?tab=schedules', client);
+    expect(w.find('[data-testid="wf-sched-empty"]').exists()).toBe(true);
+    expect(w.find('[data-testid="wf-sched-table"]').exists()).toBe(false);
+  });
+});
+
 describe('P-4: workflow cron schedule survives the move out of Settings', () => {
   it('sets and clears a workflow cron schedule from Workflows › Schedules', async () => {
     const { client, scheduleSet, scheduleClear } = statefulClient();
@@ -197,6 +243,19 @@ describe('P-6: Library absorbs the Settings panel’s delete affordances', () =>
     await w.find('[data-testid="workflows-delete-cancel"]').trigger('click');
     expect(remove).not.toHaveBeenCalled();
     expect(w.find('[data-testid="workflows-delete-confirm-dialog"]').exists()).toBe(false);
+  });
+
+  it('schedules are preloaded at mount, so the warning is decided before the dialog opens', async () => {
+    const { client } = statefulClient([
+      { workflowId: WF.id, cron: '0 7 * * *', timezone: 'UTC', enabled: true },
+    ]);
+    const scheduleList = vi.spyOn(client, 'scheduleList');
+    const { w } = await mountAt('/workflows', client);
+    expect(scheduleList).toHaveBeenCalled();
+    // Click and inspect synchronously — no flush between open and check, the
+    // shape of a fast confirm.
+    await w.find('[data-testid="workflows-delete-button"]').trigger('click');
+    expect(w.find('[data-testid="workflows-delete-schedule-warning"]').exists()).toBe(true);
   });
 
   it('no schedule warning for an unscheduled workflow; confirm deletes', async () => {

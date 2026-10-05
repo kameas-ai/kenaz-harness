@@ -304,7 +304,8 @@ type HarnessAPI interface {
 
 	// ScheduledChat exposes the scheduled-chat-runs CRUD + dispatch surface
 	// (mission scheduled-chat-runs-01KX5R8B, v0.10.0). The frontend's
-	// Settings → Scheduled Chats panel creates and manages prompt-template
+	// Workflows › Schedules tab (Settings → Scheduled Chats until
+	// nav-ia-sweep-01DOGF0F) creates and manages prompt-template
 	// jobs fired by the existing core/scheduler cron engine.
 	ScheduledChat() scheduledchatview.ScheduledChatAPI
 

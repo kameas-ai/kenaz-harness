@@ -426,10 +426,10 @@
 "Projects_SetAutonomy"
 
 # Called through scheduledChatClient.ts, a separate bridge module (not part of
-# HarnessClient/harnessClient.ts). All UI callers are
-# views/settings/scheduledchat/* (nested under SettingsView.vue) and
-# views/workflows/* (RunsHistoryTab.vue, ScheduledInbox.vue, WorkflowsView.vue
-# itself), both boundary-panelled.
+# HarnessClient/harnessClient.ts). All UI callers are views/workflows/*
+# (scheduledchat/* via SchedulesTab.vue, RunsHistoryTab.vue,
+# ScheduledInbox.vue, WorkflowsView.vue itself), boundary-panelled by
+# WorkflowsView. (Moved out of Settings by nav-ia-sweep-01DOGF0F, 2026-10-04.)
 "ScheduledChat_Create"
 "ScheduledChat_Delete"
 "ScheduledChat_Get"
@@ -518,9 +518,10 @@
 # HarnessClient/harnessClient.ts). All UI callers are views/workflows/*
 # (WorkflowsView.vue itself, CatalogView.vue, CatalogPreviewDrawer.vue,
 # RunsHistoryTab.vue, ScheduledInbox.vue, WorkflowEditor.vue,
-# SimpleTemplateEditor.vue) and components/workflows/WorkflowGraphEditor.vue
-# plus views/settings/WorkflowsSettingsPanel.vue (nested under SettingsView.vue)
-# -- all boundary-panelled.
+# SimpleTemplateEditor.vue, WorkflowSchedulesSection.vue) and
+# components/workflows/WorkflowGraphEditor.vue -- all boundary-panelled.
+# (views/settings/WorkflowsSettingsPanel.vue was deleted by
+# nav-ia-sweep-01DOGF0F, 2026-10-04.)
 "Workflows_CancelRun"
 "Workflows_CatalogGet"
 "Workflows_CatalogInstall"

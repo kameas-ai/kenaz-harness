@@ -2850,9 +2850,11 @@ regenerating `frontend/wailsjs/` with the Wails toolchain plus a
   posture at all, and where, is the same product question as
   `Options.DefaultDeny` (deliberately `false`, `api.go`'s `buildCedarGate`).
   Both dials should be designed together or not at all.
-- **Owner / deleting change:** a Settings → Workflows panel mission that
-  surfaces both strictness dials, adds
-  `Settings_{Get,Set}CedarStrictWorkflowMode`, and deletes this entry.
+- **Owner / deleting change:** a mission that surfaces both strictness
+  dials on the Workflows surface (Workflows › Schedules / Library — the
+  Settings → Workflows panel was retired into it by nav-ia-sweep-01DOGF0F,
+  2026-10-04), adds `Settings_{Get,Set}CedarStrictWorkflowMode`, and deletes
+  this entry.
 
 Until then the policy file's header says exactly this, and no longer claims
 a "Settings → Workflows panel" that does not exist.

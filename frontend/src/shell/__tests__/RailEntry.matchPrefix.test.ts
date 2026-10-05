@@ -15,6 +15,7 @@ import { defineComponent, h } from 'vue';
 import RailEntry from '@/shell/RailEntry.vue';
 import { railPathMatches, SETTINGS_HUB_PREFIXES } from '@/shell/railMatch';
 import { GitBranch } from '@/shell/icons';
+import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 
 const Stub = defineComponent({ render: () => h('div') });
 
@@ -74,5 +75,36 @@ describe('RailEntry active state (P-2)', () => {
   it('an explicit active prop overrides the route both ways', async () => {
     expect(current(await mountAt('/tools', { to: '/tools', active: false }))).toBe(false);
     expect(current(await mountAt('/memory', { to: '/tools', active: true }))).toBe(true);
+  });
+});
+
+// Review follow-up: SETTINGS_HUB_PREFIXES is hand-kept. Tie it to the
+// SettingsTabs rail so a new separately-routed Settings entry (one whose `to`
+// is not a /settings?tab= URL) cannot be added without the rail's Settings
+// entry learning to light for it.
+describe('SETTINGS_HUB_PREFIXES covers every SettingsTabs route', () => {
+  it('every non-?tab entry in SettingsTabs matches a hub prefix', async () => {
+    const pushed: string[] = [];
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/:pathMatch(.*)*', component: Stub }],
+    });
+    router.beforeEach((to) => {
+      pushed.push(to.path);
+    });
+    await router.push('/');
+    await router.isReady();
+    pushed.length = 0;
+    const w = mount(SettingsTabs, { global: { plugins: [router] } });
+    const items = w.findAll('[data-testid^="settings-tab-"]');
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      await item.trigger('click');
+      await flushPromises();
+    }
+    expect(pushed.length).toBe(items.length);
+    for (const path of pushed) {
+      expect(railPathMatches(path, SETTINGS_HUB_PREFIXES), path).toBe(true);
+    }
   });
 });

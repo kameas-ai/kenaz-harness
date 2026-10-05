@@ -13,7 +13,7 @@
 import type { RouteLocationNormalized, RouteLocationRaw } from 'vue-router';
 
 /** Old `/settings?tab=<key>` → its new `/workflows` location. */
-export const LEGACY_SETTINGS_TAB_REDIRECTS: Readonly<Record<string, RouteLocationRaw>> = {
+const LEGACY_SETTINGS_TAB_REDIRECTS: Readonly<Record<string, RouteLocationRaw>> = {
   scheduledchats: { path: '/workflows', query: { tab: 'schedules' } },
   tasks: { path: '/workflows', query: { tab: 'tasks' } },
   // Settings › Workflows was the workflow list + CRUD (now Library, the
