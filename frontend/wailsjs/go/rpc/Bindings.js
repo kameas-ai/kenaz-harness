@@ -1314,6 +1314,10 @@ export function Settings_FleetRefreshIdentity() {
   return window['go']['rpc']['Bindings']['Settings_FleetRefreshIdentity']();
 }
 
+export function Settings_FleetSession() {
+  return window['go']['rpc']['Bindings']['Settings_FleetSession']();
+}
+
 export function Settings_FleetSetTelemetryOptIn(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Settings_FleetSetTelemetryOptIn'](arg1, arg2);
 }

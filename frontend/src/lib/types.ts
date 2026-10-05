@@ -4602,6 +4602,76 @@ export interface CapabilitiesView {
 }
 
 /**
+ * FleetSessionState — the fleet session's one answer to "am I signed in"
+ * (fleet-session-truth-01DOGF0A FR-1). `degraded` = tokens are usable but the
+ * last identity refresh failed; it is NOT signed out (FR-3).
+ */
+export type FleetSessionState =
+  | 'signed_out'
+  | 'signing_in'
+  | 'signed_in'
+  | 'degraded'
+  | 'disabled';
+
+/** One session's context-sync breaker state. Mirrors settings.FleetSyncSessionView. */
+export interface FleetSyncSessionView {
+  sessionId: string;
+  reason?: string;
+  lastError?: string;
+  consecutiveFailures: number;
+  open: boolean;
+  nextRetryAt?: string;
+  dropped: number;
+}
+
+/** One background lane's health. Mirrors settings.FleetSyncLaneView. */
+export interface FleetSyncLaneView {
+  /** 'unknown' | 'ok' | 'degraded' | 'off' */
+  status: string;
+  reason?: string;
+  lastError?: string;
+  consecutiveFailures: number;
+  lastSuccessAt?: string;
+  nextRetryAt?: string;
+  sessions?: FleetSyncSessionView[];
+}
+
+/** Mirrors settings.FleetSyncView. */
+export interface FleetSyncView {
+  contextSync: FleetSyncLaneView;
+  unitPoll: FleetSyncLaneView;
+  telemetry: FleetSyncLaneView;
+}
+
+/**
+ * FleetSessionView — the single fleet-session snapshot every surface reads.
+ * Returned by Settings_FleetSession and pushed on `fleet:session-changed`.
+ * Mirrors core/rpc/views/settings.FleetSessionView.
+ */
+export interface FleetSessionView {
+  state: FleetSessionState;
+  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled */
+  reason?: string;
+  /** Raw error text behind `reason` (humanize before showing). */
+  message?: string;
+  /** False once automatic identity refresh has stopped (not provisioned). */
+  autoRetry: boolean;
+  nextRetryAt?: string;
+  lastAttemptAt?: string;
+  identity?: FleetIdentity;
+  /** 'enroll' | 'cache' */
+  identitySource?: string;
+  /** 'enroll' | 'token_claim' */
+  emailSource?: string;
+  nameSource?: string;
+  claims: { hasSubject: boolean; hasOrgClaim: boolean };
+  capabilities: CapabilitiesView;
+  profile?: FleetProfileInfo;
+  sync: FleetSyncView;
+  updatedAt: string;
+}
+
+/**
  * FleetConfigPullStatusView — wire projection of the config-pull poller state.
  * Mirrors core/rpc/views/settings.FleetConfigPullStatusView.
  * (fleet-config-pull-01NDFSEX10 WP02)

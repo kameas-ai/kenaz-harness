@@ -178,6 +178,7 @@ import type {
   FallbackChainSummary,
   FleetIdentity,
   FleetProfileInfo,
+  FleetSessionView,
   CapabilitiesView,
   FleetConfigPullStatusView,
   FleetHealthView,
@@ -599,6 +600,8 @@ interface WailsBindingsLike {
   Settings_FleetSignedIn(): Promise<boolean>;
   Settings_FleetRefreshIdentity(): Promise<FleetIdentity>;
   Settings_FleetProfile(): Promise<FleetProfileInfo>;
+  // fleet-session-truth-01DOGF0A FR-1
+  Settings_FleetSession(): Promise<FleetSessionView>;
   // fleet-capability-surface-01NDFSEX09 WP11
   Settings_FleetCapabilities(): Promise<CapabilitiesView>;
   Settings_FleetRefreshCapabilities(): Promise<CapabilitiesView>;
@@ -2507,6 +2510,12 @@ export interface SettingsClient {
    * expose ClientID, APIAudience, or any secret fields.
    */
   fleetProfile(): Promise<FleetProfileInfo>;
+  /**
+   * The single fleet-session snapshot (fleet-session-truth-01DOGF0A FR-1).
+   * Components do not call this directly — they read `useFleetSession()`,
+   * which calls it once and then follows `fleet:session-changed`.
+   */
+  fleetSession(): Promise<FleetSessionView>;
 
   // ── fleet-capability-surface-01NDFSEX09 WP11 ────────────────────────────
   /** Return the in-memory fleet capability snapshot. */
@@ -4551,6 +4560,7 @@ export function createHarnessClient(): HarnessClient {
       fleetSignedIn: () => b().Settings_FleetSignedIn(),
       fleetRefreshIdentity: () => b().Settings_FleetRefreshIdentity(),
       fleetProfile: () => b().Settings_FleetProfile(),
+      fleetSession: () => b().Settings_FleetSession(),
       // fleet-capability-surface-01NDFSEX09 WP11
       fleetCapabilities: () => b().Settings_FleetCapabilities(),
       fleetRefreshCapabilities: () => b().Settings_FleetRefreshCapabilities(),
@@ -5462,6 +5472,14 @@ export function createServedHarnessClient(opts?: {
         transport.call<PermissionRequest[]>('Permissions_ListPending'),
     },
 
+    // Settings_FleetSession — the only settings method core/serve answers
+    // (fleet-session-truth-01DOGF0A FR-1). Everything else under settings
+    // stays an honest ServedUnsupportedError.
+    settings: {
+      ...base.settings,
+      fleetSession: () => transport.call<FleetSessionView>('Settings_FleetSession'),
+    },
+
     // Fleet telemetry consent + status: the workbench is where everyday work
     // happens, so consent must be settable here or a workbench never reports.
     fleet: {
@@ -5484,6 +5502,25 @@ export function createServedHarnessClient(opts?: {
       // kill (served-mode-is-a-real-mode-01PMZ707 WP04).
       getFlags: () => transport.call<FeatureFlagInfo[]>('Config_GetFlags'),
     },
+  };
+}
+
+/**
+ * fakeFleetSession — the fake client's fleet-session snapshot: signed out,
+ * nothing granted. Exported so tests can start from a valid shape.
+ */
+export function fakeFleetSession(
+  overrides: Partial<FleetSessionView> = {},
+): FleetSessionView {
+  const lane = { status: 'unknown', consecutiveFailures: 0 };
+  return {
+    state: 'signed_out',
+    autoRetry: true,
+    claims: { hasSubject: false, hasOrgClaim: false },
+    capabilities: { tier: '', enabled: {}, fetchedAt: '', source: 'default-deny' },
+    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
+    updatedAt: '',
+    ...overrides,
   };
 }
 
@@ -6053,6 +6090,7 @@ export function createFakeHarnessClient(
       fleetProfile: async () => ({
         name: 'prod', badgeColor: '', fleetBaseUrl: '', configured: false,
       }),
+      fleetSession: async () => fakeFleetSession(),
       // fleet-capability-surface-01NDFSEX09 WP11
       fleetCapabilities: async () => ({
         tier: '', enabled: {}, fetchedAt: '', source: 'default-deny',

@@ -141,6 +141,21 @@ type fleetState struct {
 	// harness path and any build where SetAuditEmitter is never called
 	// (mirrors every other optional Set* field on this struct).
 	auditEmitter auditEmitter
+
+	// lanes is the shared background-sync status board FleetSession.sync
+	// reads (fleet-session-truth-01DOGF0A FR-6). Never nil after
+	// newFleetState.
+	lanes *fleet.SyncLanes
+
+	// sess records the fleet session's recent transitions — the last enroll
+	// outcome, backoff, sign-in in flight — that the FleetSession snapshot
+	// derives degraded / signed-out from (fleet-session-truth-01DOGF0A).
+	sess sessionTrack
+}
+
+// newFleetState returns a fleetState with its always-present members built.
+func newFleetState() *fleetState {
+	return &fleetState{lanes: fleet.NewSyncLanes()}
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -148,7 +163,7 @@ type fleetState struct {
 // called, fleet methods return fleet.ErrFleetDisabled.
 func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -227,7 +242,7 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 // (fleet-emergency-lockdown-01NDFSEX12 WP02)
 func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -255,7 +270,7 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 // bundle applied afterward — even the very next poll — sees it.
 func (a *API) SetCedarEngine(engine *cedarpolicy.Engine) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -285,7 +300,7 @@ func (a *API) SetFleetOTLPPipeline(
 	consent *fleet.TelemetryConsent,
 ) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -324,7 +339,7 @@ func (a *API) SetFleetOTLPPipeline(
 // resource (service.name / service.version). See fleetState.resFunc.
 func (a *API) SetFleetTelemetryResourceFunc(fn func() *resource.Resource) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	a.fleet.resFunc = fn
@@ -381,6 +396,7 @@ func (a *API) FleetSessionEnded(ctx context.Context) {
 	a.fleet.mu.Lock()
 	a.fleet.enrolled = false
 	a.fleet.enrolledOrgID, a.fleet.enrolledNodeID, a.fleet.enrolledTier = "", "", ""
+	a.fleet.sess = sessionTrack{}
 	a.fleet.telemetryOptIns = nil
 	a.fleet.optInsFetchedAt = time.Time{}
 	pipeline := a.fleet.otlpPipeline
@@ -529,7 +545,7 @@ type FleetTelemetryStatusView struct {
 // the "next tier change" half of the retry contract.
 func (a *API) SetTelemetryOptInPusher(p *fleet.TelemetryOptInPusher) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -591,7 +607,7 @@ func (a *API) retryPendingTelemetryOptInPush(ctx context.Context) {
 // mandated_skills section.
 func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Registry) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -612,7 +628,7 @@ func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Regist
 // applied:true for a section this device cannot apply" rule.
 func (a *API) SetMCPCatalog(cat *recipes.MergedCatalog) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -628,7 +644,7 @@ func (a *API) SetMCPCatalog(cat *recipes.MergedCatalog) {
 // emitted (the pre-WP05 state for every build that predates this wiring).
 func (a *API) SetAuditEmitter(em auditEmitter) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -648,7 +664,7 @@ func (a *API) SetAuditEmitter(em auditEmitter) {
 // every entry rather than applying nothing silently as a false "success".
 func (a *API) SetSyncKindRegistry(registry *fleet.KindRegistry) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -772,11 +788,16 @@ func (a *API) StopFleetBackground() {
 	a.fleet.enrolledOrgID = ""
 	a.fleet.enrolledNodeID = ""
 	a.fleet.enrolledTier = ""
+	// A stopped background is a session that no longer exists: forget its
+	// transitions and lane health so nothing from it is shown afterwards.
+	a.fleet.sess = sessionTrack{}
+	lanes := a.fleet.lanes
 	pipeline := a.fleet.otlpPipeline
 	tracker := a.fleet.usageTracker
 	mcpCatalog := a.fleet.mcpCatalog
 	syncKindRegistry := a.fleet.syncKindRegistry
 	a.fleet.mu.Unlock()
+	lanes.Reset()
 
 	// Clear the org-provisioned recipe overlay (fleet-org-config-
 	// inheritance-01NORGX01 WP02 / spec §5's "removing fleet cleanly
@@ -916,10 +937,16 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		"fleet_base_url", c.Profile().FleetBaseURL,
 	)
 	id, err := c.RefreshIdentity(ctx, nodeID, runtime.GOOS, "0.18.0")
+	// Fold the outcome into the session track BEFORE returning either way:
+	// a failed enroll while tokens are usable is "degraded", not "signed
+	// out" (fleet-session-truth-01DOGF0A FR-3), and the snapshot can only
+	// say so if the failure is recorded.
 	if err != nil {
+		a.recordEnrollOutcome(nil, err)
 		logging.L().Error("fleet.rpc.enroll.failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
+	a.recordEnrollOutcome(&id, nil)
 	logging.L().Info("fleet.rpc.enroll.success",
 		"org_id", id.OrgID,
 		"team_id", id.TeamID,

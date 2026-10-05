@@ -1727,6 +1727,14 @@ func (b *Bindings) Settings_FleetSignedIn() (bool, error) {
 	return b.api.Settings().FleetSignedIn(b.ctx())
 }
 
+// Settings_FleetSession returns the single fleet-session snapshot every
+// surface reads (fleet-session-truth-01DOGF0A FR-1). The same shape is
+// pushed on fleet:session-changed.
+func (b *Bindings) Settings_FleetSession() (settings.FleetSessionView, error) {
+	defer sentry.WrapBinding("Settings_FleetSession")()
+	return b.api.Settings().FleetSession(b.ctx())
+}
+
 // Settings_FleetRefreshIdentity re-enrolls with fleet and updates the cache.
 func (b *Bindings) Settings_FleetRefreshIdentity() (settings.FleetIdentity, error) {
 	defer sentry.WrapBinding("Settings_FleetRefreshIdentity")()

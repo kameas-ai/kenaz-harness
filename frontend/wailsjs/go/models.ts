@@ -7247,6 +7247,178 @@ export namespace settings {
 	        this.configured = source["configured"];
 	    }
 	}
+	export class FleetSessionClaims {
+	    hasSubject: boolean;
+	    hasOrgClaim: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetSessionClaims(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hasSubject = source["hasSubject"];
+	        this.hasOrgClaim = source["hasOrgClaim"];
+	    }
+	}
+	export class FleetSyncSessionView {
+	    sessionId: string;
+	    reason?: string;
+	    lastError?: string;
+	    consecutiveFailures: number;
+	    open: boolean;
+	    nextRetryAt?: string;
+	    dropped: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetSyncSessionView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.reason = source["reason"];
+	        this.lastError = source["lastError"];
+	        this.consecutiveFailures = source["consecutiveFailures"];
+	        this.open = source["open"];
+	        this.nextRetryAt = source["nextRetryAt"];
+	        this.dropped = source["dropped"];
+	    }
+	}
+	export class FleetSyncLaneView {
+	    status: string;
+	    reason?: string;
+	    lastError?: string;
+	    consecutiveFailures: number;
+	    lastSuccessAt?: string;
+	    nextRetryAt?: string;
+	    sessions?: FleetSyncSessionView[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetSyncLaneView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.reason = source["reason"];
+	        this.lastError = source["lastError"];
+	        this.consecutiveFailures = source["consecutiveFailures"];
+	        this.lastSuccessAt = source["lastSuccessAt"];
+	        this.nextRetryAt = source["nextRetryAt"];
+	        this.sessions = this.convertValues(source["sessions"], FleetSyncSessionView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class FleetSyncView {
+	    contextSync: FleetSyncLaneView;
+	    unitPoll: FleetSyncLaneView;
+	    telemetry: FleetSyncLaneView;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetSyncView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.contextSync = this.convertValues(source["contextSync"], FleetSyncLaneView);
+	        this.unitPoll = this.convertValues(source["unitPoll"], FleetSyncLaneView);
+	        this.telemetry = this.convertValues(source["telemetry"], FleetSyncLaneView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class FleetSessionView {
+	    state: string;
+	    reason?: string;
+	    message?: string;
+	    autoRetry: boolean;
+	    nextRetryAt?: string;
+	    lastAttemptAt?: string;
+	    identity?: FleetIdentity;
+	    identitySource?: string;
+	    emailSource?: string;
+	    nameSource?: string;
+	    claims: FleetSessionClaims;
+	    capabilities: CapabilitiesView;
+	    profile?: FleetProfileInfo;
+	    sync: FleetSyncView;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetSessionView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.reason = source["reason"];
+	        this.message = source["message"];
+	        this.autoRetry = source["autoRetry"];
+	        this.nextRetryAt = source["nextRetryAt"];
+	        this.lastAttemptAt = source["lastAttemptAt"];
+	        this.identity = this.convertValues(source["identity"], FleetIdentity);
+	        this.identitySource = source["identitySource"];
+	        this.emailSource = source["emailSource"];
+	        this.nameSource = source["nameSource"];
+	        this.claims = this.convertValues(source["claims"], FleetSessionClaims);
+	        this.capabilities = this.convertValues(source["capabilities"], CapabilitiesView);
+	        this.profile = this.convertValues(source["profile"], FleetProfileInfo);
+	        this.sync = this.convertValues(source["sync"], FleetSyncView);
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class FleetTelemetryStatusView {
 	    wired: boolean;
 	    enrolled: boolean;

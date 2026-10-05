@@ -1705,6 +1705,12 @@ type SettingsAPI interface {
 	// Does NOT expose ClientID, APIAudience, or any secret fields.
 	FleetProfile(ctx context.Context) (FleetProfileInfo, error)
 
+	// FleetSession returns the single fleet-session snapshot every surface
+	// reads (fleet-session-truth-01DOGF0A FR-1): state (signed_out /
+	// signing_in / signed_in / degraded / disabled), identity, claims,
+	// capabilities and sync-lane health. Network-free.
+	FleetSession(ctx context.Context) (FleetSessionView, error)
+
 	// ── Fleet capabilities (fleet-capability-surface-01NDFSEX09 WP11) ───────
 
 	// FleetCapabilities returns the in-memory capability snapshot.
