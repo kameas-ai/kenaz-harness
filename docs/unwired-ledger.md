@@ -340,6 +340,122 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-04 (install-framework-01DOGF0B WP01/WP02) · Marketplace "Install" for workflow / agent_pack / bundle was badge-only — nothing consumes `installed/`; the skill badge lied the other way
+
+**Class:** registered/advertised capability with no consumer.
+
+**Finding.** `fleet.Client.Install` (`core/fleet/catalog_install.go`)
+fetched a catalog item, (skipped) signature verification, wrote
+`<DataDir>/installed/<kind>/<id>@<version>/payload` + `meta.json`, and
+returned success — no registration, no store save, no event. The only
+reader of `installed/` was the badge set inside `Catalog_List`
+(`core/rpc/views/catalog/impl.go`); `Catalog_Installed` has zero `.vue`
+callers. So Marketplace Install for **workflow**, **agent_pack** and
+**bundle** reported success and painted "Installed" while delivering no
+capability. Opposite-direction lie on the same code: **skill** installs
+bypass `installed/` entirely (`slashcmd.SkillInstall` →
+`fleet.InstallSkill` → `slashcmd.LiveRegister` → `SkillStore`), so a
+successfully installed skill still showed "Install".
+
+**Verification pass (dogfood 2026-10-04, CONFIRMED, re-read against
+`main` @ `b8079d48`;** `kitty-specs/dogfood-2026-10-04/notes.md`
+§"Marketplace installed/ verification"). Per kind, the runtime consumer and
+why `installed/` never reaches it:
+- workflow — workflows load from sqlite + builtins via a *different,
+  same-named* catalog (`Workflows_CatalogInstall` → wfcatalog over
+  `LoadBuiltins` → `Store.Save` + cron arm). Never reads `installed/`.
+- agent_pack — agent profiles load only from `<dataDir>/agents`
+  (`core/agents/loader.go`). Never reads `installed/`.
+- bundle — the bundle list reads `kenaz.lock`; `Bundle.Install` needs a
+  directory with a `kenaz.yaml` manifest, which `Catalog_Install` never
+  wrote (it wrote an opaque `payload` file).
+- skill — bypasses `installed/`; consumed by the slash registry.
+
+**Disposition (this PR, Phase 0).**
+- WP01 (`fix(marketplace): WP01`): `Catalog_List` reads kind=skill
+  installed state from the `SkillStore` (`WithSkillStore`, wired in
+  `core/rpc/api.go`), not `installed/`. `fleet.ResolveSkillStoreID` maps
+  the catalog_id the Marketplace sends to the store's skill ID (they differ
+  for every `SkillPublish`'d skill), so the now-visible Uninstall works.
+  Pins: `TestCatalogList_SkillInstalledStateFromSkillStore` (P-1),
+  `TestCatalogList_SkillResidueInInstalledDirIsNotInstalled`,
+  `TestUninstallSkill_ByCatalogID` — each fails with the behaviour reverted.
+- WP02 (`fix(marketplace): WP02`): `Client.Install` refuses **every** kind
+  with `fleet.ErrCatalogKindNotInstallable`, the message naming the kind
+  and the working alternative, and writes nothing — the payload-writing
+  code is deleted (skill is refused too: on this path it was equally
+  unconsumed; skills install via `SkillInstall`). `MarketplaceView.vue`
+  shows workflow / agent_pack / bundle Install **disabled, not hidden**,
+  with the reason as visible text (`item-install-unsupported-<slug>`,
+  linked by `aria-describedby`). Existing residue is labelled
+  "Downloaded — not active" (never "Installed") and keeps a
+  "Remove download" action — `Client.Uninstall` and `InstalledItems` stay
+  as the cleanup path. Pins: `TestCatalog_Install_RefusesEveryKind`,
+  `TestCatalogInstall_RefusesUnconsumedKinds`, `MarketplaceView.spec.ts`
+  4 (P-2), 2 and 5 — each fails against the pre-fix code.
+
+**Still standing (dated-justified, 2026-10-04).** `Client.Install`'s
+`dataDir` and `pubKeyBase64` parameters are unread, kept so the per-kind
+providers and the C-2 per-device key plug into the existing call chain
+(catalog/impl.go's `pubKeyBase64` / `WithPubKey`, already justified under
+register C-2). `Catalog_Installed` keeps zero `.vue` callers (pre-existing
+NARROW, `harnessClient.ts`); WP08 is its intended reader. Blocker: the
+install framework (install-framework-01DOGF0B Phases 1–3). Owner: alec /
+install-framework-01DOGF0B.
+
+Two residue gaps the Phase-0 cleanup path does not reach (dated
+2026-10-04, review F5; owner: install-framework-01DOGF0B **WP08**, which
+deletes both lines when its offer-to-finish-or-remove flow reads
+`installed/` directly):
+- **Withdrawn-item residue is unreachable.** "Remove download" lives on
+  the item's Marketplace card, which comes from `Catalog_List` (the live
+  fleet listing). Once a publisher withdraws the item, the card is gone
+  and its `installed/` payload has no removal surface — the one RPC that
+  would list it, `Catalog_Installed`, has no `.vue` caller.
+- **`installed/skill/` residue has no removal surface.** WP01 made the
+  skill store the only authority for a skill's installed state, so a
+  skill payload an earlier release's `Catalog_Install` wrote under
+  `installed/skill/` never surfaces as a card state at all; nothing
+  offers to remove it (it is inert — the slash registry never reads it).
+
+Review follow-ups landed with this entry
+(`fix(marketplace): review follow-ups`): `rpc.New`'s `WithSkillStore`
+wiring is pinned at chassis level
+(`TestChassis_CatalogList_SkillInstalledStateIsWiredToSkillStore`);
+`fleet.ResolveSkillStoreID` matches CatalogID (+version) before the exact
+store ID so a colliding catalog_id cannot cross-delete another skill;
+`Client.Uninstall` — now the promoted "Remove download" path — refuses
+any kind/catalogID/version that is not a single clean path segment
+(`ErrCatalogInvalidPathSegment`; before, a version of
+`/../../../../victim` removed a directory outside `installed/`) and an
+empty data dir.
+
+**What deletes this entry.** Each kind gaining a *consumed* install
+through the provider framework, its installed state read from the consumer:
+workflow (WP05 — wfcatalog `Store.Save`, listed by `Workflows_List`),
+bundle (WP06 — `Bundle.Install` from a `kenaz.yaml` directory, listed by
+`Bundle_List`), agent_pack (WP07 — written to `<dataDir>/agents` + loader
+reload, **or** the kind dropped from the catalog with the reason recorded
+here), plus WP08 offering to finish or remove existing `installed/`
+residue. When the last kind lands, `ErrCatalogKindNotInstallable`, the
+`INSTALL_UNSUPPORTED_REASON` map in `MarketplaceView.vue`, and this entry
+are deleted together.
+
+**Gate question — could a gate see "install writes a directory nothing
+reads"?** Not with the existing gates, and not cheaply as a new one. Every
+gate in the inventory pairs *symbols* (registration ↔ predicate, exported
+func ↔ call site, package ↔ importer); this class is a filesystem *path*
+written by one function and read by none, reached through
+`filepath.Join` fragments (`"installed"`, a runtime `kind`) that no
+grep can pair with a reader reliably — a path-literal write/read scan
+would both miss computed paths and flag every write whose reader lives in
+another process (fleet, sidecars). No gate is extended here. The class
+becomes symbol-gateable at **WP03**: once the provider contract exists,
+"every `CatalogItemKind` has a registered provider whose `InstalledState`
+is computed from its consumer" is a registration↔consumer pair the
+pass-2 tripwire pattern can enforce. WP03 owns adding that gate, with a
+planted-violation proof in `scripts/ci/gates_can_fail_test.go`.
+
 ### 2026-09-30 (laya-advisors-01LAYA001 WP13) · the dated-nil `sidecarProbe` is replaced; two dated justifications remain
 
 `core/rpc/api.go`'s `sidecarProbe` (nil since WP12, "until the Settings

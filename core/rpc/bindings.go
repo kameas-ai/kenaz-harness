@@ -3603,8 +3603,10 @@ func (b *Bindings) Catalog_List(filter catalogview.CatalogFilter) ([]catalogview
 	return b.api.Catalog().Catalog_List(b.ctx(), filter)
 }
 
-// Catalog_Install downloads and installs the identified catalog item into the
-// local DataDir. Returns an error when signature verification fails.
+// Catalog_Install refuses every catalog kind with
+// fleet.ErrCatalogKindNotInstallable (install-framework-01DOGF0B WP02): no
+// kind has an install on this path that a runtime consumer reads. Skills
+// install via Slash_SkillInstall. Writes nothing.
 func (b *Bindings) Catalog_Install(catalogID, version string) error {
 	defer sentry.WrapBinding("Catalog_Install")()
 	return b.api.Catalog().Catalog_Install(b.ctx(), catalogID, version)
