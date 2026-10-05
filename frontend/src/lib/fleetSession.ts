@@ -56,9 +56,45 @@ let _scope: EffectScope | null = null;
 let _readSeq = 0;
 let _focusHandler: (() => void) | null = null;
 
+/**
+ * True while the store holds only the boot-time AppInfo seed (below), not a
+ * real backend snapshot. A real snapshot always replaces a seed; a seed
+ * never replaces a real snapshot.
+ */
+let _seeded = false;
+
 /** Install a snapshot (the event handler; tests seed through it too). */
 export function applyFleetSession(v: FleetSessionView | null): void {
+  _seeded = false;
   _session.value = v;
+}
+
+/**
+ * seedFleetSessionFromAppInfo installs the capability map boot AppInfo
+ * already carries, so the gates can open on the same tick the app boots —
+ * before the Settings_FleetSession read lands. It is the SAME backend data
+ * (AppInfo's map is the capability poller's set, masked to empty while
+ * default-deny), not a second source: the first real snapshot replaces it,
+ * and it never overwrites one. `null` clears a seed (fail closed).
+ * Called only by lib/featureFlags.ts's initFeatureFlags.
+ */
+export function seedFleetSessionFromAppInfo(caps: Record<string, boolean> | null | undefined): void {
+  if (_session.value && !_seeded) return;
+  if (!caps) {
+    _seeded = false;
+    _session.value = null;
+    return;
+  }
+  const lane = { status: 'unknown', consecutiveFailures: 0 };
+  _seeded = true;
+  _session.value = {
+    state: Object.keys(caps).length > 0 ? 'signed_in' : 'signed_out',
+    autoRetry: true,
+    claims: { hasSubject: false, hasOrgClaim: false },
+    capabilities: { tier: '', enabled: { ...caps }, fetchedAt: '', source: 'appinfo' },
+    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
+    updatedAt: '',
+  };
 }
 
 function ensureSubscribed(): void {
@@ -329,5 +365,6 @@ export function _resetFleetSessionForTest(): void {
   _focusHandler = null;
   _client = null;
   _readSeq = 0;
+  _seeded = false;
   _session.value = null;
 }

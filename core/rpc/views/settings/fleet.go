@@ -799,6 +799,19 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 		logging.L().Error("fleet.rpc.sign_in.enroll_failed", "err", err.Error())
 		return id, err
 	}
+	// The capability poller still holds the signed-out answer; fetch now so
+	// the snapshot (and every gate reading it) opens on the next push rather
+	// than at the poller's next tick, whichever surface the sign-in came
+	// from (fleet-session-truth-01DOGF0A FR-8 — a menu sign-in left the rail
+	// stale). Its OnChange republishes the session. Not under go test (the
+	// pollers' network work never runs there).
+	if p := a.fleetPoller(); p != nil && !testing.Testing() {
+		go func() {
+			rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = p.Refresh(rctx)
+		}()
+	}
 	logging.L().Info("fleet.rpc.sign_in.success",
 		"org_id", id.OrgID,
 		"team_id", id.TeamID,

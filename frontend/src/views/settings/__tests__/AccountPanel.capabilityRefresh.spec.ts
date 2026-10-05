@@ -189,12 +189,18 @@ describe('AccountPanel — capability refresh on session transitions', () => {
     const wrapper = mountPanel(AccountPanel, client);
     await flushPromises();
 
-    // Boot left the snapshot empty; Refresh must repair it.
-    expect(signedIn.value).toBe(false);
+    // fleet-session-truth-01DOGF0A WP05: the gates read the fleet-session
+    // store, which reads the live snapshot on mount — a stale boot AppInfo
+    // can no longer leave them closed for a signed-in user. Refresh must
+    // still force a capability fetch (a re-enroll is where a tier change
+    // lands) and keep the gates open.
+    expect(signedIn.value).toBe(true);
+    const before = vi.mocked(client.settings.fleetRefreshCapabilities).mock.calls.length;
 
     await wrapper.find('[data-testid="refresh-btn"]').trigger('click');
     await flushPromises();
 
+    expect(vi.mocked(client.settings.fleetRefreshCapabilities).mock.calls.length).toBeGreaterThan(before);
     expect(signedIn.value).toBe(true);
   });
 });

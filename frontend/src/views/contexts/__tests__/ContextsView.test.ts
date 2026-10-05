@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import ContextsView from '@/views/contexts/ContextsView.vue';
-import { createFakeHarnessClient } from '@/lib/harnessClient';
+import { createFakeHarnessClient, fakeFleetSession } from '@/lib/harnessClient';
+import { _resetFleetSessionForTest } from '@/lib/fleetSession';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type {
   ContextNode,
@@ -42,7 +43,25 @@ function provide(opts: {
     team_cap_enabled: false,
   };
 
+  const base = createFakeHarnessClient();
   const client = createFakeHarnessClient({
+    // fleet-session-truth-01DOGF0A WP05: the team gate reads the shared
+    // fleet-session capability set. Model the backend: syncStatus's
+    // team_cap_enabled and the session's shared_team_graph come from the
+    // same capability poller.
+    settings: {
+      ...base.settings,
+      fleetSession: async () =>
+        fakeFleetSession({
+          state: 'signed_in',
+          capabilities: {
+            tier: 'enterprise',
+            enabled: { shared_team_graph: syncStatus.team_cap_enabled },
+            fetchedAt: '',
+            source: 'fleet',
+          },
+        }),
+    } as any,
     contexts: {
       list: async () => tree,
       listAll: async () => treeAll,
@@ -84,6 +103,9 @@ function provide(opts: {
   });
   return { client };
 }
+
+beforeEach(() => _resetFleetSessionForTest());
+afterEach(() => _resetFleetSessionForTest());
 
 describe('ContextsView', () => {
   it('renders the canvas head with section number 07 and title', async () => {
