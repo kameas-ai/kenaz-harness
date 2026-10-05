@@ -420,10 +420,10 @@ function extractAfter(s: string, prefix: string): string | null {
 // ── Materialize: reused pre-fix chat run id (agentgraph-settings-linkage-01DOGF0D) ─
 
 /**
- * The backend's ErrRunIDReused text (core/agentgraph/materialize.go). A
- * pre-WP02 chat run id ("chat-<n>" from a per-process counter) can hold
- * several unrelated turns in the persistent event log; the backend
- * refuses to project them as one graph. Matched on this stable fragment.
+ * The backend's ErrRunIDReused text (core/agentgraph/materialize.go). The
+ * backend refuses only TRUE reuse — a run started again after it had
+ * completed, or several starts under a pre-ULID "chat-<n>" id — never a
+ * resumed or overflow-redriven run. Matched on this stable fragment.
  */
 const RUN_ID_REUSED_MARKER = 'run id was reused by several runs';
 
@@ -435,7 +435,7 @@ const RUN_ID_REUSED_MARKER = 'run id was reused by several runs';
 export function materializeErrorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   if (raw.includes(RUN_ID_REUSED_MARKER)) {
-    return 'This run graph cannot be shown. The turn ran before run ids were made unique, and its run id was reused by turns from other app sessions, so its recorded steps cannot be separated from theirs.';
+    return 'This run graph cannot be shown: its run id was used by more than one run (this happens to turns recorded before run ids were made unique), so its steps cannot be separated from the other runs\'.';
   }
   return raw;
 }

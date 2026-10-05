@@ -267,7 +267,7 @@ describe('GraphEditor — materialized run', () => {
         ...createFakeHarnessClient().graph,
         materializeRun: vi.fn(async () => {
           throw new Error(
-            'agentgraph: materialize: run id was reused by several runs (pre-fix chat run id); its events cannot be attributed to one turn: run "chat-3" has 2 run_start events',
+            'agentgraph: materialize: run id was reused by several runs; its events cannot be attributed to one turn: run "chat-3" has 2 run_start events',
           );
         }),
       },

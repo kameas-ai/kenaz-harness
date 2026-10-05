@@ -1285,7 +1285,11 @@ func (m *Manager) statusFromLog(runID string) (RunStatus, bool) {
 					out.SessionID = p.SessionID
 				}
 			}
+			// A run_start re-enters the run (Kernel.Resume after a
+			// pause, or the chat overflow-recovery redrive): what came
+			// before it is a previous attempt, not this one's outcome.
 			paused = false
+			lastNodeErr = ""
 		case coreag.EventRunComplete:
 			completed = true
 		case coreag.EventRunAbandoned:
