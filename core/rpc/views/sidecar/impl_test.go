@@ -188,6 +188,7 @@ func TestStatus_UnsupportedPlatform_NoEnable(t *testing.T) {
 }
 
 func TestStatus_NoPublishedRelease_ExplainsAndRefuses(t *testing.T) {
+	defer mlsidecar.SetPinnedReleaseForTesting(mlsidecar.EngineRelease{})() // a build with no engine pin
 	f := newFixture(t)
 	f.impl.Release = mlsidecar.PinnedEngineRelease
 	v, _ := f.impl.Status(context.Background())
@@ -196,6 +197,34 @@ func TestStatus_NoPublishedRelease_ExplainsAndRefuses(t *testing.T) {
 	}
 	if _, err := f.impl.Enable(context.Background()); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("Enable err = %v", err)
+	}
+}
+
+// TestBuildTimePin_FlowsThroughStatusAndEnable (engine-publication-
+// 01ENPUB01 WP-H3): with a NON-zero build-time pin, the production
+// ReleaseSource (mlsidecar.PinnedEngineRelease — the exact func
+// core/rpc/api.go wires) makes Status disclose the pinned version + size
+// and Enable install and start that release.
+func TestBuildTimePin_FlowsThroughStatusAndEnable(t *testing.T) {
+	f := newFixture(t)
+	pin := f.release("1.2.0")
+	pin.SizeBytes = 126 << 20
+	defer mlsidecar.SetPinnedReleaseForTesting(pin)()
+	f.impl.Release = mlsidecar.PinnedEngineRelease
+
+	v, err := f.impl.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Available || v.Release.Version != "1.2.0" || v.Release.SizeMB != 126 || v.UnavailableReason != "" {
+		t.Fatalf("pinned build Status = %+v, want the pinned 1.2.0 / 126 MB offered", v)
+	}
+	v, err = f.impl.Enable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.State != "healthy" || v.InstalledVersion != "1.2.0" {
+		t.Fatalf("Enable on the pinned release = %+v", v)
 	}
 }
 

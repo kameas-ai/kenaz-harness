@@ -3024,6 +3024,11 @@ func New(c *core.Core, opts ...Option) *API {
 	} else {
 		a.trustEngine = trustEngine
 		a.trustAnchorAPI = trustanchor.New(trustEngine)
+		// engine-publication-01ENPUB01 WP-H2: seed the compiled-in Kameas
+		// ML release key as an anchor IF nothing already knows it (never
+		// overwriting operator/fleet anchors, never resurrecting a
+		// revoked one). A placeholder build seeds nothing.
+		seedBakedReleaseAnchor(context.Background(), trustEngine)
 	}
 
 	// Wire the bundle reader against the core data dir. nil core (test

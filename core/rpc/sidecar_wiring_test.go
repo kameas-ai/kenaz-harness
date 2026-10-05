@@ -2,6 +2,9 @@ package rpc
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,6 +21,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	sidecarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sidecar"
+	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 )
 
 // countingEngine answers /health from a scripted payload and counts hits,
@@ -153,6 +157,9 @@ func TestSidecarWiring_NilCore_NoManagerAndNilInterfaceProbe(t *testing.T) {
 // collaborators — and constructing all of it touches nothing on disk and
 // dials nothing (no boot-time spawn).
 func TestSidecarWiring_RealManagerUnderDataDir(t *testing.T) {
+	// The honest-unavailable assertions below are about a build with NO
+	// engine pin; force that, independent of the checked-in pin.
+	defer mlsidecar.SetPinnedReleaseForTesting(mlsidecar.EngineRelease{})()
 	api, dataDir := newSidecarTestAPI(t)
 	if api.sidecarMgr == nil {
 		t.Fatal("New(c) with a data dir left the sidecar Manager nil")
@@ -286,4 +293,78 @@ func TestSidecarWiring_LadderResolvesRung2ThroughProductionProbe(t *testing.T) {
 	if !ok || rung != advice.RungLocalLaya || model != "kenaz-ml-sidecar@1.0.0" {
 		t.Fatalf("ladder = (%q, %q, %v), want rung 2 via the production probe", model, rung, ok)
 	}
+}
+
+// TestSidecarWiring_BakedReleaseKeySeededAtBoot pins WP-H2's boot wiring
+// (engine-publication-01ENPUB01): a build carrying a real baked release
+// key boots with that key as a trust anchor, and the explicit install
+// path's VerifierFunc hands it to the engine verifier — so an un-enrolled
+// install verifies the engine download with no operator step. A
+// placeholder build seeds nothing. (Revocation-across-boots and
+// operator-anchor precedence are pinned against real sqlite in
+// core/trust/seed_test.go.)
+func TestSidecarWiring_BakedReleaseKeySeededAtBoot(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("placeholder seeds nothing", func(t *testing.T) {
+		restore := mlsidecar.SetBakedReleaseKeyForTesting("")
+		defer restore()
+		api, _ := newSidecarTestAPI(t)
+		anchors, err := api.TrustAnchors().ListAnchors(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range anchors {
+			if strings.HasPrefix(a.AnchorID, "kameas-ml-release-") {
+				t.Fatalf("placeholder build seeded %q", a.AnchorID)
+			}
+		}
+	})
+
+	t.Run("real key is seeded and reaches the install verifier", func(t *testing.T) {
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restore := mlsidecar.SetBakedReleaseKeyForTesting(hex.EncodeToString(pub))
+		defer restore()
+		api, _ := newSidecarTestAPI(t)
+		want, ok, err := mlsidecar.BakedReleaseAnchor()
+		if err != nil || !ok {
+			t.Fatalf("BakedReleaseAnchor: ok=%v err=%v", ok, err)
+		}
+		anchors, err := api.TrustAnchors().ListAnchors(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, a := range anchors {
+			if a.AnchorID == want.AnchorID && a.PublicKey.Fingerprint == want.PublicKey.Fingerprint {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("baked anchor %s not in the boot trust store: %+v", want.AnchorID, anchors)
+		}
+		if api.sidecarMgr == nil || api.sidecarMgr.VerifierFunc == nil {
+			t.Fatal("sidecar install deps not attached")
+		}
+		v, err := api.sidecarMgr.VerifierFunc(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inVerifier := false
+		for _, a := range v.Anchors {
+			if a.PublicKey.Fingerprint == want.PublicKey.Fingerprint {
+				inVerifier = true
+			}
+		}
+		if !inVerifier {
+			t.Fatal("the install VerifierFunc does not carry the baked anchor")
+		}
+		// Re-running the boot seed is a no-op, never a rewrite.
+		if got := seedBakedReleaseAnchor(ctx, api.trustEngine); got != coretrust.SeedAlreadyPresent {
+			t.Fatalf("second seed outcome = %q, want already_present", got)
+		}
+	})
 }
