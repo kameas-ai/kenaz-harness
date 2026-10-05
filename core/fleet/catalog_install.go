@@ -2,7 +2,7 @@
 // cleanup and listing of what earlier releases left under installed/.
 //
 // install-framework-01DOGF0B WP02: Install used to verify, then write
-//   <DataDir>/installed/<kind>/<catalog_id>@<version>/payload (+ meta.json)
+// <DataDir>/installed/<kind>/<catalog_id>@<version>/payload (+ meta.json)
 // and report success. Nothing reads installed/ — not for workflow,
 // agent_pack, bundle or skill — so every such "install" was a badge with no
 // capability behind it (docs/unwired-ledger.md, "badge-only catalog
@@ -34,18 +34,19 @@ import (
 // its runtime consumer (install-framework-01DOGF0B WP05–WP07).
 var ErrCatalogKindNotInstallable = errors.New("fleet/catalog: installing this kind from the org catalog isn't supported yet")
 
-// CatalogInstallRefusal returns the named refusal for kind. Exported so the
-// RPC view and tests share one source for the per-kind reason.
-func CatalogInstallRefusal(kind CatalogItemKind) error {
+// catalogInstallRefusal returns the named refusal for kind — the single
+// source of the per-kind reason on the Go side (MarketplaceView.vue carries
+// the matching UI copy).
+func catalogInstallRefusal(kind CatalogItemKind) error {
 	switch kind {
 	case CatalogKindWorkflow:
-		return fmt.Errorf("%w: workflow — nothing on this device loads a downloaded workflow; install workflows from Workflows › Catalog", ErrCatalogKindNotInstallable)
+		return fmt.Errorf("%w: workflow — nothing on this device would load the download; install a workflow from Workflows › Catalog instead", ErrCatalogKindNotInstallable)
 	case CatalogKindAgentPack:
-		return fmt.Errorf("%w: agent_pack — agent profiles load only from the agents folder in your profile directory, which a catalog download does not reach", ErrCatalogKindNotInstallable)
+		return fmt.Errorf("%w: agent_pack — nothing on this device would load the download; add agent profiles to the agents folder in your profile directory instead", ErrCatalogKindNotInstallable)
 	case CatalogKindBundle:
-		return fmt.Errorf("%w: bundle — bundles install from a kenaz.yaml manifest directory; use Settings › Integrations › Bundles", ErrCatalogKindNotInstallable)
+		return fmt.Errorf("%w: bundle — nothing on this device would load the download; install a bundle from Settings › Integrations › Bundles instead", ErrCatalogKindNotInstallable)
 	case CatalogKindSkill:
-		return fmt.Errorf("%w: skill — skills install through the skill path (SkillInstall), which live-registers them", ErrCatalogKindNotInstallable)
+		return fmt.Errorf("%w: skill — this path would not register it; install the skill through the skill install path (SkillInstall) instead", ErrCatalogKindNotInstallable)
 	default:
 		return fmt.Errorf("%w: unknown kind %q", ErrCatalogKindNotInstallable, kind)
 	}
@@ -58,7 +59,7 @@ func installBasePath(dataDir string, kind CatalogItemKind, catalogID, version st
 }
 
 // Install fetches the item to learn its kind, then refuses it with
-// CatalogInstallRefusal — it writes nothing (install-framework-01DOGF0B
+// catalogInstallRefusal — it writes nothing (install-framework-01DOGF0B
 // WP02). dataDir and pubKeyBase64 are unread for now: they are kept so the
 // per-kind providers that replace this method (WP05–WP07) and the C-2
 // per-device key (catalog/impl.go's pubKeyBase64, WithPubKey) plug into the
@@ -82,12 +83,45 @@ func (c *Client) Install(ctx context.Context, _ string, _ string, catalogID, ver
 	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
 		return fmt.Errorf("fleet/catalog: install: decode: %w", err)
 	}
-	return CatalogInstallRefusal(item.Kind)
+	return catalogInstallRefusal(item.Kind)
 }
 
-// Uninstall removes the namespaced install directory (FR-006).
+// ErrCatalogInvalidPathSegment is returned by Uninstall when kind,
+// catalogID or version is not a single clean path segment.
+var ErrCatalogInvalidPathSegment = errors.New("fleet/catalog: uninstall: invalid path segment")
+
+// cleanPathSegment reports whether s is safe as exactly one path element:
+// non-empty, not "." or "..", no separator of either OS flavour, no NUL,
+// and unchanged by filepath.Clean.
+func cleanPathSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	if strings.ContainsAny(s, "/\\\x00") || strings.ContainsRune(s, filepath.Separator) {
+		return false
+	}
+	return filepath.Clean(s) == s
+}
+
+// Uninstall removes the namespaced install directory (FR-006) — since
+// install-framework-01DOGF0B WP02, residue an earlier release's Install
+// left behind ("Remove download" in the Marketplace). kind, catalogID and
+// version come from the frontend and are joined into a RemoveAll path, so
+// each must be a single clean path segment (review F8); dataDir must be
+// set, or the path would resolve against the process working directory.
 // Returns nil when the directory does not exist (idempotent).
 func (c *Client) Uninstall(dataDir string, kind CatalogItemKind, catalogID, version string) error {
+	if dataDir == "" {
+		return fmt.Errorf("fleet/catalog: uninstall: data dir not configured")
+	}
+	for _, seg := range []string{string(kind), catalogID, version} {
+		if !cleanPathSegment(seg) {
+			return fmt.Errorf("%w: %q", ErrCatalogInvalidPathSegment, seg)
+		}
+	}
+	if !cleanPathSegment(catalogID + "@" + version) {
+		return fmt.Errorf("%w: %q", ErrCatalogInvalidPathSegment, catalogID+"@"+version)
+	}
 	dir := installBasePath(dataDir, kind, catalogID, version)
 	if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("fleet/catalog: uninstall: %w", err)

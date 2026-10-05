@@ -19,6 +19,13 @@ import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { CatalogItemView } from '@/lib/types';
 
+// ── toast spy (pins the install() guard's user-visible refusal) ───────────
+const { pushToastSpy } = vi.hoisted(() => ({ pushToastSpy: vi.fn() }));
+vi.mock('@/composables/useToastQueue', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/composables/useToastQueue')>()),
+  push: pushToastSpy,
+}));
+
 // ── featureFlags mock ──────────────────────────────────────────────────────
 // Use a real Vue ref so template auto-unwrapping works correctly.
 const _signedIn = ref(true);
@@ -119,6 +126,7 @@ function mountView(client = buildClient().client) {
 describe('MarketplaceView', () => {
   beforeEach(() => {
     _signedIn.value = true;
+    pushToastSpy.mockClear();
   });
 
   it('1. shows not-signed-in gate when user is not signed in', async () => {
@@ -191,12 +199,60 @@ describe('MarketplaceView', () => {
       expect(reason.exists(), `${kind} must show its reason as visible text`).toBe(true);
       expect(reason.text()).toContain("isn't supported yet");
       expect(reason.text()).toMatch(alternative);
-      expect(btn.attributes('aria-describedby')).toBe(`item-install-unsupported-${slug}`);
+      // describedby points at the reason element's (id+version-derived) id.
+      expect(reason.attributes('id')).toBeTruthy();
+      expect(btn.attributes('aria-describedby')).toBe(reason.attributes('id'));
       await btn.trigger('click');
     }
     await flushPromises();
     expect(installFn).not.toHaveBeenCalled();
     expect(listFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('4a. install() guard refuses an unsupported kind even if the button is force-enabled (F4)', async () => {
+    // VTU skips trigger() on a disabled element, so test 4 never ran the
+    // handler. Strip the disabled attribute to reach install() directly:
+    // the guard must toast the reason and never call catalog.install.
+    const installFn = vi.fn(async () => {});
+    const client = createFakeHarnessClient({
+      catalog: {
+        publish: async () => ({ ...WORKFLOW_ITEM }),
+        list: async () => [WORKFLOW_ITEM],
+        install: installFn,
+        uninstall: async () => {},
+        installed: async () => [],
+        unpublish: vi.fn(async () => {}),
+      },
+    });
+    const wrapper = mountView(client);
+    await flushPromises();
+
+    const btn = wrapper.find('[data-testid="item-install-btn-my-workflow"]');
+    (btn.element as HTMLButtonElement).disabled = false;
+    btn.element.removeAttribute('disabled');
+    expect(btn.attributes('disabled')).toBeUndefined();
+    await btn.trigger('click');
+    await flushPromises();
+
+    expect(installFn).not.toHaveBeenCalled();
+    expect(pushToastSpy).toHaveBeenCalledTimes(1);
+    const [msg, opts] = pushToastSpy.mock.calls[0];
+    expect(msg).toContain("isn't supported yet");
+    expect(msg).toContain('Workflows › Catalog');
+    expect(opts).toEqual({ level: 'error' });
+  });
+
+  it('4d. reason element ids are unique per id+version even when slugs collide (F2)', async () => {
+    const a: CatalogItemView = { ...WORKFLOW_ITEM, id: 'cat-x', version: '1.0.0' };
+    const b: CatalogItemView = { ...WORKFLOW_ITEM, id: 'cat-x', version: '2.0.0' };
+    const { client } = buildClient([a, b]);
+    const wrapper = mountView(client);
+    await flushPromises();
+    const ids = wrapper
+      .findAll('[data-testid="item-install-unsupported-my-workflow"]')
+      .map((w) => w.attributes('id'));
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it('4b. skill Install stays enabled with no unsupported reason', async () => {

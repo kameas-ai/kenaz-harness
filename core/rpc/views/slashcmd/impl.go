@@ -344,7 +344,7 @@ func (a *API) SkillInstall(ctx context.Context, catalogID, version string) error
 		// FR-501: fleet.skill_installed audit event.
 		// Fetch the trigger from the store so the audit entry records it.
 		trigger := catalogID // fallback when store lookup fails
-		storeID := corefleet.ResolveSkillStoreID(a.skillDeps.SkillStore, catalogID)
+		storeID := corefleet.ResolveSkillStoreID(a.skillDeps.SkillStore, catalogID, version)
 		if sk, lookupErr := a.skillDeps.SkillStore.Get(storeID); lookupErr == nil {
 			trigger = sk.EffectiveTrigger()
 		}
@@ -368,7 +368,7 @@ func (a *API) SkillUninstall(ctx context.Context, skillID string) error {
 	}
 	// The Marketplace passes the catalog_id; the store keys on the payload's
 	// skill ID. Resolve once so the audit record and the removal agree.
-	skillID = corefleet.ResolveSkillStoreID(a.skillDeps.SkillStore, skillID)
+	skillID = corefleet.ResolveSkillStoreID(a.skillDeps.SkillStore, skillID, "")
 	// Capture trigger before removal for the audit record.
 	var trigger string
 	if sk, lookupErr := a.skillDeps.SkillStore.Get(skillID); lookupErr == nil {

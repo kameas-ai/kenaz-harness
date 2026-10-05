@@ -418,3 +418,47 @@ func TestCatalog_PayloadTooLarge(t *testing.T) {
 		t.Errorf("expected ErrCatalogPayloadTooLarge, got %v", err)
 	}
 }
+
+// TestCatalog_Uninstall_RefusesTraversal — review F8. Uninstall is now the
+// promoted "Remove download" path; kind/catalogID/version arrive from the
+// frontend and feed filepath.Join → os.RemoveAll. Pre-fix, a version of
+// "/../../../../victim" removed <root>/victim, outside installed/ entirely.
+// Each input must be a single clean segment.
+func TestCatalog_Uninstall_RefusesTraversal(t *testing.T) {
+	var c *Client // Uninstall touches no client state
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	victim := filepath.Join(root, "victim")
+	if err := os.MkdirAll(victim, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "installed", "workflow"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ kind, id, ver string }{
+		// Joins to <root>/victim: the case that removed a real directory
+		// outside installed/ before the guard.
+		{"workflow", "x", "/../../../../victim"},
+		{"../../..", "victim", "1"},
+		{"workflow", "../../../victim", "1"},
+		{"workflow", `..\..\victim`, "1"},
+		{"..", "..", "x"},
+		{"", "a", "1"},
+		{"workflow", "", "1"},
+		{"workflow", "a", ""},
+		{"workflow", ".", "1"},
+		{"workflow/sub", "a", "1"},
+	}
+	for _, tc := range cases {
+		err := c.Uninstall(dataDir, CatalogItemKind(tc.kind), tc.id, tc.ver)
+		if !errors.Is(err, ErrCatalogInvalidPathSegment) {
+			t.Errorf("Uninstall(%q, %q, %q) = %v, want ErrCatalogInvalidPathSegment", tc.kind, tc.id, tc.ver, err)
+		}
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("victim directory outside installed/ was removed: %v", err)
+	}
+	if err := c.Uninstall("", CatalogKindWorkflow, "a", "1"); err == nil {
+		t.Error("Uninstall with empty dataDir must refuse (it would resolve against the working directory)")
+	}
+}

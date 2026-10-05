@@ -414,3 +414,36 @@ func TestUninstallSkill_ByCatalogID(t *testing.T) {
 		t.Error("skill still in store after UninstallSkill by catalog ID")
 	}
 }
+
+// TestResolveSkillStoreID_CatalogIDWinsOverCollidingStoreID — review F3.
+// Skill A is stored under ID "shared"; skill B came from the catalog with
+// catalog_id "shared" but is stored under "b-local". The Marketplace sends
+// "shared" meaning B. Exact-store-ID-first resolution deleted A instead.
+func TestResolveSkillStoreID_CatalogIDWinsOverCollidingStoreID(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	registry, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	a := slashcmd.Skill{ID: "shared", Trigger: "skilla", Kind: slashcmd.KindText, Body: "a", Source: slashcmd.SkillSourceCatalog}
+	b := slashcmd.Skill{ID: "b-local", CatalogID: "shared", Version: "2.0.0", Trigger: "skillb", Kind: slashcmd.KindText, Body: "b", Source: slashcmd.SkillSourceCatalog}
+	for _, sk := range []slashcmd.Skill{a, b} {
+		if err := slashcmd.LiveRegister(store, registry, sk); err != nil {
+			t.Fatalf("LiveRegister %s: %v", sk.ID, err)
+		}
+	}
+
+	if got := ResolveSkillStoreID(store, "shared", "2.0.0"); got != "b-local" {
+		t.Errorf("ResolveSkillStoreID(shared, 2.0.0) = %q, want b-local", got)
+	}
+	if err := UninstallSkill(store, registry, "shared"); err != nil {
+		t.Fatalf("UninstallSkill(shared): %v", err)
+	}
+	if _, err := store.Get("shared"); err != nil {
+		t.Errorf("skill A (store ID \"shared\") was deleted by a catalog-id uninstall: %v", err)
+	}
+	if _, err := store.Get("b-local"); err == nil {
+		t.Error("skill B (catalog_id \"shared\") still in store after uninstall by its catalog_id")
+	}
+	if _, ok := registry.Lookup("skilla"); !ok {
+		t.Error("skill A's trigger was unregistered")
+	}
+}

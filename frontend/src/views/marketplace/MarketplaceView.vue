@@ -95,15 +95,23 @@ const filtered = computed<CatalogItemView[]>(() => {
 // kind's entry when its provider ships a consumed install (WP05–WP07).
 const INSTALL_UNSUPPORTED_REASON: Record<string, string> = {
   workflow:
-    "Installing workflows from the org catalog isn't supported yet — nothing on this device would load it. Install workflows from Workflows › Catalog.",
+    "Installing workflows from the org catalog isn't supported yet — nothing on this device would load the download. Install a workflow from Workflows › Catalog instead.",
   agent_pack:
-    "Installing agent packs from the org catalog isn't supported yet — agent profiles load only from the agents folder in your profile directory.",
+    "Installing agent packs from the org catalog isn't supported yet — nothing on this device would load the download. Add agent profiles to the agents folder in your profile directory instead.",
   bundle:
-    "Installing bundles from the org catalog isn't supported yet — bundles install from a kenaz.yaml manifest. Use Settings › Integrations › Bundles.",
+    "Installing bundles from the org catalog isn't supported yet — nothing on this device would load the download. Install a bundle from Settings › Integrations › Bundles instead.",
 };
 
 function installUnsupportedReason(kind: string): string | null {
   return INSTALL_UNSUPPORTED_REASON[kind] ?? null;
+}
+
+// DOM id for the visible reason text (aria-describedby target). Built from
+// id + version, not slug: two cards can share a slug (another version, or a
+// different item kind), and duplicate ids break the describedby link
+// (review F2). Non-id-safe characters are replaced.
+function reasonElId(item: CatalogItemView): string {
+  return `item-install-unsupported-${item.id}-${item.version}`.replace(/[^A-Za-z0-9_-]/g, '_');
 }
 
 // ── actions ───────────────────────────────────────────────────────────────
@@ -142,7 +150,9 @@ async function uninstall(item: CatalogItemView) {
   setBusy(item.id, true);
   try {
     if (item.kind === 'skill') {
-      // Skills are identified by their catalog ID in the skill store.
+      // The Marketplace knows only the catalog_id; SkillUninstall resolves
+      // it to the skill store ID (fleet.ResolveSkillStoreID) — they differ
+      // for every published skill.
       await client.slashcmd.skillUninstall(item.id);
     } else {
       await client.catalog.uninstall(item.kind, item.id, item.version);
@@ -274,9 +284,10 @@ async function confirmWithdraw() {
         register C-2): plain text on the install affordance, not a modal
         or a tooltip — no per-device catalog signing key source exists
         yet, so ed25519 signature verification is skipped on every
-        install from this catalog, on both the workflow/pack/bundle path
-        (client.catalog.install) and the skill path
-        (client.slashcmd.skillInstall). This stays visible until C-2's
+        install from this catalog. Since install-framework-01DOGF0B WP02
+        only the skill path (client.slashcmd.skillInstall) installs; the
+        workflow/pack/bundle path (client.catalog.install) is refused
+        before any verification would run. This stays visible until C-2's
         key source lands.
       -->
       <p
@@ -304,7 +315,7 @@ async function confirmWithdraw() {
       >
         <p class="font-ui text-sm text-ink-muted">No catalog items found.</p>
         <p class="font-ui text-xs text-ink-subtle">
-          Ask a team admin to publish workflows or packs to the catalog.
+          Ask a team admin to publish to the catalog. Skills install from here today; workflows, agent packs and bundles are listed but can't be installed from the catalog yet.
         </p>
       </div>
 
@@ -386,7 +397,7 @@ async function confirmWithdraw() {
                 class="h-6 rounded-sm bg-accent px-3 font-ui text-xs font-medium text-white hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="busyIds.has(item.id) || installUnsupportedReason(item.kind) !== null"
                 :title="installUnsupportedReason(item.kind) ?? undefined"
-                :aria-describedby="installUnsupportedReason(item.kind) ? `item-install-unsupported-${item.slug}` : undefined"
+                :aria-describedby="installUnsupportedReason(item.kind) ? reasonElId(item) : undefined"
                 :data-testid="`item-install-btn-${item.slug}`"
                 @click="install(item)"
               >
@@ -408,7 +419,7 @@ async function confirmWithdraw() {
           <!-- Disabled-with-reason (install-framework-01DOGF0B WP02): visible text, not a tooltip only. -->
           <p
             v-if="!item.installed && installUnsupportedReason(item.kind)"
-            :id="`item-install-unsupported-${item.slug}`"
+            :id="reasonElId(item)"
             class="font-ui text-[11px] text-ink-subtle"
             :data-testid="`item-install-unsupported-${item.slug}`"
           >

@@ -403,6 +403,33 @@ NARROW, `harnessClient.ts`); WP08 is its intended reader. Blocker: the
 install framework (install-framework-01DOGF0B Phases 1–3). Owner: alec /
 install-framework-01DOGF0B.
 
+Two residue gaps the Phase-0 cleanup path does not reach (dated
+2026-10-04, review F5; owner: install-framework-01DOGF0B **WP08**, which
+deletes both lines when its offer-to-finish-or-remove flow reads
+`installed/` directly):
+- **Withdrawn-item residue is unreachable.** "Remove download" lives on
+  the item's Marketplace card, which comes from `Catalog_List` (the live
+  fleet listing). Once a publisher withdraws the item, the card is gone
+  and its `installed/` payload has no removal surface — the one RPC that
+  would list it, `Catalog_Installed`, has no `.vue` caller.
+- **`installed/skill/` residue has no removal surface.** WP01 made the
+  skill store the only authority for a skill's installed state, so a
+  skill payload an earlier release's `Catalog_Install` wrote under
+  `installed/skill/` never surfaces as a card state at all; nothing
+  offers to remove it (it is inert — the slash registry never reads it).
+
+Review follow-ups landed with this entry
+(`fix(marketplace): review follow-ups`): `rpc.New`'s `WithSkillStore`
+wiring is pinned at chassis level
+(`TestChassis_CatalogList_SkillInstalledStateIsWiredToSkillStore`);
+`fleet.ResolveSkillStoreID` matches CatalogID (+version) before the exact
+store ID so a colliding catalog_id cannot cross-delete another skill;
+`Client.Uninstall` — now the promoted "Remove download" path — refuses
+any kind/catalogID/version that is not a single clean path segment
+(`ErrCatalogInvalidPathSegment`; before, a version of
+`/../../../../victim` removed a directory outside `installed/`) and an
+empty data dir.
+
 **What deletes this entry.** Each kind gaining a *consumed* install
 through the provider framework, its installed state read from the consumer:
 workflow (WP05 — wfcatalog `Store.Save`, listed by `Workflows_List`),
