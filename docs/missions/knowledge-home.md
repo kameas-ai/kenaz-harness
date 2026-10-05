@@ -81,9 +81,13 @@ starter hooks; optimistic flip with rollback on error). The stale header
 comment ("unhides the Memory tab" — the rail entry was never conditional) is
 deleted with the row.
 
-## D4 — FR-7 folder-level promote: OWNER QUESTION — OPEN
+## D4 — FR-7 folder-level promote: RESOLVED (owner ruled: build, 2026-10-05)
 
-Question for the owner (asked 2026-10-04, **no answer recorded yet**):
+**Resolution (2026-10-05, owner: alec):** build the batch dialog. Shipped in
+v0.88.0 (`feat/folder-promote`, WP01–WP03) — see "As shipped (D4 resolution)"
+below. The interim copy described under "Disposition" is retired.
+
+Question for the owner (asked 2026-10-04, answered 2026-10-05):
 
 > With a context *folder* selected (e.g. `kameas-ai`), should "Share…/
 > Promote…" open a batch dialog that publishes every entry in the module
@@ -97,7 +101,7 @@ Facts for the call: there is no folder-level publish/promote in the API —
 over per-entry `contexts.publish` / `contexts.promote`. The plan says do not
 resolve this by picking the cheaper option silently.
 
-**Disposition for this mission:** the batch dialog is **deferred, not
+**Disposition for this mission (superseded 2026-10-05):** the batch dialog was **deferred, not
 rejected**. WP05 does not build it. What ships instead is the honest interim
 folder state the spec requires either way (P-6): with a folder selected the
 sharing controls still render, disabled, with the reason "Sharing works per
@@ -116,6 +120,32 @@ preview, "+ Folder" and import targets are unchanged. The reason names the
 folder ("select a file in “kameas-ai”") and appends the fleet reason when
 the cap is off. P-6 pins this interim state; P-7 (per-entry batch results)
 does not apply until the dialog exists.
+
+**As shipped (D4 resolution, v0.88.0):** with a folder selected the sharing
+controls read "Share folder…" / "Promote folder…" and open
+`frontend/src/views/contexts/FolderShareDialog.vue`: every file under the
+folder, recursive, with its folder-relative path, a checkbox per entry
+(default: all eligible) and the per-entry ineligible reason inline (today:
+an empty file cannot be shared). Confirm runs `folderBatch.ts:runBatch` — a
+**client-side sequential batch** over the existing per-entry bindings
+(`contexts.get` + `contexts.publish`, or `contexts.promote`) with the same
+deterministic node ids as the single-file path (`contextNodeID`). No backend
+batch RPC: the per-entry calls express the batch and the per-call cost is
+one request per file. Per-entry progress and failure; one failure never
+aborts the rest; the summary reads "N shared, M failed" and names every
+failure with its reason (P-7). Stop while running lets the in-flight entry
+finish and marks the rest "not started". The capability gate is the same
+FleetSession-derived `sharingDisabledReason` (passed in, not recomputed):
+signed-out / degraded / needs-reauth / capability-missing render the whole
+dialog disabled with that sentence. `folderShareReason` and its interim
+"pending a product decision" copy are deleted.
+
+Deferred from FR-7: the spec's "showing which are already published at which
+layer" per entry. Blocker: no per-entry publication-state read exists —
+`Context_SyncStatus` is an aggregate and `Context_ContextSearch` is a
+title/body search, neither keyed by node id. Owner: whichever mission adds a
+per-node fleet status read to `core/rpc/views/contexts`; until then each
+entry reports where it actually landed (`effective_layer`) after the run.
 
 ## D5 — Sharing reason source (FR-6)
 

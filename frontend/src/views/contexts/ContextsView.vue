@@ -69,6 +69,14 @@
  *     org-wide visibility. Delete this UI layer-choice/fallback messaging
  *     once fleet always returns a real team_id (see impl.go for the
  *     exact deletion trigger).
+ *
+ * knowledge-home-01DOGF0E FR-7 (owner ruled D4 "build", 2026-10-05):
+ *   - With a folder selected, Share… / Promote become "Share folder…" /
+ *     "Promote folder…" and open FolderShareDialog — a client-side
+ *     sequential batch over the per-entry publish/promote bindings
+ *     (folderBatch.ts). The interim "pending a product decision" folder copy
+ *     (folderShareReason) is retired; a folder gets the same
+ *     `sharingDisabledReason` as a file.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
@@ -122,7 +130,8 @@ const previewError = ref<string | null>(null);
  * only expanded the row. Folder and file selection are mutually exclusive:
  * selecting a folder clears the previewed file (otherwise the preview would
  * show one file while the sharing section talked about the folder — review
- * F6), and "+ Folder" / import then target the selected folder.
+ * F6), and "+ Folder" / import then target the selected folder. Share /
+ * Promote then act on the folder via the FR-7 batch dialog.
  */
 const selectedFolder = ref<string | null>(null);
 
