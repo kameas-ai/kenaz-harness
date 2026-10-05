@@ -362,6 +362,20 @@ research/pull-idempotency-audit-2026-10-05.md:
    wire a naive AppendMessage loop. **Owner:** the future session-pull
    mission; the audit file is its contract.
 
+### 2026-10-05 · contexts per-node publication-state read (blocker for FR-7 pre-run state display) — owner: follow-up WP on knowledge-home (needs a Contexts_NodeStatus binding returning per-node layer/version)
+
+knowledge-home-01DOGF0E FR-7 asks the folder share/promote dialog to show,
+per entry and before the run, whether it is already published and at which
+layer. Nothing can answer that today: `Context_SyncStatus` is an aggregate
+(cursor, pull count, errors) and `Context_ContextSearch` is a title/body
+search — neither is keyed by node id (`core/rpc/views/contexts/api.go`). The
+dialog (`frontend/src/views/contexts/FolderShareDialog.vue`) therefore
+reports each entry's actual landing layer (`effective_layer`) only after the
+run, and says nothing about prior state rather than guessing. Blocker: a
+`Contexts_NodeStatus` binding returning per-node layer/version. Owner: a
+follow-up WP on knowledge-home. Not a lie today — no control claims the
+state — so this is a dated gap, not an inert dial.
+
 ### 2026-10-05 (v0.87.0 adversarial review F2) · the repair path's re-application window ends at 0341
 
 Re-running sessions/0332 on a database units/1104 has converted fails
