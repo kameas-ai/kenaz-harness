@@ -6,8 +6,8 @@
  *   1. shows not-signed-in gate when signedIn is false
  *   2. renders catalog items returned by client.catalog.list
  *   3. shows empty state when no items exist
- *   4. install button calls catalog.install and refreshes list
- *   5. uninstall button calls catalog.uninstall and refreshes list
+ *   4. workflow/agent_pack/bundle Install is disabled with a visible reason (P-2)
+ *   5. "Remove download" on installed/ residue calls catalog.uninstall
  *   6. install of kind=skill routes to slashcmd.skillInstall
  *   7. uninstall of kind=skill routes to slashcmd.skillUninstall
  */
@@ -139,8 +139,10 @@ describe('MarketplaceView', () => {
     expect(wrapper.find('[data-testid="marketplace-grid"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="marketplace-item-my-workflow"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="marketplace-item-my-bundle"]').exists()).toBe(true);
-    // installed badge should be shown for the installed item
-    expect(wrapper.find('[data-testid="item-installed-badge"]').exists()).toBe(true);
+    // A bundle with installed/ residue is a download nothing uses — it is
+    // labelled as such, never "Installed" (install-framework-01DOGF0B WP02).
+    expect(wrapper.find('[data-testid="item-installed-badge"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="item-downloaded-badge"]').text()).toContain('not active');
   });
 
   it('3. shows empty state when catalog returns no items', async () => {
@@ -152,10 +154,19 @@ describe('MarketplaceView', () => {
     expect(wrapper.find('[data-testid="marketplace-grid"]').exists()).toBe(false);
   });
 
-  it('4. install button calls catalog.install and refreshes the list', async () => {
-    const listFn = vi.fn()
-      .mockResolvedValueOnce([WORKFLOW_ITEM])
-      .mockResolvedValueOnce([{ ...WORKFLOW_ITEM, installed: true }]);
+  it('4. P-2: workflow / agent_pack / bundle Install is disabled with a visible reason and never calls catalog.install', async () => {
+    // install-framework-01DOGF0B WP02. Pre-fix the button was enabled and
+    // clicking it called catalog.install, which wrote a payload nothing
+    // reads and painted "Installed".
+    const kinds: Array<[string, string, RegExp]> = [
+      ['workflow', 'wf-a', /Workflows › Catalog/],
+      ['agent_pack', 'pack-a', /agents folder/],
+      ['bundle', 'bundle-a', /Settings › Integrations › Bundles/],
+    ];
+    const items: CatalogItemView[] = kinds.map(([kind, slug], i) => ({
+      id: `cat-${i}`, kind, slug, version: '1.0.0', description: '', visibility: 'team', installed: false,
+    }));
+    const listFn = vi.fn(async () => items);
     const installFn = vi.fn(async () => {});
     const client = createFakeHarnessClient({
       catalog: {
@@ -171,17 +182,42 @@ describe('MarketplaceView', () => {
     const wrapper = mountView(client);
     await flushPromises();
 
-    const installBtn = wrapper.find('[data-testid="item-install-btn-my-workflow"]');
-    expect(installBtn.exists()).toBe(true);
-    await installBtn.trigger('click');
+    for (const [kind, slug, alternative] of kinds) {
+      const btn = wrapper.find(`[data-testid="item-install-btn-${slug}"]`);
+      // Disabled, not hidden.
+      expect(btn.exists(), `${kind} Install button must be shown`).toBe(true);
+      expect(btn.attributes('disabled'), `${kind} Install must be disabled`).toBeDefined();
+      const reason = wrapper.find(`[data-testid="item-install-unsupported-${slug}"]`);
+      expect(reason.exists(), `${kind} must show its reason as visible text`).toBe(true);
+      expect(reason.text()).toContain("isn't supported yet");
+      expect(reason.text()).toMatch(alternative);
+      expect(btn.attributes('aria-describedby')).toBe(`item-install-unsupported-${slug}`);
+      await btn.trigger('click');
+    }
     await flushPromises();
-
-    expect(installFn).toHaveBeenCalledWith('cat-001', '1.0.0');
-    // list should have been refreshed (called twice total)
-    expect(listFn).toHaveBeenCalledTimes(2);
+    expect(installFn).not.toHaveBeenCalled();
+    expect(listFn).toHaveBeenCalledTimes(1);
   });
 
-  it('5. uninstall button calls catalog.uninstall and refreshes the list', async () => {
+  it('4b. skill Install stays enabled with no unsupported reason', async () => {
+    const { client } = buildClient([SKILL_ITEM]);
+    const wrapper = mountView(client);
+    await flushPromises();
+    const btn = wrapper.find('[data-testid="item-install-btn-pr-review"]');
+    expect(btn.attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[data-testid="item-install-unsupported-pr-review"]').exists()).toBe(false);
+  });
+
+  it('4c. P-1: a skill reported installed (registry-backed) shows the Installed badge and Uninstall', async () => {
+    const { client } = buildClient([INSTALLED_SKILL_ITEM]);
+    const wrapper = mountView(client);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="item-installed-badge"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="item-uninstall-btn-standup"]').text()).toBe('Uninstall');
+    expect(wrapper.find('[data-testid="item-install-btn-standup"]').exists()).toBe(false);
+  });
+
+  it('5. "Remove download" on installed/ residue calls catalog.uninstall and refreshes the list', async () => {
     const listFn = vi.fn()
       .mockResolvedValueOnce([INSTALLED_ITEM])
       .mockResolvedValueOnce([{ ...INSTALLED_ITEM, installed: false }]);
@@ -202,6 +238,7 @@ describe('MarketplaceView', () => {
 
     const uninstallBtn = wrapper.find('[data-testid="item-uninstall-btn-my-bundle"]');
     expect(uninstallBtn.exists()).toBe(true);
+    expect(uninstallBtn.text()).toBe('Remove download');
     await uninstallBtn.trigger('click');
     await flushPromises();
 

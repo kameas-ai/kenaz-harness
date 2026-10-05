@@ -982,9 +982,13 @@ interface WailsBindingsLike {
   Catalog_Publish(input: CatalogPublishInput): Promise<CatalogItemView>;
   /** List catalog items, optionally filtered by kind or visibility. */
   Catalog_List(filter: CatalogFilter): Promise<CatalogItemView[]>;
-  /** Download and install a catalog item into the local DataDir. */
+  /**
+   * Refuses every catalog kind (install-framework-01DOGF0B WP02): no kind has
+   * an install on this path that anything consumes. Skills install via
+   * Slash_SkillInstall. Writes nothing.
+   */
   Catalog_Install(catalogID: string, version: string): Promise<void>;
-  /** Remove an installed catalog item from the local DataDir. Idempotent. */
+  /** Remove a downloaded catalog payload (installed/ residue) from the local DataDir. Idempotent. */
   Catalog_Uninstall(kind: string, catalogID: string, version: string): Promise<void>;
   /** List all catalog items currently installed in the local DataDir. */
   Catalog_Installed(): Promise<CatalogItemView[]>;
@@ -3817,9 +3821,9 @@ export interface CatalogClient {
   publish(input: CatalogPublishInput): Promise<CatalogItemView>;
   /** List catalog items, optionally filtered. */
   list(filter?: CatalogFilter): Promise<CatalogItemView[]>;
-  /** Install a catalog item into the local DataDir. */
+  /** Refused server-side for every kind (install-framework-01DOGF0B WP02). */
   install(catalogID: string, version: string): Promise<void>;
-  /** Remove an installed catalog item. Idempotent. */
+  /** Remove a downloaded catalog payload (installed/ residue). Idempotent. */
   uninstall(kind: string, catalogID: string, version: string): Promise<void>;
   /**
    * List all catalog items currently installed locally.

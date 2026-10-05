@@ -24,6 +24,16 @@
  * subscription-tier message) is reported as-is. Confirm-guarded, with copy
  * distinct from Uninstall's (AC-021).
  *
+ * Interim honesty (install-framework-01DOGF0B WP02): only skills install
+ * from here. Install for workflow / agent_pack / bundle used to write an
+ * opaque payload under installed/ that nothing reads, then paint
+ * "Installed" — a badge with no capability. Those Install buttons are now
+ * shown DISABLED with a visible per-kind reason naming the working
+ * alternative (not hidden), and the backend refuses them too. A payload an
+ * earlier release already downloaded is labelled "Downloaded — not active"
+ * (never "Installed") and keeps a "Remove download" action for cleanup.
+ * Each kind regains Install when its provider lands (WP05–WP07).
+ *
  * (fleet-share-and-sync-01NDFSEX14 WP03; fleet-skills-sync-01NDFSEX18 WP04)
  */
 import { ref, computed, onMounted } from 'vue';
@@ -79,6 +89,23 @@ const filtered = computed<CatalogItemView[]>(() => {
   });
 });
 
+// ── install support (install-framework-01DOGF0B WP02) ─────────────────────
+// Kinds whose catalog install reaches no runtime consumer. The reason is
+// rendered as visible text under the disabled Install button. Delete a
+// kind's entry when its provider ships a consumed install (WP05–WP07).
+const INSTALL_UNSUPPORTED_REASON: Record<string, string> = {
+  workflow:
+    "Installing workflows from the org catalog isn't supported yet — nothing on this device would load it. Install workflows from Workflows › Catalog.",
+  agent_pack:
+    "Installing agent packs from the org catalog isn't supported yet — agent profiles load only from the agents folder in your profile directory.",
+  bundle:
+    "Installing bundles from the org catalog isn't supported yet — bundles install from a kenaz.yaml manifest. Use Settings › Integrations › Bundles.",
+};
+
+function installUnsupportedReason(kind: string): string | null {
+  return INSTALL_UNSUPPORTED_REASON[kind] ?? null;
+}
+
 // ── actions ───────────────────────────────────────────────────────────────
 function setBusy(id: string, on: boolean) {
   const s = new Set(busyIds.value);
@@ -87,6 +114,13 @@ function setBusy(id: string, on: boolean) {
 }
 
 async function install(item: CatalogItemView) {
+  // The button is disabled for these kinds; this guard keeps a stray call
+  // (keyboard, test, future caller) from reaching a refused backend path.
+  const unsupported = installUnsupportedReason(item.kind);
+  if (unsupported) {
+    pushToast(unsupported, { level: 'error' });
+    return;
+  }
   setBusy(item.id, true);
   try {
     if (item.kind === 'skill') {
@@ -113,7 +147,11 @@ async function uninstall(item: CatalogItemView) {
     } else {
       await client.catalog.uninstall(item.kind, item.id, item.version);
     }
-    pushToast(`Uninstalled: ${item.slug} v${item.version}`);
+    pushToast(
+      installUnsupportedReason(item.kind)
+        ? `Removed download: ${item.slug} v${item.version}`
+        : `Uninstalled: ${item.slug} v${item.version}`,
+    );
     await loadItems();
   } catch (err) {
     pushToast(`Uninstall failed: ${err instanceof Error ? err.message : String(err)}`, { level: 'error' });
@@ -291,13 +329,26 @@ async function confirmWithdraw() {
               <span class="font-mono text-[10px] text-ink-subtle">v{{ item.version }}</span>
             </div>
             <div class="flex shrink-0 items-center gap-1">
-              <!-- Installed badge -->
+              <!-- Installed badge (skills: registry-backed) -->
               <span
-                v-if="item.installed"
+                v-if="item.installed && !installUnsupportedReason(item.kind)"
                 class="rounded-sm bg-accent/10 px-1.5 py-0.5 font-ui text-[10px] font-medium text-accent"
                 data-testid="item-installed-badge"
               >
                 Installed
+              </span>
+              <!--
+                Downloaded-but-inert residue (install-framework-01DOGF0B
+                WP02): an earlier release wrote this payload to installed/,
+                which nothing reads. Never called "Installed".
+              -->
+              <span
+                v-else-if="item.installed"
+                class="rounded-sm bg-surface-2 px-1.5 py-0.5 font-ui text-[10px] font-medium text-ink-muted"
+                title="An earlier version downloaded this item, but nothing on this device uses it."
+                data-testid="item-downloaded-badge"
+              >
+                Downloaded — not active
               </span>
               <!-- Kind badge -->
               <span
@@ -332,8 +383,10 @@ async function confirmWithdraw() {
               <button
                 v-if="!item.installed"
                 type="button"
-                class="h-6 rounded-sm bg-accent px-3 font-ui text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
-                :disabled="busyIds.has(item.id)"
+                class="h-6 rounded-sm bg-accent px-3 font-ui text-xs font-medium text-white hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="busyIds.has(item.id) || installUnsupportedReason(item.kind) !== null"
+                :title="installUnsupportedReason(item.kind) ?? undefined"
+                :aria-describedby="installUnsupportedReason(item.kind) ? `item-install-unsupported-${item.slug}` : undefined"
                 :data-testid="`item-install-btn-${item.slug}`"
                 @click="install(item)"
               >
@@ -347,10 +400,20 @@ async function confirmWithdraw() {
                 :data-testid="`item-uninstall-btn-${item.slug}`"
                 @click="uninstall(item)"
               >
-                {{ busyIds.has(item.id) ? 'Removing…' : 'Uninstall' }}
+                {{ busyIds.has(item.id) ? 'Removing…' : installUnsupportedReason(item.kind) ? 'Remove download' : 'Uninstall' }}
               </button>
             </div>
           </div>
+
+          <!-- Disabled-with-reason (install-framework-01DOGF0B WP02): visible text, not a tooltip only. -->
+          <p
+            v-if="!item.installed && installUnsupportedReason(item.kind)"
+            :id="`item-install-unsupported-${item.slug}`"
+            class="font-ui text-[11px] text-ink-subtle"
+            :data-testid="`item-install-unsupported-${item.slug}`"
+          >
+            {{ installUnsupportedReason(item.kind) }}
+          </p>
         </li>
       </ul>
     </template>
