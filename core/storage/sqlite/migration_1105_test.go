@@ -30,13 +30,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 	"github.com/kameas-ai/kenaz-harness/core/storage/sqlite/upgradesnap"
@@ -345,13 +348,150 @@ func TestMigration1105_V087SnapshotBoots(t *testing.T) {
 	assert1105ZeroDelta(t, ctx, dir)
 }
 
-// TestMigration1105_ToleratesArtifactsDeletedSinceCopy pins the deliberate
-// FR-2 deviation: on v0.87.0 every artifact delete and every session purge
-// (C spec FR-6) removes the artifact UNIT and leaves its legacy row. Those
-// rows are copies of data the user deleted; 1105 must drop them, not
-// refuse — a refusal would make Open fail for every such user.
-func TestMigration1105_ToleratesArtifactsDeletedSinceCopy(t *testing.T) {
-	t.Parallel()
+// drop1105LogCapture records the units.drop_artifacts_legacy* log lines.
+// Tests that install it are NOT parallel (logging.Replace is global), so
+// no other 1105 test's lines can interleave.
+type drop1105LogCapture struct {
+	next slog.Handler
+	mu   sync.Mutex
+	recs []map[string]string
+}
+
+func (c *drop1105LogCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (c *drop1105LogCapture) Handle(ctx context.Context, r slog.Record) error {
+	if strings.HasPrefix(r.Message, "units.drop_artifacts_legacy") {
+		m := map[string]string{"msg": r.Message, "level": r.Level.String()}
+		r.Attrs(func(a slog.Attr) bool { m[a.Key] = a.Value.String(); return true })
+		c.mu.Lock()
+		c.recs = append(c.recs, m)
+		c.mu.Unlock()
+	}
+	if c.next != nil && c.next.Enabled(ctx, r.Level) {
+		return c.next.Handle(ctx, r)
+	}
+	return nil
+}
+func (c *drop1105LogCapture) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *drop1105LogCapture) WithGroup(string) slog.Handler      { return c }
+
+// orphanWarns returns artifact_id -> the WARN line naming it.
+func (c *drop1105LogCapture) orphanWarns() map[string]map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[string]map[string]string{}
+	for _, m := range c.recs {
+		if m["msg"] == "units.drop_artifacts_legacy.orphan_quarantined" && m["level"] == "WARN" {
+			out[m["artifact_id"]] = m
+		}
+	}
+	return out
+}
+
+func captureDrop1105Logs(t *testing.T) *drop1105LogCapture {
+	t.Helper()
+	prev := logging.Handler()
+	c := &drop1105LogCapture{next: prev}
+	logging.Replace(c)
+	t.Cleanup(func() { logging.Replace(prev) })
+	return c
+}
+
+// legacyRowSnapshot is one artifacts_legacy row plus its version count, read
+// before 1105 runs, to check the quarantine copy against.
+type legacyRowSnapshot struct {
+	title, hash, sourceRef string
+	versions               int
+}
+
+func readLegacyRows(t *testing.T, ctx context.Context, path string) map[string]legacyRowSnapshot {
+	t.Helper()
+	raw := openRawSQLiteAt(t, path)
+	defer func() { _ = raw.Close() }()
+	rows, err := raw.QueryContext(ctx, `SELECT l.id, l.title, l.content_hash, l.source_ref_json,
+	        (SELECT COUNT(*) FROM artifact_versions_legacy v WHERE v.artifact_id = l.id) FROM artifacts_legacy l`)
+	if err != nil {
+		t.Fatalf("read legacy rows: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]legacyRowSnapshot{}
+	for rows.Next() {
+		var id string
+		var r legacyRowSnapshot
+		if err := rows.Scan(&id, &r.title, &r.hash, &r.sourceRef, &r.versions); err != nil {
+			t.Fatalf("scan legacy row: %v", err)
+		}
+		out[id] = r
+	}
+	return out
+}
+
+// assertQuarantined checks that exactly wantIDs are in
+// artifacts_legacy_orphans, each a faithful copy of its legacy row (title,
+// hash, source ref verbatim, every legacy version in legacy_metadata), and
+// each named by a WARN line.
+func assertQuarantined(t *testing.T, ctx context.Context, path string, legacy map[string]legacyRowSnapshot, wantIDs []string, logs *drop1105LogCapture) {
+	t.Helper()
+	raw := openRawSQLiteAt(t, path)
+	defer func() { _ = raw.Close() }()
+	rows, err := raw.QueryContext(ctx, `SELECT id, title, content_hash, source_ref_json,
+	        json_extract(legacy_metadata, '$.dropped_from'), json_array_length(legacy_metadata, '$.versions'), quarantined_at
+	   FROM artifacts_legacy_orphans`)
+	if err != nil {
+		t.Fatalf("read quarantine: %v", err)
+	}
+	got := map[string]bool{}
+	for rows.Next() {
+		var id, title, hash, ref, from, at string
+		var nVersions int
+		if err := rows.Scan(&id, &title, &hash, &ref, &from, &nVersions, &at); err != nil {
+			t.Fatalf("scan quarantine: %v", err)
+		}
+		got[id] = true
+		want, ok := legacy[id]
+		if !ok {
+			t.Errorf("quarantined %s was never a legacy row", id)
+			continue
+		}
+		if title != want.title || hash != want.hash || ref != want.sourceRef || nVersions != want.versions ||
+			from != "artifacts_legacy" || at == "" {
+			t.Errorf("quarantine row %s = (%q,%s,%q,from=%s,versions=%d,at=%q); want (%q,%s,%q,from=artifacts_legacy,versions=%d)",
+				id, title, hash, ref, from, nVersions, at, want.title, want.hash, want.sourceRef, want.versions)
+		}
+	}
+	_ = rows.Close()
+	sort.Strings(wantIDs)
+	var gotIDs []string
+	for id := range got {
+		gotIDs = append(gotIDs, id)
+	}
+	sort.Strings(gotIDs)
+	if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
+		t.Errorf("quarantined ids = %v, want %v", gotIDs, wantIDs)
+	}
+	warns := logs.orphanWarns()
+	for _, id := range wantIDs {
+		w, ok := warns[id]
+		if !ok {
+			t.Errorf("no WARN line names orphan %s", id)
+			continue
+		}
+		if w["content_hash"] != legacy[id].hash || w["title"] != legacy[id].title {
+			t.Errorf("WARN for %s = %v; want hash %s title %q", id, w, legacy[id].hash, legacy[id].title)
+		}
+	}
+	if len(warns) != len(wantIDs) {
+		t.Errorf("orphan WARN lines = %d, want %d", len(warns), len(wantIDs))
+	}
+}
+
+// TestMigration1105_QuarantinesArtifactsDeletedSinceCopy pins the
+// deliberate FR-2 deviation (orchestrator ruling: quarantine, not refuse):
+// on v0.87.0 every artifact delete and every project/session purge (C spec
+// FR-6) removes the artifact UNIT and leaves its legacy row. 1105 must not
+// refuse (Open would fail for every such user) and must not silently drop
+// them either: each is moved to artifacts_legacy_orphans and named at WARN.
+// Not parallel: it swaps the global log handler.
+func TestMigration1105_QuarantinesArtifactsDeletedSinceCopy(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	var deleted []string
@@ -381,27 +521,24 @@ func TestMigration1105_ToleratesArtifactsDeletedSinceCopy(t *testing.T) {
 	if len(deleted) < 2 {
 		t.Fatalf("setup: deleted %d artifacts on v0.87.0, want >= 2", len(deleted))
 	}
-	raw := openRawSQLiteAt(t, filepath.Join(dir, "data.db"))
-	var orphaned int
-	if err := raw.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM artifacts_legacy l WHERE NOT EXISTS (SELECT 1 FROM units u WHERE u.id = l.id)").Scan(&orphaned); err != nil || orphaned == 0 {
-		t.Fatalf("setup: legacy rows without a unit = %d, %v; want > 0 (the deleted artifacts)", orphaned, err)
-	}
-	_ = raw.Close()
+	path := filepath.Join(dir, "data.db")
+	legacy := readLegacyRows(t, ctx, path)
+	logs := captureDrop1105Logs(t)
 
 	db := assert1105ZeroDelta(t, ctx, dir)
+	assertQuarantined(t, ctx, path, legacy, deleted, logs)
 	store := coreart.NewSQLStore(db)
 	for _, id := range deleted {
 		if _, err := store.Get(ctx, id); err == nil {
-			t.Errorf("artifact %s deleted on v0.87.0 came back after 1105", id)
+			t.Errorf("artifact %s deleted on v0.87.0 came back as a live artifact after 1105", id)
 		}
 	}
+	isDeleted := map[string]bool{}
+	for _, d := range deleted {
+		isDeleted[d] = true
+	}
 	for id := range seeded {
-		isDeleted := false
-		for _, d := range deleted {
-			isDeleted = isDeleted || d == id
-		}
-		if !isDeleted {
+		if !isDeleted[id] {
 			if _, err := store.Get(ctx, id); err != nil {
 				t.Errorf("surviving artifact %s lost across 1105: %v", id, err)
 			}
@@ -409,35 +546,117 @@ func TestMigration1105_ToleratesArtifactsDeletedSinceCopy(t *testing.T) {
 	}
 }
 
+// TestMigration1105_MassLossQuarantinesEverything: every artifact unit is
+// gone (a user who deleted all of them on v0.87.0 — or a bug/tamper that
+// did). Open must still succeed; every legacy row is quarantined and
+// WARNed; the big tables are still dropped. Not parallel (log handler).
+func TestMigration1105_MassLossQuarantinesEverything(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	buildV087State(t, ctx, dir, nil)
+	path := filepath.Join(dir, "data.db")
+	raw := openRawSQLiteAt(t, path)
+	for _, stmt := range []string{
+		"DELETE FROM unit_versions WHERE unit_id IN (SELECT id FROM units WHERE kind = 'artifact')",
+		"DELETE FROM unit_edges WHERE from_id IN (SELECT id FROM units WHERE kind = 'artifact') OR to_id IN (SELECT id FROM units WHERE kind = 'artifact')",
+		"DELETE FROM unit_sync_state WHERE unit_id IN (SELECT id FROM units WHERE kind = 'artifact')",
+		"DELETE FROM units WHERE kind = 'artifact'",
+	} {
+		if _, err := raw.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("mass delete: %v", err)
+		}
+	}
+	_ = raw.Close()
+	legacy := readLegacyRows(t, ctx, path)
+	var all []string
+	for id := range legacy {
+		all = append(all, id)
+	}
+	if len(all) < 10 {
+		t.Fatalf("setup: %d legacy rows, want the seeded set", len(all))
+	}
+	logs := captureDrop1105Logs(t)
+
+	db, err := storagesqlite.Open(newConfig(dir))
+	if err != nil {
+		t.Fatalf("Open with every artifact unit gone: %v (mass loss must quarantine, not brick)", err)
+	}
+	defer func() { _ = db.Close(ctx) }()
+	post := openRawSQLiteAt(t, path)
+	if n := legacyTableCount(t, ctx, post); n != 0 {
+		t.Errorf("legacy tables after mass-loss 1105 = %d, want 0 (still dropped)", n)
+	}
+	_ = post.Close()
+	assertQuarantined(t, ctx, path, legacy, all, logs)
+}
+
 // deletedOnV087 is a stable artifact id from seedEveryArtifactShape that
 // the deletion test deletes "on v0.87.0".
 const deletedOnV087 = "01MIG1104BROKENSOURCEREF00"
 
+// versionLessSeeded is a seedEveryArtifactShape artifact with no legacy
+// version rows — 1104 synthesized its v1.
+const versionLessSeeded = "01MIG1104ORPHANSESSION0000"
+
 // TestMigration1105_RefusesOnCopyMismatch is P-2: a planted copy mismatch
 // makes 1105 refuse — Open fails closed naming the migration and
-// ErrLegacyArtifactsUnverified, both legacy tables survive with every row,
+// ErrLegacyArtifactsUnverified, the legacy tables survive with every row,
 // 1105 has no ledger row — and once the damage is repaired the same
 // database boots and drops cleanly.
 func TestMigration1105_RefusesOnCopyMismatch(t *testing.T) {
 	t.Parallel()
+	type twin struct {
+		unitID  string
+		version int
+	}
 	cases := []struct {
 		name, plant, repair, wantInErr string
+		// restore, when set, re-writes this unit_versions row exactly as it
+		// was before the plant (the repair for twin damage).
+		restore *twin
 	}{
 		{
-			// A version row of a still-present artifact lost its units twin:
-			// the legacy row is the only copy of that revision.
-			name:      "version twin missing",
+			name:      "real version twin missing",
 			plant:     "DELETE FROM unit_versions WHERE unit_id = 'seed-artifact-1' AND version = 2",
-			repair:    "", // set below from the deleted row
+			restore:   &twin{"seed-artifact-1", 2},
 			wantInErr: "seed-artifact-1 v2",
 		},
 		{
-			// A legacy artifact's id is now held by a non-artifact unit: the
-			// legacy row is the only artifact with that id.
+			name:      "real version twin byte_size differs",
+			plant:     "UPDATE unit_versions SET metadata = json_set(metadata, '$.byte_size', 999999) WHERE unit_id = 'seed-artifact-1' AND version = 2",
+			restore:   &twin{"seed-artifact-1", 2},
+			wantInErr: "seed-artifact-1 v2",
+		},
+		{
+			name:      "real version twin created_at differs",
+			plant:     "UPDATE unit_versions SET created_at = created_at + 1 WHERE unit_id = 'seed-artifact-1' AND version = 2",
+			restore:   &twin{"seed-artifact-1", 2},
+			wantInErr: "seed-artifact-1 v2",
+		},
+		{
+			name:      "synthesized v1 twin missing",
+			plant:     "DELETE FROM unit_versions WHERE unit_id = '" + versionLessSeeded + "' AND version = 1",
+			restore:   &twin{versionLessSeeded, 1},
+			wantInErr: versionLessSeeded + " synthesized v1",
+		},
+		{
+			name:      "synthesized v1 twin hash differs",
+			plant:     "UPDATE unit_versions SET metadata = json_set(metadata, '$.content_hash', 'tampered') WHERE unit_id = '" + versionLessSeeded + "' AND version = 1",
+			restore:   &twin{versionLessSeeded, 1},
+			wantInErr: versionLessSeeded + " synthesized v1",
+		},
+		{
 			name:      "id squatted by another kind",
 			plant:     "UPDATE units SET kind = 'doc' WHERE id = 'seed-artifact-1'",
 			repair:    "UPDATE units SET kind = 'artifact' WHERE id = 'seed-artifact-1'",
 			wantInErr: "seed-artifact-1 (now a doc unit)",
+		},
+		{
+			// 1104 renames both tables in one transaction: a lone one is damage.
+			name:      "lone legacy table",
+			plant:     "ALTER TABLE artifact_versions_legacy RENAME TO avl_hidden_by_test",
+			repair:    "ALTER TABLE avl_hidden_by_test RENAME TO artifact_versions_legacy",
+			wantInErr: "only one legacy table exists",
 		},
 	}
 	for _, tc := range cases {
@@ -450,23 +669,31 @@ func TestMigration1105_RefusesOnCopyMismatch(t *testing.T) {
 			path := filepath.Join(dir, "data.db")
 
 			raw := openRawSQLiteAt(t, path)
-			repair := tc.repair
-			if repair == "" {
+			repair := []string{tc.repair}
+			if tc.restore != nil {
 				var meta string
 				var created int64
 				if err := raw.QueryRowContext(ctx,
-					"SELECT metadata, created_at FROM unit_versions WHERE unit_id = 'seed-artifact-1' AND version = 2").Scan(&meta, &created); err != nil {
+					"SELECT metadata, created_at FROM unit_versions WHERE unit_id = ? AND version = ?",
+					tc.restore.unitID, tc.restore.version).Scan(&meta, &created); err != nil {
 					t.Fatalf("read row to plant over: %v", err)
 				}
-				repair = fmt.Sprintf("INSERT INTO unit_versions (unit_id, version, body, metadata, created_at) VALUES ('seed-artifact-1', 2, '', '%s', %d)",
-					strings.ReplaceAll(meta, "'", "''"), created)
+				repair = []string{
+					fmt.Sprintf("DELETE FROM unit_versions WHERE unit_id = '%s' AND version = %d", tc.restore.unitID, tc.restore.version),
+					fmt.Sprintf("INSERT INTO unit_versions (unit_id, version, body, metadata, created_at) VALUES ('%s', %d, '', '%s', %d)",
+						tc.restore.unitID, tc.restore.version, strings.ReplaceAll(meta, "'", "''"), created),
+				}
 			}
 			if _, err := raw.ExecContext(ctx, tc.plant); err != nil {
 				t.Fatalf("plant: %v", err)
 			}
-			preLegacy := map[string]string{
-				"artifacts_legacy":         rowsDigest(t, ctx, raw, "artifacts_legacy"),
-				"artifact_versions_legacy": rowsDigest(t, ctx, raw, "artifact_versions_legacy"),
+			preLegacy := map[string]string{}
+			for _, table := range []string{"artifacts_legacy", "artifact_versions_legacy", "avl_hidden_by_test"} {
+				var n int
+				_ = raw.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&n)
+				if n == 1 {
+					preLegacy[table] = rowsDigest(t, ctx, raw, table)
+				}
 			}
 			_ = raw.Close()
 
@@ -490,8 +717,10 @@ func TestMigration1105_RefusesOnCopyMismatch(t *testing.T) {
 			if err := check.QueryRowContext(ctx, "SELECT COUNT(*) FROM harness_migrations WHERE id = ?", migration1105ID).Scan(&n); err != nil || n != 0 {
 				t.Errorf("1105 ledger rows after refusal = %d, %v; want 0", n, err)
 			}
-			if _, err := check.ExecContext(ctx, repair); err != nil {
-				t.Fatalf("repair: %v", err)
+			for _, stmt := range repair {
+				if _, err := check.ExecContext(ctx, stmt); err != nil {
+					t.Fatalf("repair %q: %v", stmt, err)
+				}
 			}
 			_ = check.Close()
 
@@ -505,7 +734,46 @@ func TestMigration1105_RefusesOnCopyMismatch(t *testing.T) {
 			if n := legacyTableCount(t, ctx, post); n != 0 {
 				t.Errorf("legacy tables after the repaired reopen = %d, want 0", n)
 			}
+			var orphans int
+			if err := post.QueryRowContext(ctx, "SELECT COUNT(*) FROM artifacts_legacy_orphans").Scan(&orphans); err != nil || orphans != 0 {
+				t.Errorf("quarantined rows after a repaired (complete) copy = %d, %v; want 0", orphans, err)
+			}
 		})
+	}
+}
+
+// TestMigration1105_RefusesWhen1104NotApplied exercises check 1, reachable
+// only by ledger surgery: the runner keys "applied" on the latest row per
+// VERSION, check 1 on the latest row per ID. A 1104 row superseded by
+// 'rolled_back' while another row keeps version 1104 'applied' passes the
+// runner and must still stop 1105.
+func TestMigration1105_RefusesWhen1104NotApplied(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	buildV087State(t, ctx, dir, nil)
+	raw := openRawSQLiteAt(t, filepath.Join(dir, "data.db"))
+	for _, stmt := range []string{
+		`INSERT INTO harness_migrations (version, id, applied_at, content_hash, owning_mission, action)
+         SELECT version, id, applied_at, content_hash, owning_mission, 'rolled_back'
+           FROM harness_migrations WHERE id = 'units/1104-artifacts-to-units' ORDER BY rowid DESC LIMIT 1`,
+		`INSERT INTO harness_migrations (version, id, applied_at, content_hash, owning_mission, action)
+         SELECT version, 'units/1104-ledger-surgery', applied_at, content_hash, owning_mission, 'applied'
+           FROM harness_migrations WHERE id = 'units/1104-artifacts-to-units' ORDER BY rowid DESC LIMIT 1`,
+	} {
+		if _, err := raw.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("ledger surgery: %v", err)
+		}
+	}
+	_ = raw.Close()
+	_, err := storagesqlite.Open(newConfig(dir))
+	if err == nil {
+		t.Fatal("Open succeeded although 1104's own latest ledger row is rolled_back")
+	}
+	for _, want := range []string{migration1105ID, units.ErrLegacyArtifactsUnverified.Error(), `latest ledger action is "rolled_back"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Open error does not contain %q:\n%v", want, err)
+		}
 	}
 }
 

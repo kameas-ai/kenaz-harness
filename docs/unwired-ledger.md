@@ -630,20 +630,31 @@ or into the same release.
 after v0.87.0 — it must not ship in v0.87.0 itself). Migration
 `units/1105-drop-artifacts-legacy` (`core/units/migration_drop_legacy_artifacts.go`)
 drops both tables child-first, `IF EXISTS`-guarded, after verifying the
-1104 copy in the same transaction: 1104 ledgered `applied`; no legacy id
-held by a non-artifact unit; every legacy version of a still-present
-artifact unit has its `unit_versions` twin (id, version, content hash).
-Any failure returns `ErrLegacyArtifactsUnverified` — Open fails closed,
-both tables intact. Deliberate deviation from the units-debt spec FR-2's
-literal row-count equality, recorded in the migration's header: legacy rows
-whose artifact UNIT was deleted on v0.87.0 (artifact delete, session /
-project purge) are dropped, not refused — the literal check would fail
-Open for every user who deleted an artifact during the retention release
-(mutation-tested: "literal: 16 legacy vs 11 units"). Tests:
-`core/storage/sqlite/migration_1105_test.go` (P-1 on a reconstructed
-v0.87.0 state from v0.86.0 + every seeded artifact shape, zero delta on the
-four units tables and every media refcount; P-2 planted mismatches refuse;
-deleted-since-copy tolerated; fresh install + rewind-reopen).
+1104 copy in the same transaction: both legacy tables present or neither;
+1104 ledgered `applied`; no legacy id held by a non-artifact unit; every
+legacy version of a still-present artifact unit — and every synthesized v1
+of a version-less one — has its `unit_versions` twin (version, content
+hash, byte size, created_at). Any failure returns
+`ErrLegacyArtifactsUnverified` — Open fails closed, both tables intact.
+Deliberate deviation from the units-debt spec FR-2's literal row-count
+equality (orchestrator ruling, 2026-10-05: QUARANTINE, not refuse): legacy
+rows whose artifact UNIT is absent — deleted on v0.87.0 (artifact delete,
+session / project purge), or lost to a bug/tamper, which looks identical
+— are neither refused (the literal check would fail Open for every user
+who deleted an artifact during the retention release; mutation-tested:
+"literal: 16 legacy vs 11 units") nor silently dropped: each is copied,
+with its legacy versions as JSON, into the retained table
+**`artifacts_legacy_orphans`** (id, title, content_hash, source_ref_json,
+legacy_metadata, quarantined_at) and named at WARN
+(`units.drop_artifacts_legacy.orphan_quarantined`: id, hash, title) before
+the big tables drop. The quarantine table is bounded (only rows orphaned at
+drop time; nothing writes or reads it afterwards) and exists for manual
+recovery. Tests: `core/storage/sqlite/migration_1105_test.go` (P-1 on a
+reconstructed v0.87.0 state from the newest pre-1104 snapshot + every
+seeded artifact shape, zero delta on the four units tables and every media
+refcount; P-2: seven planted mismatches refuse and boot once repaired;
+check 1 via ledger surgery; deleted-since-copy and mass-loss quarantined;
+fresh install + rewind-reopen).
 **Residual:** `TestMigration1105_V087SnapshotBoots` — P-1 against the REAL
 first snapshot that carries the `*_legacy` tables — SKIPS until
 `testdata/upgrade/v0.87.0/` is committed, then activates with no edit;
