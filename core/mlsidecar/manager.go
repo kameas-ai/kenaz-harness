@@ -446,7 +446,7 @@ func (m *Manager) Shutdown(_ context.Context) error {
 // (VerifyInstalled) still gates every spawn and adoption.
 func (m *Manager) Installed() (InstallRecord, bool) {
 	rec, ok, err := ReadInstallJSON(m.Layout)
-	if err != nil || !ok || !recordAdoptable(rec) {
+	if err != nil || !ok || !recordAdoptable(m.Layout, rec) {
 		return InstallRecord{}, false
 	}
 	return rec, true
@@ -454,8 +454,8 @@ func (m *Manager) Installed() (InstallRecord, bool) {
 
 // recordAdoptable is the record-only half of VerifyInstalled's rule: a
 // known installer provenance and a tree digest to re-verify against.
-func recordAdoptable(rec InstallRecord) bool {
-	return knownProvenance(rec.Provenance) && rec.TreeSHA256 != ""
+func recordAdoptable(l Layout, rec InstallRecord) bool {
+	return l.acceptsProvenance(rec.Provenance) && rec.TreeSHA256 != ""
 }
 
 // occupiedStatus is the "something answered on the port, but not with a

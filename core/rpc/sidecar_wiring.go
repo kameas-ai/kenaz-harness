@@ -70,6 +70,9 @@ func newSidecarStack(dataDir, buildVersion string) (*mlsidecar.Manager, advice.S
 	// (prod 7774, dev 7775, test 7776), so a dev build never talks to —
 	// or port-conflicts with — the prod engine.
 	env := mlsidecar.EngineEnv()
+	// The dev root also adopts engines a developer seeded from a local
+	// build (scripts/dev-ml.sh); prod and test roots never do.
+	layout.DeveloperBuilds = env == mlsidecar.EngineEnvDev
 	m := mlsidecar.NewManager(layout,
 		mlsidecar.NewClient(mlsidecar.BaseURLForEnv(env), nil),
 		mlsidecar.ProcessSpawner{Layout: layout, Port: mlsidecar.EnginePort(env)},
