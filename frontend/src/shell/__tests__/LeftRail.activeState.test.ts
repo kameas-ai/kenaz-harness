@@ -3,7 +3,9 @@
  *
  * With a chat open the session surface's active indicator is the selected
  * session ROW (aria-current="page"), and with a nested agent-graph route open
- * the "Agent graphs" surface entry is current. Before WP02 no surface entry
+ * the "Settings" surface entry is current (the "Agent graphs" rail entry was
+ * moved under Settings › Authoring by agentgraph-settings-linkage-01DOGF0D
+ * WP05). Before WP02 no surface entry
  * was ever current on any route (exact-path match + Boolean prop casting).
  */
 import { describe, it, expect } from 'vitest';
@@ -68,7 +70,9 @@ describe('LeftRail active state (P-2)', () => {
   });
 
   it.each([
-    ['/agentgraph/run/x/graph', 'Agent graphs'],
+    // agentgraph-settings-linkage-01DOGF0D WP05: no Agent graphs rail entry;
+    // its routes belong to the Settings hub (SETTINGS_HUB_PREFIXES).
+    ['/agentgraph/run/x/graph', 'Settings'],
     ['/workflows', 'Workflows'],
     ['/permissions/fs', 'Settings'],
     ['/settings', 'Settings'],

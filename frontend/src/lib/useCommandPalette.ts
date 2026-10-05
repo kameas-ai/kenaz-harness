@@ -55,9 +55,11 @@ const NAV_ACTIONS: PaletteAction[] = [
   { id: 'nav.workflows', label: 'Go to Workflows', hint: 'Scheduled workflows', perform: () => navigate('#/workflows') },
   // artifacts-as-units-01DOGF0C WP06: Artifacts + Documents → one Library.
   { id: 'nav.library', label: 'Go to Library', hint: 'Captured artifacts & authored documents', perform: () => navigate('#/library/captured') },
-  // agentgraph-total-convergence-01PMGX01 WP16: back in the left rail as well
-  // (see LeftRail.vue). The palette entry stays — a rail entry and a Cmd+K
-  // action are not redundant, they serve different reach.
+  // agentgraph-total-convergence-01PMGX01 WP16 put Agent graphs back in the
+  // left rail; agentgraph-settings-linkage-01DOGF0D WP05 moved the library
+  // under Settings › Authoring (the rail entry is gone — each chat turn links
+  // to its own run graph instead). The palette entry stays, routing to the
+  // same /agentgraph library, now framed by the Settings hub.
   // served-mode-is-a-real-mode-01PMZ707 WP03: gated on !isServedMode() —
   // both routes render NotAvailableInServedMode in a served build (D-701;
   // Graph_*/CedarPolicy_*/Policy_* have no serve dispatch case), mirroring
@@ -65,7 +67,7 @@ const NAV_ACTIONS: PaletteAction[] = [
   {
     id: 'nav.agentgraph',
     label: 'Go to Agent graphs',
-    hint: 'Graphs the kernel runs, and the materialized graph of each conversation',
+    hint: 'Settings › Authoring — the graph library and editor',
     visible: () => !isServedMode(),
     perform: () => navigate('#/agentgraph'),
   },

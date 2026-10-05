@@ -457,6 +457,41 @@ becomes symbol-gateable at **WP03**: once the provider contract exists,
 is computed from its consumer" is a registration↔consumer pair the
 pass-2 tripwire pattern can enforce. WP03 owns adding that gate, with a
 planted-violation proof in `scripts/ci/gates_can_fail_test.go`.
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored
+
+Every chat turn now links to its run graph (WP04), so materialization
+quality on *old* runs is user-visible. The resolved spec a run executed
+lives only in `Manager.TrackExternalRun`'s process-local map, capped at
+`maxTrackedExternalRuns = 64` (`core/rpc/views/agentgraph/manager.go`).
+After a restart, or 64 turns later, `runSpecFor` answers from tier 3:
+the library graph named by the run's own `run_start`. That is a
+projection of the run's events onto *today's* file, which may not be
+the spec that ran.
+
+**Disposition: dated justification, not wired.** Persisting the exact
+resolved spec per run was explicitly out of scope (spec §5). Instead
+WP03 records a SHA-256 `agentgraph.SpecDigest` of the resolved spec
+(layout and provenance excluded) on `run_start` and in
+`session_turn_runs.spec_digest`. At tier 3 the manager compares it with
+the library file's digest: **equal** ⇒ the file *is* the spec that ran,
+exact provenance, no banner; **different or absent** (file edited since,
+a resolved spec that never matched a file, or a pre-WP03 run) ⇒
+`SpecProvenanceLibraryFallback`, and the editor says so in plain words
+("Reconstructed from the library graph — the exact spec for this turn
+is no longer in memory…"). Pin:
+`TestMaterializeRun_LibraryFallbackVerifiedBySpecDigest` (fresh manager
+on a SQL log = after a restart). So nothing is presented as faithful
+that is not — the gap is fidelity, not honesty: a digest-mismatched run
+still renders against the wrong topology, under a banner.
+
+**Blocker:** a per-run spec store (a `run_specs(run_id, spec_json)` side
+table or an event carrying the resolved spec) with a retention policy —
+specs are larger than any row the event log holds today. **Owner:** the
+01DOGF0D follow-up that persists exact run state (spec §5; the same
+owner as the redrive-window entry below). Deleted when tier 3 is
+reachable only for runs that predate that store, and a test materializes
+a 65th-turn run with exact provenance after an edit to its library file.
+
 ### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · a redriven run's status reads "failed" for the seconds before its redrive starts
 
 Between a chat run's failed attempt and the overflow redrive's
@@ -4645,6 +4680,38 @@ semantics from what its doc currently claims.
   session did not have).
 
 ## Drained
+
+### 2026-10-04 · CLOSED — chat run ids were a per-process counter written into a persistent log (`agentgraph-settings-linkage-01DOGF0D` WP02)
+
+Found by the spec's verification pass, not by a user: no surface linked
+a historical chat turn to its run yet, so nothing exercised it — the
+mission that adds that link is what would have exposed it. Class: **a
+latent identity defect behind a missing consumer.**
+
+- `chat_runner.go` minted run ids as `r.nextID++; "chat-%d"` — reset to
+  0 on every boot — and used the same string as the kernel `RunID`
+  written to `agent_graph_events`, which `buildAgentGraphEventLog` backs
+  with `NewSQLEventLog` (persistent). Today's `chat-1` and yesterday's
+  `chat-1` shared one run id; `MaterializeRun("chat-1")` would have
+  projected several unrelated turns as one graph.
+- **Drained — wired** (WP02): `newChatRunID` returns `chat-<ULID>`
+  (`core/event.NewULID`); sub id and kernel run id stay one string; the
+  counter is gone. Pin: `TestChatRunID_UniqueAcrossRestartsOnSQLEventLog`
+  (two runner instances = a simulated restart, one real sqlite log, the
+  production `0309` DDL). Red proof: `newChatRunID` reverted to the
+  constant `"chat-1"` → FAIL.
+- **Pre-fix rows are kept** (an audit trail, no destructive migration)
+  and are never linked: no `session_turn_runs` row exists for them, so
+  the transcript shows "Run graph not recorded for this turn". A direct
+  `MaterializeRun` of a legacy id whose log holds several starts refuses
+  with `agentgraph.ErrRunIDReused` instead of merging turns (pin
+  `TestMaterializeRun_RefusesRunIDReusedAcrossRestarts`); resume and the
+  overflow redrive — one run continuing under one id — still
+  materialize as one graph.
+- **Why the suite never saw it:** every agentgraph test of run identity
+  ran on `NewMemoryEventLog`, which dies with the "process". Blind spot
+  #2 in its event-log shape; WP-PI moved the identity pins to real
+  sqlite and recorded which memory-log tests stay and why.
 
 ### 2026-10-04 · CLOSED — every user chat turn had two writers; the second was the only path into fleet sync (`chat-single-writer-01DOGF0G`)
 

@@ -22,6 +22,8 @@
 import type { Component } from 'vue';
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { railPathMatches } from '@/shell/railMatch';
+import { isServedMode } from '@/lib/useServedMode';
 import {
   Activity,
   AlertTriangle,
@@ -35,6 +37,7 @@ import {
   GitBranch,
   Globe,
   KeyRound,
+  Layers,
   Package,
   Plug,
   RefreshCw,
@@ -57,8 +60,16 @@ interface Tab {
   label: string;
   icon: Component;
   /** Optional path-prefix used to keep the tab highlighted across
-   *  nested routes (e.g. /permissions/fs still highlights Permissions). */
+   *  nested routes (e.g. /permissions/fs still highlights Permissions).
+   *  Segment-bounded (railPathMatches), like the app LeftRail. */
   matchPrefix?: string;
+  /**
+   * Hide the tab in a served (browser) build. For surfaces whose RPCs have
+   * no serve dispatch case, where the route would only render a
+   * NotAvailableInServedMode panel (D-701) — mirrors the LeftRail's
+   * `!served` entries.
+   */
+  desktopOnly?: boolean;
   /**
    * Optional query-param marker used to keep two tabs that share the
    * same path distinguishable (e.g. General and Updates both live under
@@ -91,6 +102,21 @@ const groups: ReadonlyArray<TabGroup> = [
   {
     label: 'Authoring',
     tabs: [
+      // agentgraph-settings-linkage-01DOGF0D WP05 (FR-4): the agent-graph
+      // library + editor moved here from the top-level rail. GraphsView is a
+      // separately-routed hub panel (like Permissions / Policy), so every
+      // /agentgraph* deep link, the `graphs` route name and the nav.agentgraph
+      // palette action keep working unchanged; matchPrefix keeps the entry lit
+      // on the editor and run routes. Desktop-only: Graph_* has no serve
+      // dispatch case (D-701). Watching what a chat turn actually did is
+      // reached from the turn itself (TurnRunLinks), not from here.
+      {
+        to: '/agentgraph',
+        label: 'Agent graphs',
+        matchPrefix: '/agentgraph',
+        icon: Layers,
+        desktopOnly: true,
+      },
       { to: '/settings?tab=compaction', label: 'Compaction', query: 'compaction', icon: Archive },
       { to: '/settings?tab=slashcmds', label: 'Slash Commands', query: 'slashcmds', icon: Command },
       { to: '/settings?tab=hooks', label: 'Hooks', query: 'hooks', icon: Webhook },
@@ -149,6 +175,13 @@ const groups: ReadonlyArray<TabGroup> = [
   },
 ];
 
+const visibleGroups = computed<ReadonlyArray<TabGroup>>(() => {
+  const served = isServedMode();
+  return groups
+    .map((g) => ({ ...g, tabs: g.tabs.filter((t) => !(served && t.desktopOnly)) }))
+    .filter((g) => g.tabs.length > 0);
+});
+
 const activePath = computed(() => route?.path ?? '');
 const activeQuery = computed<string>(() => {
   const v = route?.query?.tab;
@@ -157,7 +190,7 @@ const activeQuery = computed<string>(() => {
 });
 
 function isActive(t: Tab): boolean {
-  if (t.matchPrefix) return activePath.value.startsWith(t.matchPrefix);
+  if (t.matchPrefix) return railPathMatches(activePath.value, t.matchPrefix);
   // For tabs that share /settings, require an exact query.tab match so
   // General and Updates highlight independently.
   if (t.to.startsWith('/settings')) {
@@ -183,7 +216,7 @@ function goto(to: string) {
   >
     <ul class="grid gap-3">
       <li
-        v-for="group in groups"
+        v-for="group in visibleGroups"
         :key="group.label"
         :aria-label="group.label"
       >
