@@ -12,7 +12,16 @@
 # To disable fleet telemetry export during dev (useful for offline work):
 #   KENAZ_HARNESS_ENV= bash scripts/dev.sh
 # or leave consent at "none" in Settings → Privacy → Fleet telemetry.
+#
+# The kenaz-ml engine: before launching, scripts/dev-ml.sh seeds an engine
+# build into the dev engine root (~/.kenaz/ml/dev) if it can find one — an
+# explicit KENAZ_ML_ONEDIR, a frozen sibling kenaz-ml checkout, the latest
+# CI artifact (via gh), or KENAZ_ML_BUILD=1 to freeze one. The harness then
+# spawns it on :7775 on first advisor demand. Nothing there can stop this
+# launch: without an engine the harness runs on its client-side heuristics.
+# KENAZ_ML_SEED=0 skips the step.
 set -euo pipefail
 
 export KENAZ_HARNESS_ENV="${KENAZ_HARNESS_ENV:-dev}"
+bash "$(dirname "${BASH_SOURCE[0]}")/dev-ml.sh" || true
 exec wails dev "$@"

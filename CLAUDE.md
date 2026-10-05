@@ -523,6 +523,12 @@ wails build
 # Live dev
 wails dev
 
+# Live dev with the kenaz-ml engine seeded into ~/.kenaz/ml/dev first
+# (scripts/dev-ml.sh: explicit onedir -> sibling ../kenaz-ml/dist -> CI artifact
+# via gh -> KENAZ_ML_BUILD=1 freeze; never blocks the launch). KENAZ_ML_SEED=0 skips.
+bash scripts/dev.sh
+go run ./cmd/mlsidecar-devseed --status   # what the dev engine root holds
+
 # Backend tests (mirror CI)
 go test ./core/... -race -count=1 -short
 

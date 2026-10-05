@@ -24,6 +24,24 @@ import (
 // production call site yet that would resolve DefaultRootFor for real.
 type Layout struct {
 	Root string
+
+	// DeveloperBuilds accepts ProvenanceDeveloperBuild records in this
+	// root: an engine a developer built locally and seeded with
+	// SeedDeveloperBuild (cmd/mlsidecar-devseed, scripts/dev-ml.sh). The
+	// production wiring sets it ONLY for the dev engine env
+	// (KENAZ_HARNESS_ENV=dev, root ~/.kenaz/ml/dev, port 7775); a prod or
+	// test root refuses such a record exactly as it refuses any unknown
+	// provenance, so a developer seed can never be adopted by a release
+	// build. Everything else about adoption is unchanged: the on-disk
+	// tree is still re-hashed against the record before every spawn.
+	DeveloperBuilds bool
+}
+
+// acceptsProvenance is the per-root provenance rule: the two installer
+// provenances everywhere, plus developer builds where DeveloperBuilds is
+// set.
+func (l Layout) acceptsProvenance(p string) bool {
+	return knownProvenance(p) || (l.DeveloperBuilds && p == ProvenanceDeveloperBuild)
 }
 
 // NewLayout returns a Layout rooted at root. root must be an absolute
