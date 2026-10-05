@@ -2624,11 +2624,12 @@ export interface HealthEntry {
 export type ArtifactSource = 'code_block' | 'tool_output' | 'user_pin' | 'model_output';
 
 /**
- * ArtifactScope — promotion tier. v1 carries `session` (default at
- * capture time) and `project` (after promotion). A future `global`
- * tier is reserved by the spec but not wired in v1.
+ * ArtifactScope — promotion tier: `session` (default at capture time),
+ * `project` (after promotion) and `global` (valid since
+ * unified-context-artifacts-01NCTXU01; artifacts are units since
+ * artifacts-as-units-01DOGF0C, and the store returns global rows).
  */
-export type ArtifactScope = 'session' | 'project';
+export type ArtifactScope = 'session' | 'project' | 'global';
 
 /**
  * ArtifactSourceRef — provenance back to the originating message /

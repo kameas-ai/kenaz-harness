@@ -81,16 +81,19 @@ export const routes: RouteRecordRaw[] = [
     name: 'permissions',
     component: () => import('@/views/permissions/PermissionsView.vue'),
   },
+  // artifacts-as-units-01DOGF0C WP06 (FR-7): Artifacts and Documents are one
+  // Library surface with Captured and Authored views. The old paths redirect
+  // into the matching view, keeping the query string (DocumentsView reads
+  // ?session=), so bookmarks, palette history and a persisted lastRoute of
+  // either old path still land in the right place.
+  { path: '/library', redirect: (to) => ({ path: '/library/captured', query: to.query }) },
   {
-    path: '/artifacts',
-    name: 'artifacts',
-    component: () => import('@/views/artifacts/ArtifactsView.vue'),
+    path: '/library/:view(captured|authored)',
+    name: 'library',
+    component: () => import('@/views/library/LibraryView.vue'),
   },
-  {
-    path: '/documents',
-    name: 'documents',
-    component: () => import('@/views/documents/DocumentsView.vue'),
-  },
+  { path: '/artifacts', redirect: (to) => ({ path: '/library/captured', query: to.query }) },
+  { path: '/documents', redirect: (to) => ({ path: '/library/authored', query: to.query }) },
   {
     // FR-002 (01NKNOW01): Corpora surface retired; redirect to Contexts.
     path: '/corpora/:pathMatch(.*)*',

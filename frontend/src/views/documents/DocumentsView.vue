@@ -1,7 +1,10 @@
 <script setup lang="ts">
 /**
- * DocumentsView — /documents: read, write, and build documents into a local,
- * self-hostable knowledge site (contracts/documents-rpc.md).
+ * DocumentsView — the Library's Authored view (/library/authored; the old
+ * /documents path redirects there, query intact — artifacts-as-units-01DOGF0C
+ * WP06): read, write, and build documents into a local, self-hostable
+ * knowledge site (contracts/documents-rpc.md). Rendered inside LibraryView
+ * with `embedded` and the shared title `query`.
  *
  * Documents belong to a session. The view always works in one named session
  * and shows what that session can see (its own documents plus global ones);
@@ -31,6 +34,7 @@ import IframeSandbox from '@/views/artifacts/preview/IframeSandbox.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { isServedMode } from '@/lib/useServedMode';
 import { documentsErrorMessage, parseDocumentsError } from '@/lib/documentsErrors';
+import { filterByTitle } from '@/views/library/titleFilter';
 import type {
   DocumentPreview,
   DocumentRecord,
@@ -38,6 +42,13 @@ import type {
   KnowledgeSiteBuild,
   Session,
 } from '@/lib/types';
+
+const props = defineProps<{
+  /** Hosted inside LibraryView: the Library renders the page head. */
+  embedded?: boolean;
+  /** Shared Library title search (case-insensitive substring). */
+  query?: string;
+}>();
 
 type Mode = 'idle' | 'read' | 'edit' | 'create';
 type SourceFormat = 'html' | 'markdown';
@@ -115,6 +126,10 @@ async function loadSessions() {
 
 // ── list ───────────────────────────────────────────────────────────────
 const documents = ref<DocumentSummary[]>([]);
+// The list as shown: the Library's shared title search applied. Site-build
+// selection still keys off ids, so a filtered-out selected document stays
+// selected (and is still built) — the count below says how many.
+const visibleDocuments = computed(() => filterByTitle(documents.value, props.query));
 const listLoading = ref(false);
 const listError = ref<string | null>(null);
 const selected = ref<Set<string>>(new Set());
@@ -445,6 +460,7 @@ onMounted(async () => {
 <template>
   <div class="h-full flex flex-col" data-testid="documents-view">
     <CanvasHead
+      v-if="!props.embedded"
       number="10"
       section="DOCUMENTS"
       title="Documents"
@@ -565,9 +581,16 @@ onMounted(async () => {
           No documents in this session yet. Ask the assistant to write one (it saves with
           <span class="font-mono text-[11px]">kenaz__save_document</span>), or create one with New document.
         </div>
+        <div
+          v-else-if="visibleDocuments.length === 0"
+          class="px-4 py-4 font-ui text-[12px] text-ink-muted"
+          data-testid="documents-no-match"
+        >
+          No documents match “{{ (props.query ?? '').trim() }}”.
+        </div>
         <ul v-else class="divide-y divide-border-muted" data-testid="documents-list">
           <li
-            v-for="d in documents"
+            v-for="d in visibleDocuments"
             :key="d.id"
             class="flex items-start gap-2 px-4 py-2"
             :class="current?.id === d.id ? 'bg-surface-2' : ''"

@@ -5,7 +5,6 @@ import RailEntry from './RailEntry.vue';
 import SessionTreeRow from './SessionTreeRow.vue';
 import {
   Archive,
-  BookOpen,
   Plus,
   MessageSquare,
   Package,
@@ -1026,8 +1025,13 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" /></li>
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
         <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
-        <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" /></li>
-        <li><RailEntry :icon="BookOpen" label="Documents" to="/documents" /></li>
+        <!-- artifacts-as-units-01DOGF0C WP06: one Library entry replaces the
+             separate Artifacts and Documents entries (Captured / Authored
+             views inside). Active on either view — RailEntry's default is an
+             exact path match. -->
+        <li data-testid="nav-library">
+          <RailEntry :icon="Archive" label="Library" to="/library/captured" :active="route.path.startsWith('/library')" />
+        </li>
         <!-- agentgraph-total-convergence-01PMGX01 WP16: Agent graphs RESTORED to
              top-level nav, reversing nav-settings-ia-cleanup WP03's demotion.
              WP03 demoted it because the surface had nothing real in it: a

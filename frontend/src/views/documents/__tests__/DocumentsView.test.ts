@@ -542,3 +542,24 @@ describe('DocumentsView — stale responses', () => {
     expect(w.find('[data-testid="documents-build-site"]').text()).toBe('Build site');
   });
 });
+
+// artifacts-as-units-01DOGF0C WP06: DocumentsView is the Library's Authored
+// view. Under the Library it is `embedded` (no page head of its own) and its
+// list follows the Library's shared title search.
+describe('DocumentsView as the Library Authored view', () => {
+  it('filters the list by the shared query and says so when nothing matches', async () => {
+    const a = record({ id: '01K000000000000000000000AA', title: 'On-call runbook' });
+    const b = record({ id: '01K000000000000000000000BB', title: 'Release plan' });
+    const { w } = await setup({ documents: { list: async () => [summary(a), summary(b)] } });
+    await w.setProps({ embedded: true, query: 'runbook' } as never);
+    await flushPromises();
+    expect(w.find(`[data-testid="documents-open-${a.id}"]`).exists()).toBe(true);
+    expect(w.find(`[data-testid="documents-open-${b.id}"]`).exists()).toBe(false);
+    expect(w.text()).not.toContain('Write documents with the assistant or by hand');
+
+    await w.setProps({ query: 'nothing like this' } as never);
+    await flushPromises();
+    expect(w.find('[data-testid="documents-no-match"]').text()).toContain('nothing like this');
+    w.unmount();
+  });
+});
