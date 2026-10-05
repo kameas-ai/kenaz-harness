@@ -21,6 +21,7 @@ import CanvasHead from '@/shell/CanvasHead.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import SessionHeader from '@/components/chat/SessionHeader.vue';
+import { describeSyncReason, fleetSessionSyncFailure } from '@/lib/fleetSession';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ComposerError from '@/components/chat/ComposerError.vue';
 import ReasoningControl from '@/components/chat/ReasoningControl.vue';
@@ -1551,6 +1552,25 @@ onMounted(() => {
 
 const isSyncEnabled = computed(() => syncStatus.value?.enabled ?? false);
 
+/**
+ * fleet-session-truth-01DOGF0A FR-6 (dogfood F7): this session's context-sync
+ * appends are failing — the toolbar says "Synced to fleet" while nothing is
+ * syncing. Read from the shared fleet-session store (the backend's append
+ * breaker reports per-session state into it); null when syncing fine.
+ */
+const syncFailure = computed(() => fleetSessionSyncFailure(sessionId.value));
+const syncFailureText = computed(() =>
+  syncFailure.value ? `Not syncing — ${describeSyncReason(syncFailure.value.reason)}` : '',
+);
+const syncFailureTitle = computed(() => {
+  const f = syncFailure.value;
+  if (!f) return '';
+  const parts = [f.lastError ?? ''];
+  if (f.open) parts.push('Automatic retries stopped; toggle sync off and on to retry.');
+  if (f.dropped > 0) parts.push(`${f.dropped} message(s) were not synced.`);
+  return parts.filter(Boolean).join(' ');
+});
+
 async function onToggleSync() {
   const id = sessionId.value;
   if (!id || syncToggling.value) return;
@@ -1659,6 +1679,16 @@ async function onShared() {
           />
           {{ isSyncEnabled ? 'Synced to fleet' : 'Sync to fleet' }}
         </button>
+        <!-- Context-sync failure badge (fleet-session-truth-01DOGF0A FR-6) -->
+        <span
+          v-if="syncFailure"
+          class="rounded px-2 py-0.5 font-ui text-[11px] text-signal-warn border border-signal-warn/40 bg-surface-2"
+          role="status"
+          :title="syncFailureTitle"
+          data-testid="session-sync-degraded"
+        >
+          {{ syncFailureText }}
+        </span>
         <!-- Share button (only shown when session is loaded) -->
         <button
           type="button"

@@ -58,6 +58,7 @@ func sessionTransitionKey(v FleetSessionView) string {
 			ss := append([]FleetSyncSessionView(nil), lane.Sessions...)
 			for i := range ss {
 				ss[i].NextRetryAt = ""
+				ss[i].Dropped = 0
 			}
 			lane.Sessions = ss
 		}
@@ -160,4 +161,32 @@ func (a *API) sessionSupervisorStep(ctx context.Context, now time.Time) {
 	// Token refresh / expiry / claim changes that happened inside other
 	// fleet traffic surface here at the latest.
 	a.publishFleetSession("tick")
+}
+
+// OnFleetSessionReset registers fn to run after a sign-in succeeds and after
+// sign-out (fleet-session-truth-01DOGF0A WP06: the context-sync append
+// breaker's ResetAll). fn must be quick and must not call back into the
+// settings API's fleet lock.
+func (a *API) OnFleetSessionReset(fn func()) {
+	if a == nil || fn == nil {
+		return
+	}
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	a.fleet.sessionResetHooks = append(a.fleet.sessionResetHooks, fn)
+	a.fleet.mu.Unlock()
+}
+
+func (a *API) runSessionResetHooks() {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	hooks := append([]func(){}, a.fleet.sessionResetHooks...)
+	a.fleet.mu.RUnlock()
+	for _, fn := range hooks {
+		fn()
+	}
 }

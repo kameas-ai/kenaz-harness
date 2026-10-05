@@ -67,15 +67,38 @@ const sessionMessage = computed(() => {
   const s = fleet.session.value;
   if (!s) return '';
   if (s.state === 'degraded') {
-    return s.reason === 'not_provisioned'
-      ? "You signed in with Zitadel, but this account hasn't finished Fleet signup yet."
-      : `${describeFleetReason(s.reason)} — showing your last known account details.`;
+    if (s.reason === 'not_provisioned') {
+      return "You signed in with Zitadel, but this account hasn't finished Fleet signup yet.";
+    }
+    if (s.reason === 'needs_reauth') {
+      return (
+        'Your sign-in predates a permission fleet now needs (your organisation claim). ' +
+        'Everything else keeps working; sign in again to re-enable telemetry export.'
+      );
+    }
+    return `${describeFleetReason(s.reason)} — showing your last known account details.`;
   }
   if (s.state === 'signed_out' && s.reason === 'session_expired') {
     return 'Your session expired. Sign in again.';
   }
   return '';
 });
+
+const needsReauth = computed(
+  () => isDegraded.value && fleet.session.value?.reason === 'needs_reauth',
+);
+const degradedHeadline = computed(() => {
+  switch (fleet.session.value?.reason) {
+    case 'not_provisioned':
+      return 'Account setup not finished';
+    case 'needs_reauth':
+      return 'Update your sign-in to re-enable telemetry export';
+    default:
+      return 'Not connected to fleet';
+  }
+});
+/** Background lanes currently failing (FR-6). */
+const degradedLanes = fleet.degradedLanes;
 
 /** One line under the actions: the action's own error wins. */
 const error = computed(() => actionError.value || sessionMessage.value);
@@ -283,8 +306,13 @@ async function refreshIdentity() {
       role="status"
       data-testid="account-degraded"
     >
-      {{ fleet.session.value?.reason === 'not_provisioned' ? 'Account setup not finished' : 'Not connected to fleet' }}
+      {{ degradedHeadline }}
     </p>
+    <ul v-if="degradedLanes.length" class="degraded-lanes" data-testid="account-sync-lanes">
+      <li v-for="lane in degradedLanes" :key="lane.key" :data-testid="`account-sync-${lane.key}`">
+        {{ lane.label }}: not syncing — {{ lane.reason }}
+      </li>
+    </ul>
 
     <div class="identity-card" data-testid="identity-card">
       <div v-if="identity?.email" class="identity-row">
@@ -314,6 +342,15 @@ async function refreshIdentity() {
     </div>
 
     <div class="panel-actions">
+      <button
+        v-if="needsReauth"
+        class="btn btn-primary"
+        :disabled="loading"
+        data-testid="reauth-btn"
+        @click="signIn"
+      >
+        {{ loading ? 'Waiting for browser…' : 'Update sign-in' }}
+      </button>
       <button
         class="btn btn-secondary"
         :disabled="loading"
@@ -493,6 +530,13 @@ async function refreshIdentity() {
   font-size: 0.8125rem;
   color: var(--warn);
   margin: 0 0 0.75rem;
+}
+
+.degraded-lanes {
+  font-size: 0.8125rem;
+  color: var(--warn);
+  margin: 0 0 0.75rem;
+  padding-left: 1rem;
 }
 
 .error-msg {

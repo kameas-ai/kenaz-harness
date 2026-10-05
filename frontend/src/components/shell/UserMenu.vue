@@ -84,6 +84,25 @@ const degradedReason = computed(() =>
 const needsSetup = computed(
   () => isDegraded.value && fleet.session.value?.reason === 'not_provisioned',
 );
+/**
+ * needs_reauth: signed in, but the token predates the org-claim scope —
+ * only a fresh sign-in fixes it (refresh keeps the old scopes). One click
+ * re-runs the sign-in flow; nothing signs the user out.
+ */
+const needsReauth = computed(
+  () => isDegraded.value && fleet.session.value?.reason === 'needs_reauth',
+);
+/** Background lanes currently failing (FR-6). */
+const degradedLanes = fleet.degradedLanes;
+/** The trigger chip: the session OR any sync lane is degraded. */
+const showStatusChip = computed(
+  () => isSignedIn.value && (isDegraded.value || degradedLanes.value.length > 0),
+);
+const statusChipTitle = computed(() =>
+  [degradedReason.value, ...degradedLanes.value.map((l) => `${l.label}: ${l.reason}`)]
+    .filter(Boolean)
+    .join(' · '),
+);
 
 function openMenu() {
   menuOpen.value = !menuOpen.value;
@@ -186,9 +205,9 @@ async function handleSignOut() {
         </span>
         <!-- Degraded: a status dot on the trigger (FR-3 / FR-6). -->
         <span
-          v-if="isDegraded"
+          v-if="showStatusChip"
           class="fleet-status-dot"
-          :title="degradedReason"
+          :title="statusChipTitle"
           data-testid="user-menu-status-chip"
         />
         <span
@@ -228,6 +247,17 @@ async function handleSignOut() {
               data-testid="menu-finish-setup"
             >Finish setup</a>
             <button
+              v-if="needsReauth && !served"
+              type="button"
+              class="user-menu-link"
+              :disabled="loading"
+              data-testid="menu-reauth"
+              @click="handleSignIn"
+            >
+              {{ loading ? 'Opening browser…' : 'Update sign-in' }}
+            </button>
+            <button
+              v-else-if="!needsReauth"
               type="button"
               class="user-menu-link"
               :disabled="loading"
@@ -236,6 +266,15 @@ async function handleSignOut() {
             >
               {{ loading ? 'Retrying…' : 'Retry' }}
             </button>
+          </div>
+          <div
+            v-for="lane in degradedLanes"
+            :key="lane.key"
+            class="user-menu-degraded"
+            role="status"
+            :data-testid="`user-menu-sync-${lane.key}`"
+          >
+            <span>{{ lane.label }}: not syncing — {{ lane.reason }}</span>
           </div>
           <div class="user-menu-divider" />
         </template>

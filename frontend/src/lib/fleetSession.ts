@@ -298,9 +298,80 @@ export function describeFleetReason(reason: string | undefined): string {
       return 'Sign-in cancelled';
     case 'sign_in_failed':
       return 'Sign-in failed';
+    case 'needs_reauth':
+      return 'Update your sign-in — telemetry export is off';
     default:
       return reason ? `Fleet: ${reason}` : '';
   }
+}
+
+/** Short copy for a sync lane's reason code (FR-6). */
+export function describeSyncReason(reason: string | undefined): string {
+  switch (reason) {
+    case 'remote_context_missing':
+      return 'remote context missing on fleet';
+    case 'not_authorized':
+      return 'not authorized by fleet';
+    case 'server_error':
+      return 'fleet returned an error';
+    case 'network':
+      return "can't reach fleet";
+    case 'session_expired':
+      return 'fleet session expired';
+    case 'no_resource_owner_claim':
+      return 'your token has no org claim — sign in again';
+    case 'activate_failed':
+      return 'export could not start';
+    case 'api_host_unresolved':
+      return "can't resolve the fleet API host";
+    default:
+      return reason ?? '';
+  }
+}
+
+export interface DegradedLane {
+  key: 'contextSync' | 'unitPoll' | 'telemetry';
+  label: string;
+  reason: string;
+  consecutiveFailures: number;
+  lastSuccessAt?: string;
+}
+
+/**
+ * fleetDegradedLanes — the background lanes currently failing (FR-6). Each
+ * is shown, with its reason and last success, instead of only being logged.
+ */
+export const fleetDegradedLanes = computed<DegradedLane[]>(() => {
+  const sync = _session.value?.sync;
+  if (!sync || !fleetSignedIn.value) return [];
+  const out: DegradedLane[] = [];
+  const add = (key: DegradedLane['key'], label: string) => {
+    const lane = sync[key];
+    if (lane?.status === 'degraded') {
+      out.push({
+        key,
+        label,
+        reason: describeSyncReason(lane.reason),
+        consecutiveFailures: lane.consecutiveFailures,
+        lastSuccessAt: lane.lastSuccessAt,
+      });
+    }
+  };
+  add('contextSync', 'Context sync');
+  add('unitPoll', 'Shared units');
+  add('telemetry', 'Telemetry');
+  return out;
+});
+
+/**
+ * fleetSessionSyncFailure — the context-sync breaker state for one chat
+ * session, or null when it is syncing fine (or not synced at all). Drives
+ * the session header's "Not syncing — <reason>" badge (FR-6, dogfood F7).
+ */
+export function fleetSessionSyncFailure(sessionId: string | null | undefined) {
+  if (!sessionId) return null;
+  const sessions = _session.value?.sync?.contextSync?.sessions ?? [];
+  return sessions.find((x) => x.sessionId === sessionId) ?? null;
 }
 
 /**
@@ -348,6 +419,7 @@ export function useFleetSession(client?: FleetSessionSource) {
     identityLabel: fleetIdentityLabel,
     initials: fleetInitials,
     capability: fleetSessionCapability,
+    degradedLanes: fleetDegradedLanes,
     refresh: refreshFleetSession,
     retry: retryFleetSession,
     signIn: signInFleet,

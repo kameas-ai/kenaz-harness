@@ -206,7 +206,10 @@ func sameLaneState(a, b LaneSnapshot) bool {
 	strip := func(in []LaneSessionSnapshot) []LaneSessionSnapshot {
 		out := make([]LaneSessionSnapshot, len(in))
 		for i, s := range in {
+			// Timestamps and the dropped counter move on every attempt;
+			// neither is a transition.
 			s.NextRetryAt = time.Time{}
+			s.Dropped = 0
 			out[i] = s
 		}
 		return out

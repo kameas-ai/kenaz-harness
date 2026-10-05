@@ -246,18 +246,30 @@ func TestFleetSession_ExpiredSessionServerSide_IsSignedOut(t *testing.T) {
 	}
 }
 
-func TestFleetSession_TokenWithoutOrgClaim_IsNamedFact(t *testing.T) {
+// P-8 (claim half, WP06 + owner addendum): enrolled, but the token has no
+// org claim → a distinct needs_reauth degraded reason with the identity
+// still shown — never signed out, never a forced logout.
+func TestFleetSession_TokenWithoutOrgClaim_IsNeedsReauth(t *testing.T) {
 	r := newSessionRig(t)
 	r.setToken(jwtFor("sub-alice", "")) // no resource-owner claim
 	if _, err := r.api.FleetRefreshIdentity(context.Background()); err != nil {
 		t.Fatalf("enroll: %v", err)
 	}
 	v := snap(t, r.api)
-	if v.State != FleetSessionSignedIn {
-		t.Fatalf("state = %q, want signed_in (enrolled) — the claim gap is a separate fact", v.State)
+	if v.State != FleetSessionDegraded || v.Reason != FleetReasonNeedsReauth {
+		t.Fatalf("state=%q reason=%q, want degraded/needs_reauth", v.State, v.Reason)
+	}
+	if v.Identity == nil {
+		t.Fatalf("needs_reauth dropped the identity")
 	}
 	if !v.Claims.HasSubject || v.Claims.HasOrgClaim {
 		t.Fatalf("claims = %+v, want subject without org claim", v.Claims)
+	}
+	// An enroll failure is the more urgent fact and wins the reason slot.
+	r.fleet.setMode("server_error")
+	_, _ = r.api.FleetRefreshIdentity(context.Background())
+	if v := snap(t, r.api); v.Reason != FleetReasonServerError {
+		t.Fatalf("reason = %q, want server_error to take precedence", v.Reason)
 	}
 }
 

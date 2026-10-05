@@ -51,6 +51,12 @@ const (
 	FleetReasonSessionExpired  = "session_expired"
 	FleetReasonSignInFailed    = "sign_in_failed"
 	FleetReasonSignInCancelled = "sign_in_cancelled"
+	// FleetReasonNeedsReauth: signed in and enrolled, but the access token
+	// lacks the resource-owner (org) claim — it was minted before
+	// DefaultOIDCScopes requested urn:zitadel:iam:user:resourceowner, and
+	// refresh keeps the old scope set. Telemetry export is off until a fresh
+	// sign-in. Never a forced sign-out: everything else keeps working.
+	FleetReasonNeedsReauth = "needs_reauth"
 )
 
 // FleetSessionClaims reports which identity claims the access token carries.
@@ -234,6 +240,12 @@ func (a *API) fleetSessionSnapshot() FleetSessionView {
 		if !tr.nextRetryAt.IsZero() && !tr.autoRetryStopped {
 			v.NextRetryAt = tr.nextRetryAt.UTC().Format(time.RFC3339)
 		}
+	case ts.Claims.Subject != "" && ts.Claims.OrgID == "":
+		// A JWT with a subject but no org claim (an opaque token has neither
+		// and is not this case). See FleetReasonNeedsReauth.
+		v.State = FleetSessionDegraded
+		v.Reason = FleetReasonNeedsReauth
+		v.Message = "Your sign-in predates a permission fleet now needs (org claim). Sign in again to re-enable telemetry export."
 	default:
 		v.State = FleetSessionSignedIn
 	}

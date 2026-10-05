@@ -294,4 +294,17 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
     await flushPromises();
     expect(client.settings.fleetRefreshIdentity).not.toHaveBeenCalled();
   });
+
+  it('needs_reauth (token without org claim) → "Update sign-in" runs the sign-in flow', async () => {
+    const client = buildClient(session('degraded', prodProfile, { reason: 'needs_reauth' }));
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="account-degraded"]').text()).toContain('Update your sign-in');
+    await wrapper.find('[data-testid="reauth-btn"]').trigger('click');
+    await flushPromises();
+    expect(client.settings.fleetSignIn).toHaveBeenCalledOnce();
+    expect(wrapper.find('[data-testid="reauth-btn"]').exists()).toBe(false);
+  });
 });

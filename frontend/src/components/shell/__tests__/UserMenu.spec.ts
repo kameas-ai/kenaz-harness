@@ -338,4 +338,43 @@ describe('UserMenu', () => {
     const header = wrapper.find('[data-testid="user-menu-identity"]');
     expect(header.find('.user-menu-email').text()).toBe('Kameas Dogfood');
   });
+
+  // ── WP06: claim gap + sync lanes ─────────────────────────────────────────
+
+  it('P-8 (UI): needs_reauth → "Update sign-in" re-runs the sign-in flow; no Retry, no sign-out forced', async () => {
+    const { client } = buildClient(
+      signedIn({
+        state: 'degraded',
+        reason: 'needs_reauth',
+        claims: { hasSubject: true, hasOrgClaim: false },
+      }),
+    );
+    const wrapper = mountUserMenu(client);
+    await flushPromises();
+    await openPopover(wrapper);
+    expect(wrapper.find('[data-testid="user-menu-degraded"]').text()).toContain('Update your sign-in');
+    expect(wrapper.find('[data-testid="menu-retry"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="menu-sign-out"]').exists()).toBe(true);
+    await wrapper.find('[data-testid="menu-reauth"]').trigger('click');
+    await flushPromises();
+    expect(client.settings.fleetSignIn).toHaveBeenCalledOnce();
+  });
+
+  it('FR-6: a degraded sync lane lights the trigger chip and is listed with its reason', async () => {
+    const lane = { status: 'unknown', consecutiveFailures: 0 };
+    const { client } = buildClient(
+      signedIn({
+        sync: {
+          contextSync: { ...lane },
+          unitPoll: { status: 'degraded', reason: 'network', consecutiveFailures: 3 },
+          telemetry: { ...lane },
+        },
+      }),
+    );
+    const wrapper = mountUserMenu(client);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="user-menu-status-chip"]').exists()).toBe(true);
+    await openPopover(wrapper);
+    expect(wrapper.find('[data-testid="user-menu-sync-unitPoll"]').text()).toContain("not syncing — can't reach fleet");
+  });
 });

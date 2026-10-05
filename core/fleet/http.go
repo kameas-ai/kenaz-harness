@@ -109,8 +109,8 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 			req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
 
 			resp, err := c.httpClient.Do(req)
-			cancel()
 			if err != nil {
+				cancel()
 				lastErr = err
 				continue // retry on transport error
 			}
@@ -119,6 +119,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 				// Drain and close body before refreshing.
 				_, _ = io.Copy(io.Discard, resp.Body)
 				_ = resp.Body.Close()
+				cancel()
 				lastResp = resp
 				goto doRefresh
 			}
@@ -126,12 +127,25 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 			if resp.StatusCode >= 500 {
 				_, _ = io.Copy(io.Discard, resp.Body)
 				_ = resp.Body.Close()
+				cancel()
 				lastResp = resp
 				lastErr = fmt.Errorf("fleet: server error %d", resp.StatusCode)
 				continue // backoff retry
 			}
 
 			// Success or a non-retryable error (4xx other than 401).
+			//
+			// The per-call context must outlive this function: Do returns
+			// once the response HEADERS arrive, and the caller reads the body
+			// afterwards. This used to call cancel() right after Do, so any
+			// body still in flight was read under a cancelled context and
+			// failed with "context canceled" — intermittently, depending on
+			// whether the transport had already buffered it. That is the
+			// fleet.unit.poll.pull_failed "context canceled" of dogfood
+			// 2026-10-04 B3b (the poll succeeding on the next tick reset the
+			// counter, which is why it read as noise). The context is now
+			// released when the caller closes the body.
+			resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
 			return resp, nil
 		}
 
@@ -175,6 +189,19 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 	}
 
 	return nil, errors.New("fleet: unexpected retry exhaustion")
+}
+
+// cancelOnClose releases a request's per-call context when the response
+// body is closed (see the B3b note in do).
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 // emitSessionExpired publishes a TopicFleetSessionExpired event to the broker,

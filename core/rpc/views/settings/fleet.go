@@ -158,6 +158,11 @@ type fleetState struct {
 	emitMu      sync.Mutex
 	lastEmitKey string
 
+	// sessionResetHooks run when one fleet session ends and another may
+	// begin (sign-in success, sign-out): per-session state held outside this
+	// package — the context-sync append breaker — forgets the old session.
+	sessionResetHooks []func()
+
 	// lanesHooked / supervisorStarted make their one-time wiring idempotent.
 	lanesHooked       bool
 	supervisorStarted bool
@@ -812,6 +817,7 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 			_, _ = p.Refresh(rctx)
 		}()
 	}
+	a.runSessionResetHooks()
 	logging.L().Info("fleet.rpc.sign_in.success",
 		"org_id", id.OrgID,
 		"team_id", id.TeamID,
@@ -942,6 +948,7 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 	} else {
 		logging.L().Info("fleet.rpc.sign_out.success")
 	}
+	a.runSessionResetHooks()
 	a.publishFleetSession("sign_out")
 	return signOutErr
 }
@@ -1117,6 +1124,7 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 	}
 	a.fleet.mu.RLock()
 	pipeline := a.fleet.otlpPipeline
+	lanes := a.fleet.lanes
 	baseRes := a.fleet.telemetryRes
 	resFunc := a.fleet.resFunc
 	consent := a.fleet.consent
@@ -1136,12 +1144,20 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 	// deactivate is the single "export must be off" path. Open conversation
 	// segments are DROPPED, not ended: their totals were gathered under a
 	// session or a consent that no longer stands.
+	//
+	// fleet-session-truth-01DOGF0A FR-6/FR-7: every outcome is reported to
+	// the telemetry lane so it is visible in FleetSession.sync.telemetry,
+	// not only in the log. Deliberate states (consent none, signed out) are
+	// "off"; a missing org claim while signed in is "degraded".
 	deactivate := func(reason string) {
 		if pipeline.Active() {
 			logging.L().Info("fleet.otlp.reconcile.deactivating", "reason", reason)
 		}
 		tracker.DropAll()
 		pipeline.Deactivate(ctx)
+		if reason != telemetryReasonNoOrgClaim {
+			lanes.RecordOff(fleet.LaneTelemetry, reason)
+		}
 	}
 
 	// Consent gate: "none" (default) → no OTLP export (NFR-005 / FR-006).
@@ -1173,8 +1189,22 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 		return
 	}
 	if tokID.OrgID == "" {
-		logging.L().Warn("fleet.otlp.reconcile.no_resource_owner_claim")
-		deactivate("no_resource_owner_claim")
+		// The token predates the resource-owner scope (core/fleet env.go
+		// ZitadelResourceOwnerScope); refresh never adds it, only a fresh
+		// sign-in does. Surfaced as the session's needs_reauth state and
+		// this lane's named reason — so the log line is a one-time INFO at
+		// the transition, not a WARN every reconcile tick (dogfood B3a:
+		// 19:35, 19:39, 19:40:56, … forever).
+		prev := lanes.Snapshot(fleet.LaneTelemetry)
+		if prev.Status != fleet.LaneDegraded || prev.Reason != telemetryReasonNoOrgClaim {
+			logging.L().Info("fleet.otlp.reconcile.no_resource_owner_claim",
+				"surfaced_as", FleetReasonNeedsReauth)
+		} else {
+			logging.L().Debug("fleet.otlp.reconcile.no_resource_owner_claim")
+		}
+		deactivate(telemetryReasonNoOrgClaim)
+		lanes.RecordFailure(fleet.LaneTelemetry, telemetryReasonNoOrgClaim,
+			errors.New("telemetry export off: your token has no org claim — sign in again"), 0, time.Time{})
 		return
 	}
 	want := fleet.IdentityAttrs{UserID: tokID.Subject, OrgID: tokID.OrgID, MachineID: nodeID, Issuer: tokID.Issuer}
@@ -1191,6 +1221,7 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 	cfg, cfgErr := client.FleetConfig(ctx)
 	if cfgErr != nil {
 		logging.L().Warn("fleet.otlp.activate.api_host_unresolved", "err", cfgErr.Error())
+		lanes.RecordFailure(fleet.LaneTelemetry, "api_host_unresolved", cfgErr, 0, time.Time{})
 		return
 	}
 	otlpBase := fleet.OTLPBaseURL(cfg)
@@ -1201,6 +1232,7 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 
 	if pipeline.Active() {
 		if pipeline.ActiveIdentity() == want && pipeline.ActiveEndpoint() == otlpBase {
+			lanes.RecordSuccess(fleet.LaneTelemetry)
 			return // already exporting as the right account, to the right realm
 		}
 		// Account, org, issuer or endpoint changed: what was gathered belongs
@@ -1223,8 +1255,15 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 
 	if err := pipeline.Activate(ctx, otlpBase, baseRes, want, fleet.DefaultBearerProvider(), tp); err != nil {
 		logging.L().Warn("fleet.otlp.activate.failed", "err", err.Error())
+		lanes.RecordFailure(fleet.LaneTelemetry, "activate_failed", err, 0, time.Time{})
+		return
 	}
+	lanes.RecordSuccess(fleet.LaneTelemetry)
 }
+
+// telemetryReasonNoOrgClaim is the telemetry lane's reason when the access
+// token lacks the Zitadel resource-owner claim (FR-7).
+const telemetryReasonNoOrgClaim = "no_resource_owner_claim"
 
 // fleetIdentityToView converts a fleet.Identity to the view type.
 func fleetIdentityToView(id fleet.Identity) FleetIdentity {
