@@ -340,6 +340,56 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `units.KindArtifact` defined, accepted by the schema, used only in tests — CLOSED
+
+`core/units/unit.go` has declared `KindArtifact = "artifact"` and the
+`units.kind` CHECK has admitted `'artifact'` since
+`unified-context-artifacts-01NCTXU01` (units/1100), but every reference was
+in a test (`resolution_test.go`, `store_mem_test.go`, `store_sql_test.go`)
+and artifacts kept living in their own `artifacts` / `artifact_versions`
+tables. 01NCTXU01 FR-003 ("artifacts are units with kind=artifact") was
+ratified and never implemented — a schema that promised a shape no writer
+produced.
+
+**Closed** by artifacts-as-units-01DOGF0C: migration
+`units/1104-artifacts-to-units` copies every artifact and version onto
+`units` / `unit_versions` (ids preserved, verified in-transaction), and
+`core/rpc/api.go` `newArtifactsStack` now builds `artifacts.NewUnitsStore`
+— every capture, revision, promote and delete in production writes
+`kind='artifact'` units. Decision record: `docs/missions/artifacts-as-units.md`.
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `artifacts_legacy` / `artifact_versions_legacy` retained read-only — DROP due next release
+
+Migration `units/1104-artifacts-to-units` RENAMES the legacy tables
+instead of dropping them (spec FR-3.3: never drop in the migration that
+copies — dropping in place is how `sessions/0327` and `sessions/0332`
+destroyed `artifact_versions`). Nothing reads or writes them after 1104:
+the legacy store implementation was deleted with the store switch. They are
+a recovery copy for one release of real upgrades.
+
+**Follow-up (dated, owned):** the release AFTER the one that ships 1104
+adds `units/1105-drop-artifacts-legacy` (`DROP TABLE
+artifact_versions_legacy` first, then `artifacts_legacy` — child before
+parent so no cascade fires), with a populated-snapshot test from the
+first snapshot that carries the `*_legacy` tables, per the I14 gate.
+Blocker: one shipped release of 1104 against real installs. Owner:
+artifacts-as-units-01DOGF0C (filed 2026-10-04). Do not fold it into 1104
+or into the same release.
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP01, D4) · artifact version history is write-only — `Store.ListVersions` has no production reader
+
+`kenaz__update_artifact`, plan-mode Edit and edit-file sync all append
+revisions (`Manager.WriteVersion`), but nothing outside the store
+implementations and their tests calls `ListVersions`, and
+`ArtifactsAPI.Get` / the Captured preview always serve the ORIGINAL
+capture's bytes (`Artifact.ContentHash`). A user who asks the model to
+update an artifact sees the old content in the Library. Found while
+mapping versions onto `unit_versions`; not fixed here because it is a
+product decision (show history and latest, or serve latest only), not a
+storage one. Blocker: that decision. Owner: the next artifacts/Library
+mission — escalate to the owner before wiring, do not delete the
+WriteVersion path (it is the only revision capability).
+
 ### 2026-09-30 (laya-advisors-01LAYA001 WP13) · the dated-nil `sidecarProbe` is replaced; two dated justifications remain
 
 `core/rpc/api.go`'s `sidecarProbe` (nil since WP12, "until the Settings

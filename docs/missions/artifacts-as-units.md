@@ -216,3 +216,25 @@ Measured (WP04, 2026-10-04, Apple Silicon laptop, `go test` without
 artifacts and 10,002 version rows — i.e. the whole pending set, 1104
 included — took **301 ms** (7.6 s under `-race`). No batching: the single
 transaction stays all-or-nothing and well under a second at 10k.
+
+## Records (WP07)
+
+- **01NCTXU01 FR-003 — shipped** by this mission (WP04: migration
+  `units/1104-artifacts-to-units` + `newArtifactsStack` on
+  `artifacts.NewUnitsStore`; WP06: one Library surface). Archive note to
+  append to `kitty-specs/_archive/unified-context-artifacts-01NCTXU01/spec.md`
+  (gitignored; mirror in the release PR description):
+
+  > FR-003 shipped 2026-10-04 by artifacts-as-units-01DOGF0C: artifacts are
+  > `core/units` rows with `kind=artifact` (migration
+  > `units/1104-artifacts-to-units`, ids preserved, legacy tables renamed
+  > `*_legacy` for one release). Capture, list, promote (including
+  > `scope=global`) and delete go through the unified store; the UI is the
+  > Library rail entry with Captured and Authored views.
+
+- **Roadmap** (`docs/roadmap.md`, gitignored): move "artifacts as units /
+  unified Library" to *Already shipped* in the release that carries 1104,
+  and slot `units/1105-drop-artifacts-legacy` into the following release.
+- **Unwired ledger** (`docs/unwired-ledger.md`, 2026-10-04 entries): closes
+  "KindArtifact defined, test-only"; files the dated drop-legacy follow-up
+  (owner: this mission); records the write-only version history found in D4.
