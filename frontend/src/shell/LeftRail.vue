@@ -1056,21 +1056,28 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <li data-testid="nav-library">
           <RailEntry :icon="Archive" label="Library" to="/library/captured" match-prefix="/library" />
         </li>
-        <!-- agentgraph-total-convergence-01PMGX01 WP16: Agent graphs RESTORED to
-             top-level nav, reversing nav-settings-ia-cleanup WP03's demotion.
-             WP03 demoted it because the surface had nothing real in it: a
-             library of hand-authored templates and an editor whose palette
-             offered kinds that crashed at run time. Since then every run
-             materializes as a graph (WP12) and the routed topology is the
-             production chat path, so this is now where you go to see what the
-             agent actually did. A substrate nobody can reach is a substrate
-             that rots — 19 of 34 kinds went unexercised while this was
-             palette-only. The nav.agentgraph command-palette action stays.
-             served-mode-is-a-real-mode-01PMZ707 WP03: gated on !served —
-             Graph_* has no serve dispatch case (D-701), so this entry would
-             route into GraphsView.vue's own NotAvailableInServedMode panel
-             in a served build. Hiding the rail entry is the honest answer,
-             matching the Sites/Marketplace treatment below. -->
+        <!-- No "Agent graphs" entry — agentgraph-settings-linkage-01DOGF0D.
+             History, so the next IA pass neither re-demotes nor re-promotes
+             it without reading why:
+             - nav-settings-ia-cleanup WP03 demoted it to palette-only; 19 of
+               34 node kinds then rotted unexercised ("a substrate nobody can
+               reach is a substrate that rots").
+             - agentgraph-total-convergence-01PMGX01 WP16 restored it here as
+               "where you go to see what the agent actually did", since every
+               run materializes as a graph (WP12). But nothing linked a chat
+               turn to its run, so in practice this entry was a library +
+               editor — half the promise.
+             - agentgraph-settings-linkage-01DOGF0D split the two halves.
+               OBSERVABILITY moved to where runs happen: every chat turn links
+               to its run graph and run details (TurnRunLinks, WP04; pinned in
+               MessageList.runLinks.test.ts and SessionsView.turnRuns.test.ts).
+               AUTHORING (library + editor) moved under Settings › Authoring
+               (WP05, SettingsTabs.vue), which lights the Settings entry below
+               on every /agentgraph* route (SETTINGS_HUB_PREFIXES).
+             The /agentgraph* routes and the nav.agentgraph palette action
+             stay. Both new homes keep the served-mode gate this entry had
+             (served-mode-is-a-real-mode-01PMZ707 WP03): Graph_* has no serve
+             dispatch case (D-701). -->
         <!-- nav-settings-ia-cleanup WP04: Audit log demoted from top-level nav.
              Viewer is accessible via Settings → Security → Audit Log. /audit route
              and the command palette entry (nav.audit) remain intact. -->
