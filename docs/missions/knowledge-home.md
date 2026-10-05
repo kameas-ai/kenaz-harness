@@ -53,9 +53,11 @@ KnowledgeView. C's LibraryView is **not** refactored here.
 
 **Follow-up (not this mission):** swap LibraryView's inline `<nav>` for
 `SectionSwitcher` (pass `test-id-prefix="library"` so its existing
-`library-tab-*` / `library-switcher` test ids survive). Owner: whichever
-mission next touches LibraryView; the LibraryView header comment already
-names this integration point.
+`library-tab-*` / `library-switcher` test ids survive). **Owner:
+knowledge-home-01DOGF0E, recorded 2026-10-04.** Until the extraction lands,
+`components/ui/__tests__/SectionSwitcher.drift.test.ts` pins the two
+switchers to identical nav / active / inactive classes (review F4); delete
+that test in the extraction commit.
 
 Section bodies mount the existing views unchanged in behaviour with an
 `embedded` prop (C's convention) that suppresses each view's own CanvasHead;
@@ -120,8 +122,13 @@ does not apply until the dialog exists.
 A (`fleet-session-truth-01DOGF0A`) is not merged, so reasons derive from
 `syncStatus` (`team_cap_enabled`, `client.contexts.syncStatus()`). The only
 distinction `syncStatus` can honestly make is *loaded with cap off* vs
-*could not be read*; signed-out vs degraded vs capability-missing needs A's
-`FleetSession`. Switch-over: whichever of A/E lands second replaces
+*could not be read* (the binding threw). In particular it cannot tell
+"fleet not configured — local-only" from "signed in, capability missing":
+with no syncer wired, `Context_SyncStatus` returns a zeroed view and no
+error (`core/rpc/views/contexts/impl.go`). So the cap-off sentence names
+the possibilities ("fleet not set up, signed out, or the team-graph
+capability is missing") rather than guessing one (review F2). Splitting
+them is the A switch-over's job via `FleetSession`. Switch-over: whichever of A/E lands second replaces
 `sharingDisabledReason` in `ContextsView.vue` with the FleetSession-derived
 sentences; the gate location (`teamCapEnabled`) is unchanged.
 

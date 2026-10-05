@@ -99,29 +99,35 @@ const props = defineProps<{
 const servedMode = useServedMode();
 const client = useHarnessClient();
 
-const tree =ref<ContextNode | null>(null);
+const tree = ref<ContextNode | null>(null);
 const recent = ref<readonly string[]>([]);
 const rootPath = ref<string>('');
 const treeError = ref<string | null>(null);
 
 const selectedPath = ref<string | null>(null);
 
+const previewContent = ref<string>('');
+const previewLoading = ref(false);
+const previewError = ref<string | null>(null);
+
 /**
- * selectedFolder — the folder row the user last clicked, when that click is
- * more recent than any file selection (knowledge-home-01DOGF0E WP05, FR-7).
- * Only the sharing section reads it: the owner's F10 case was "kameas-ai
+ * selectedFolder — the folder row the user last clicked
+ * (knowledge-home-01DOGF0E WP05, FR-7). The owner's F10 case was "kameas-ai
  * folder selected → no sharing affordance at all", because folder clicks
- * only expanded the row. Kept separate from `selectedPath` so the preview,
- * "+ Folder" and import targets behave exactly as before.
+ * only expanded the row. Folder and file selection are mutually exclusive:
+ * selecting a folder clears the previewed file (otherwise the preview would
+ * show one file while the sharing section talked about the folder — review
+ * F6), and "+ Folder" / import then target the selected folder.
  */
 const selectedFolder = ref<string | null>(null);
 
 function selectFolder(path: string) {
   selectedFolder.value = path;
+  selectedPath.value = null;
+  previewContent.value = '';
+  previewError.value = null;
+  previewLoading.value = false;
 }
-const previewContent = ref<string>('');
-const previewLoading = ref(false);
-const previewError = ref<string | null>(null);
 
 const showHidden = ref(false);
 const externalChangeToast = ref(false);
@@ -191,9 +197,16 @@ function folderShareReason(folderPath: string): string {
 const sharingDisabledReason = computed<string | null>(() => {
   if (teamCapEnabled.value) return null;
   if (syncStatus.value === null) {
+    // The binding itself failed (loadSyncStatus's catch path).
     return 'Sharing is unavailable — fleet team-sync status could not be read. Sharing needs a signed-in fleet connection with the team-graph capability.';
   }
-  return 'Sharing is off — fleet team sync is not active. Sharing needs a signed-in fleet connection with the team-graph capability.';
+  // A successful read with the cap off. The API cannot say WHY: with no
+  // syncer wired (fleet not configured — local-only) Context_SyncStatus
+  // returns a zeroed view with no error (core/rpc/views/contexts/impl.go),
+  // which is indistinguishable from "signed in, capability missing". So
+  // this names the possibilities rather than guessing one. A's
+  // FleetSession is what can split them (decision record D5).
+  return 'Sharing is off — team sync is not active on this device (fleet not set up, signed out, or the team-graph capability is missing). Sharing needs a signed-in fleet connection with the team-graph capability.';
 });
 
 /** What the sharing controls act on: the last-clicked folder, else the selected file. */
@@ -545,7 +558,7 @@ function cancelCreateFolder() {
 // should be created in, derived from the current selection (folder → into
 // it; file → its parent; nothing selected → root). Mirrors importTargetPath.
 function folderParentPath(): string {
-  const sel = selectedPath.value;
+  const sel = selectedFolder.value ?? selectedPath.value;
   if (!sel) return '';
   const node = findNode(tree.value, sel);
   if (!node) return '';
@@ -592,7 +605,7 @@ function openImportDialog() {
  * boundary in confusing ways.
  */
 function importTargetPath(name: string): string {
-  const sel = selectedPath.value;
+  const sel = selectedFolder.value ?? selectedPath.value;
   if (!sel) return name;
   // If the selection is a file, drop its basename and use its
   // parent directory. If it's a folder, use it directly.

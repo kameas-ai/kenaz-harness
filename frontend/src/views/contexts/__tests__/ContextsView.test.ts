@@ -424,7 +424,7 @@ describe('ContextsView', () => {
       expect(btn.exists()).toBe(true);
       expect((btn.element as HTMLButtonElement).disabled).toBe(true);
       const reason = w.find('[data-testid=context-share-disabled-reason]');
-      expect(reason.text()).toContain('fleet team sync is not active');
+      expect(reason.text()).toContain('team sync is not active on this device');
       expect(reason.text()).toContain('signed-in fleet connection with the team-graph capability');
       expect(w.find('[data-testid=context-share-account-link]').attributes('href')).toBe('#/settings?tab=account');
       await btn.trigger('click');
@@ -1226,7 +1226,7 @@ describe('ContextsView folder sharing state (knowledge-home-01DOGF0E WP05, P-6)'
     expect(reason.attributes('data-share-target')).toBe('folder');
     expect(reason.text()).toContain('Sharing works per file today — select a file in “kameas-ai” to share it.');
     expect(reason.text()).toContain('pending a product decision');
-    expect(reason.text()).toContain('fleet team sync is not active');
+    expect(reason.text()).toContain('team sync is not active on this device');
     expect(publishSpy).not.toHaveBeenCalled();
     expect(promoteSpy).not.toHaveBeenCalled();
     w.unmount();
@@ -1243,6 +1243,38 @@ describe('ContextsView folder sharing state (knowledge-home-01DOGF0E WP05, P-6)'
     expect(reason.text()).toContain('select a file in “kameas-ai”');
     expect(reason.text()).not.toContain('fleet team sync');
     expect(w.find('[data-testid=context-share-account-link]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it('selecting a folder clears the previewed file (review F6) and targets "+ Folder" at it', async () => {
+    const { client } = provide({ tree, files: { 'kameas-ai/context.md': 'UNIQUE-PREVIEW-BODY' }, syncStatus: status(true) });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai/context.md"]').trigger('click');
+    await flushPromises();
+    expect(w.text()).toContain('UNIQUE-PREVIEW-BODY');
+    // Click the folder again (collapses it) — the file preview must go.
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    expect(w.text()).not.toContain('UNIQUE-PREVIEW-BODY');
+    expect(w.find('[data-testid=context-share-disabled-reason]').attributes('data-share-target')).toBe('folder');
+    await w.find('[data-testid=context-create-folder]').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid=context-new-folder-row]').text()).toContain('kameas-ai');
+    w.unmount();
+  });
+
+  it('cap off with a readable status names the possibilities, not one guessed cause (review F2)', async () => {
+    const { client } = provide({ tree, files: { 'kameas-ai/context.md': '# k' }, syncStatus: status(false) });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    const text = w.find('[data-testid=context-share-disabled-reason]').text();
+    expect(text).toContain('fleet not set up, signed out, or the team-graph capability is missing');
+    expect(text).not.toContain('could not be read');
     w.unmount();
   });
 

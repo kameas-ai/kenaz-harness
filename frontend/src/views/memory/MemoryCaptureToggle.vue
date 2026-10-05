@@ -82,9 +82,14 @@ async function toggle(event: Event): Promise<void> {
   } catch (e) {
     enabled.value = previous;
     error.value = e instanceof Error ? e.message : 'Failed to toggle memory.';
-  } finally {
     busy.value = false;
+    // Re-read the truth rather than trusting the rollback: setMemory may
+    // have landed before the hook call failed, which is exactly a partial
+    // install — surface it now, not on the next load (review F7a).
+    await refresh();
+    return;
   }
+  busy.value = false;
   await checkHooks();
 }
 
@@ -135,6 +140,10 @@ onMounted(refresh);
           When on, each finished turn is captured into memory and the most
           relevant chunks are added before every model call. Turning it off
           stops both; chunks already saved stay below until you forget them.
+          Memory needs an embeddings-capable provider: OpenAI, OpenRouter,
+          Azure OpenAI, or a custom OpenAI-compatible endpoint (Anthropic and
+          Bedrock profiles cannot embed). The Health tab shows which one is in
+          use.
         </span>
       </span>
     </label>

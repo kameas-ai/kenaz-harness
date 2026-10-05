@@ -70,9 +70,19 @@ export const routes: RouteRecordRaw[] = [
     name: 'project',
     component: () => import('@/views/projects/ProjectLandingPage.vue'),
   },
-  // `/memory/<chunk id>` included: CrossReferenceLink has linked audit rows
-  // there since before this route existed; land in Learned, not the void.
-  { path: '/memory/:pathMatch(.*)*', redirect: (to) => ({ path: '/knowledge/learned', query: to.query }) },
+  // `/memory/<chunk id>` (an old CrossReferenceLink target that never had a
+  // route) lands in Learned with the chunk targeted via ?chunk=<id>.
+  {
+    path: '/memory/:pathMatch(.*)*',
+    redirect: (to) => {
+      const seg = to.params.pathMatch;
+      const chunk = Array.isArray(seg) ? seg[0] : seg;
+      return {
+        path: '/knowledge/learned',
+        query: chunk ? { ...to.query, chunk } : to.query,
+      };
+    },
+  },
   {
     path: '/workflows',
     name: 'workflows',

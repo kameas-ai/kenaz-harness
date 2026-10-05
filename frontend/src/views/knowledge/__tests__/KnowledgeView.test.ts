@@ -42,7 +42,7 @@ describe('Knowledge routes (P-1, FR-2)', () => {
       ['/contexts', '/knowledge/curated', {}],
       ['/memory', '/knowledge/learned', {}],
       ['/memory?scopeKind=project&scopeId=p1', '/knowledge/learned', { scopeKind: 'project', scopeId: 'p1' }],
-      ['/memory/chunk-123', '/knowledge/learned', {}],
+      ['/memory/chunk-123', '/knowledge/learned', { chunk: 'chunk-123' }],
       ['/corpora/x', '/knowledge/curated', {}],
       ['/knowledge', '/knowledge/curated', {}],
       ['/knowledge/learned', '/knowledge/learned', {}],

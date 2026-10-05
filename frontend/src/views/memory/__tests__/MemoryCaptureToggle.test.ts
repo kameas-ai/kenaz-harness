@@ -98,7 +98,19 @@ describe('MemoryCaptureToggle (P-2)', () => {
     expect(w.find('[data-testid="memory-off-banner"]').exists()).toBe(true);
   });
 
-  it('rolls the switch back and shows the error when a call fails', async () => {
+  it('rolls the switch back and shows the error when setMemory fails', async () => {
+    const { client } = makeClient(false, []);
+    client.settings.setMemory = vi.fn(async () => {
+      throw new Error('settings.json read-only');
+    });
+    const w = mountToggle(client);
+    await flushPromises();
+    await flip(w, true);
+    expect(w.find('[data-testid="memory-capture-state"]').text()).toBe('off');
+    expect(w.find('[data-testid="memory-toggle-error"]').text()).toContain('settings.json read-only');
+  });
+
+  it('setting saved but hook install failed → re-reads and shows the partial install immediately (review F7a)', async () => {
     const { client } = makeClient(false, []);
     client.hooks.installStarterMemory = vi.fn(async () => {
       throw new Error('registry offline');
@@ -106,8 +118,17 @@ describe('MemoryCaptureToggle (P-2)', () => {
     const w = mountToggle(client);
     await flushPromises();
     await flip(w, true);
-    expect(w.find('[data-testid="memory-capture-state"]').text()).toBe('off');
+    // The truth after the failure: memoryEnabled=true on disk, no hooks.
+    expect(w.find('[data-testid="memory-capture-state"]').text()).toBe('on');
+    expect(w.find('[data-testid="memory-partial-install"]').exists()).toBe(true);
     expect(w.find('[data-testid="memory-toggle-error"]').text()).toContain('registry offline');
+  });
+
+  it('copy names the embeddings requirement (review F7b — core/memory/eligibility.go)', async () => {
+    const { client } = makeClient(true);
+    const w = mountToggle(client);
+    await flushPromises();
+    expect(w.text()).toContain('OpenAI, OpenRouter, Azure OpenAI, or a custom OpenAI-compatible endpoint');
   });
 });
 
