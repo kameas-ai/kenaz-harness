@@ -3148,7 +3148,8 @@ export interface GraphSpec {
    * projection, not a second source of truth. "model_authored" marks
    * an unreviewed model draft; "library_fallback" marks a materialized
    * run reconstructed from the library file because its resolved spec
-   * was never recorded (runs before per-run spec recording).
+   * was never recorded (runs before per-run spec recording, or a spec
+   * refused for size).
    */
   specProvenance?: string;
 }

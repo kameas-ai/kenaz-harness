@@ -39,13 +39,20 @@ type RunSpecStore interface {
 	LoadRunSpec(runID string) (g Graph, found bool, err error)
 }
 
-// MaxRunSpecBytes bounds one stored spec's JSON encoding. The shipped
-// chat_default resolves to a few tens of KiB; 1 MiB leaves room for
-// large authored graphs while keeping a pathological spec (a
-// multi-megabyte inlined prompt) from bloating the database once per
-// run. A spec over the bound is not stored and its run view says it is
-// a reconstruction — the run itself is unaffected.
+// MaxRunSpecBytes bounds one stored spec's JSON encoding. Measured on
+// the shipped library (2026-10-05): chat_default encodes to ~5.0 KiB
+// (5028 bytes; ~2.7 KiB resolved with the routing gate off),
+// toolloop_default to ~4.2 KiB (4259 bytes). 1 MiB leaves two orders of
+// magnitude of room for large authored graphs while keeping a
+// pathological spec (a multi-megabyte inlined prompt) from bloating the
+// database once per run. A spec over the bound is not stored and its
+// run view says it is a reconstruction — the run itself is unaffected.
 const MaxRunSpecBytes = 1 << 20
+
+// runSpecByteCap is the bound encodeRunSpec enforces: MaxRunSpecBytes,
+// lowered only by tests (export_test.go) so the oversize degrade can be
+// driven end-to-end without a megabyte fixture.
+var runSpecByteCap = MaxRunSpecBytes
 
 // ErrRunSpecTooLarge is RecordRunSpec's refusal for a spec over
 // MaxRunSpecBytes.
@@ -80,7 +87,7 @@ func encodeRunSpec(runID string, g Graph) (raw []byte, digest string, err error)
 	if err != nil {
 		return nil, "", err
 	}
-	if len(raw) > MaxRunSpecBytes {
+	if len(raw) > runSpecByteCap {
 		return nil, "", fmt.Errorf("%w (run %s: %d bytes)", ErrRunSpecTooLarge, runID, len(raw))
 	}
 	return raw, SpecDigest(g), nil

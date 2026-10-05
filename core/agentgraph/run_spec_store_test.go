@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 
 	_ "modernc.org/sqlite"
@@ -196,4 +197,80 @@ func digestFromPayload(t *testing.T, payload []byte) string {
 		return ""
 	}
 	return rest[:j]
+}
+
+// The deliberate degrade, end to end: a spec over the byte cap is not
+// stored, the run itself COMPLETES, and a fresh manager (restart) renders
+// it as a labelled reconstruction — never an error, never "exact".
+// Not t.Parallel(): it lowers the package-level cap.
+func TestKernel_OversizedSpecRunCompletesAndRendersAsReconstruction(t *testing.T) {
+	coreag.SetRunSpecByteCapForTest(t, 64)
+	ctx := context.Background()
+	dir := t.TempDir()
+	log := coreag.NewSQLEventLog(openRunSpecDB(t))
+
+	before, err := graphview.NewManager(graphview.WithDataDir(dir), graphview.WithEventLog(log))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	const yaml = `spec_version: "1"
+id: oversized_spec
+entrypoints: [first]
+nodes:
+  - id: first
+    kind: transform
+    attrs:
+      name: concat
+  - id: second
+    kind: transform
+    attrs:
+      name: concat
+edges:
+  - from: {node: first, port: out}
+    to: {node: second, port: in}
+`
+	if err := graphview.New(before).SaveGraph(ctx, graphview.GraphSpec{ID: "oversized_spec", YAML: yaml}, "user"); err != nil {
+		t.Fatalf("SaveGraph: %v", err)
+	}
+	g, err := before.LoadGraphSpec("oversized_spec")
+	if err != nil {
+		t.Fatalf("LoadGraphSpec: %v", err)
+	}
+	if raw, _ := coreag.DumpJSON(g); len(raw) <= 64 {
+		t.Fatalf("fixture encodes to %d bytes — not over the lowered cap", len(raw))
+	}
+
+	const runID = "run-oversized"
+	if err := before.Kernel().Run(ctx, &coreag.Env{RunID: runID, Graph: &g}); err != nil {
+		t.Fatalf("kernel run with an oversized spec did not complete: %v", err)
+	}
+	completed := false
+	_ = log.Replay(runID, func(ev coreag.Event) error {
+		if ev.Kind == coreag.EventRunComplete {
+			completed = true
+		}
+		return nil
+	})
+	if !completed {
+		t.Fatal("oversized-spec run has no run_complete — the refusal broke the run")
+	}
+	if _, found, err := log.LoadRunSpec(runID); err != nil || found {
+		t.Fatalf("oversized spec stored anyway: found %v err %v", found, err)
+	}
+
+	after, err := graphview.NewManager(graphview.WithDataDir(dir), graphview.WithEventLog(log))
+	if err != nil {
+		t.Fatalf("NewManager (after restart): %v", err)
+	}
+	spec, err := graphview.New(after).MaterializeRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("MaterializeRun(oversized run): %v", err)
+	}
+	if spec.SpecProvenance != coreag.SpecProvenanceLibraryFallback {
+		t.Errorf("SpecProvenance = %q, want %q — an unrecorded spec must render as a labelled reconstruction",
+			spec.SpecProvenance, coreag.SpecProvenanceLibraryFallback)
+	}
+	if !strings.Contains(spec.YAML, "DEGRADED") {
+		t.Errorf("reconstruction's description does not say so:\n%s", spec.YAML)
+	}
 }

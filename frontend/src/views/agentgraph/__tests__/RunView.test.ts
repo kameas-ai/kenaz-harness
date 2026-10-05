@@ -400,9 +400,13 @@ describe('RunView — the run as a graph', () => {
     await flushPromises();
     const notice = wrapper.get('[data-testid="canvas-notice"]').text();
     expect(notice).toContain('Degraded projection');
-    // feat/graph-resolved-spec WP02: the reconstruction is labelled as
-    // one, for the reason that is now true.
-    expect(notice).toContain('reconstructed from the library graph');
+    // feat/graph-resolved-spec WP02 (review F3): the reconstruction is
+    // labelled with both causes that are now true — the run predates
+    // spec recording, or its spec exceeded the size bound.
+    expect(notice).toContain("exact spec was never recorded");
+    expect(notice).toContain('predates recording');
+    expect(notice).toContain('exceeded the size bound');
+    expect(notice).toContain('current library graph');
     expect(notice).not.toContain('evicted');
   });
 

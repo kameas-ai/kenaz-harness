@@ -46,6 +46,14 @@ import (
 // (agent_graph_run_specs).
 func openSQLEventLog(t *testing.T) *coreag.SQLEventLog {
 	t.Helper()
+	log, _ := openSQLEventLogDB(t)
+	return log
+}
+
+// openSQLEventLogDB is openSQLEventLog plus the raw handle, for tests
+// that corrupt a stored row behind the log's back.
+func openSQLEventLogDB(t *testing.T) (*coreag.SQLEventLog, *sql.DB) {
+	t.Helper()
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "events.db"))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -69,7 +77,7 @@ func openSQLEventLog(t *testing.T) *coreag.SQLEventLog {
 	if applied != 2 {
 		t.Fatalf("applied %d of the 2 migrations the event log needs", applied)
 	}
-	return coreag.NewSQLEventLog(db)
+	return coreag.NewSQLEventLog(db), db
 }
 
 const editedGraphV1 = `spec_version: "1"
@@ -306,6 +314,11 @@ func TestMaterializeRun_PreSnapshotRunOnUpgradedInstall_IsLabelledReconstruction
 
 // A persisted spec that is not the one run_start says ran is refused,
 // not served as exact and not silently swapped for a reconstruction.
+// The run has a real node fire so projection would otherwise succeed:
+// the ONLY thing standing between this run and a materialized graph is
+// the run_start digest check (review F1 — an earlier fixture with no
+// fires errored on "no recorded node fires" first, so disabling the
+// check changed nothing).
 func TestMaterializeRun_PersistedSpecMustMatchRunStartDigest(t *testing.T) {
 	t.Parallel()
 	log := openSQLEventLog(t)
@@ -320,12 +333,79 @@ func TestMaterializeRun_PersistedSpecMustMatchRunStartDigest(t *testing.T) {
 	}
 	ev := &fakeTurnEvents{runID: runID}
 	ev.add("", coreag.EventRunStart, map[string]any{"graph_id": g.ID, "spec_digest": "sha256:not-this-spec"})
-	ev.add("", coreag.EventRunComplete, map[string]any{})
+	ev.fire("first", "transform")
+	ev.add("", coreag.EventRunComplete, map[string]any{"completed_nodes": 1})
 	if _, err := log.Append(ev.batch); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	if _, err := graphview.New(mgr).MaterializeRun(context.Background(), runID); err == nil {
-		t.Error("MaterializeRun served a stored spec whose digest contradicts run_start")
+	_, err = graphview.New(mgr).MaterializeRun(context.Background(), runID)
+	if err == nil {
+		t.Fatal("MaterializeRun served a stored spec whose digest contradicts run_start")
+	}
+	if !strings.Contains(err.Error(), "spec_digest") {
+		t.Errorf("error %q does not name the spec_digest mismatch", err)
+	}
+}
+
+// A stored row that is corrupt — JSON that no longer decodes, or content
+// that no longer hashes to its recorded digest — must make
+// materialization ERROR. It must never fall through to the in-memory
+// maps or the library reconstruction (review F2): the run HAS a recorded
+// spec, so a library_fallback answer would quietly replace "what ran"
+// with "what the file says now". The library graph exists here, so a
+// fall-through would succeed — that is what makes the test bite.
+func TestMaterializeRun_CorruptStoredSpecErrorsNeverFallsBack(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		corrupt string
+	}{
+		{"bad_json", `UPDATE agent_graph_run_specs SET spec_json = '{not json' WHERE run_id = ?`},
+		{"digest_mismatch", `UPDATE agent_graph_run_specs SET spec_json = replace(spec_json, 'Second as it ran', 'Second, tampered') WHERE run_id = ? AND spec_json LIKE '%Second as it ran%'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			log, db := openSQLEventLogDB(t)
+			mgr, err := graphview.NewManager(graphview.WithDataDir(t.TempDir()), graphview.WithEventLog(log))
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			a := graphview.New(mgr)
+			if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "edited_later", YAML: editedGraphV1}, "user"); err != nil {
+				t.Fatalf("SaveGraph: %v", err)
+			}
+			g, err := mgr.LoadGraphSpec("edited_later")
+			if err != nil {
+				t.Fatalf("LoadGraphSpec: %v", err)
+			}
+			const runID = "chat-corrupt"
+			if err := log.RecordRunSpec(runID, g); err != nil {
+				t.Fatalf("RecordRunSpec: %v", err)
+			}
+			ev := &fakeTurnEvents{runID: runID}
+			ev.add("", coreag.EventRunStart, map[string]any{"graph_id": g.ID})
+			ev.fire("first", "transform")
+			ev.fire("second", "transform")
+			ev.add("", coreag.EventRunComplete, map[string]any{"completed_nodes": 2})
+			if _, err := log.Append(ev.batch); err != nil {
+				t.Fatalf("append: %v", err)
+			}
+			res, err := db.Exec(tc.corrupt, runID)
+			if err != nil {
+				t.Fatalf("corrupt: %v", err)
+			}
+			if n, _ := res.RowsAffected(); n != 1 {
+				t.Fatalf("corruption touched %d rows, want 1 — fixture no longer corrupts the row", n)
+			}
+			spec, err := a.MaterializeRun(ctx, runID)
+			if err == nil {
+				t.Errorf("MaterializeRun served a run whose stored spec is corrupt (provenance %q)", spec.SpecProvenance)
+			}
+			if spec.SpecProvenance == coreag.SpecProvenanceLibraryFallback {
+				t.Error("a corrupt stored spec fell through to the library reconstruction")
+			}
+		})
 	}
 }
 

@@ -561,8 +561,12 @@ v0.88.0), both halves of the deletion condition met:
   `recordRunSpec`, `core/agentgraph/run_spec_store.go`) once per run,
   before `run_start`, from `env.Graph` — the spec it executes, post alias
   / routing gate / dial. Insert-once (Resume and the overflow redrive
-  keep the first row); bounded per row by `MaxRunSpecBytes` (1 MiB —
-  `chat_default` resolves to tens of KiB); digest re-checked on read.
+  keep the first row); bounded per row by `MaxRunSpecBytes` (1 MiB;
+  measured 2026-10-05: `chat_default` encodes to ~5.0 KiB of JSON (5028
+  bytes; ~2.7 KiB resolved with the routing gate off), `toolloop_default`
+  ~4.2 KiB (4259 bytes)); digest re-checked on read. An oversized spec is
+  not stored and renders as a labelled reconstruction (pinned by
+  `TestKernel_OversizedSpecRunCompletesAndRendersAsReconstruction`).
 - *Tier 3 reachable only for runs that predate it.* `runSpecFor` reads
   the persisted spec first and holds it to `run_start`'s `spec_digest`;
   a run with a stored spec never reaches the library reconstruction.

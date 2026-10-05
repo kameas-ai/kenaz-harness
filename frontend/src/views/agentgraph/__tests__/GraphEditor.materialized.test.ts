@@ -158,10 +158,13 @@ describe('GraphEditor — materialized run', () => {
     // agentgraph-settings-linkage-01DOGF0D WP04 (FR-3): the provenance
     // tier in plain words, not only the technical caveat.
     expect(badge.text()).toContain('Reconstructed from the library graph');
-    // feat/graph-resolved-spec WP02: runs since then carry their exact
-    // spec, so a reconstruction is only ever a run that predates it —
-    // and the banner says so rather than blaming memory.
-    expect(badge.text()).toContain('predates per-run spec recording');
+    // feat/graph-resolved-spec WP02: a reconstruction is a run whose
+    // exact spec was never recorded — it predates recording, or its spec
+    // was refused for size — and the banner names both causes rather
+    // than blaming memory (review F3).
+    expect(badge.text()).toContain('exact spec was never');
+    expect(badge.text()).toContain('predates spec recording');
+    expect(badge.text()).toContain('exceeded the');
   });
 
   it('does not badge a faithful projection', async () => {

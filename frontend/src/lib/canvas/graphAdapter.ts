@@ -98,7 +98,8 @@ export function defaultAttrsForKind(
 /**
  * `Graph.SpecProvenance` value marking a projection reconstructed from
  * the library file because the resolved spec the run executed was never
- * recorded — the run predates per-run spec recording
+ * recorded — the run predates per-run spec recording, or its spec was
+ * refused for size
  * (core/agentgraph/spec.go, run_spec_store.go). The topology shown may
  * differ from the one that ran, which is why it is badged rather than
  * served silently.

@@ -91,8 +91,8 @@ export interface ParsedGraph {
   /**
    * `spec_provenance` on a materialized run — `library_fallback` when
    * the run's resolved spec was never recorded (it predates per-run spec
-   * recording) and the projection was reconstructed from the library
-   * file. Absent on everything else.
+   * recording, or was refused for size) and the projection was
+   * reconstructed from the library file. Absent on everything else.
    */
   specProvenance?: string;
 }

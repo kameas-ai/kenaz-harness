@@ -191,7 +191,7 @@ const isDegraded = computed(
 );
 const canvasNotice = computed(() =>
   isDegraded.value
-    ? 'Degraded projection — reconstructed from the library graph; this run predates per-run spec recording, so this topology may differ from the one that ran.'
+    ? "Degraded projection — this run's exact spec was never recorded (it predates recording or exceeded the size bound); showing the current library graph, which may differ from the one that ran."
     : '',
 );
 
