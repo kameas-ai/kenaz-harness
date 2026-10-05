@@ -2,6 +2,7 @@
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import RailEntry from './RailEntry.vue';
+import { SETTINGS_HUB_PREFIXES } from './railMatch';
 import SessionTreeRow from './SessionTreeRow.vue';
 import {
   Archive,
@@ -1022,12 +1023,12 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     <nav class="px-2 py-2 border-t border-border-muted" aria-label="Surfaces">
       <ul class="space-y-1">
         <li><RailEntry :icon="MessageSquare" label="Sessions" to="/sessions" /></li>
-        <li><RailEntry :icon="Wrench" label="Tools" to="/tools" /></li>
-        <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" /></li>
-        <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
-        <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
-        <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" /></li>
-        <li><RailEntry :icon="BookOpen" label="Documents" to="/documents" /></li>
+        <li><RailEntry :icon="Wrench" label="Tools" to="/tools" match-prefix="/tools" /></li>
+        <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" match-prefix="/workflows" /></li>
+        <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" match-prefix="/contexts" /></li>
+        <li><RailEntry :icon="Brain" label="Memory" to="/memory" match-prefix="/memory" /></li>
+        <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" match-prefix="/artifacts" /></li>
+        <li><RailEntry :icon="BookOpen" label="Documents" to="/documents" match-prefix="/documents" /></li>
         <!-- agentgraph-total-convergence-01PMGX01 WP16: Agent graphs RESTORED to
              top-level nav, reversing nav-settings-ia-cleanup WP03's demotion.
              WP03 demoted it because the surface had nothing real in it: a
@@ -1044,7 +1045,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
              in a served build. Hiding the rail entry is the honest answer,
              matching the Sites/Marketplace treatment below. -->
         <li v-if="!served" data-testid="nav-agentgraph">
-          <RailEntry :icon="Route" label="Agent graphs" to="/agentgraph" />
+          <RailEntry :icon="Route" label="Agent graphs" to="/agentgraph" match-prefix="/agentgraph" />
         </li>
         <!-- nav-settings-ia-cleanup WP04: Audit log demoted from top-level nav.
              Viewer is accessible via Settings → Security → Audit Log. /audit route
@@ -1059,15 +1060,25 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
           v-if="!served && signedIn && capability('sites_hosting')"
           data-testid="nav-sites"
         >
-          <RailEntry :icon="Globe" label="Sites" to="/sites" />
+          <RailEntry :icon="Globe" label="Sites" to="/sites" match-prefix="/sites" />
         </li>
         <li
           v-if="!served && signedIn"
           data-testid="nav-marketplace"
         >
-          <RailEntry :icon="Package" label="Marketplace" to="/marketplace" />
+          <RailEntry :icon="Package" label="Marketplace" to="/marketplace" match-prefix="/marketplace" />
         </li>
-        <li><RailEntry :icon="Settings" label="Settings" to="/settings" /></li>
+        <!-- nav-ia-sweep-01DOGF0F WP02: every route SettingsShell renders
+             (SettingsTabs' own entries) lights the Settings entry, not just
+             the bare /settings path. -->
+        <li>
+          <RailEntry
+            :icon="Settings"
+            label="Settings"
+            to="/settings"
+            :match-prefix="SETTINGS_HUB_PREFIXES"
+          />
+        </li>
       </ul>
     </nav>
   </div>
