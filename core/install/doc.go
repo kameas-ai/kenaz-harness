@@ -30,4 +30,11 @@
 // contract is install.Provider, the orchestrator install.Framework, the
 // Wails binding family Capability_*, the topics capability:installed /
 // capability:uninstalled, and the frontend surface "Add capability".
+//
+// Rail (decision record §3, Phase 4 executed early by owner ruling
+// 2026-10-05, ahead of Phase 3): ONE left-rail entry, "Capabilities", at
+// route /tools, replaces Tools + Marketplace; the page's primary action is
+// "Add capability", and /marketplace redirects to /tools. bundle and
+// agent_pack are still provider-less (Phase 3) and stay disabled-with-reason
+// in the surface's fleet-catalog rows.
 package install

@@ -2,7 +2,8 @@ package rpc
 
 // install-framework-01DOGF0B review follow-up (F1): the composition wiring
 // in New() — catalogAPI.(*catalogview.API).WithSkillStore(skillStore) — is
-// what makes the Marketplace skill badge read the consumer. Every unit test
+// what makes Catalog_List's skill installed flag (the Marketplace badge, then;
+// the Capabilities catalog rows now) read the consumer. Every unit test
 // of the catalog view calls WithSkillStore itself, so deleting the three
 // wiring lines in api.go left every suite green while the live badge
 // regressed to "Install". This test boots a real chassis, installs a skill

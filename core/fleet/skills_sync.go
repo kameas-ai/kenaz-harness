@@ -4,7 +4,9 @@
 // skill apply (push-down) via the existing catalog seam.
 //
 // Fork-removal recipe: delete this file + the Publish button in
-// SlashCommandsView + the "skill" kind in MarketplaceView. The
+// SlashCommandsView + the skill provider of the Capabilities surface
+// (core/rpc/views/capabilities/skill_provider.go; MarketplaceView, the
+// skill kind's old browse, was deleted in install-framework Phase 4). The
 // core/slashcmd/store.go store stays (useful standalone).
 //
 // (fleet-skills-sync-01NDFSEX18 WP03 / WP04 / WP05)
@@ -167,7 +169,8 @@ func InstallSkillPayload(store *slashcmd.SkillStore, registry *slashcmd.Registry
 //
 // A catalog-installed skill is stored under the ID carried in its payload —
 // for SkillPublish that is the command name, not the catalog_id — while the
-// Marketplace only knows the catalog_id. Resolution order (review F3):
+// catalog browse (the Capabilities surface's catalog rows; formerly the
+// Marketplace) only knows the catalog_id. Resolution order (review F3):
 //  1. a stored skill whose CatalogID matches id (and whose Version matches
 //     version, when version is non-empty);
 //  2. any stored skill whose CatalogID matches id;

@@ -370,7 +370,7 @@ func (a *API) SkillUninstall(ctx context.Context, skillID string) error {
 	if a.registry == nil {
 		return fmt.Errorf("slashcmd view: registry not wired")
 	}
-	// The Marketplace passes the catalog_id; the store keys on the payload's
+	// A catalog browse passes the catalog_id; the store keys on the payload's
 	// skill ID. Resolve once so the audit record and the removal agree.
 	skillID = corefleet.ResolveSkillStoreID(a.skillDeps.SkillStore, skillID, "")
 	// Capture trigger before removal for the audit record.

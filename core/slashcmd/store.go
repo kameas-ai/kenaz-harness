@@ -15,7 +15,8 @@
 // fleet install/uninstall path needs.
 //
 // Fork recipe (OSS-standalone): delete core/fleet/skills_sync.go and the
-// Publish button and skill kind from the Marketplace. This file stays in OSS
+// Publish button and the skill kind of the Capabilities surface's fleet
+// catalog (formerly the Marketplace). This file stays in OSS
 // because it is useful standalone (local-only multi-device sync, future
 // community marketplaces).
 package slashcmd

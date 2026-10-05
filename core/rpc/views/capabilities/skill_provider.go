@@ -152,8 +152,8 @@ func (p *SkillProvider) Install(ctx context.Context, req install.InstallRequest)
 	return nil, p.installer.SkillInstallPayload(ctx, req.Ref.ID, req.Ref.Version, req.Verification.Payload)
 }
 
-// Uninstall implements install.Provider. id may be the catalog id (the
-// Marketplace, this surface) or the store id (Settings › Skills); the
+// Uninstall implements install.Provider. id may be the catalog id (this
+// surface's catalog rows) or the store id (Settings › Skills); the
 // slashcmd view resolves either.
 func (p *SkillProvider) Uninstall(ctx context.Context, id string) error {
 	return p.installer.SkillUninstall(ctx, id)
