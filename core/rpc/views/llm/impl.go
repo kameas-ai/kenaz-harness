@@ -180,8 +180,13 @@ type CredPeeker interface {
 // runner the user turn it is about to run — by reference, never as text
 // to persist (chat-single-writer-01DOGF0G). A reader that leaves it
 // empty (test fakes) degrades to the runner's own TurnSpan lookup.
+//
+// TurnSpanID is the row's turn_span_id (empty for classic rows). StartStream
+// reads it to decide whether a user turn is fresh: a turn whose id some row
+// already spans has been run before.
 type SessionMessage struct {
 	ID            string
+	TurnSpanID    string
 	Role          string
 	Content       string
 	ContentBlocks []corellm.ContentBlock
@@ -992,9 +997,16 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 	// that re-append was the second writer behind dogfood F12.)
 	//
 	// Announce: the row is a fresh turn — so it is reported to fleet
-	// context-sync once — when it is the session's last row. A stream
-	// started over a session whose newest user row is already answered
-	// is re-running a turn, not opening one.
+	// context-sync once — when NO row spans it yet. Every move a run
+	// writes carries the turn's id as turn_span_id, so a spanned row has
+	// already been run (and announced). This replaced "the user row is
+	// the session's last row", which (a) missed a send that raced the
+	// PREVIOUS turn's deferred writes (journal.Finish landing a held move
+	// after the new user row) and (b) let a retried turn whose failed run
+	// left moves behind announce a second time. Residual: a turn whose
+	// failed run wrote NO spanned row re-announces if re-run without a new
+	// append — no live caller does that (every caller appends first; the
+	// keychain redrive bypasses this path with Announce=false).
 	var turn UserTurn
 	if a.history != nil && sessionID != "" {
 		if stored, herr := a.history.ListMessages(ctx, sessionID); herr == nil {
@@ -1003,7 +1015,7 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 					turn = UserTurn{
 						MessageID: stored[i].ID,
 						Text:      stored[i].Content,
-						Announce:  i == len(stored)-1,
+						Announce:  !turnAlreadySpanned(stored, stored[i].ID),
 					}
 					break
 				}
@@ -1011,6 +1023,21 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		}
 	}
 	return a.chatRunner.StartStream(ctx, profileID, sessionID, modelOverride, turn)
+}
+
+// turnAlreadySpanned reports whether any row carries id as its
+// turn_span_id — i.e. a run of that turn already wrote moves. An empty id
+// (a reader that carries no ids) is never "spanned".
+func turnAlreadySpanned(stored []SessionMessage, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, m := range stored {
+		if m.TurnSpanID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // StopStream terminates the subscription. Forwards to the ChatRunner

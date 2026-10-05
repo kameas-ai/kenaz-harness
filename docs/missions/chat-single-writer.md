@@ -24,7 +24,7 @@ opened. Timestamps are `created_at` in unix-nanoseconds.
 | adjacent identical user rows *outside* 2 s (genuine re-sends) | 9, smallest gap **6.6 s** (largest seen 13.5 h) |
 | earlier row (A) referenced by any `turn_span_id` | **0** of 40 |
 | later row (B) referenced by any `turn_span_id` | 11 of 40 (the other 29 predate model-moves 0333, so nothing carries a span) |
-| first / last pair | 2026-06-07 23:04 / 2026-10-04 23:40 UTC |
+| first / last pair | 2026-06-07 23:04 / 2026-10-04 23:40 UTC (the oldest *surviving* pair — the profile's age; the re-append itself dates from 5fe2fbcf, 2026-04-27, v0.1.x) |
 | user rows whose `content_json` has an `image` or `document` block | **0** |
 
 ### 1.1 Spec §2.3 (blocks path) — NOT data-confirmable on this profile
@@ -219,6 +219,19 @@ branch refs, artifact source refs). On the dev copy: exactly the 3 cases of
 * **Whole-turn partials from the pre-#105 era** (500adbdf row 21: 508 bytes
   = move 0 + final). Content differs from the move it duplicates, so an
   equality rule cannot see it. Left in place.
+* **Parked-error shape has one point of write (review L5).** After WP04,
+  when the last chat fire completed and a later call failed, the answer
+  is written ONLY by `driveRun`'s deferred `journal.Finish` → `flushHeld`.
+  If that single write fails (it logs, never aborts), the answer the user
+  watched stream is lost from the transcript; before WP04 the kind-less
+  partial row was an accidental second copy. Accepted: the failure mode is
+  a storage write error, which loses every other row of the turn too.
+* **The destructive-migration gate reads `UpSource` for procedural
+  migrations (review I1).** `checkdestructivemigrations` scans the `Up`
+  literal plus `UpSource`; a named-function `Up` (0337, 0341) is visible
+  only because its `UpSource` text spells out `DELETE FROM`. An UpSource
+  that omitted it would hide a destructive migration from the gate. No
+  code change in this mission; recorded in the ledger residuals.
 
 ## 6. Migration ID
 
@@ -235,7 +248,8 @@ out of scope (spec §5) and handed to `fleet-session-truth-01DOGF0A`.
 ## 7. Release-note text (WP06 — for the shipping PR body)
 
 > **Chat: every message you sent was stored — and sent to the model —
-> twice.** Since early June, each user chat turn was written to the
+> twice.** Since April (the graph-chat migration, first shipped in
+> v0.1.x), each user chat turn was written to the
 > session twice (once by the chat window, once again by the chat engine),
 > so on every request the model received every one of your earlier
 > messages duplicated. This affected answer quality and token cost, and

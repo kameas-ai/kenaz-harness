@@ -14,15 +14,18 @@ import (
 // migrationIDDedupeUserTurns identifies migration 0341 — the cleanup for
 // dogfood finding F12 (chat-single-writer-01DOGF0G WP05).
 //
-// THE DEFECT IT REPAIRS. From 2026-06-07 (graph-chat migration 5fe2fbcf +
-// v0.63.0 146d9e54) until chat-single-writer's WP02, every user chat turn
-// was written to session_messages TWICE: once by the RPC the chat surface
+// THE DEFECT IT REPAIRS. From the graph-chat migration (5fe2fbcf,
+// 2026-04-27, first shipped in v0.1.x; v0.63.0's 146d9e54 then made the
+// runner's copy the turn's span) until chat-single-writer's WP02, every
+// user chat turn was written to session_messages TWICE: once by the RPC the chat surface
 // calls (Sessions_AppendMessage / Sessions_SendMessageWithBlocks — row A),
 // and again, 0.7–17 ms later, by the chat runner, which read A's flattened
 // text back in LLM.StartStream and re-appended it (row B, which became the
 // turn's span). Every history read returns both, so the model has been
-// sent every user message twice on every turn. The forward fix stops new
-// pairs; this migration removes the ones already stored.
+// sent every user message twice on every turn. (The oldest SURVIVING pair
+// on the dev profile is 2026-06-07; that is the profile's age, not the
+// bug's.) The forward fix stops new pairs; this migration removes the ones
+// already stored.
 //
 // It also removes the assistant-side twin the same mission attributed
 // (WP04): a kind-less assistant row with streaming_failed_at set that
@@ -34,7 +37,7 @@ import (
 //
 // USER PAIRS — rows A, B form a doubled user turn iff ALL of:
 //
-//  1. same session, both role='user', both classic (kind NULL or ”);
+//  1. same session, both role='user', both classic (kind NULL or empty);
 //  2. B.sequence = A.sequence + 1;
 //  3. A.content = B.content (the flattened text, byte-equal);
 //  4. 0 <= B.created_at - A.created_at <= 2 s. Observed on the dev
@@ -50,13 +53,15 @@ import (
 //   - neither row carries a non-text block -> delete A. B keeps its
 //     turn_span_id referrers and is the id fleet sync was told about.
 //     Skipped if A is itself a span target (the bug never anchored on A).
+//   - the two rows disagree on archived_at (one compacted away, one not)
+//     -> skipped and counted.
 //   - A carries an image/document block, B does not -> KEEP A (it holds
 //     the user's attachment), re-point every turn_span_id = B.id in the
 //     session to A.id, then delete B.
 //   - any other combination -> skipped and counted.
 //
 // ASSISTANT TWINS — delete assistant row R iff R is classic (kind NULL or
-// ”), R.streaming_failed_at IS NOT NULL, R.continuation_of IS NULL, and
+// empty), R.streaming_failed_at IS NOT NULL, R.continuation_of IS NULL, and
 // the row S immediately before or after it (|sequence diff| = 1) is an
 // assistant row with identical non-empty content that is NOT itself a
 // classic failed row, with |created_at diff| <= 60 s.
@@ -76,8 +81,18 @@ import (
 // are loaded alone (O(rows in the largest such session) memory) and
 // scanned once in sequence order.
 //
-// IDEMPOTENT: a second run finds no pair (the duplicate is gone) and
-// writes nothing. Down is a best-effort no-op (0327/0332/0337 precedent:
+// CONVERGENT, NOT SINGLE-PASS IDEMPOTENT. Each pass is safe to repeat and
+// every deletion it makes is one a later pass would also make, but one
+// pass is not always a fixpoint. The interleaved shape A1,A2,B1,B2 (two
+// identical sends racing, so both frontend rows land before both runner
+// rows) shows it: pass 1 pairs (A1,A2) and deletes A1, consumes A2, then
+// skips (B1,B2) because B1 anchors turn 1's moves; pass 2 sees A2,B1
+// adjacent, pairs them and deletes A2; pass 3 changes nothing. The
+// endpoint — B1 and B2, each anchoring its own turn — is the same either
+// way. A second application is reachable (the repair path re-applies late
+// sessions migrations, see repair_upgrade_test.go) and is pinned by
+// TestMigration0341_SecondApplicationConvergesOnInterleavedPairs.
+// Down is a best-effort no-op (0327/0332/0337 precedent:
 // Registry.Rollback has no production caller).
 //
 // Numbering: 0341 — chat-single-writer-01DOGF0G claims the next
@@ -102,7 +117,9 @@ const sqlDedupeUserTurnsUpSource = `
 --     DELETE FROM session_messages WHERE id = R.id
 -- Never deleted while referenced by continuation_of, compacted_into_id,
 -- branches.parent_message_id, branch_message_refs, or artifact
--- source_ref_json (skipped + counted). Bounded per-session scan in Go;
+-- source_ref_json (skipped + counted); likewise a text-only pair whose A
+-- is a turn_span_id target, a pair disagreeing on archived_at, and any
+-- other block shape. Bounded per-session scan in Go;
 -- see migrations_dedupe_user_turns.go.
 `
 
@@ -305,8 +322,7 @@ func externallyReferenced(ctx context.Context, tx migrations.WriteTx, id string)
 }
 
 // dedupeSession applies both rules to one session.
-func dedupeSession(ctx context.Context, tx migrations.WriteTx, sessionID string) (dedupeCounts, error) {
-	var c dedupeCounts
+func dedupeSession(ctx context.Context, tx migrations.WriteTx, sessionID string) (c dedupeCounts, err error) {
 	all, err := loadDedupeRows(ctx, tx, sessionID)
 	if err != nil {
 		return c, err
@@ -325,6 +341,26 @@ func dedupeSession(ctx context.Context, tx migrations.WriteTx, sessionID string)
 		}
 	}
 	deleted := map[string]bool{}
+	// skip records why a candidate was left in place — ids and a reason
+	// only, never content (the same privacy line syncHook draws).
+	skip := func(class, id, reason string) {
+		logging.L().Info("sessions.dedupe_user_turns.skip",
+			"session_id", sessionID, "class", class, "message_id", id, "reason", reason)
+	}
+	defer func() {
+		if c != (dedupeCounts{}) {
+			logging.L().Info("sessions.dedupe_user_turns.session",
+				"session_id", sessionID,
+				"pairs_found", c.UserPairsFound,
+				"deleted", c.UserRowsDeleted,
+				"repointed", c.UserSpansRepointed,
+				"skipped", c.UserPairsSkipped,
+				"assistant_twins_found", c.AssistantTwinsFound,
+				"assistant_deleted", c.AssistantRowsDeleted,
+				"assistant_skipped", c.AssistantTwinsSkipped,
+			)
+		}
+	}()
 	referenced := func(id string) (bool, error) {
 		if pointerTargets[id] {
 			return true, nil
@@ -364,22 +400,26 @@ func dedupeSession(ctx context.Context, tx migrations.WriteTx, sessionID string)
 			survivor, victim = b, a
 			if spanRefs[a.id] > 0 {
 				c.UserPairsSkipped++
+				skip("user", a.id, "earlier_row_is_span_target")
 				continue
 			}
 		case aRich && !bRich:
 			survivor, victim, repoint = a, b, true
 		default:
 			c.UserPairsSkipped++
+			skip("user", a.id, "block_shape_not_produced_by_bug")
 			continue
 		}
 		if a.archivedAt.Valid != b.archivedAt.Valid {
 			c.UserPairsSkipped++
+			skip("user", a.id, "archived_at_disagrees")
 			continue
 		}
-		if ref, err := referenced(victim.id); err != nil {
-			return c, err
+		if ref, rerr := referenced(victim.id); rerr != nil {
+			return c, rerr
 		} else if ref {
 			c.UserPairsSkipped++
+			skip("user", victim.id, "victim_referenced")
 			continue
 		}
 		if repoint && spanRefs[victim.id] > 0 {
@@ -436,16 +476,19 @@ func dedupeSession(ctx context.Context, tx migrations.WriteTx, sessionID string)
 			// answer", so the survivor is not decidable here (the pre-0336
 			// periodic-flush residue 0337's strict-prefix rule leaves).
 			c.AssistantTwinsSkipped++
+			skip("assistant", r.id, "both_rows_failed_partials")
 			continue
 		}
 		if spanRefs[r.id] > 0 {
 			c.AssistantTwinsSkipped++
+			skip("assistant", r.id, "span_target")
 			continue
 		}
-		if ref, err := referenced(r.id); err != nil {
-			return c, err
+		if ref, rerr := referenced(r.id); rerr != nil {
+			return c, rerr
 		} else if ref {
 			c.AssistantTwinsSkipped++
+			skip("assistant", r.id, "victim_referenced")
 			continue
 		}
 		if err := del(r.id); err != nil {

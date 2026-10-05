@@ -4353,7 +4353,9 @@ invariant nothing enforced**.
   `Sessions_AppendMessage` / `SendMessageWithBlocks`; `LLM.StartStream`
   then read that row's text back and `ChatRunner.StartStream` re-appended
   it through the HistoryWriter, anchoring the turn's span on the copy.
-  Every typed turn since 2026-06-07 was stored twice (dev profile: 40
+  Every typed turn since the graph-chat migration (5fe2fbcf, 2026-04-27,
+  v0.1.x — the dev profile's oldest surviving pair is 2026-06-07) was
+  stored twice (dev profile: 40
   pairs, 0.7–17 ms apart), and every history read handed the model each
   user message twice. Text+image sends were doubled too (the flattened
   text was re-appended text-only); only image/document-only sends escaped.

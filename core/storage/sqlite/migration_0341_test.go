@@ -4,10 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 	"github.com/kameas-ai/kenaz-harness/core/storage/sqlite/upgradesnap"
@@ -51,6 +55,9 @@ import (
 // "g-u2a ... (0 rows means it was incorrectly deleted)"; dropping the
 // window check deletes shape 3's genuine re-send.
 func TestMigration0341_DedupesDoubledTurnsAgainstUpgradedDatabase(t *testing.T) {
+	// Installed before the parallel subtests start, restored after they
+	// all finish (parent cleanups run last).
+	captureDedupeLogs(t)
 	for _, tag := range []string{"v0.85.2", "v0.63.0"} {
 		tag := tag
 		t.Run(tag, func(t *testing.T) {
@@ -141,6 +148,55 @@ func runMigration0341Case(t *testing.T, tag string) {
 	msg("g-pre-u", "g-prebug", 0, "user", "hello from before the bug", ms(0), nil)
 	msg("g-pre-a", "g-prebug", 1, "assistant", "hello back", ms(500), nil)
 
+	// ---- GUARD SHAPES (review M1): one session per skip-guard, each a
+	// text-only doubled pair (A at seq 0, B at seq 1, 3 ms apart) that
+	// 0341 would dedupe were it not for the guard. Session ids carry the
+	// tag so the two parallel subtests' log lines never mix.
+	gsid := func(name string) string { return "gg-" + name + "-" + tag }
+	guardPair := func(name, aID, bID string, aJSON, bJSON any) {
+		t.Helper()
+		sid := gsid(name)
+		exec(`INSERT INTO sessions (id, name, created_at, updated_at, last_active_at, position)
+		      VALUES (?, ?, 1, 1, 1, 60)`, sid, "guard "+name)
+		msg(aID, sid, 0, "user", "guarded duplicate "+name, ms(100_000), aJSON)
+		msg(bID, sid, 1, "user", "guarded duplicate "+name, ms(100_003), bJSON)
+	}
+	// continuation_of: a later row continues A.
+	guardPair("cont", "gg-cont-a", "gg-cont-b", nil, nil)
+	msg("gg-cont-c", gsid("cont"), 2, "assistant", "continued", ms(100_500), nil)
+	exec(`UPDATE session_messages SET continuation_of = 'gg-cont-a' WHERE id = 'gg-cont-c'`)
+	// compacted_into_id: a row was compacted into A.
+	guardPair("comp", "gg-comp-a", "gg-comp-b", nil, nil)
+	msg("gg-comp-c", gsid("comp"), 2, "assistant", "compacted", ms(100_500), nil)
+	exec(`UPDATE session_messages SET compacted_into_id = 'gg-comp-a' WHERE id = 'gg-comp-c'`)
+	// branch_message_refs.parent_msg_id = A, and .child_msg_id = A.
+	guardPair("brp", "gg-brp-a", "gg-brp-b", nil, nil)
+	exec(`INSERT INTO branch_message_refs (branch_id, seq, parent_msg_id, child_msg_id) VALUES ('g-branch', 0, 'gg-brp-a', '')`)
+	guardPair("brc", "gg-brc-a", "gg-brc-b", nil, nil)
+	exec(`INSERT INTO branch_message_refs (branch_id, seq, parent_msg_id, child_msg_id) VALUES ('g-branch', 1, 'other-parent', 'gg-brc-a')`)
+	// artifact source_ref_json naming A exactly (the quoted instr match)...
+	guardPair("art", "gg-art-a", "gg-art-b", nil, nil)
+	exec(`INSERT INTO artifacts (id, session_id, title, mime_type, content_hash, byte_size, source, source_ref_json, created_at)
+	      VALUES ('gg-artifact-1', ?, 't', 'text/plain', 'h1', 1, 'user_pin', '{"message_id":"gg-art-a"}', 1)`, gsid("art"))
+	// ...and the NEGATIVE: an artifact naming a DIFFERENT id that merely
+	// starts with A's id. The quotes in the instr probe are what keep this
+	// from matching; the pair must be deduped normally.
+	guardPair("artneg", "gg-artneg-a", "gg-artneg-b", nil, nil)
+	exec(`INSERT INTO artifacts (id, session_id, title, mime_type, content_hash, byte_size, source, source_ref_json, created_at)
+	      VALUES ('gg-artifact-2', ?, 't', 'text/plain', 'h2', 1, 'user_pin', '{"message_id":"gg-artneg-a-copy"}', 1)`, gsid("artneg"))
+	// archived_at disagreement: A was compacted away, B was not.
+	guardPair("arch", "gg-arch-a", "gg-arch-b", nil, nil)
+	exec(`UPDATE session_messages SET archived_at = ? WHERE id = 'gg-arch-a'`, ms(100_100))
+	// both rows carry a non-text block — a shape the bug never produced.
+	guardPair("rich", "gg-rich-a", "gg-rich-b", g0341ImgJS, g0341ImgJS)
+	// text-only pair whose A is a span target (move era only: the column
+	// does not exist on the v0.63.0 schema until 0333 runs).
+	if moveEra {
+		guardPair("spana", "gg-spana-a", "gg-spana-b", nil, nil)
+		msg("gg-spana-c", gsid("spana"), 2, "assistant", "anchored on A", ms(100_500), nil)
+		move("gg-spana-c", "final", "gg-spana-a")
+	}
+
 	seedDigestBefore := sessionRowsDigest(t, ctx, raw, "seed-session-1")
 	preDigestBefore := sessionRowsDigest(t, ctx, raw, "g-prebug")
 	if err := raw.Close(); err != nil {
@@ -216,6 +272,31 @@ func runMigration0341Case(t *testing.T, tag string) {
 	kept("g-p6b")
 	kept("g-p7")
 
+	// ---- guard shapes: skipped AND counted (review M1). ----
+	type guard struct{ name, a, b, reason string }
+	guards := []guard{
+		{"cont", "gg-cont-a", "gg-cont-b", "victim_referenced"},
+		{"comp", "gg-comp-a", "gg-comp-b", "victim_referenced"},
+		{"brp", "gg-brp-a", "gg-brp-b", "victim_referenced"},
+		{"brc", "gg-brc-a", "gg-brc-b", "victim_referenced"},
+		{"art", "gg-art-a", "gg-art-b", "victim_referenced"},
+		{"arch", "gg-arch-a", "gg-arch-b", "archived_at_disagrees"},
+		{"rich", "gg-rich-a", "gg-rich-b", "block_shape_not_produced_by_bug"},
+	}
+	if moveEra {
+		guards = append(guards, guard{"spana", "gg-spana-a", "gg-spana-b", "earlier_row_is_span_target"})
+	}
+	for _, g := range guards {
+		kept(g.a)
+		kept(g.b)
+		assertDedupeSessionCounts(t, gsid(g.name), map[string]string{"pairs_found": "1", "skipped": "1", "deleted": "0"})
+		assertDedupeSkipReason(t, gsid(g.name), g.reason)
+	}
+	// The negative artifact shape is NOT a reference: deduped normally.
+	gone("gg-artneg-a")
+	kept("gg-artneg-b")
+	assertDedupeSessionCounts(t, gsid("artneg"), map[string]string{"pairs_found": "1", "skipped": "0", "deleted": "1"})
+
 	// AC-2: every turn_span_id resolves to an existing row.
 	var dangling int
 	if err := r.QueryRow(ctx, `SELECT COUNT(*) FROM session_messages m
@@ -274,4 +355,197 @@ func sessionRowsDigest(t *testing.T, ctx context.Context, db *sql.DB, sessionID 
 		t.Fatalf("digest %s: no rows — the comparison would be vacuous", sessionID)
 	}
 	return b.String()
+}
+
+// ---- 0341 log capture -----------------------------------------------------
+//
+// 0341's counts are observable only through its log lines (production
+// logs them; nothing else reads them). The tests assert the per-session
+// summary ("sessions.dedupe_user_turns.session") and per-skip lines
+// ("sessions.dedupe_user_turns.skip") — both keyed by session_id, so
+// parallel tests' lines cannot be mistaken for this test's.
+
+type dedupeLogCapture struct {
+	next slog.Handler
+	mu   sync.Mutex
+	recs []map[string]string
+}
+
+var activeDedupeCapture *dedupeLogCapture
+
+func (c *dedupeLogCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (c *dedupeLogCapture) Handle(ctx context.Context, r slog.Record) error {
+	if strings.HasPrefix(r.Message, "sessions.dedupe_user_turns.") {
+		m := map[string]string{"msg": r.Message}
+		r.Attrs(func(a slog.Attr) bool { m[a.Key] = a.Value.String(); return true })
+		c.mu.Lock()
+		c.recs = append(c.recs, m)
+		c.mu.Unlock()
+	}
+	if c.next != nil && c.next.Enabled(ctx, r.Level) {
+		return c.next.Handle(ctx, r)
+	}
+	return nil
+}
+func (c *dedupeLogCapture) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *dedupeLogCapture) WithGroup(string) slog.Handler      { return c }
+
+func (c *dedupeLogCapture) find(msg, sessionID string) []map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []map[string]string
+	for _, m := range c.recs {
+		if m["msg"] == msg && m["session_id"] == sessionID {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func captureDedupeLogs(t *testing.T) {
+	t.Helper()
+	prev := logging.Handler()
+	c := &dedupeLogCapture{next: prev}
+	activeDedupeCapture = c
+	logging.Replace(c)
+	t.Cleanup(func() { logging.Replace(prev); activeDedupeCapture = nil })
+}
+
+func assertDedupeSessionCounts(t *testing.T, sessionID string, want map[string]string) {
+	t.Helper()
+	got := activeDedupeCapture.find("sessions.dedupe_user_turns.session", sessionID)
+	if len(got) != 1 {
+		t.Errorf("%s: %d per-session 0341 summary lines, want exactly 1 (the pair was not counted)", sessionID, len(got))
+		return
+	}
+	for k, v := range want {
+		if got[0][k] != v {
+			t.Errorf("%s: 0341 counted %s=%s, want %s (line %v)", sessionID, k, got[0][k], v, got[0])
+		}
+	}
+}
+
+func assertDedupeSkipReason(t *testing.T, sessionID, reason string) {
+	t.Helper()
+	for _, m := range activeDedupeCapture.find("sessions.dedupe_user_turns.skip", sessionID) {
+		if m["reason"] == reason {
+			return
+		}
+	}
+	t.Errorf("%s: no 0341 skip line with reason %q", sessionID, reason)
+}
+
+// TestMigration0341_SecondApplicationConvergesOnInterleavedPairs pins the
+// convergence claim on migrationIDDedupeUserTurns (review M2). One pass is
+// NOT a fixpoint for the interleaved shape A1,A2,B1,B2 — two identical
+// sends racing, both frontend rows (A*) landing before both runner rows
+// (B*), each B anchoring its own turn. Pass 1 deletes A1 and skips (B1,B2)
+// because B1 is a span target; pass 2 pairs the now-unconsumed A2 with B1
+// and deletes A2; pass 3 changes nothing. Double application is reachable
+// in production — the repair path re-applies late sessions migrations
+// whose ledger rows are missing (repair_upgrade_test.go) — so each state
+// is asserted, not just the endpoint. Driven exactly that way: delete the
+// 0341 ledger row and reopen through production Open.
+func TestMigration0341_SecondApplicationConvergesOnInterleavedPairs(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "data.db")
+	dumpText, err := os.ReadFile(filepath.Join("testdata", "upgrade", "v0.85.2", "dump.sql"))
+	if err != nil {
+		t.Fatalf("read v0.85.2 dump.sql: %v", err)
+	}
+	raw := openRawSQLiteAt(t, rawPath)
+	if err := upgradesnap.Materialize(ctx, raw, string(dumpText)); err != nil {
+		t.Fatalf("materialise v0.85.2: %v", err)
+	}
+	ms := func(n int64) int64 { return g0341Base + n*1_000_000 }
+	stmts := []struct {
+		q    string
+		args []any
+	}{
+		{`INSERT INTO sessions (id, name, created_at, updated_at, last_active_at, position) VALUES ('gi', 'interleaved', 1, 1, 1, 70)`, nil},
+		{`INSERT INTO session_messages (id, session_id, sequence, role, content, created_at) VALUES ('gi-a1', 'gi', 0, 'user', 'same words', ?)`, []any{ms(0)}},
+		{`INSERT INTO session_messages (id, session_id, sequence, role, content, created_at) VALUES ('gi-a2', 'gi', 1, 'user', 'same words', ?)`, []any{ms(3)}},
+		{`INSERT INTO session_messages (id, session_id, sequence, role, content, created_at) VALUES ('gi-b1', 'gi', 2, 'user', 'same words', ?)`, []any{ms(6)}},
+		{`INSERT INTO session_messages (id, session_id, sequence, role, content, created_at) VALUES ('gi-b2', 'gi', 3, 'user', 'same words', ?)`, []any{ms(9)}},
+		{`INSERT INTO session_messages (id, session_id, sequence, role, content, created_at, kind, move_index, turn_span_id) VALUES ('gi-f1', 'gi', 4, 'assistant', 'answer one', ?, 'final', 0, 'gi-b1')`, []any{ms(900)}},
+		{`INSERT INTO session_messages (id, session_id, sequence, role, content, created_at, kind, move_index, turn_span_id) VALUES ('gi-f2', 'gi', 5, 'assistant', 'answer two', ?, 'final', 0, 'gi-b2')`, []any{ms(1800)}},
+	}
+	for _, st := range stmts {
+		if _, err := raw.ExecContext(ctx, st.q, st.args...); err != nil {
+			t.Fatalf("seed %q: %v", st.q, err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw: %v", err)
+	}
+
+	userRows := func() []string {
+		t.Helper()
+		db := openRawSQLiteAt(t, rawPath)
+		defer func() { _ = db.Close() }()
+		rows, err := db.QueryContext(ctx, `SELECT id FROM session_messages WHERE session_id = 'gi' AND role = 'user' ORDER BY sequence`)
+		if err != nil {
+			t.Fatalf("list gi users: %v", err)
+		}
+		defer func() { _ = rows.Close() }()
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	open := func() {
+		t.Helper()
+		db, err := storagesqlite.Open(newConfig(dir))
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		var action string
+		if err := db.Reader().QueryRow(ctx, "SELECT action FROM harness_migrations WHERE id = 'sessions/0341-dedupe-user-turns'").Scan(&action); err != nil || action != "applied" {
+			t.Fatalf("0341 ledger action=%q err=%v, want applied", action, err)
+		}
+		if err := db.Close(ctx); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}
+	rewind0341 := func() {
+		t.Helper()
+		db := openRawSQLiteAt(t, rawPath)
+		defer func() { _ = db.Close() }()
+		if _, err := db.ExecContext(ctx, `DELETE FROM harness_migrations WHERE id = 'sessions/0341-dedupe-user-turns'`); err != nil {
+			t.Fatalf("rewind 0341 ledger row: %v", err)
+		}
+	}
+	want := func(pass string, ids ...string) {
+		t.Helper()
+		if got := strings.Join(userRows(), ","); got != strings.Join(ids, ",") {
+			t.Fatalf("after %s: user rows = %s, want %s", pass, got, strings.Join(ids, ","))
+		}
+	}
+
+	open()
+	want("pass 1", "gi-a2", "gi-b1", "gi-b2")
+	rewind0341()
+	open()
+	want("pass 2 (re-application)", "gi-b1", "gi-b2")
+	rewind0341()
+	open()
+	want("pass 3 (fixpoint)", "gi-b1", "gi-b2")
+
+	// Both turns still anchor on rows that exist.
+	db := openRawSQLiteAt(t, rawPath)
+	defer func() { _ = db.Close() }()
+	var dangling int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_messages m WHERE m.session_id = 'gi'
+	    AND m.turn_span_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM session_messages u WHERE u.id = m.turn_span_id)`).Scan(&dangling); err != nil {
+		t.Fatal(err)
+	}
+	if dangling != 0 {
+		t.Errorf("%d gi rows carry a dangling turn_span_id after convergence", dangling)
+	}
 }

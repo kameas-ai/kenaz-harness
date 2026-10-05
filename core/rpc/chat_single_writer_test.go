@@ -92,6 +92,7 @@ type singleWriterHarness struct {
 	sessMgr  *session.Manager
 	sessAPI  sessions.SessionsAPI
 	llmAPI   *llmview.API
+	runner   *chat.ChatRunner
 	registry *recordingRegistry
 	broker   *recordingBroker
 	sync     *syncEventRecorder
@@ -157,6 +158,7 @@ func newSingleWriterHarnessOn(t *testing.T, sessMgr *session.Manager, attMgr *at
 		sessMgr:  sessMgr,
 		sessAPI:  sessions.NewManagerAPIWithAttachments(sessMgr, attMgr),
 		llmAPI:   llmAPI,
+		runner:   runner,
 		registry: reg,
 		broker:   broker,
 		sync:     rec,
