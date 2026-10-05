@@ -263,7 +263,7 @@ describe('workflowRunsStore — real Go-emitted FrontendProgressEvent shape', ()
       phase: 'step_failed',
       stepName: 'fetch_slack',
       stepKind: 'mcp_call',
-      error: 'MCP server "slack" is not installed — install it from Tools',
+      error: 'MCP server "slack" is not installed — install it from Capabilities',
       ts: '2026-07-07T11:00:01.000Z',
     });
     // run_failed emitted by impl.go after engine.Run returns with an error

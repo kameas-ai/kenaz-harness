@@ -41,13 +41,13 @@ var ErrCatalogKindNotInstallable = errors.New("fleet/catalog: installing this ki
 func catalogInstallRefusal(kind CatalogItemKind) error {
 	switch kind {
 	case CatalogKindWorkflow:
-		return fmt.Errorf("%w: workflow — nothing on this device would load the download; install the workflow from Tools › Add capability (Workflows), which installs org-catalog workflows and shipped templates through the install framework", ErrCatalogKindNotInstallable)
+		return fmt.Errorf("%w: workflow — nothing on this device would load the download; install the workflow from Capabilities (Workflows), which installs org-catalog workflows and shipped templates through the install framework", ErrCatalogKindNotInstallable)
 	case CatalogKindAgentPack:
 		return fmt.Errorf("%w: agent_pack — nothing on this device would load the download; add agent profiles to the agents folder in your profile directory instead", ErrCatalogKindNotInstallable)
 	case CatalogKindBundle:
 		return fmt.Errorf("%w: bundle — nothing on this device would load the download; install a bundle from Settings › Integrations › Bundles instead", ErrCatalogKindNotInstallable)
 	case CatalogKindSkill:
-		return fmt.Errorf("%w: skill — this path would not register it; install it from the skills surface (Tools › Add capability, Skills) instead", ErrCatalogKindNotInstallable)
+		return fmt.Errorf("%w: skill — this path would not register it; install it from Capabilities (Skills) instead", ErrCatalogKindNotInstallable)
 	default:
 		return fmt.Errorf("%w: unknown kind %q", ErrCatalogKindNotInstallable, kind)
 	}

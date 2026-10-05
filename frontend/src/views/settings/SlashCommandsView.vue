@@ -53,7 +53,7 @@ async function handlePublishToTeam(): Promise<void> {
   const ok = await confirm({
     title: `Publish /${cmd.name} to team?`,
     message:
-      'This skill will be visible to your whole team in the Marketplace. ' +
+      'This skill will be visible to your whole team in the fleet catalog (Capabilities › Skills). ' +
       'Make sure it contains no secrets or sensitive information.',
     confirmLabel: 'Publish',
   });

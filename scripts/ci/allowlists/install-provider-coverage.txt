@@ -8,8 +8,11 @@
 # here. Format: `<kind>  # YYYY-MM-DD blocker: <what> owner: <who>`.
 # Allowlists shrink monotonically: the commit that registers a kind's
 # provider deletes its line (the gate fails if a registered kind is still
-# listed). Until a kind leaves this file, the Marketplace keeps that kind's
-# Install disabled-with-reason (WP02's fleet.ErrCatalogKindNotInstallable).
+# listed). Until a kind leaves this file, the Capabilities surface's
+# fleet-catalog rows (frontend views/capabilities/catalogBrowse.ts
+# CATALOG_ONLY_KINDS — the Marketplace folded in there in Phase 4) keep that
+# kind's Install disabled-with-reason, and the backend refuses it (WP02's
+# fleet.ErrCatalogKindNotInstallable).
 
 bundle      # 2026-10-05 blocker: the FR-2 bundle payload format (a kenaz.yaml archive) must be accepted by the fleet team before a bundle provider can consume it (install-framework-01DOGF0B WP06) owner: alec / fleet team
 agent_pack  # 2026-10-05 blocker: the agent_pack disposition — loader-dir provider or drop the kind — per the decision record's criteria (install-framework-01DOGF0B WP07) owner: alec / install-framework-01DOGF0B

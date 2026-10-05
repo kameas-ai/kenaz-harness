@@ -12,6 +12,11 @@
  * the `visible` filter is exercised through the component that applies it.
  *
  * (docs/dead-code-audit-2026-08-16.md finding A4)
+ *
+ * install-framework-01DOGF0B Phase 4 WP09: nav.marketplace is gone — the
+ * fleet-catalog browse folded into Capabilities, whose palette action
+ * (nav.tools, "Go to Capabilities") is ungated like its rail entry: the page
+ * works signed out and shows the fleet catalog's sign-in reason rows itself.
  */
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
@@ -66,25 +71,34 @@ describe('CommandPalette — fleet nav actions', () => {
     _resetPlatformCache();
   });
 
-  it('hides both from a signed-out user', async () => {
+  it('hides Sites from a signed-out user, and still offers Capabilities', async () => {
     initFeatureFlags(null);
     const w = await openPalette();
     expect(w.text()).not.toContain('Go to Sites');
-    expect(w.text()).not.toContain('Go to Marketplace');
+    expect(w.text()).toContain('Go to Capabilities');
   });
 
-  it('offers Marketplace but not Sites without the sites_hosting capability', async () => {
+  it('offers no Sites without the sites_hosting capability', async () => {
     initFeatureFlags(makeAppInfo({ context_sync: true }));
     const w = await openPalette();
-    expect(w.text()).toContain('Go to Marketplace');
     expect(w.text()).not.toContain('Go to Sites');
   });
 
-  it('offers both when signed in with sites_hosting', async () => {
+  it('offers Sites when signed in with sites_hosting', async () => {
     initFeatureFlags(makeAppInfo({ sites_hosting: true }));
     const w = await openPalette();
     expect(w.text()).toContain('Go to Sites');
-    expect(w.text()).toContain('Go to Marketplace');
+  });
+
+  it.each([
+    ['signed out', null],
+    ['signed in', makeAppInfo({ sites_hosting: true })],
+  ] as const)('%s: no Marketplace or Tools action — one Go to Capabilities (WP09)', async (_l, info) => {
+    initFeatureFlags(info);
+    const w = await openPalette();
+    expect(w.text()).not.toContain('Go to Marketplace');
+    expect(w.text()).not.toContain('Go to Tools');
+    expect(w.text()).toContain('Go to Capabilities');
   });
 
   it('leaves the ungated actions alone', async () => {

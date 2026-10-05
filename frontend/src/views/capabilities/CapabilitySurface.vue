@@ -441,13 +441,33 @@ function kindNoun(kind: CapabilityKind | string): string {
 function gotoLearned() {
   void router.push('/knowledge/learned');
 }
+
+// The page's primary action, "Add capability" (decision record §3; the
+// button lives in ToolsView's header): clear every filter and put the
+// cursor in search, so the whole browse — every kind, every source — is
+// one keystroke away.
+const searchEl = ref<HTMLInputElement | null>(null);
+function focusBrowse() {
+  query.value = '';
+  kindFilter.value = 'all';
+  sourceFilter.value = 'all';
+  categoryFilter.value = null;
+  void nextTick(() => {
+    searchEl.value?.scrollIntoView?.({ block: 'nearest' });
+    searchEl.value?.focus();
+  });
+}
+defineExpose({ focusBrowse });
 </script>
 
 <template>
   <section class="px-6 py-4 space-y-3" data-testid="capability-surface">
     <header class="flex flex-wrap items-center justify-between gap-2">
+      <!-- The page's "Add capability" action lives in ToolsView's header
+           (WP09); this heading names the list, which holds installed and
+           available capabilities alike. -->
       <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
-        Add capability
+        All capabilities
       </h2>
       <div class="flex flex-wrap items-center gap-2" data-testid="capability-entry-points">
         <span class="font-ui text-[11px] text-ink-muted">Add your own:</span>
@@ -472,6 +492,7 @@ function gotoLearned() {
         aria-hidden="true"
       />
       <input
+        ref="searchEl"
         v-model="query"
         type="search"
         aria-label="Search capabilities"

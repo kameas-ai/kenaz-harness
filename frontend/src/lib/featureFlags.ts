@@ -185,9 +185,10 @@ export const signedIn: ComputedRef<boolean> = computed(() => {
   // for the count as of the last release that touched it.)
   //
   // Closed HERE rather than at each call site because the call sites do not
-  // agree on how they are protected, and one of them is not. Sites and
-  // Marketplace are unrouted in served mode AND carry a `!served` rail guard;
-  // WorkflowsView, SettingsView (which owns SyncPanel and SlashCommandsView)
+  // agree on how they are protected, and one of them is not. Sites is
+  // unrouted in served mode AND carries a `!served` rail guard; ToolsView
+  // (whose Capabilities surface holds the fleet-catalog browse that was the
+  // Marketplace — /marketplace now redirects there), WorkflowsView, SettingsView (which owns SyncPanel and SlashCommandsView)
   // render `NotAvailableInServedMode` over their whole template. BundlesView
   // does neither: `/bundles` is a served route, it has no boundary panel, and
   // its "Publish to team" button gates on `signedIn` alone — so wiring the

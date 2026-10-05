@@ -37,6 +37,11 @@ export const routes: RouteRecordRaw[] = [
     name: 'tools',
     component: () => import('@/views/tools/ToolsView.vue'),
   },
+  // install-framework-01DOGF0B Phase 4 WP09: the Marketplace folded into
+  // Capabilities (/tools). Mirrors main.ts so a bookmarked /marketplace lands
+  // on ToolsView's served-mode boundary panel (Catalog_* has no serve
+  // dispatch) instead of not-found.
+  { path: '/marketplace', redirect: (to) => ({ path: '/tools', query: to.query }) },
   {
     path: '/bundles',
     name: 'bundles',
@@ -155,14 +160,14 @@ export const routes: RouteRecordRaw[] = [
   {
     // Catch-all not-found route, mirroring main.ts. Its absence meant an
     // unmatched hash rendered a blank <router-view> with no explanation —
-    // Shell.vue has no fallback slot. Note that `/sites` and `/marketplace`
-    // are deliberately NOT registered here (see docs/served-mode-boundary.md):
-    // the served RPC surface is the allowlist in core/serve/methods.go, which
-    // carries no Sites_* or Catalog_* method, so both views would render a
-    // shell over a backend that answers "unknown method" to every call. The
-    // LeftRail entries that reach them are gated on !isServedMode() for the
-    // same reason; this catch-all is the backstop for a bookmarked or
-    // hand-typed URL.
+    // Shell.vue has no fallback slot. Note that `/sites` is deliberately
+    // NOT registered here (see docs/served-mode-boundary.md): the served RPC
+    // surface is the allowlist in core/serve/methods.go, which carries no
+    // Sites_* method, so the view would render a shell over a backend that
+    // answers "unknown method" to every call. The LeftRail entry that reaches
+    // it is gated on !isServedMode() for the same reason; this catch-all is
+    // the backstop for a bookmarked or hand-typed URL. (`/marketplace` used
+    // to be the other one; it is now a redirect to /tools in both tables.)
     // (docs/dead-code-audit-2026-08-16.md finding B4)
     path: '/:pathMatch(.*)*',
     name: 'not-found',

@@ -52,8 +52,47 @@ describe('ToolsView (FR-001b numbered-section header)', () => {
     });
     await flushPromises();
     expect(w.text()).toContain('02');
-    expect(w.text()).toContain('TOOLS');
+    expect(w.text()).toContain('CAPABILITIES');
     expect(w.text()).toContain('MCP servers');
+  });
+
+  // install-framework-01DOGF0B Phase 4 WP09 (decision record §3): the page
+  // is "Capabilities" and its primary action is "Add capability". The
+  // subtitle the v0.88.0 adversarial review flagged — "built-in tools and
+  // MCP servers in one list" while skills and workflows were listed too, and
+  // a "tool invocations do not leave the device" egress claim that a remote
+  // MCP server falsifies — must not come back.
+  it('is headed Capabilities with a truthful subtitle (WP09)', async () => {
+    const { client } = provide();
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const h1 = w.get('h1');
+    expect(h1.text()).toBe('Capabilities');
+    const head = w.get('header').text();
+    expect(head).toContain('skills and workflows');
+    expect(head).not.toContain('built-in tools and MCP servers in one list');
+    expect(head).not.toContain('do not leave the device');
+    expect(head).toContain('a call to a remote MCP server leaves this device');
+  });
+
+  it('"Add capability" is the page action: it clears the filters and focuses search', async () => {
+    const { client } = provide();
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    const search = w.get('[data-testid=capability-search]');
+    await search.setValue('nothing-matches-this');
+    await w.get('[data-testid=capability-kind-chip-skill]').trigger('click');
+    await w.get('[data-testid=capabilities-add]').trigger('click');
+    await flushPromises();
+    expect((search.element as HTMLInputElement).value).toBe('');
+    expect(w.get('[data-testid=capability-kind-chip-all]').attributes('aria-pressed')).toBe('true');
+    expect(document.activeElement).toBe(search.element);
+    w.unmount();
   });
 
   it('renders the empty-state copy + doc link when no servers are configured', async () => {

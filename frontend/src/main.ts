@@ -157,10 +157,10 @@ export const routes: RouteRecordRaw[] = [
     name: 'sites',
     component: () => import('@/views/sites/SitesView.vue'),
   },
-  // install-framework-01DOGF0B Phase 4 WP08: the Marketplace folded into
-  // the Capabilities surface (/tools) and MarketplaceView was deleted. Old
-  // links, palette history and a persisted lastRoute land there, query kept
-  // (?kind= picks a kind chip).
+  // install-framework-01DOGF0B Phase 4 WP08/WP09: the Marketplace folded
+  // into the Capabilities surface (/tools) and MarketplaceView was deleted.
+  // Old links, palette history and a persisted lastRoute land there, query
+  // kept (?kind= picks a kind chip). Mirrored in main-served.ts.
   { path: '/marketplace', redirect: (to) => ({ path: '/tools', query: to.query }) },
   {
     // WP08: catch-all not-found route (FR-011).
@@ -215,7 +215,7 @@ window.addEventListener('unhandledrejection', (ev) => {
 
 // Fleet capability gating. Every `v-if="signedIn && capability('…')"` in the
 // app reads a module-level snapshot that nothing but this call populates —
-// without it the Sites and Marketplace nav entries, the three Publish-to-team
+// without it the Sites nav entry, the three Publish-to-team
 // buttons, the Cedar team-policy editor and the Sync panel are invisible to
 // every signed-in user, and Settings → Sync tells them to sign in on the same
 // screen where Settings → Account shows them signed in.

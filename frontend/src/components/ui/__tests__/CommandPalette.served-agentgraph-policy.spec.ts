@@ -5,8 +5,9 @@
  * nav.agentgraph and nav.policy would route into GraphsView.vue's and
  * PolicyView.vue's own boundary panels in a served build (Graph_ and
  * CedarPolicy_/Policy_ RPCs have no serve dispatch case), so both palette
- * entries carry the same `!isServedMode()` predicate as nav.sites and
- * nav.marketplace (CommandPalette.fleet-nav.spec.ts). Unlike the fleet
+ * entries carry the same `!isServedMode()` predicate as nav.sites
+ * (CommandPalette.fleet-nav.spec.ts; nav.marketplace, which shared it, was
+ * removed by install-framework-01DOGF0B WP09). Unlike the fleet
  * entries, neither is also gated on sign-in or a capability — hiding them
  * in served mode must not require either.
  *
@@ -78,6 +79,6 @@ describe('CommandPalette — Agent graphs / Policy in served mode', () => {
     const w = await openPalette();
     expect(w.text()).toContain('Go to Sessions');
     expect(w.text()).toContain('Go to Permissions');
-    expect(w.text()).toContain('Go to Tools');
+    expect(w.text()).toContain('Go to Capabilities');
   });
 });

@@ -221,18 +221,15 @@
 "Bundle_List"
 "Bundle_Remove"
 
-# Caller(s) MarketplaceView.vue (CatalogPreviewDrawer.vue was retired by
-# install-framework-01DOGF0B WP05, 2026-10-05) spans multiple views,
-# ALL of which are inaccessible in served mode (boundary-panelled and/or
-# unrouted and/or gated) -- no single caller reaches this in a served build via
-# any path.
-"Catalog_Install"
-
-# Caller(s) MarketplaceView.vue (workflows' CatalogView.vue was retired by
-# install-framework-01DOGF0B WP05, 2026-10-05) spans multiple views, ALL of
-# which are inaccessible in served mode (boundary-panelled and/or unrouted
-# and/or gated) -- no single caller reaches this in a served build via any path.
+# Caller(s) CapabilitySurface.vue only (the fleet-catalog browse folded in
+# from the deleted MarketplaceView.vue -- install-framework-01DOGF0B Phase 4
+# WP08, 2026-10-05), reachable only from ToolsView.vue, which renders
+# NotAvailableInServedMode. Catalog_Uninstall moved here from `unrouted`
+# (its old only caller, MarketplaceView, was the unrouted view; its new one
+# is boundary-panelled). Catalog_Install left this group for `unrouted`
+# (zero callers now -- see there).
 "Catalog_List"
+"Catalog_Uninstall"
 
 # Caller(s) CedarEditor.vue, PolicyView.vue only reachable from a view that
 # renders NotAvailableInServedMode.
@@ -345,9 +342,11 @@
 
 # Caller(s) CapabilitySurface.vue + its plugins (install-framework-01DOGF0B
 # WP04, 2026-10-05) only reachable from ToolsView.vue, which renders
-# NotAvailableInServedMode. The one install framework's surface is
-# desktop-only until Phase 4 (WP09) decides its served disposition with
-# the rail entry.
+# NotAvailableInServedMode. Phase 4 WP09 (2026-10-05) decided the served
+# disposition with the rail entry: the "Capabilities" entry stays in the
+# served rail and lands on that boundary panel (as does a /marketplace
+# bookmark -- main-served.ts redirects it to /tools); the surface stays
+# desktop-only until a served port of the Capability_* family is requested.
 "Capability_Install"
 "Capability_List"
 "Capability_Uninstall"
@@ -516,9 +515,9 @@
 "Slashcmd_SkillList"
 "Slashcmd_SkillRenameLocalTrigger"
 
-# Caller(s) MarketplaceView.vue, SkillsPanel.vue span multiple views, ALL of
-# which are inaccessible in served mode (boundary-panelled and/or unrouted
-# and/or gated) -- no single caller reaches this in a served build via any path.
+# Caller(s) SkillsPanel.vue only (MarketplaceView.vue, the other caller, was
+# deleted by install-framework-01DOGF0B Phase 4 WP08, 2026-10-05), reachable
+# only from SettingsView, which renders NotAvailableInServedMode.
 "Slashcmd_SkillUninstall"
 
 # Caller(s) MigrationDriftPanel.vue only reachable from a view that renders
@@ -684,9 +683,17 @@
 # not register.
 "Catalog_Publish"
 
-# Caller(s) MarketplaceView.vue only reachable from a route main-served.ts does
-# not register.
-"Catalog_Uninstall"
+# NO caller anywhere in EITHER build (RAN: zero hits for catalog.install( and
+# skillInstall( outside __tests__, 2026-10-05). The only caller of both was
+# MarketplaceView.vue, deleted by install-framework-01DOGF0B Phase 4 WP08
+# when its catalog browse folded into the Capabilities surface: catalog
+# skills install through Capability_Install, and bundle / agent_pack Install
+# is disabled-with-reason there (no call). Kept, not deleted: Catalog_Install
+# is the backend refusal (defence in depth) the Phase 3 bundle / agent_pack
+# providers replace, and Slashcmd_SkillInstall is a framework-routed
+# per-kind binding -- both dispositions are recorded in docs/unwired-ledger.md
+# (install-framework Phase 4 entry). Vacuously unrouted.
+"Catalog_Install"
 "Slashcmd_SkillInstall"
 
 # A-14 orphan binding (WP09 research/a14-served-dispositions.md): zero TS client

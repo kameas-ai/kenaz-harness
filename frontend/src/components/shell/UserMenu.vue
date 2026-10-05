@@ -147,7 +147,8 @@ async function handleSignIn() {
   loading.value = true;
   try {
     const err = await fleet.signIn();
-    // The capability gates (LeftRail Marketplace/Sites, Publish-to-team)
+    // The capability gates (LeftRail Sites, the Capabilities fleet-catalog
+    // rows, Publish-to-team)
     // must follow a menu sign-in exactly as they follow an Account-panel
     // one (P-4: they used to stay stale until restart).
     await refreshFeatureFlags(client);

@@ -1770,8 +1770,9 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			wantOutput: "has no consumer test",
 		},
 		{
-			// A fleet catalog kind with no install kind — the Marketplace
-			// could list it and nothing could install it.
+			// A fleet catalog kind with no install kind — the Capabilities
+			// surface's catalog browse could list it and nothing could
+			// install it.
 			name:       "install-provider-coverage/catalog-kind-without-install-kind",
 			gate:       "check-install-provider-coverage.sh",
 			file:       "core/fleet/catalog.go",
