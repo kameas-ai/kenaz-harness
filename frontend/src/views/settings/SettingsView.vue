@@ -245,6 +245,9 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },
   'crash-reporting': { title: 'Crash Reporting', subtitle: 'Configure error and crash-report telemetry consent.' },
   recommendations: { title: 'Recommendations', subtitle: 'Install, check and remove the local ML engine that powers branch, compact and model-switch suggestions.' },
+  // dogfood 2026-10-05: this key was missing, so the pane fell through to
+  // the "App preferences" default head while showing Branch Advisor content.
+  'branch-advisor': { title: 'Branch Advisor', subtitle: 'Inline branch suggestions in chat — a local heuristic with no model calls. The ML-engine-served branch_now advice chips are configured under Recommendations.' },
 };
 const DEFAULT_HEAD = {
   title: 'App preferences',
