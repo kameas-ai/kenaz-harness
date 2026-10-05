@@ -18,6 +18,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { materializeErrorMessage } from '@/lib/errors';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type { GraphSpec, GraphValidationResult } from '@/lib/types';
@@ -358,7 +359,7 @@ async function load() {
       editingId.value = spec.id;
       markClean();
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = materializeErrorMessage(err);
     }
     return;
   }

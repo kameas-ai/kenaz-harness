@@ -77,7 +77,7 @@ describe('MessageList — turn -> run links', () => {
     const old = w.get('[data-message-id="a-old"]');
     expect(old.find('[data-testid="turn-run-graph-link"]').exists()).toBe(false);
     expect(old.get('[data-testid="turn-run-unrecorded"]').text()).toContain(
-      'predates run-graph linkage',
+      'Run graph not recorded for this turn',
     );
   });
 
@@ -88,29 +88,8 @@ describe('MessageList — turn -> run links', () => {
     expect(w.html()).not.toContain('/agentgraph/run/');
   });
 
-  it('the live turn links once its run is recorded, and is never marked unrecorded mid-flight', () => {
-    const live = row({
-      id: 'live-0',
-      kind: 'assistant_move',
-      moveIndex: 0,
-      turnSpanId: 'u-live',
-      content: 'Working…',
-      streaming: true,
-    });
-    const base = [...transcript(), row({ id: 'u-live', role: 'user', content: 'Go' })];
-
-    const pending = mount(MessageList, {
-      props: { messages: base, streamingMessages: [live], turnRuns: new Map() },
-      global: { plugins: [router()] },
-    });
-    expect(pending.get('[data-message-id="live-0"]').find('[data-testid="turn-run-unrecorded"]').exists()).toBe(false);
-
-    const recorded = mount(MessageList, {
-      props: { messages: base, streamingMessages: [live], turnRuns: new Map([['u-live', RUN]]) },
-      global: { plugins: [router()] },
-    });
-    expect(
-      recorded.get('[data-message-id="live-0"]').get('[data-testid="turn-run-graph-link"]').attributes('href'),
-    ).toBe(`/agentgraph/run/${RUN}/graph`);
-  });
+  // The live / just-committed turn is pinned through the REAL useSession
+  // stream path in lib/__tests__/useSession.turnRunLinks.test.ts (review
+  // H2): production live rows carry `live:<sub id>`, a shape a hand
+  // fixture here would only guess at.
 });

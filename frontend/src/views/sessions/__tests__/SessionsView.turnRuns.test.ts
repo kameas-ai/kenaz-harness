@@ -42,7 +42,7 @@ const MESSAGES: Message[] = [
   },
 ];
 
-async function mountView() {
+async function mountView(opts: { subagent?: boolean } = {}) {
   const turnRuns = vi.fn(async (): Promise<TurnRun[]> => [
     { runId: RUN, turnSpanId: 'u-1', graphId: 'chat_default', specDigest: 'sha256:ab', createdAt: '2026-10-04T00:00:00Z' },
   ]);
@@ -77,6 +77,30 @@ async function mountView() {
                 }),
                 listMessagesActive: async () => ({ messages: MESSAGES, sweptCount: 0 }),
                 turnRuns,
+              },
+              // review L8: the subagent transcript is a second MessageList
+              // mount (inside SubagentTab's #transcript slot). It renders
+              // when BranchSidebar lists a running subagent branch whose
+              // child session is the one on screen.
+              branches: {
+                ...base.branches,
+                list: async () =>
+                  opts.subagent
+                    ? [
+                        {
+                          id: 'br-1',
+                          parentSessionId: 'sess-parent',
+                          childSessionId: SID,
+                          kind: 'fork' as const,
+                          status: 'active' as const,
+                          createdAt: '2026-10-04T00:00:00Z',
+                          updatedAt: '2026-10-04T00:00:00Z',
+                          subagentBranch: true,
+                          subagentStatus: 'running' as const,
+                          profileId: 'p',
+                        },
+                      ]
+                    : [],
               },
             });
           },
@@ -114,6 +138,16 @@ describe('SessionsView — turn -> run links', () => {
     expect(turnRuns).not.toHaveBeenCalled();
     expect(w.find('[data-testid="turn-run-links"]').exists()).toBe(false);
     expect(w.find('[data-testid="turn-run-unrecorded"]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it('L8: the subagent transcript mount links the turn too', async () => {
+    setConnectionState('ready');
+    const { w } = await mountView({ subagent: true });
+    const tab = w.get('[data-testid="session-subagent-tab"]');
+    expect(tab.get('[data-testid="turn-run-graph-link"]').attributes('href')).toBe(
+      `/agentgraph/run/${RUN}/graph`,
+    );
     w.unmount();
   });
 });

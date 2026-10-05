@@ -33,7 +33,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import MessageBubble from './MessageBubble.vue';
 import MoveTrail from './MoveTrail.vue';
 import TurnRunLinks from './TurnRunLinks.vue';
-import { foldedTurnCounts, projectTranscript } from '@/lib/transcript';
+import { foldedTurnCounts, projectTranscript, runIdFromLiveSpan } from '@/lib/transcript';
 import type { Artifact, MemoryScopeKind, Message } from '@/lib/types';
 
 const props = defineProps<{
@@ -190,7 +190,10 @@ const emit = defineEmits<{
 
 function runIdFor(m: Message): string {
   if (!props.turnRuns || !m.turnSpanId) return '';
-  return props.turnRuns.get(m.turnSpanId) ?? '';
+  // A live (or just-committed, not yet reloaded) turn carries
+  // `live:<sub id>`, and the sub id IS the run id (review H2) — the
+  // recorded mapping is keyed by the durable span and cannot match it.
+  return runIdFromLiveSpan(m.turnSpanId) || props.turnRuns.get(m.turnSpanId) || '';
 }
 
 /**

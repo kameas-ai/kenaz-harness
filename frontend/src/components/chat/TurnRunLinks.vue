@@ -17,9 +17,10 @@
  *
  * keyed by the turn span id the backend recorded against the run
  * (Sessions_TurnRuns, migration sessions/0342). A turn with no recorded
- * run predates the mapping; it gets the reason, never a link — pre-fix
- * run ids were reused across restarts, so guessing one could open the
- * wrong turn's graph.
+ * run — it predates the mapping, the record write failed, it has no
+ * span anchor, or it synced in from another device — gets the reason,
+ * never a link: pre-fix run ids were reused across restarts, so guessing
+ * one could open the wrong turn's graph.
  *
  * The parent decides whether this renders at all: served builds pass no
  * run map (Graph_* has no serve dispatch, D-701), and neither does any
@@ -59,8 +60,8 @@ const props = defineProps<{
     v-else
     class="mt-1 font-ui text-[11px] text-ink-subtle opacity-70"
     data-testid="turn-run-unrecorded"
-    title="Run graphs are recorded for turns sent after run-graph linkage shipped; this turn's run cannot be identified."
+    title="No run was recorded for this turn — it predates run-graph linkage, the recording failed, or the turn arrived from another device. Its run cannot be identified safely."
   >
-    Run graph not recorded — this turn predates run-graph linkage.
+    Run graph not recorded for this turn
   </div>
 </template>
