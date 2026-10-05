@@ -15,7 +15,6 @@ import {
   Brain,
   GitBranch,
   Globe,
-  Route,
   Trash2,
   X,
   ChevronDown,
@@ -1072,9 +1071,6 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
              route into GraphsView.vue's own NotAvailableInServedMode panel
              in a served build. Hiding the rail entry is the honest answer,
              matching the Sites/Marketplace treatment below. -->
-        <li v-if="!served" data-testid="nav-agentgraph">
-          <RailEntry :icon="Route" label="Agent graphs" to="/agentgraph" match-prefix="/agentgraph" />
-        </li>
         <!-- nav-settings-ia-cleanup WP04: Audit log demoted from top-level nav.
              Viewer is accessible via Settings → Security → Audit Log. /audit route
              and the command palette entry (nav.audit) remain intact. -->

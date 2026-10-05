@@ -30,4 +30,9 @@ export const SETTINGS_HUB_PREFIXES: readonly string[] = [
   '/permissions',
   '/policy',
   '/audit',
+  // agentgraph-settings-linkage-01DOGF0D WP05: Settings › Authoring › Agent
+  // graphs is the separately-routed /agentgraph library. The editor
+  // (/agentgraph/edit/:id) and run views (/agentgraph/run/…) carry no rail
+  // entry of their own any more, so they light Settings too.
+  '/agentgraph',
 ];

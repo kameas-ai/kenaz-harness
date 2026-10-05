@@ -42,7 +42,9 @@ describe('SettingsTabs — vertical nav rail', () => {
     // sub-tab in Authoring.
     // nav-ia-sweep-01DOGF0F WP05: -3 — Runtime (Scheduled Chats, Tasks) and
     // Authoring › Workflows moved to the Workflows surface.
-    expect(items).toHaveLength(23);
+    // agentgraph-settings-linkage-01DOGF0D WP05: +1 — Agent graphs in
+    // Authoring (moved from the top-level rail; desktop-only).
+    expect(items).toHaveLength(24);
     for (const item of items) {
       // lucide-vue-next renders an <svg>; every row should carry one.
       expect(item.find('svg').exists()).toBe(true);
