@@ -19,6 +19,7 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -197,5 +198,79 @@ func TestUnitSyncer_PullFastForward_AtomicWithSyncState(t *testing.T) {
 	}
 	if len(syncer.Conflicts()) != 0 {
 		t.Errorf("conflicts after a clean fast-forward = %+v", syncer.Conflicts())
+	}
+}
+
+// raceLocalEditStore wraps the production units.Manager and, just before
+// the pull path's UpdateWithSyncState runs, lands a LOCAL edit on the same
+// unit — the window between the syncer's Get (which decided the
+// fast-forward was clean) and the store's write transaction.
+type raceLocalEditStore struct {
+	*units.Manager
+	t *testing.T
+}
+
+func (r raceLocalEditStore) UpdateWithSyncState(ctx context.Context, id string, baseVersion int, body string, metadata json.RawMessage, st units.SyncState) (units.Unit, units.SyncState, error) {
+	if _, err := r.Manager.Update(ctx, id, "concurrent local edit", nil); err != nil {
+		r.t.Fatalf("racing local edit: %v", err)
+	}
+	return r.Manager.UpdateWithSyncState(ctx, id, baseVersion, body, metadata, st)
+}
+
+// TestUnitSyncer_PullFastForward_LocalEditRaceIsAConflict (review M3): a
+// local edit landing between the syncer's read and the fast-forward write
+// must not be overwritten and baselined as synced. Real sqlite.
+func TestUnitSyncer_PullFastForward_LocalEditRaceIsAConflict(t *testing.T) {
+	db, m := openUnitSyncSQLite(t)
+	ctx := context.Background()
+
+	local := seedTeamUnit(t, m, "doc", "v0 body")
+	if _, err := m.UpsertSyncState(ctx, units.SyncState{
+		UnitID: local.ID, NodeID: "srv-race",
+		SyncedServerVersion: 1, SyncedLocalVersion: local.Version,
+		Classification: string(ClassTeamShared),
+	}); err != nil {
+		t.Fatalf("seed sidecar: %v", err)
+	}
+	fake := &contextFakeServer{}
+	updated := time.Now().UTC().Format(time.RFC3339Nano)
+	fake.addPullResponse(contextPullResponse{
+		Nodes: []ContextPulledNode{{
+			ID: "srv-race", Kind: "doc", Title: "doc", Body: "v2 server body",
+			Classification: ClassTeamShared, Version: 2, UpdatedAt: updated,
+		}},
+		Cursor: updated,
+	})
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
+	syncer := NewUnitSyncer(makeTestClient(t, srv.URL), raceLocalEditStore{Manager: m, t: t},
+		NewUnitMapper(""), makeCapPollerWithTeamCap(t), t.TempDir())
+
+	applied, err := syncer.PullDown(ctx)
+	if err != nil || applied != 0 {
+		t.Fatalf("PullDown = %d, %v; want 0 applied, nil (the race is a conflict, not an error)", applied, err)
+	}
+	got, err := m.Get(ctx, local.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Body != "concurrent local edit" || got.Version != local.Version+1 {
+		t.Errorf("unit = body %q v%d; want the racing local edit intact at v%d", got.Body, got.Version, local.Version+1)
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM unit_versions WHERE unit_id = ?", local.ID); n != 1 {
+		t.Errorf("history rows = %d, want 1 (the local edit only)", n)
+	}
+	st, err := m.GetSyncState(ctx, local.ID)
+	if err != nil || st.SyncedServerVersion != 1 || st.SyncedLocalVersion != local.Version {
+		t.Errorf("sidecar = %+v, %v; want NOT baselined (server=1 local=%d)", st, err, local.Version)
+	}
+	conflicts := syncer.Conflicts()
+	if len(conflicts) != 1 || conflicts[0].UnitID != local.ID || conflicts[0].ServerVersion != 2 || conflicts[0].LocalVersion != got.Version {
+		t.Errorf("conflicts = %+v; want one for %s (local v%d, server v2)", conflicts, local.ID, got.Version)
+	}
+	// The local edit is still in the push worklist.
+	if dirty, err := m.ListDirty(ctx, units.ClassTeam); err != nil || len(dirty) != 1 {
+		t.Errorf("ListDirty(team) = %d, %v; want 1 (the un-synced local edit)", len(dirty), err)
 	}
 }

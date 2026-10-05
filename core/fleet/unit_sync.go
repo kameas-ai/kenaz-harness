@@ -58,7 +58,7 @@ type UnitStore interface {
 	// sync baseline in ONE storage transaction (units-debt-01UNITD01 FR-4):
 	// the pull path never leaves a unit without its baseline.
 	CreateWithSyncState(ctx context.Context, u units.Unit, st units.SyncState) (units.Unit, units.SyncState, error)
-	UpdateWithSyncState(ctx context.Context, id, body string, metadata json.RawMessage, st units.SyncState) (units.Unit, units.SyncState, error)
+	UpdateWithSyncState(ctx context.Context, id string, baseVersion int, body string, metadata json.RawMessage, st units.SyncState) (units.Unit, units.SyncState, error)
 }
 
 // UnitConflict records a pull-time divergence: the server advanced a unit
@@ -464,12 +464,32 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 	// pull read the server's own body as an un-synced local edit and
 	// surfaced a conflict of the unit against itself. The store sets
 	// SyncedLocalVersion to the unit's Version after the bump.
-	if _, _, err := s.store.UpdateWithSyncState(ctx, local.ID, mapped.Body, mapped.Metadata, units.SyncState{
+	//
+	// local.Version is passed as the base and re-checked inside the write
+	// transaction: a local edit that lands after the Get above makes the
+	// fast-forward NOT clean, and it takes the same path as any other
+	// both-sides-moved case — surfaced as a conflict, local body kept,
+	// sidecar not advanced.
+	if _, _, err := s.store.UpdateWithSyncState(ctx, local.ID, local.Version, mapped.Body, mapped.Metadata, units.SyncState{
 		NodeID:              n.ID,
 		SyncedServerVersion: n.Version, // server counter at this pull
 		Classification:      string(n.Classification),
 		LastSynced:          time.Now().UTC(),
 	}); err != nil {
+		if errors.Is(err, units.ErrVersionConflict) {
+			latest := local.Version + 1 // at least one local edit raced in
+			if cur, gerr := s.store.Get(ctx, local.ID); gerr == nil {
+				latest = cur.Version
+			}
+			s.recordConflict(UnitConflict{
+				UnitID:        local.ID,
+				NodeID:        n.ID,
+				LocalVersion:  latest,
+				SyncedVersion: st.SyncedServerVersion,
+				ServerVersion: n.Version,
+			})
+			return false, nil
+		}
 		return false, fmt.Errorf("fleet: unit pull: update %s: %w", local.ID, err)
 	}
 	return true, nil

@@ -292,7 +292,10 @@ func (s *memStore) CreateWithSyncState(_ context.Context, u Unit, st SyncState) 
 
 // UpdateWithSyncState bumps the unit and upserts its sidecar under one lock
 // acquisition. See Store.UpdateWithSyncState.
-func (s *memStore) UpdateWithSyncState(_ context.Context, id, body string, metadata []byte, st SyncState) (Unit, SyncState, error) {
+func (s *memStore) UpdateWithSyncState(_ context.Context, id string, baseVersion int, body string, metadata []byte, st SyncState) (Unit, SyncState, error) {
+	if baseVersion < 0 {
+		return Unit{}, SyncState{}, ErrVersionConflict
+	}
 	meta := normaliseMetadata(metadata)
 	now := s.now()
 	st.UnitID = id
@@ -306,6 +309,9 @@ func (s *memStore) UpdateWithSyncState(_ context.Context, id, body string, metad
 	u, ok := s.units[id]
 	if !ok {
 		return Unit{}, SyncState{}, ErrUnitNotFound
+	}
+	if u.Version != baseVersion {
+		return Unit{}, SyncState{}, ErrVersionConflict
 	}
 	if err := s.checkNodeIDLocked(st); err != nil {
 		return Unit{}, SyncState{}, err

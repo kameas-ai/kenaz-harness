@@ -109,13 +109,14 @@ func (m *Manager) CreateWithSyncState(ctx context.Context, u Unit, st SyncState)
 }
 
 // UpdateWithSyncState fast-forwards a unit to a pulled body and advances its
-// sync sidecar, atomically (see Store.UpdateWithSyncState). metadata may be
-// nil (stored as "{}").
-func (m *Manager) UpdateWithSyncState(ctx context.Context, id, body string, metadata json.RawMessage, st SyncState) (Unit, SyncState, error) {
+// sync sidecar, atomically, iff the unit is still at baseVersion (see
+// Store.UpdateWithSyncState; ErrVersionConflict otherwise). metadata may
+// be nil (stored as "{}").
+func (m *Manager) UpdateWithSyncState(ctx context.Context, id string, baseVersion int, body string, metadata json.RawMessage, st SyncState) (Unit, SyncState, error) {
 	if id == "" {
 		return Unit{}, SyncState{}, errors.New("units: empty id")
 	}
-	return m.store.UpdateWithSyncState(ctx, id, body, []byte(metadata), st)
+	return m.store.UpdateWithSyncState(ctx, id, baseVersion, body, []byte(metadata), st)
 }
 
 // GetSyncState returns the sidecar for a unit, or ErrSyncStateNotFound when

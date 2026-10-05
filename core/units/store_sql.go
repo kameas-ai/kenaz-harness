@@ -146,22 +146,35 @@ func (s *sqlStore) CreateWithSyncState(ctx context.Context, u Unit, st SyncState
 
 // UpdateWithSyncState applies a pulled fast-forward (version bump, history
 // row, body/metadata) AND advances the sync sidecar in ONE WriteTx
-// (units-debt-01UNITD01 FR-4). See Store.UpdateWithSyncState.
-func (s *sqlStore) UpdateWithSyncState(ctx context.Context, id, body string, metadata []byte, st SyncState) (Unit, SyncState, error) {
-	current, err := s.Get(ctx, id)
-	if err != nil {
-		return Unit{}, SyncState{}, err
+// (units-debt-01UNITD01 FR-4). baseVersion is the local Version the caller
+// observed when it decided the fast-forward was clean; it is re-checked
+// INSIDE the write transaction, so a local edit that lands between the
+// caller's read and this write returns ErrVersionConflict instead of being
+// overwritten and baselined as synced. See Store.UpdateWithSyncState.
+func (s *sqlStore) UpdateWithSyncState(ctx context.Context, id string, baseVersion int, body string, metadata []byte, st SyncState) (Unit, SyncState, error) {
+	if baseVersion < 0 {
+		return Unit{}, SyncState{}, ErrVersionConflict
 	}
 	meta := normaliseMetadata(metadata)
 	now := s.now()
-	newVersion := current.Version + 1
+	newVersion := baseVersion + 1
 	st.UnitID = id
 	st.SyncedLocalVersion = newVersion
-	st, err = s.prepareSyncState(st)
+	st, err := s.prepareSyncState(st)
 	if err != nil {
 		return Unit{}, SyncState{}, err
 	}
 	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		var persisted int
+		if err := tx.QueryRow(ctx, "SELECT version FROM units WHERE id = ?", id).Scan(&persisted); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrUnitNotFound
+			}
+			return fmt.Errorf("units: UpdateWithSyncState: read version: %w", err)
+		}
+		if persisted != baseVersion {
+			return ErrVersionConflict
+		}
 		if err := writeUpdateTx(ctx, tx, id, newVersion, body, meta, now); err != nil {
 			return err
 		}
@@ -172,11 +185,11 @@ func (s *sqlStore) UpdateWithSyncState(ctx context.Context, id, body string, met
 	}); err != nil {
 		return Unit{}, SyncState{}, err
 	}
-	current.Version = newVersion
-	current.Body = body
-	current.Metadata = meta
-	current.UpdatedAt = now
-	return current, st, nil
+	updated, err := s.Get(ctx, id)
+	if err != nil {
+		return Unit{}, SyncState{}, err
+	}
+	return updated, st, nil
 }
 
 // ── Get ────────────────────────────────────────────────────────────────

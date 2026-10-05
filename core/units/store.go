@@ -65,11 +65,15 @@ type Store interface {
 	CreateWithSyncState(ctx context.Context, u Unit, st SyncState) (Unit, SyncState, error)
 
 	// UpdateWithSyncState applies an Update (version bump + history row)
-	// AND upserts the sync sidecar row in a single atomic operation.
-	// st.UnitID is set to id and st.SyncedLocalVersion to the unit's
-	// Version after the bump. The transactional primitive behind the fleet
-	// pull path's clean fast-forward (units-debt-01UNITD01 FR-4).
-	UpdateWithSyncState(ctx context.Context, id, body string, metadata []byte, st SyncState) (Unit, SyncState, error)
+	// AND upserts the sync sidecar row in a single atomic operation, but
+	// only if the persisted Version still equals baseVersion — checked
+	// inside the same transaction; otherwise ErrVersionConflict and
+	// nothing is written. st.UnitID is set to id and st.SyncedLocalVersion
+	// to the unit's Version after the bump. The transactional primitive
+	// behind the fleet pull path's clean fast-forward
+	// (units-debt-01UNITD01 FR-4): the base check stops a local edit made
+	// after the syncer's read from being overwritten and baselined.
+	UpdateWithSyncState(ctx context.Context, id string, baseVersion int, body string, metadata []byte, st SyncState) (Unit, SyncState, error)
 
 	// ListEdges returns all edges where FromID or ToID matches id,
 	// ordered by created_at ASC.
