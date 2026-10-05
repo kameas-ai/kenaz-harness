@@ -337,7 +337,7 @@ func TestUsage_MultiMoveTurnPersistsUsageForEveryGenerateCall(t *testing.T) {
 	}
 	sessionID := rec.ID
 
-	if _, err := runner.StartStream(ctx, "profile-1", sessionID, "", "find it"); err != nil {
+	if _, err := runner.StartStream(ctx, "profile-1", sessionID, "", testTurn("find it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -621,7 +621,7 @@ func TestUsage_RoutedGraphFinalRowGetsTheChatMovesUsageNotTheExitGates(t *testin
 	}
 	sessionID := rec.ID
 
-	if _, err := runner.StartStream(ctx, "profile-1", sessionID, "", "ask"); err != nil {
+	if _, err := runner.StartStream(ctx, "profile-1", sessionID, "", testTurn("ask")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -840,7 +840,7 @@ func TestUsage_DegenerateJournalStillGetsUsageViaCandidateLookup(t *testing.T) {
 	// cannot resolve a turnSpanID, so journal.records() is false for this
 	// whole turn and every entry — including what would be the final —
 	// is written classic.
-	if _, err := runner.StartStream(ctx, "profile-1", sessionID, "", ""); err != nil {
+	if _, err := runner.StartStream(ctx, "profile-1", sessionID, "", UserTurn{}); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {

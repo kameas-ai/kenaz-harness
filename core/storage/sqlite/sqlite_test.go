@@ -175,7 +175,7 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// are numerically lower — see migrations_blocked_permission_requests.go
 	// / migrations_scheduled_chat_runs_trigger.go for why registering
 	// below an already-applied version is safe on this runner.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340}
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -272,9 +272,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// WP09 (0340) adds one more, hence 54; WP05 (0337) adds one more
 	// still, hence 55; cedar-policy/1300 adds one more, hence 56; WP06
 	// (0338) and WP08 (0339) add one more each, hence 58; laya-advisors/
-	// 1600 adds one more, hence 59; laya-advisors/1601 one more, hence 60.
-	if count != 60 {
-		t.Errorf("ledger count = %d, want 60", count)
+	// 1600 adds one more, hence 59; laya-advisors/1601 one more, hence 60;
+	// chat-single-writer-01DOGF0G's sessions/0341 one more, hence 61.
+	if count != 61 {
+		t.Errorf("ledger count = %d, want 61", count)
 	}
 }
 

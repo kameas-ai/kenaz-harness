@@ -171,6 +171,11 @@ type turnJournal struct {
 	heldResp         corellm.Response
 	heldProviderKind string
 	heldModelID      string
+	// lastAssistant is the content of the last assistant-role row this
+	// journal actually wrote (a flushed move, the final, or a partial).
+	// UnpersistedTail reads it so a terminal path never re-persists text
+	// the journal already owns (chat-single-writer-01DOGF0G WP04).
+	lastAssistant string
 	// usageHook fires once per persisted assistant-role row this journal
 	// writes, INCLUDING the final row (see the file header's USAGE
 	// CAPTURE note). nil disables usage capture entirely — tests that
@@ -399,6 +404,9 @@ func (j *turnJournal) flushHeld(ctx context.Context) {
 		MoveIndex:  idx,
 		TurnSpanID: j.spanID,
 	})
+	if err == nil {
+		j.lastAssistant = text
+	}
 	j.fireUsage(ctx, id, err, resp, providerKind, modelID)
 }
 
@@ -695,6 +703,11 @@ func (j *turnJournal) AppendEntry(ctx context.Context, sessionID string,
 	entry.MoveIndex = idx
 	entry.TurnSpanID = j.spanID
 	id, err := j.writer.AppendEntry(ctx, sessionID, entry)
+	if err == nil {
+		j.mu.Lock()
+		j.lastAssistant = entry.Content
+		j.mu.Unlock()
+	}
 	if absorbed {
 		j.mu.Lock()
 		if err == nil {
@@ -741,6 +754,17 @@ func (j *turnJournal) RecordPartial(ctx context.Context, text string) {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	// chat-single-writer-01DOGF0G WP04: a Stop that lands after the turn's
+	// final was already written (no segment open, nothing parked) must not
+	// re-persist the final's text as a second assistant row. Only what the
+	// journal does not already own is the interrupted move's body; the
+	// interruption marker itself survives as the tail.
+	if j.openIdx < 0 && !j.heldLive {
+		text = j.unpersistedTailLocked(text)
+		if text == "" {
+			return
+		}
+	}
 	idx := j.openIdx
 	j.openIdx = -1
 	// resp/providerKind/modelID carry the completed fire's usage
@@ -783,9 +807,67 @@ func (j *turnJournal) RecordPartial(ctx context.Context, text string) {
 		MoveIndex:  idx,
 		TurnSpanID: j.spanID,
 	})
+	if err == nil {
+		j.lastAssistant = text
+	}
 	if hadUsage {
 		j.fireUsage(ctx, id, err, resp, providerKind, modelID)
 	}
+}
+
+// UnpersistedTail returns the part of segment — the text the stream
+// bridge accumulated since the last move boundary — that this journal
+// neither wrote nor holds (chat-single-writer-01DOGF0G WP04).
+//
+// The backend-error terminal path persists a partial row for "what the
+// user watched stream that was never saved". It used to take
+// bridge.PartialSegment() at face value, which is wrong in two shapes the
+// dev profile recorded as extra assistant bubbles:
+//
+//   - the last chat fire completed and is PARKED here, and a later call
+//     (exit_gate's verdict, on the routed graph) failed: the segment IS
+//     the parked text, which driveRun's deferred Finish is about to write
+//     as an assistant_move — persisting it as a partial too wrote it
+//     twice, 2 ms apart;
+//   - session_write already wrote the segment as the turn's `final` and
+//     the run then failed: the move boundary had not advanced, so the
+//     whole final was re-persisted as a kind-less failed twin.
+//
+// A segment that is open (a fire is streaming text the journal has not
+// seen complete) is returned untouched: that text is genuinely
+// un-persisted. An inert journal owns nothing and returns segment as-is.
+func (j *turnJournal) UnpersistedTail(segment string) string {
+	if !j.records() || segment == "" {
+		return segment
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.unpersistedTailLocked(segment)
+}
+
+// unpersistedTailLocked is UnpersistedTail's body. Caller holds j.mu.
+func (j *turnJournal) unpersistedTailLocked(segment string) string {
+	if j.openIdx >= 0 {
+		return segment
+	}
+	owned := j.lastAssistant
+	if j.heldLive {
+		owned = j.held
+	}
+	if owned == "" {
+		return segment
+	}
+	if strings.TrimSpace(segment) == strings.TrimSpace(owned) {
+		return ""
+	}
+	if strings.HasPrefix(segment, owned) {
+		tail := segment[len(owned):]
+		if strings.TrimSpace(tail) == "" {
+			return ""
+		}
+		return tail
+	}
+	return segment
 }
 
 // RecordSyntheticToolResult persists the is_error tool_result that

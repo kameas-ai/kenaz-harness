@@ -116,7 +116,10 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 		got = append(got, v)
 	}
 	rows.Close()
-	want := []int{332, 333, 334, 335, 336, 337, 338, 339, 340}
+	// 0341 (chat-single-writer-01DOGF0G) is a per-session scan like 0337:
+	// with no doubled turns in this database it finds nothing, so its
+	// re-application here is a no-op by construction.
+	want := []int{332, 333, 334, 335, 336, 337, 338, 339, 340, 341}
 	if len(got) != len(want) {
 		t.Fatalf("re-applied sessions migrations = %v, want %v", got, want)
 	}

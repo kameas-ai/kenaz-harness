@@ -165,6 +165,10 @@ const sqlInitSchema = `
 // VerifyLedger contiguity) rather than the v0.63.0 max-based bug; both
 // are proven against a v0.78.1 snapshot that already carries 0340 in its
 // ledger, not merely argued.
+// 0341 is chat-single-writer-01DOGF0G's destructive cleanup of doubled
+// user turns and kind-less assistant twins (dogfood F12 — see
+// migrations_dedupe_user_turns.go); 0342 is reserved for
+// artifacts-as-units-01DOGF0C.
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -237,6 +241,7 @@ func Migrations() []migrations.Migration {
 		migration0338(),
 		migration0339(),
 		migration0340(),
+		migration0341(),
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
+	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
@@ -90,25 +91,52 @@ type SessionMessageReader interface {
 	History(ctx context.Context, sessionID string, n int) ([]coreag.Message, error)
 }
 
+// UserTurn is the already-persisted user message that opens a chat turn
+// — see llmview.UserTurn for the field contract. Aliased rather than
+// redeclared so the LLM view's ChatRunner interface and this runner name
+// one type.
+type UserTurn = llmview.UserTurn
+
 // TurnSpanReader resolves the id of the most recent user message in a
 // session — the id that IS a turn's span
 // (model-moves-transcript-01PMCH01 WP02).
 //
-// StartStream normally learns the span from its own write: it appends
-// the user turn and the seam hands back the row's id. But StartStream is
-// also called with an EMPTY userMessage on two live paths — the
-// keychain-rotation redrive (RedriveLastTurn) and the multimodal send,
-// where the frontend has already landed the user's row through
-// Sessions_SendMessageWithBlocks. Those turns have a span; this runner
-// just did not write it. Without a lookup their moves would be
-// span-less, which AppendTranscriptEntry rejects, so the whole turn
-// would silently fall back to the pre-mission single-row behaviour.
+// SINGLE WRITER (chat-single-writer-01DOGF0G). This runner never writes
+// the user turn: the row is persisted, once, by whoever asked for the
+// run (Sessions_AppendMessage / Sessions_SendMessageWithBlocks, the
+// scheduler, the sub-agent spawner, the resume starter). The caller
+// normally hands the row's id in on UserTurn.MessageID; this seam is the
+// fallback for a caller that could not resolve it.
+//
+// History: StartStream used to learn the span from its OWN append of the
+// user text, and consulted this reader only on the "empty userMessage"
+// paths, whose comment claimed the frontend had already landed the row
+// only for multimodal sends. In fact the frontend lands EVERY turn, so
+// every text turn was stored twice and the span pointed at the runner's
+// copy (dogfood F12). The lookup branch is now the only way a span is
+// resolved when the caller does not pass one.
 //
 // SessionMessageReader cannot answer this: coreag.Message carries no id
 // (deliberately — the kernel has no use for one), which is why this is a
 // separate, narrow seam rather than a widening of that one.
 type TurnSpanReader interface {
 	LatestUserMessageID(ctx context.Context, sessionID string) (string, error)
+}
+
+// UserTurnAnnouncer is the optional half of the HistoryWriter seam that
+// reports an existing user row to fleet context-sync without writing it
+// (chat-single-writer-01DOGF0G FR-1d).
+//
+// The runner's old re-append was the ONLY path by which a user turn
+// reached SessionSyncer.AppendEvent — the production writer fires the
+// sync hook on every AppendEntry, and the frontend's Sessions_AppendMessage
+// never touches it. Removing the second write without this seam would
+// have silently stopped every user turn reaching fleet session sync. The
+// production writer (core/rpc llmHistoryWriter) implements it with the
+// same hook and the same payload AppendEntry uses; a writer that does not
+// implement it simply has no sync to feed.
+type UserTurnAnnouncer interface {
+	AnnounceUserTurn(ctx context.Context, sessionID, messageID string)
 }
 
 // HistoryWriter is the persistence surface the SessionWriteNode kind
@@ -198,7 +226,7 @@ type RunSpecRecorder func(runID string, g coreag.Graph)
 // What actually happens instead: each chat turn constructs a FRESH
 // AskBus and pre-seeds it with the user's message before the kernel
 // run starts (StartStream, coreag.NewMemAskBus() + askBus.Answer(subID,
-// chatAskNodeID, userMessage)) rather than resuming an already-paused
+// chatAskNodeID, turn.Text)) rather than resuming an already-paused
 // kernel mid-run. AnswerInjector's shape — inject an answer into a run
 // that is ALREADY executing, keyed by (runID, nodeID) — has no current
 // caller because chat never keeps a kernel run paused across a
@@ -230,10 +258,10 @@ type Config struct {
 	Broker        Broker
 	History       SessionMessageReader
 	HistoryWriter HistoryWriter
-	// TurnSpan resolves the turn's span id when StartStream is called
-	// without a user message (model-moves-transcript-01PMCH01 WP02).
-	// nil means such a turn writes classic entries, as it did before the
-	// mission — see TurnSpanReader for why that path exists at all.
+	// TurnSpan resolves the turn's span id when the caller's UserTurn
+	// carries no MessageID (model-moves-transcript-01PMCH01 WP02;
+	// chat-single-writer-01DOGF0G). nil means such a turn writes classic
+	// entries — see TurnSpanReader.
 	TurnSpan    TurnSpanReader
 	GraphLoader GraphLoader
 	MaxTurns    MaxTurnsResolver
@@ -758,7 +786,11 @@ type pausedTurn struct {
 	sessionID     string
 	profileID     string
 	modelOverride string
-	pausedAt      time.Time
+	// turn is the paused run's own user turn, so the redrive re-runs the
+	// SAME persisted row — with its text still feeding the ask node, the
+	// post_send hook and the advisors — rather than a blank turn.
+	turn     UserTurn
+	pausedAt time.Time
 }
 
 // AuthFailedPayload is the broker payload emitted on the
@@ -834,9 +866,12 @@ type chatSub struct {
 	sessionID     string
 	profileID     string // retained for post-run auto-title trigger
 	modelOverride string // retained for post-run auto-title trigger
-	cancel        context.CancelFunc
-	done          chan struct{}
-	bridge        *StreamBridge
+	// turn is the user turn this run answers, retained so an auth-failure
+	// pause can hand it to RedriveLastTurn unchanged.
+	turn   UserTurn
+	cancel context.CancelFunc
+	done   chan struct{}
+	bridge *StreamBridge
 	// journal is the turn's move journal
 	// (model-moves-transcript-01PMCH01 WP02). driveRun's terminal paths
 	// flush it, and the interrupt path records the partial through it so
@@ -922,10 +957,16 @@ func New(cfg Config) (*ChatRunner, error) {
 // StartStream opens one chat run on the kernel's chat graph and
 // returns a subscription id. The runner spawns a goroutine that drives
 // the kernel; events fan onto the broker's "llm:stream-chunk" /
-// "llm:stream-closed" topics. The userMessage is the new turn — the
-// runner appends it to the session via cfg.HistoryWriter before
-// firing the kernel so HistoryReadNode picks it up at run start.
-func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, modelOverride, userMessage string) (string, error) {
+// "llm:stream-closed" topics.
+//
+// turn names the user message this run answers. It is ALREADY in the
+// session — HistoryReadNode reads it from there like every other row —
+// and this function has no path that writes it (chat-single-writer-
+// 01DOGF0G: the runner used to re-append the text it was given, which is
+// how every typed turn came to be stored, and sent to the model, twice).
+// turn.Text is consumed only: the ask-node pre-seed, the post_send hook,
+// the advisors.
+func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, modelOverride string, turn UserTurn) (string, error) {
 	if r == nil {
 		return "", errors.New("chat: nil runner")
 	}
@@ -942,31 +983,18 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// than from fireAdvice's goroutine.
 	r.checkModelSwitch(ctx, sessionID, profileID, modelOverride)
 
-	// Persist the user turn so HistoryReadNode sees it on the first
-	// fire of the kernel run.
+	// Resolve the turn's span: the id of the persisted user row that
+	// opened it. Every move the loop emits below carries it, and that
+	// shared id IS the turn's span (model-moves-transcript-01PMCH01 WP02).
 	//
-	// turnSpanID is this row's id. Every move the loop emits below
-	// carries it, and that shared id IS the turn's span
-	// (model-moves-transcript-01PMCH01 WP02). WP01 already returned it
-	// here and the value was discarded.
-	var turnSpanID string
-	if r.cfg.HistoryWriter != nil && userMessage != "" {
-		// Classic entry: the human turn itself is not a move. The move
-		// metadata goes on the entries the loop emits AFTER this one.
-		mid, werr := r.cfg.HistoryWriter.AppendEntry(ctx, sessionID, coreag.HistoryEntry{
-			Role:    "user",
-			Content: userMessage,
-		})
-		if werr != nil {
-			return "", fmt.Errorf("chat: persist user turn: %w", werr)
-		}
-		turnSpanID = mid
-	}
+	// SINGLE WRITER (chat-single-writer-01DOGF0G). The row was written by
+	// the caller's own append — never here. This block used to append
+	// `userMessage` through cfg.HistoryWriter and take the NEW row's id as
+	// the span, while the frontend had already landed the same turn via
+	// Sessions_AppendMessage: two rows per turn, the span on the runner's
+	// copy, the frontend's copy orphaned, and the model reading both.
+	turnSpanID := turn.MessageID
 	if turnSpanID == "" && r.cfg.TurnSpan != nil {
-		// The empty-userMessage paths (keychain redrive; the multimodal
-		// send, where the frontend already landed the user's row). The
-		// turn HAS a span — this runner just did not write it — so look
-		// it up rather than leaving the turn's moves unattributable.
 		if mid, serr := r.cfg.TurnSpan.LatestUserMessageID(ctx, sessionID); serr != nil {
 			logging.L().Warn("chat.turn_span.lookup_failed",
 				"session_id", sessionID, "err", serr.Error())
@@ -977,11 +1005,24 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if turnSpanID == "" {
 		// No user message anywhere in this session. Nothing to hang the
 		// turn's moves on, so the run writes classic entries exactly as
-		// it did before this mission. Loud, because in a real chat
-		// session it cannot happen.
+		// it did before model-moves. Loud, because in a real chat session
+		// it cannot happen.
 		logging.L().Warn("chat.turn_span.unresolved",
 			"session_id", sessionID,
 			"note", "turn writes classic entries; no user message to span from")
+	}
+	turn.MessageID = turnSpanID
+
+	// FR-1d: report the user turn to fleet context-sync exactly once.
+	// The runner's old re-append was the only path that fed the sync hook
+	// for user turns (it fired on the write); with the write gone, the
+	// same event is emitted for the existing row through the writer
+	// seam's announcer. Only a fresh turn announces — the keychain
+	// redrive re-runs a turn that already did.
+	if turn.Announce && turnSpanID != "" {
+		if announcer, ok := r.cfg.HistoryWriter.(UserTurnAnnouncer); ok {
+			announcer.AnnounceUserTurn(ctx, sessionID, turnSpanID)
+		}
 	}
 
 	// Compaction is no longer a pre-send pass here. It is a `compact`
@@ -1234,7 +1275,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// run pauses on the next ask_user fire if the LoopNode body re-
 	// enters the AskNode for a follow-up turn.
 	askBus := coreag.NewMemAskBus()
-	askBus.Answer(subID, chatAskNodeID, userMessage)
+	askBus.Answer(subID, chatAskNodeID, turn.Text)
 
 	env := &coreag.Env{
 		RunID:     subID,
@@ -1475,7 +1516,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// matches (never blocks the hook on a lookup miss).
 		if r.cfg.PostSendHook != nil {
 			postSendHook := r.cfg.PostSendHook
-			capturedUserMessage := userMessage
+			capturedUserMessage := turn.Text
 			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, text string) {
 				resp, providerKind, modelID, ok := capturedJournal.LookupCandidateUsage(text)
 				if !ok {
@@ -1522,7 +1563,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		capturedTier := resolvedKnobs.EffectiveTier
 		capturedProfileID, capturedModelOverride := profileID, modelOverride
 		env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(_ context.Context, sID, _, _ string) {
-			go r.fireAdvice(sID, capturedProfileID, capturedModelOverride, userMessage, capturedTier)
+			go r.fireAdvice(sID, capturedProfileID, capturedModelOverride, turn.Text, capturedTier)
 		})
 	}
 
@@ -1531,6 +1572,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		sessionID:     sessionID,
 		profileID:     profileID,
 		modelOverride: modelOverride,
+		turn:          turn,
 		cancel:        cancel,
 		done:          make(chan struct{}),
 		bridge:        bridge,
@@ -1626,10 +1668,11 @@ func (r *ChatRunner) HasPausedSubFor(profileID string) (token string, ok bool) {
 }
 
 // RedriveLastTurn re-issues a StartStream for the captured (profileID,
-// sessionID, modelOverride) of a paused turn WITHOUT appending a new user
-// message — the user turn is already in session history courtesy of the
-// original StartStream. This is the auto-resume seam called by the LLM
-// view after a successful TestAndRotateKey.
+// sessionID, modelOverride, turn) of a paused turn. Nothing is appended —
+// the runner never appends a user turn — and the turn is not announced to
+// context-sync again: the original run already did. This is the
+// auto-resume seam called by the LLM view after a successful
+// TestAndRotateKey.
 //
 // Returns the new sub_id on success. The paused entry is removed from
 // pausedSubs regardless of the outcome so a failed redrive does not block
@@ -1646,10 +1689,14 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 	if !ok {
 		return "", fmt.Errorf("chat: no paused turn for profile %q", profileID)
 	}
-	// StartStream with empty userMessage skips the HistoryWriter.AppendMessage
-	// call so the user turn is not double-appended (the HistoryWriter guard
-	// in StartStream checks `userMessage != ""`).
-	newSubID, err = r.StartStream(ctx, pt.profileID, pt.sessionID, pt.modelOverride, "")
+	// The SAME turn, minus the announce. Before chat-single-writer this
+	// passed an empty userMessage — which was what kept the old runner from
+	// appending the turn a third time, and which also handed the ask node,
+	// the post_send hook and the advisors an empty string for the redriven
+	// turn.
+	redrive := pt.turn
+	redrive.Announce = false
+	newSubID, err = r.StartStream(ctx, pt.profileID, pt.sessionID, pt.modelOverride, redrive)
 	if err != nil {
 		// The user rotated their key expecting the retry to work; a bare
 		// error return here told them nothing (B17, engineer-truth-pass
@@ -1863,6 +1910,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 			sessionID:     sub.sessionID,
 			profileID:     authFailed.ProfileID,
 			modelOverride: sub.modelOverride,
+			turn:          sub.turn,
 			pausedAt:      time.Now(),
 		}
 		r.mu.Lock()
@@ -2070,7 +2118,14 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// which is turn-wide by design — unlike the text, it is not
 		// scoped to the tail segment.
 		_, hasTool := sub.bridge.PartialState()
-		partialText := sub.bridge.PartialSegment()
+		// chat-single-writer-01DOGF0G WP04: and not even the whole
+		// segment — only the part the move journal neither wrote nor
+		// holds. A segment the journal already owns (the parked last fire
+		// that the deferred Finish below will write, or a `final`
+		// session_write already wrote) persisted here became a kind-less
+		// failed twin of that move: the "extra assistant bubble" of
+		// dogfood F12. See turnJournal.UnpersistedTail.
+		partialText := sub.journal.UnpersistedTail(sub.bridge.PartialSegment())
 		if partialText != "" {
 			partialFailureKind = classifyPartialFailureKind(message)
 			partialRecoverable = !hasTool

@@ -79,7 +79,7 @@ func TestTurnUsage_CleanTurn_ReportsStartedOnceAndNoFailure(t *testing.T) {
 	usage := &fakeTurnUsage{}
 	runner, broker := newTurnUsageRunner(t, llm, usage)
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-42", "", "hello"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-42", "", testTurn("hello")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -105,7 +105,7 @@ func TestTurnUsage_BackendError_ReportsAClosedKindNeverTheMessage(t *testing.T) 
 	usage := &fakeTurnUsage{}
 	runner, broker := newTurnUsageRunner(t, llm, usage)
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-42", "", "hello"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-42", "", testTurn("hello")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason != "backend-error" {

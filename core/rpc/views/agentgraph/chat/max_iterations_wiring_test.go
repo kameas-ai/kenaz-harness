@@ -100,7 +100,7 @@ func TestChatRunner_MaxIterations_NoProviderUsesLegacyMaxTurns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", "hello")
+	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestChatRunner_MaxIterations_DefaultTierMatchesLegacyMaxTurns(t *testing.T)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", "hello")
+	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestChatRunner_MaxIterations_ResolvedKnobOverridesLegacyMaxTurns(t *testing
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = runner.StartStream(context.Background(), "profile-1", "session-override-test", "", "hello")
+	_, err = runner.StartStream(context.Background(), "profile-1", "session-override-test", "", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestChatRunner_MaxIterations_ZeroResolvedFallsBackToLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", "hello")
+	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestChatRunner_MaxIterations_AutonomyKnobsProviderCalledExactlyOnce(t *test
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "hello"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("hello")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	// StartStream resolves synchronously before it returns; the async

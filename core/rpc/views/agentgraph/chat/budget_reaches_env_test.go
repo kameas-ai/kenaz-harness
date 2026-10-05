@@ -73,7 +73,7 @@ func TestChatRunner_GraphBudgetReachesEnv(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "say hi"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("say hi")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	waitForClosed(t, broker)

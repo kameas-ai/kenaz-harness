@@ -160,7 +160,7 @@ func TestChatRunner_PostSendHook_FiresOnRealPath(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-post-send", "", userMsg); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-post-send", "", testTurn(userMsg)); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -275,7 +275,7 @@ func TestPostSendHook_MemoryPersist_WritesRealRow(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-memory-persist", "", userMsg); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-memory-persist", "", testTurn(userMsg)); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)

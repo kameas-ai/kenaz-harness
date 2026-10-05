@@ -200,11 +200,12 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 
 	// Step 5: append the rendered prompt as the user turn BEFORE calling
 	// the LLM view's StartStream. Required: llmview.API.StartStream
-	// derives its userMessage by scanning session history backwards for
-	// the last user row (core/rpc/views/llm/impl.go) — the same contract
-	// the interactive chat surface relies on (Sessions_AppendMessage then
-	// LLM_StartStream). Without this append, StartStream sends an empty
-	// prompt.
+	// resolves the turn by scanning session history backwards for the
+	// last user row (core/rpc/views/llm/impl.go) — the same contract the
+	// interactive chat surface relies on (Sessions_AppendMessage then
+	// LLM_StartStream). This append is the turn's ONLY write: the chat
+	// runner never persists a user turn (chat-single-writer-01DOGF0G).
+	// Without it, StartStream runs with no user message at all.
 	if _, aerr := d.deps.Sessions.AppendMessage(ctx, sess.ID, "user", prompt); aerr != nil {
 		return failedRecord(now, fmt.Sprintf("append prompt: %v", aerr)), nil
 	}
