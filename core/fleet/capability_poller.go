@@ -180,12 +180,6 @@ func (p *CapabilityPoller) Start(ctx context.Context) {
 	// AuditArchiver and AuditRetentionSweeper, which already do it this way.
 	p.done = make(chan struct{})
 
-	// Load the disk cache as the initial state so we have something to serve
-	// before the first network fetch completes.
-	if cached, err := LoadCapabilities(p.dataDir); err == nil && cached.Source == "cache" {
-		p.setCurrent(cached)
-	}
-
 	go func() {
 		defer close(p.done)
 		defer cancel()
@@ -199,6 +193,23 @@ func (p *CapabilityPoller) Start(ctx context.Context) {
 				)
 			}
 		}()
+
+		// Load the disk cache as the initial state so we have something to
+		// serve before the first network fetch completes. This MUST happen
+		// on the poller's own goroutine, never inline in Start: setCurrent
+		// fires OnChange listeners synchronously, and Start's callers may
+		// hold locks the listeners need. startFleetBackgroundLocked calls
+		// Start under settings' fleet.mu write lock while the registered
+		// listener (ReconcileTelemetry) read-locks the same mutex — with a
+		// warm capability cache on disk, an inline setCurrent here
+		// deadlocked every enrolled install at boot (caught in the v0.87.0
+		// release dogfood, 2026-10-05). No unit test executes this path
+		// (production code gates Start off under go test), so the invariant
+		// is pinned by
+		// TestCapabilityPollerStart_ListenersDoNotFireOnCallersGoroutine.
+		if cached, err := LoadCapabilities(p.dataDir); err == nil && cached.Source == "cache" {
+			p.setCurrent(cached)
+		}
 
 		// Decide whether to fetch immediately or wait.
 		cur := p.Current()
