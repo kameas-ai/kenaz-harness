@@ -258,6 +258,24 @@ func WriteLocalToken(l Layout) (string, error) {
 	return token, nil
 }
 
+// ensureLocalToken returns the shutdown token, writing a fresh one when
+// none exists yet. kenaz-ml reads lease/shutdown.token on EVERY
+// /v1/admin/shutdown request and never creates it ("written
+// user-read-only by the spawning client" — kenaz_ml/lifecycle/shutdown.py),
+// so a token written now authorizes a stop of an engine that is already
+// running — the recovery path for an engine spawned by a harness build
+// that never wrote one (every build before the v0.86.0 unwired sweep).
+// An existing token is returned untouched, never rotated: another client
+// may hold it.
+func ensureLocalToken(l Layout) (string, error) {
+	if tok, ok, err := ReadLocalToken(l); err != nil {
+		return "", err
+	} else if ok && tok != "" {
+		return tok, nil
+	}
+	return WriteLocalToken(l)
+}
+
 // ReadLocalToken reads the local shutdown-authorization token. ok=false
 // (no error) when no token has been written yet.
 func ReadLocalToken(l Layout) (string, bool, error) {

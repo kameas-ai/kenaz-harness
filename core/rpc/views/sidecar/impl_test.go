@@ -345,9 +345,10 @@ func TestUninstall_RemovesEverything(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.root, "models", "w.bin"), []byte("w"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.root, "lease", "shutdown.token"), []byte("tok\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// No hand-written lease/shutdown.token (v0.86.0 unwired sweep): the
+	// fixture used to write it, doing the production layer's job — the
+	// Enable above must have written it at spawn time, or the engine
+	// could never be stopped.
 	v, err := f.impl.Uninstall(context.Background())
 	if err != nil {
 		t.Fatal(err)
