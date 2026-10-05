@@ -307,18 +307,61 @@ func loadDedupeRows(ctx context.Context, tx migrations.WriteTx, sessionID string
 // externallyReferenced reports whether any table outside this session's
 // own pointer columns names id — branches, branch message refs, or an
 // artifact's source ref.
+//
+// The artifact check must tolerate BOTH storage generations: before
+// units/1104 the table is `artifacts` (source_ref_json column); after
+// it, artifacts live in `units` (kind='artifact', source ref inside
+// metadata JSON) and the old table is renamed `artifacts_legacy`. The
+// repair path re-applies late sessions migrations, so this migration
+// can legitimately run AGAIN on a database 1104 has already converted —
+// a bare `FROM artifacts` would fail with "no such table" there and
+// brick Open (C-review finding 2, 2026-10-04).
 func externallyReferenced(ctx context.Context, tx migrations.WriteTx, id string) (bool, error) {
 	var n int
 	err := tx.QueryRow(ctx, `
         SELECT
           (SELECT COUNT(*) FROM branches WHERE parent_message_id = ?) +
-          (SELECT COUNT(*) FROM branch_message_refs WHERE parent_msg_id = ? OR child_msg_id = ?) +
-          (SELECT COUNT(*) FROM artifacts WHERE instr(source_ref_json, ?) > 0)`,
-		id, id, id, `"`+id+`"`).Scan(&n)
+          (SELECT COUNT(*) FROM branch_message_refs WHERE parent_msg_id = ? OR child_msg_id = ?)`,
+		id, id, id).Scan(&n)
 	if err != nil {
 		return false, err
 	}
-	return n > 0, nil
+	if n > 0 {
+		return true, nil
+	}
+	a, err := artifactReferences(ctx, tx, id)
+	if err != nil {
+		return false, err
+	}
+	return a > 0, nil
+}
+
+// artifactReferences counts artifact rows naming id, against whichever
+// artifact storage generation this database is on.
+func artifactReferences(ctx context.Context, tx migrations.WriteTx, id string) (int, error) {
+	var hasArtifacts int
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artifacts'`,
+	).Scan(&hasArtifacts); err != nil {
+		return 0, err
+	}
+	quoted := `"` + id + `"`
+	var n int
+	if hasArtifacts == 1 {
+		if err := tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM artifacts WHERE instr(source_ref_json, ?) > 0`,
+			quoted).Scan(&n); err != nil {
+			return 0, err
+		}
+		return n, nil
+	}
+	// Post-1104: artifact units carry the source ref inside metadata.
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM units WHERE kind = 'artifact' AND instr(metadata, ?) > 0`,
+		quoted).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // dedupeSession applies both rules to one session.

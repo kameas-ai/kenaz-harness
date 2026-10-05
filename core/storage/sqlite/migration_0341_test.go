@@ -549,3 +549,67 @@ func TestMigration0341_SecondApplicationConvergesOnInterleavedPairs(t *testing.T
 		t.Errorf("%d gi rows carry a dangling turn_span_id after convergence", dangling)
 	}
 }
+
+// TestMigration0341_ReapplyAfterUnitsConversionDoesNotBrick pins the
+// C-review cross-branch hazard (finding 2, 2026-10-04): the repair path
+// re-applies late sessions migrations, so 0341 can run AGAIN on a
+// database units/1104 has already converted (artifacts renamed to
+// artifacts_legacy). A bare `FROM artifacts` would fail Open there.
+// The hardened artifactReferences consults sqlite_master and falls back
+// to artifact units, so the referenced pair is still SKIPPED.
+func TestMigration0341_ReapplyAfterUnitsConversionDoesNotBrick(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "data.db")
+	dumpText, err := os.ReadFile(filepath.Join("testdata", "upgrade", "v0.85.2", "dump.sql"))
+	if err != nil {
+		t.Fatalf("read v0.85.2 dump.sql: %v", err)
+	}
+	raw := openRawSQLiteAt(t, rawPath)
+	if err := upgradesnap.Materialize(ctx, raw, string(dumpText)); err != nil {
+		t.Fatalf("materialise v0.85.2: %v", err)
+	}
+	ms := func(n int64) int64 { return g0341Base + n*1_000_000 }
+	stmts := []string{
+		`INSERT INTO sessions (id, name, created_at, updated_at, last_active_at, position) VALUES ('zz-re', 'reapply', 1, 1, 1, 71)`,
+		`ALTER TABLE artifacts RENAME TO artifacts_legacy`,
+		`INSERT INTO units (id, kind, scope, scope_id, classification, version, load_policy, title, body, metadata, created_at, updated_at)
+		 VALUES ('unit-art-1','artifact','session','zz-re','personal',1,'on_demand','t','','{"source_ref":{"message_id":"zr-a"}}',1,1)`,
+	}
+	for _, q := range stmts {
+		if _, err := raw.ExecContext(ctx, q); err != nil {
+			t.Fatalf("seed %q: %v", q, err)
+		}
+	}
+	for i, row := range []struct {
+		id string
+		at int64
+	}{{"zr-a", ms(0)}, {"zr-a-copy", ms(1)}} {
+		if _, err := raw.ExecContext(ctx,
+			`INSERT INTO session_messages (id, session_id, sequence, role, content, created_at) VALUES (?, 'zz-re', ?, 'user', 'same text', ?)`,
+			row.id, i, row.at); err != nil {
+			t.Fatalf("seed pair row: %v", err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw: %v", err)
+	}
+
+	// Open applies 0341 against the post-1104 shape. It must NOT fail,
+	// and the pair referenced through the artifact UNIT must be kept.
+	db, err := storagesqlite.Open(newConfig(dir))
+	if err != nil {
+		t.Fatalf("Open on a units-converted database: %v", err)
+	}
+	var n int
+	if err := db.Reader().QueryRow(ctx,
+		`SELECT COUNT(*) FROM session_messages WHERE session_id = 'zz-re' AND role = 'user'`).Scan(&n); err != nil {
+		t.Fatalf("count zz-re users: %v", err)
+	}
+	if err := db.Close(ctx); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("user rows after 0341 on units-converted db = %d, want 2 (pair kept via units reference)", n)
+	}
+}
