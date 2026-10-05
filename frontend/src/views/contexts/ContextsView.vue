@@ -74,9 +74,8 @@
  *   - With a folder selected, Share… / Promote become "Share folder…" /
  *     "Promote folder…" and open FolderShareDialog — a client-side
  *     sequential batch over the per-entry publish/promote bindings
- *     (folderBatch.ts). The interim "pending a product decision" folder copy
- *     (folderShareReason) is retired; a folder gets the same
- *     `sharingDisabledReason` as a file.
+ *     (folderBatch.ts). The interim per-file-only folder sentence is
+ *     retired; a folder gets the same `sharingDisabledReason` as a file.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
