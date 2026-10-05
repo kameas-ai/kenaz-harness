@@ -152,4 +152,22 @@ describe('entry-point route tables', () => {
       }
     },
   );
+
+  // nav-ia-sweep-01DOGF0F WP03 (P-1): the "Sessions" rail entry is gone,
+  // but the routes it pointed at are not — `/` still lands on the session
+  // surface and `/sessions/:id` still opens a chat, in both bundles.
+  it.each(['desktop', 'served'] as const)(
+    '/ redirects to /sessions and /sessions/:id resolves (%s)',
+    async (which) => {
+      const routes = which === 'desktop' ? desktop : served;
+      const router = createRouter({ history: createMemoryHistory(), routes });
+      await router.push('/');
+      await router.isReady();
+      expect(router.currentRoute.value.path, `${which} /`).toBe('/sessions');
+      expect(router.currentRoute.value.name).toBe('sessions');
+      await router.push('/sessions/abc');
+      expect(router.currentRoute.value.name).toBe('sessions');
+      expect(router.currentRoute.value.params.id).toBe('abc');
+    },
+  );
 });

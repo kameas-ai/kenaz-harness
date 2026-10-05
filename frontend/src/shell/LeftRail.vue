@@ -1022,7 +1022,10 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     <!-- primary-surfaces nav -->
     <nav class="px-2 py-2 border-t border-border-muted" aria-label="Surfaces">
       <ul class="space-y-1">
-        <li><RailEntry :icon="MessageSquare" label="Sessions" to="/sessions" /></li>
+        <!-- nav-ia-sweep-01DOGF0F WP03 (F4): no "Sessions" entry. The session
+             list above IS the sessions home; /sessions with no id is only an
+             empty state whose New-session button duplicated the rail's. The
+             routes (/, /sessions, /sessions/:id) are untouched. -->
         <li><RailEntry :icon="Wrench" label="Tools" to="/tools" match-prefix="/tools" /></li>
         <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" match-prefix="/workflows" /></li>
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" match-prefix="/contexts" /></li>
