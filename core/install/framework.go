@@ -246,9 +246,11 @@ func (f *Framework) install(ctx context.Context, ref Ref, in Inputs, via string)
 
 	st, err := p.InstalledState(ctx, ref.ID)
 	if err != nil {
+		f.cleanupUnconsumed(ctx, p, ref)
 		return Result{}, fmt.Errorf("%w: %s %s: reading consumer state: %v", ErrNotConsumed, ref.Kind, ref.ID, err)
 	}
 	if !st.Installed {
+		f.cleanupUnconsumed(ctx, p, ref)
 		return Result{}, fmt.Errorf("%w: %s %s", ErrNotConsumed, ref.Kind, ref.ID)
 	}
 
@@ -290,7 +292,13 @@ func (f *Framework) Uninstall(ctx context.Context, kind Kind, id string) error {
 	if err != nil {
 		return err
 	}
-	if it, derr := p.Detail(ctx, id); derr == nil && it.ReadOnly {
+	// Fail closed (review L1): if the item cannot be described, it cannot
+	// be shown not to be org-managed, so nothing is removed.
+	it, derr := p.Detail(ctx, id)
+	if derr != nil {
+		return fmt.Errorf("install: uninstall %s %s: %w", kind, id, derr)
+	}
+	if it.ReadOnly {
 		reason := it.ReadOnlyReason
 		if reason == "" {
 			reason = "provisioned by your org"
@@ -313,12 +321,23 @@ func (f *Framework) Uninstall(ctx context.Context, kind Kind, id string) error {
 	return nil
 }
 
+// State reads id's installed state from its consumer.
+func (f *Framework) State(ctx context.Context, kind Kind, id string) (State, error) {
+	p, err := f.provider(kind)
+	if err != nil {
+		return State{}, err
+	}
+	return p.InstalledState(ctx, id)
+}
+
 // Observe is for a per-kind flow that completes an install the framework
 // did not start (an MCP OAuth sign-in or device-code approval installs and
-// respawns the recipe itself). It reads the consumer and, when the
-// capability is installed, announces it like any other install. It never
+// respawns the recipe itself). wasInstalled is the consumer's state read
+// (State) before the flow ran. Observe announces capability:installed only
+// for a transition — the consumer lists it now and did not before — so
+// re-authenticating an already-enabled recipe emits nothing. It never
 // announces an install the consumer does not confirm.
-func (f *Framework) Observe(ctx context.Context, kind Kind, id string) (State, error) {
+func (f *Framework) Observe(ctx context.Context, kind Kind, id string, wasInstalled bool) (State, error) {
 	p, err := f.provider(kind)
 	if err != nil {
 		return State{}, err
@@ -327,12 +346,23 @@ func (f *Framework) Observe(ctx context.Context, kind Kind, id string) (State, e
 	if err != nil {
 		return State{}, err
 	}
-	if st.Installed {
+	if st.Installed && !wasInstalled {
 		f.emit(TopicCapabilityInstalled, Event{
 			Kind: kind, ID: id, Version: st.Version, Installed: true, Via: "flow", Consumer: st.Consumer,
 		})
 	}
 	return st, nil
+}
+
+// cleanupUnconsumed removes what a provider's Install left behind when its
+// consumer did not confirm the capability (review M1): no keychain entry,
+// store row or file is stranded by a refused install. Best effort — a
+// failure is logged; the install still fails and nothing is announced.
+func (f *Framework) cleanupUnconsumed(ctx context.Context, p Provider, ref Ref) {
+	if err := p.Uninstall(ctx, ref.ID); err != nil {
+		logging.L().Warn("install.unconsumed_cleanup_failed",
+			"kind", string(ref.Kind), "id", ref.ID, "err", err.Error())
+	}
 }
 
 func (f *Framework) emit(topic string, ev Event) {

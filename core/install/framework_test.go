@@ -30,8 +30,13 @@ type fakeProvider struct {
 	requirements    []install.Requirement
 	updateRef       install.Ref
 	updateErr       error
+	detailErr       error
+	// artifacts stands in for what an install leaves outside the consumer
+	// (a keychain entry, a store row): Install writes, Uninstall clears.
+	artifacts map[string]bool
 
-	installCalls []install.InstallRequest
+	installCalls   []install.InstallRequest
+	uninstallCalls []string
 }
 
 func newFake(kind install.Kind) *fakeProvider {
@@ -40,6 +45,7 @@ func newFake(kind install.Kind) *fakeProvider {
 		items:        map[string]install.Item{},
 		consumer:     map[string]string{},
 		verification: install.Verification{Method: install.VerifyBuiltin},
+		artifacts:    map[string]bool{},
 	}
 }
 
@@ -69,6 +75,9 @@ func (p *fakeProvider) List(_ context.Context, _ install.Filter) (install.Listin
 func (p *fakeProvider) Detail(_ context.Context, id string) (install.Item, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.detailErr != nil {
+		return install.Item{}, p.detailErr
+	}
 	it, ok := p.items[id]
 	if !ok {
 		return install.Item{}, install.ErrNotFound
@@ -92,6 +101,7 @@ func (p *fakeProvider) Install(_ context.Context, req install.InstallRequest) (a
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.installCalls = append(p.installCalls, req)
+	p.artifacts[req.Ref.ID] = true
 	if !p.consumerIgnores {
 		p.consumer[req.Ref.ID] = req.Ref.Version
 	}
@@ -101,6 +111,8 @@ func (p *fakeProvider) Install(_ context.Context, req install.InstallRequest) (a
 func (p *fakeProvider) Uninstall(_ context.Context, id string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.uninstallCalls = append(p.uninstallCalls, id)
+	delete(p.artifacts, id)
 	if !p.consumerSticky {
 		delete(p.consumer, id)
 	}
@@ -118,6 +130,18 @@ func (p *fakeProvider) Update(_ context.Context, _ string) (install.Ref, error) 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.updateRef, p.updateErr
+}
+
+func (p *fakeProvider) hasArtifact(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.artifacts[id]
+}
+
+func (p *fakeProvider) uninstalls() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.uninstallCalls...)
 }
 
 func (p *fakeProvider) calls() []install.InstallRequest {
@@ -216,6 +240,13 @@ func TestInstall_BadgeOnly_RefusedWithErrNotConsumed(t *testing.T) {
 	}
 	if evs := pub.snapshot(); len(evs) != 0 {
 		t.Fatalf("a refused install must announce nothing, got %+v", evs)
+	}
+	// Review M1: what the provider's Install left behind is cleaned up.
+	if p.hasArtifact("b1") {
+		t.Fatal("an unconsumed install stranded its artifacts (keychain entry / store row)")
+	}
+	if got := p.uninstalls(); len(got) != 1 || got[0] != "b1" {
+		t.Fatalf("cleanup uninstall calls = %v", got)
 	}
 }
 
@@ -394,6 +425,7 @@ func TestUninstall_ReadOnlyRefused(t *testing.T) {
 
 func TestUninstall_ConsumerStillLists_ErrStillConsumed(t *testing.T) {
 	p := newFake(install.KindSkill)
+	p.add(install.Item{ID: "s1", Name: "S1"})
 	p.consumer["s1"] = "1"
 	p.consumerSticky = true
 	fw, pub := newFramework(t, nil, p)
@@ -477,21 +509,56 @@ func TestObserve_AnnouncesOnlyWhatTheConsumerConfirms(t *testing.T) {
 	fw, pub := newFramework(t, nil, p)
 	ctx := context.Background()
 
-	if st, err := fw.Observe(ctx, install.KindMCPRecipe, "r1"); err != nil || st.Installed {
+	if st, err := fw.Observe(ctx, install.KindMCPRecipe, "r1", false); err != nil || st.Installed {
 		t.Fatalf("Observe before install = %+v, %v", st, err)
 	}
 	if len(pub.snapshot()) != 0 {
 		t.Fatal("Observe announced an install the consumer does not list")
 	}
+	before, _ := fw.State(ctx, install.KindMCPRecipe, "r1")
 	p.mu.Lock()
 	p.consumer["r1"] = ""
 	p.mu.Unlock()
-	if _, err := fw.Observe(ctx, install.KindMCPRecipe, "r1"); err != nil {
+	if _, err := fw.Observe(ctx, install.KindMCPRecipe, "r1", before.Installed); err != nil {
 		t.Fatal(err)
 	}
 	evs := pub.snapshot()
 	if len(evs) != 1 || evs[0].ev.Via != "flow" || !evs[0].ev.Installed {
 		t.Fatalf("events = %+v", evs)
+	}
+}
+
+// Review: re-authenticating an already-enabled recipe is not a new install.
+func TestObserve_ReauthOfInstalledRecipeEmitsNothing(t *testing.T) {
+	p := newFake(install.KindMCPRecipe)
+	p.consumer["r1"] = ""
+	fw, pub := newFramework(t, nil, p)
+	ctx := context.Background()
+	before, err := fw.State(ctx, install.KindMCPRecipe, "r1")
+	if err != nil || !before.Installed {
+		t.Fatalf("State = %+v, %v", before, err)
+	}
+	if _, err := fw.Observe(ctx, install.KindMCPRecipe, "r1", before.Installed); err != nil {
+		t.Fatal(err)
+	}
+	if evs := pub.snapshot(); len(evs) != 0 {
+		t.Fatalf("a re-auth emitted a second capability:installed: %+v", evs)
+	}
+}
+
+// Review L1: if the item cannot be described, uninstall refuses (fail
+// closed) instead of skipping the org-managed check.
+func TestUninstall_DetailErrorFailsClosed(t *testing.T) {
+	p := newFake(install.KindMCPRecipe)
+	p.consumer["r1"] = ""
+	p.detailErr = errors.New("catalog unreadable")
+	fw, pub := newFramework(t, nil, p)
+	err := fw.Uninstall(context.Background(), install.KindMCPRecipe, "r1")
+	if err == nil || !strings.Contains(err.Error(), "catalog unreadable") {
+		t.Fatalf("got %v, want the Detail error", err)
+	}
+	if len(p.uninstalls()) != 0 || len(pub.snapshot()) != 0 {
+		t.Fatal("uninstall proceeded past an unreadable Detail")
 	}
 }
 

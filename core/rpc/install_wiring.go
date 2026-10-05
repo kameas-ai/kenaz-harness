@@ -37,14 +37,23 @@ func installRecipe(ctx context.Context, fw *install.Framework, t tools.ToolsAPI,
 	return t.RecipeStatus(ctx, id)
 }
 
-// observeRecipeFlow is called after a per-kind MCP flow that installs on its
-// own (OAuth sign-in, device-code approval) succeeds: the framework reads
-// the supervisor and announces the install if — and only if — it is there.
-func observeRecipeFlow(ctx context.Context, fw *install.Framework, id string) {
-	if fw == nil {
-		return
+// observeRecipeFlow wraps a per-kind MCP flow that installs on its own
+// (OAuth sign-in, device-code approval): it reads the supervisor before the
+// flow and, if the flow succeeds, lets the framework announce the install
+// only when it is new — re-authenticating an already-enabled recipe emits
+// no second capability:installed.
+func observeRecipeFlow(ctx context.Context, fw *install.Framework, id string, flow func() (stdio.RecipeStatus, error)) (stdio.RecipeStatus, error) {
+	was := false
+	if fw != nil {
+		if st, err := fw.State(ctx, install.KindMCPRecipe, id); err == nil {
+			was = st.Installed
+		}
 	}
-	_, _ = fw.Observe(ctx, install.KindMCPRecipe, id)
+	st, err := flow()
+	if err == nil && fw != nil {
+		_, _ = fw.Observe(ctx, install.KindMCPRecipe, id, was)
+	}
+	return st, err
 }
 
 // frameworkRoutedTools is the ToolsAPI the fleet MCP sync applier

@@ -2148,11 +2148,9 @@ func (b *Bindings) Tools_InstallRecipe(id string, env map[string]string, config 
 // supervisor and announces capability:installed if it is there.
 func (b *Bindings) Tools_SignInRecipe(id string) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_SignInRecipe")()
-	st, err := b.api.Tools().SignInRecipe(b.ctx(), id)
-	if err == nil {
-		observeRecipeFlow(b.ctx(), b.api.Capabilities().Framework(), id)
-	}
-	return st, err
+	return observeRecipeFlow(b.ctx(), b.api.Capabilities().Framework(), id, func() (stdio.RecipeStatus, error) {
+		return b.api.Tools().SignInRecipe(b.ctx(), id)
+	})
 }
 
 // Tools_UninstallRecipe removes a recipe through the framework (consumer
@@ -2246,11 +2244,9 @@ func (b *Bindings) Tools_BeginDeviceAuth(id string) (tools.DeviceAuthBeginResult
 // Returns the live RecipeStatus so the frontend can update the Tools panel.
 func (b *Bindings) Tools_PollDeviceAuth(id string) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_PollDeviceAuth")()
-	st, err := b.api.Tools().PollDeviceAuth(b.ctx(), id)
-	if err == nil {
-		observeRecipeFlow(b.ctx(), b.api.Capabilities().Framework(), id)
-	}
-	return st, err
+	return observeRecipeFlow(b.ctx(), b.api.Capabilities().Framework(), id, func() (stdio.RecipeStatus, error) {
+		return b.api.Tools().PollDeviceAuth(b.ctx(), id)
+	})
 }
 
 // ── capabilities: the one install framework (install-framework-01DOGF0B) ──

@@ -139,3 +139,30 @@ func TestSyncMCPApply_InstallsThroughTheFramework(t *testing.T) {
 		t.Fatalf("events = %v, want one %s", got, install.TopicCapabilityInstalled)
 	}
 }
+
+// TestObserveRecipeFlow_ReauthEmitsNoSecondInstall — review: an OAuth
+// re-sign-in (or device-code re-approval) of an already-enabled recipe is
+// not a new install; a first sign-in that enables it is.
+func TestObserveRecipeFlow_ReauthEmitsNoSecondInstall(t *testing.T) {
+	ft := &fakeRecipeTools{enabled: map[string]bool{}}
+	pub := &capturePublisher{}
+	fw := install.New(pub, nil)
+	if err := fw.Register(install.KindMCPRecipe, capabilitiesview.NewMCPProvider(ft)); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	signIn := func() (stdio.RecipeStatus, error) { return ft.InstallRecipe(ctx, "fetch", nil, nil) }
+
+	if _, err := observeRecipeFlow(ctx, fw, "fetch", signIn); err != nil {
+		t.Fatal(err)
+	}
+	if got := pub.snapshot(); len(got) != 1 || got[0] != install.TopicCapabilityInstalled {
+		t.Fatalf("first sign-in events = %v, want one capability:installed", got)
+	}
+	if _, err := observeRecipeFlow(ctx, fw, "fetch", signIn); err != nil {
+		t.Fatal(err)
+	}
+	if got := pub.snapshot(); len(got) != 1 {
+		t.Fatalf("re-auth emitted again: %v", got)
+	}
+}
