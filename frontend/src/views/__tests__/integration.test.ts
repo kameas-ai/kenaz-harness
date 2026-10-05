@@ -228,8 +228,8 @@ function makeRouter() {
         component: defineComponent({ render: () => h('div', 'sessions') }),
       },
       {
-        path: '/memory',
-        name: 'memory',
+        path: '/knowledge/learned',
+        name: 'knowledge',
         component: defineComponent({ render: () => h('div', 'memory') }),
       },
     ],

@@ -85,10 +85,19 @@ import GlobalContextPanel from '@/components/settings/GlobalContextPanel.vue';
 import ContextRecent from './ContextRecent.vue';
 import ContextHealthCard from '@/components/context/ContextHealthCard.vue';
 
+const props = defineProps<{
+  /**
+   * Rendered inside KnowledgeView's Curated section (knowledge-home-01DOGF0E
+   * WP02): Knowledge owns the page header, so this view drops its own
+   * CanvasHead and shows the library location in its toolbar instead.
+   */
+  embedded?: boolean;
+}>();
+
 const servedMode = useServedMode();
 const client = useHarnessClient();
 
-const tree = ref<ContextNode | null>(null);
+const tree =ref<ContextNode | null>(null);
 const recent = ref<readonly string[]>([]);
 const rootPath = ref<string>('');
 const treeError = ref<string | null>(null);
@@ -599,6 +608,7 @@ onBeforeUnmount(() => {
     class="h-full flex flex-col"
   >
     <CanvasHead
+      v-if="!props.embedded"
       number="07"
       section="CONTEXTS"
       title="Context library"
@@ -607,8 +617,22 @@ onBeforeUnmount(() => {
           ? `Markdown + text files in ${rootPath}. Drop a file in the folder or use the “+ Folder” affordance to organise.`
           : 'Markdown + text files attached to sessions, projects, or globally. Local-only — context files never leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active).'
       "
+    />
+    <!-- Library toolbar. Lived in CanvasHead's trailing slot until
+         knowledge-home-01DOGF0E WP02; a row of its own so the controls
+         survive when Knowledge mounts this view without its header. -->
+    <div
+      class="px-6 py-2 border-b border-border-muted flex flex-wrap items-center gap-3"
+      data-testid="context-toolbar"
     >
-      <template #trailing>
+      <span
+        v-if="props.embedded"
+        class="font-ui text-[11px] text-ink-muted flex-1 min-w-0 truncate"
+        data-testid="context-library-location"
+      >
+        <template v-if="rootPath">Markdown + text files in <span class="font-mono">{{ rootPath }}</span></template>
+        <template v-else>Markdown + text files, local to this device</template>
+      </span>
         <div class="flex items-center gap-3">
           <label
             class="flex items-center gap-1.5 font-ui text-[11px] text-ink-muted cursor-pointer"
@@ -640,8 +664,7 @@ onBeforeUnmount(() => {
             @change="onImportChange"
           />
         </div>
-      </template>
-    </CanvasHead>
+    </div>
 
     <!-- Global-scope attachments — moved here from Settings (every
          session inherits these as the prefix). -->

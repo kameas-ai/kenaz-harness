@@ -53,6 +53,14 @@ import PrunePreviewModal from './PrunePreviewModal.vue';
 import ProvenanceDrawer from './ProvenanceDrawer.vue';
 import type { ChunkProvenance } from '@/lib/types';
 
+const props = defineProps<{
+  /**
+   * Rendered inside KnowledgeView's Learned section (knowledge-home-01DOGF0E
+   * WP02): Knowledge owns the page header, so this view drops its own.
+   */
+  embedded?: boolean;
+}>();
+
 const servedMode = useServedMode();
 const client = useHarnessClient();
 const route = useRoute();
@@ -583,6 +591,7 @@ defineExpose({ refresh });
   />
   <div v-else>
     <CanvasHead
+      v-if="!props.embedded"
       number="07"
       section="MEMORY"
       title="Long-term memory"

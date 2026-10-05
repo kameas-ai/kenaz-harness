@@ -47,21 +47,27 @@ export const routes: RouteRecordRaw[] = [
     name: 'audit',
     component: () => import('@/views/audit/AuditView.vue'),
   },
+  // knowledge-home-01DOGF0E WP02 (FR-1, FR-2): Contexts and Memory are one
+  // Knowledge surface with Curated and Learned sections; the stores stay
+  // separate. The old paths redirect into the matching section, keeping the
+  // query string (MemoryView reads ?scopeKind=/?scopeId=, MemoryBadge pushes
+  // ?project=), so bookmarks, palette history and a persisted lastRoute of
+  // either old path still land in the right place.
+  { path: '/knowledge', redirect: (to) => ({ path: '/knowledge/curated', query: to.query }) },
   {
-    path: '/contexts',
-    name: 'contexts',
-    component: () => import('@/views/contexts/ContextsView.vue'),
+    path: '/knowledge/:section(curated|learned)',
+    name: 'knowledge',
+    component: () => import('@/views/knowledge/KnowledgeView.vue'),
   },
+  { path: '/contexts', redirect: (to) => ({ path: '/knowledge/curated', query: to.query }) },
   {
     path: '/projects/:id',
     name: 'project',
     component: () => import('@/views/projects/ProjectLandingPage.vue'),
   },
-  {
-    path: '/memory',
-    name: 'memory',
-    component: () => import('@/views/memory/MemoryView.vue'),
-  },
+  // `/memory/<chunk id>` included: CrossReferenceLink has linked audit rows
+  // there since before this route existed; land in Learned, not the void.
+  { path: '/memory/:pathMatch(.*)*', redirect: (to) => ({ path: '/knowledge/learned', query: to.query }) },
   {
     path: '/workflows',
     name: 'workflows',
@@ -94,9 +100,10 @@ export const routes: RouteRecordRaw[] = [
   { path: '/artifacts', redirect: (to) => ({ path: '/library/captured', query: to.query }) },
   { path: '/documents', redirect: (to) => ({ path: '/library/authored', query: to.query }) },
   {
-    // FR-002 (01NKNOW01): Corpora surface retired; redirect to Contexts.
+    // FR-002 (01NKNOW01): Corpora surface retired; redirect to Contexts,
+    // which knowledge-home-01DOGF0E made Knowledge › Curated.
     path: '/corpora/:pathMatch(.*)*',
-    redirect: '/contexts',
+    redirect: '/knowledge/curated',
   },
   {
     path: '/agentgraph',

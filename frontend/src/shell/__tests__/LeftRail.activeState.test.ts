@@ -72,7 +72,8 @@ describe('LeftRail active state (P-2)', () => {
     ['/workflows', 'Workflows'],
     ['/permissions/fs', 'Settings'],
     ['/settings', 'Settings'],
-    ['/memory', 'Memory'],
+    ['/knowledge/curated', 'Knowledge'],
+    ['/knowledge/learned', 'Knowledge'],
   ])('at %s exactly the %s surface entry is current', async (path, label) => {
     const w = await mountRailAt(path);
     expect(surfaceCurrent(w)).toEqual([label]);

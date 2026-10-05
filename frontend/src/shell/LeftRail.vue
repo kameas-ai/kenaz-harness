@@ -12,7 +12,7 @@ import {
   Wrench,
   FileText,
   Settings,
-  Brain,
+  BookOpen,
   GitBranch,
   Globe,
   Route,
@@ -1049,8 +1049,13 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
              routes (/, /sessions, /sessions/:id) are untouched. -->
         <li><RailEntry :icon="Wrench" label="Tools" to="/tools" match-prefix="/tools" /></li>
         <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" match-prefix="/workflows" /></li>
-        <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" match-prefix="/contexts" /></li>
-        <li><RailEntry :icon="Brain" label="Memory" to="/memory" match-prefix="/memory" /></li>
+        <!-- knowledge-home-01DOGF0E WP02: one Knowledge entry replaces the
+             separate Contexts and Memory entries (Curated / Learned sections
+             inside; stores unchanged). match-prefix keeps it active on
+             either section. /contexts and /memory redirect into it. -->
+        <li data-testid="nav-knowledge">
+          <RailEntry :icon="BookOpen" label="Knowledge" to="/knowledge/curated" match-prefix="/knowledge" />
+        </li>
         <!-- artifacts-as-units-01DOGF0C WP06: one Library entry replaces the
              separate Artifacts and Documents entries (Captured / Authored
              views inside). match-prefix keeps it active on either view. -->
