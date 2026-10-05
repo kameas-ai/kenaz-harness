@@ -741,16 +741,21 @@ describe('ContextsView', () => {
     });
   });
 
-  // BLOCKER-1: ContextHealthCard must be mounted in the right column.
+  // BLOCKER-1: ContextHealthCard must be mounted. knowledge-home-01DOGF0E
+  // WP06 moved it from the top of the right column to a collapsed status
+  // chip in the toolbar (dogfood F11 — too prominent for a rarely-used card).
   describe('ContextHealthCard (context-bootstrap-harness-integration WP07b)', () => {
-    it('mounts ContextHealthCard in the right-hand column (data-testid=context-health-card)', async () => {
+    it('mounts ContextHealthCard as a collapsed chip in the toolbar, not the right column', async () => {
+      try { localStorage.removeItem('harness.knowledge.contextHealthExpanded.v1'); } catch { /* */ }
       const { client } = provide({});
       const w = mount(ContextsView, {
         global: { provide: { [HarnessClientKey as symbol]: client } },
       });
       await flushPromises();
-      // ContextHealthCard renders with data-testid="context-health-card" on mount.
-      expect(w.find('[data-testid="context-health-card"]').exists()).toBe(true);
+      const toolbar = w.find('[data-testid="context-toolbar"]');
+      expect(toolbar.find('[data-testid="context-health-chip"]').exists()).toBe(true);
+      // Collapsed by default: the full card is not rendered.
+      expect(w.find('[data-testid="context-health-card"]').exists()).toBe(false);
     });
 
     it('calls contextBootstrap.health() on mount via ContextHealthCard', async () => {

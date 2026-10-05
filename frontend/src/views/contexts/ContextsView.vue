@@ -660,6 +660,12 @@ onBeforeUnmount(() => {
         <template v-else>Markdown + text files, local to this device</template>
       </span>
         <div class="flex items-center gap-3">
+          <!-- Context-health rollup (context-bootstrap-harness-integration
+               WP07b) as a one-line chip, expand on click (knowledge-home-
+               01DOGF0E WP06). Self-contained: loads health on mount. Not
+               gated by servedMode — the whole view is already inside the
+               v-else block above. -->
+          <ContextHealthCard />
           <label
             class="flex items-center gap-1.5 font-ui text-[11px] text-ink-muted cursor-pointer"
           >
@@ -1134,13 +1140,9 @@ onBeforeUnmount(() => {
         :on-save="savePreview"
       />
 
-      <!-- right: health + recents -->
+      <!-- right: recents. Context health moved to a status chip in the
+           toolbar (knowledge-home-01DOGF0E WP06, dogfood F11). -->
       <div class="flex flex-col gap-3 border-l border-border-muted bg-surface-0 overflow-y-auto p-3">
-        <!-- Context-health rollup (context-bootstrap-harness-integration WP07b).
-             Self-contained: loads health on mount, degrades to empty state when
-             fleet is disabled. Not gated by servedMode — the whole view is
-             already inside the v-else block above. -->
-        <ContextHealthCard />
         <ContextRecent
           :paths="recent"
           :selected-path="selectedPath"
