@@ -9,8 +9,18 @@
  *   - `signedIn` — computed ref that is true when `appInfo.capabilities`
  *     is populated (i.e. the user has an active fleet session).
  *
- * Both helpers read from a module-level `appInfo` ref. **The entry points own
- * the write.** `bootFeatureFlags(client)` is called exactly once from
+ * fleet-session-truth-01DOGF0A WP05: both helpers are now views over the
+ * ONE fleet-session store (`lib/fleetSession.ts`) — the same store UserMenu,
+ * the Account panel and ContextsView read, kept live by the backend's
+ * `fleet:session-changed` push. Before this, `signedIn` here meant "the boot
+ * AppInfo had a non-empty capability map" and was refreshed only from
+ * AccountPanel, so a sign-in from the UserMenu left the rail gates stale
+ * (dogfood 2026-10-04) and the rail could disagree with every other surface.
+ * Boot AppInfo still SEEDS the store (initFeatureFlags) so gates open on the
+ * first tick; the first real snapshot supersedes the seed.
+ *
+ * Historical note (pre-WP05): both helpers read from a module-level
+ * `appInfo` ref. **The entry points own the write.** `bootFeatureFlags(client)` is called exactly once from
  * `main.ts` and once from `main-served.ts`; no component calls it. Until that
  * promise resolves the defaults (false for capability, false for signedIn)
  * apply, so every gate fails closed during boot and opens reactively when the
@@ -33,6 +43,13 @@
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { isServedMode } from './useServedMode';
+import {
+  fleetSessionCapability,
+  fleetSignedIn,
+  seedFleetSessionFromAppInfo,
+  useFleetSession,
+  type FleetSessionSource,
+} from './fleetSession';
 import type { AppInfo } from './types';
 import type { Capability } from './capability-keys';
 
@@ -54,6 +71,9 @@ const _appInfo: Ref<AppInfo | null> = ref(null);
  */
 export function initFeatureFlags(info: AppInfo | null): void {
   _appInfo.value = info;
+  // Seed the fleet-session store from the same capability map (never
+  // overwrites a real backend snapshot — see seedFleetSessionFromAppInfo).
+  seedFleetSessionFromAppInfo(info?.capabilities ?? null);
 }
 
 /**
@@ -67,7 +87,20 @@ export interface FeatureFlagSource {
   settings: {
     /** Forces an immediate capability fetch from fleet, updating the poller. */
     fleetRefreshCapabilities(): Promise<unknown>;
-  };
+  } & Partial<FleetSessionSource['settings']>;
+}
+
+/**
+ * startFleetSession hands the client to the fleet-session store (initial
+ * Settings_FleetSession read + the single fleet:session-changed
+ * subscription). Clients without the session RPCs (narrow test stubs) are
+ * skipped; the AppInfo seed then stands alone.
+ */
+async function startFleetSession(client: FeatureFlagSource): Promise<void> {
+  const s = client.settings;
+  if (!s || typeof s.fleetSession !== 'function') return;
+  const { refresh } = useFleetSession(); // subscribe; the read is below
+  await refresh(client as unknown as FleetSessionSource);
 }
 
 /**
@@ -84,15 +117,17 @@ export interface FeatureFlagSource {
 export async function bootFeatureFlags(
   client: FeatureFlagSource,
 ): Promise<AppInfo | null> {
+  let info: AppInfo | null = null;
   try {
-    const info = await client.appInfo();
+    info = await client.appInfo();
     initFeatureFlags(info);
-    return info;
   } catch {
     // Fail closed. A transport error must not grant capabilities.
     initFeatureFlags(null);
-    return null;
   }
+  // Then the real snapshot (never throws).
+  await startFleetSession(client);
+  return info;
 }
 
 /**
@@ -129,9 +164,8 @@ export async function refreshFeatureFlags(
 }
 
 /**
- * signedIn is a computed boolean ref that is true when the AppInfo
- * capabilities map is non-empty — which the backend only populates when the
- * user is signed in to fleet.
+ * signedIn is a computed boolean ref that is true when the fleet-session
+ * store says the session's tokens are usable (signed_in or degraded).
  *
  * Usage in templates: `v-if="signedIn"`
  */
@@ -161,10 +195,8 @@ export const signedIn: ComputedRef<boolean> = computed(() => {
   // `Catalog_Publish` that served mode refuses. One fence in the helper
   // covers that and every gate added later. See docs/served-mode-boundary.md.
   if (isServedMode()) return false;
-  const caps = _appInfo.value?.capabilities;
-  if (!caps) return false;
-  // The map is non-empty → we have a fleet session.
-  return Object.keys(caps).length > 0;
+  // The fleet-session store's answer: signed_in OR degraded (FR-3).
+  return fleetSignedIn.value;
 });
 
 /**
@@ -187,7 +219,9 @@ export function capability(key: Capability): boolean {
   // Same served-mode fence as `signedIn`. Repeated rather than delegated so
   // that neither helper can be made safe by accident while the other is not.
   if (isServedMode()) return false;
-  return _appInfo.value?.capabilities?.[key] === true;
+  // The store's capability set — the same one ContextsView's team gate
+  // reads, so a capability arriving re-renders every gate in one tick (FR-8).
+  return fleetSessionCapability(key);
 }
 
 /**

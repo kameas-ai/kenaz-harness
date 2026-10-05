@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -36,9 +37,11 @@ type Client struct {
 	httpTimeout time.Duration
 	isNop       bool
 
-	// sessionBroker is optional. When set, refresh failures emit
-	// TopicFleetSessionExpired on the Wails event bus so the UI
-	// can surface a re-auth banner (FR-005).
+	// sessionBroker is optional. When set, a DEFINITE refresh rejection
+	// emits TopicFleetSessionExpired on it. The production sink is the
+	// settings view's sessionExpiredTap, which consumes it in-process into
+	// the FleetSession snapshot (the UI sees it only as
+	// fleet:session-changed); it is not forwarded to the event bus.
 	sessionBroker BrokerSink
 
 	// enrollSF collapses concurrent RefreshIdentity callers into a single
@@ -56,10 +59,14 @@ type Client struct {
 	// concurrent enroll attempts are always for the same session and can
 	// always share one result.
 	enrollSF singleflight.Group
+
+	// authOK is the SetAuthOKHook callback (fleet-session-truth-01DOGF0A).
+	authOK atomic.Pointer[func()]
 }
 
-// SetSessionBroker wires the event broker into the client. When set, a
-// refresh failure emits TopicFleetSessionExpired to the frontend.
+// SetSessionBroker wires the session sink into the client. When set, a
+// definite refresh rejection emits TopicFleetSessionExpired on it (see the
+// sessionBroker field: consumed in-process, not forwarded to the frontend).
 // Safe to call at any time; replaces the previous broker.
 func (c *Client) SetSessionBroker(b BrokerSink) {
 	if c == nil || c.isNop {

@@ -1725,16 +1725,25 @@ func (b *Bindings) Settings_FleetSignIn() (settings.FleetIdentity, error) {
 	return b.api.Settings().FleetSignIn(b.ctx())
 }
 
+// Settings_FleetSignInCancel cancels the in-flight sign-in flow
+// (fleet-session-truth-01DOGF0A FR-5). No-op when none is running.
+func (b *Bindings) Settings_FleetSignInCancel() error {
+	defer sentry.WrapBinding("Settings_FleetSignInCancel")()
+	return b.api.Settings().FleetSignInCancel(b.ctx())
+}
+
 // Settings_FleetSignOut clears tokens and identity cache.
 func (b *Bindings) Settings_FleetSignOut() error {
 	defer sentry.WrapBinding("Settings_FleetSignOut")()
 	return b.api.Settings().FleetSignOut(b.ctx())
 }
 
-// Settings_FleetSignedIn reports whether valid tokens exist.
-func (b *Bindings) Settings_FleetSignedIn() (bool, error) {
-	defer sentry.WrapBinding("Settings_FleetSignedIn")()
-	return b.api.Settings().FleetSignedIn(b.ctx())
+// Settings_FleetSession returns the single fleet-session snapshot every
+// surface reads (fleet-session-truth-01DOGF0A FR-1). The same shape is
+// pushed on fleet:session-changed.
+func (b *Bindings) Settings_FleetSession() (settings.FleetSessionView, error) {
+	defer sentry.WrapBinding("Settings_FleetSession")()
+	return b.api.Settings().FleetSession(b.ctx())
 }
 
 // Settings_FleetRefreshIdentity re-enrolls with fleet and updates the cache.

@@ -19,7 +19,15 @@
  * `unsubscribe()` manually.
  */
 
-import { onBeforeUnmount, ref, type Ref, watch } from 'vue';
+import {
+  getCurrentInstance,
+  getCurrentScope,
+  onBeforeUnmount,
+  onScopeDispose,
+  ref,
+  type Ref,
+  watch,
+} from 'vue';
 import { useConnectionState } from './useConnectionState';
 import { onServedEvent } from './useServedEvents';
 
@@ -114,7 +122,17 @@ export function useEventStream<T>(
     detach();
   }
 
-  onBeforeUnmount(unsubscribe);
+  // Inside a component: tear down on unmount (the original contract).
+  // Inside a bare effectScope — a module-level store such as
+  // lib/fleetSession.ts, which must outlive any one component — tear down
+  // when that scope is disposed instead. Calling onBeforeUnmount with no
+  // component instance is a Vue warning and a no-op, so the store path
+  // would otherwise leak silently on dispose.
+  if (getCurrentInstance()) {
+    onBeforeUnmount(unsubscribe);
+  } else if (getCurrentScope()) {
+    onScopeDispose(unsubscribe);
+  }
 
   return { latest, count, active, unsubscribe };
 }

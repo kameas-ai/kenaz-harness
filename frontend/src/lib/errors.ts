@@ -209,8 +209,10 @@ export function friendlyUnsupportedFeatureError(err: unknown): string | null {
  *
  * TERMINAL, not transient: the same tokens will 403 with this code on
  * every retry until the user finishes signup out-of-band at the SPA host.
- * Callers that poll (UserMenu's periodic identity refresh) must stop
- * rather than back off — see UserMenu.vue's refresh().
+ * The backend session cadence stops automatic retries on it
+ * (core/rpc/views/settings/fleet_session_events.go sessionEnrollDue) and
+ * the FleetSession snapshot reports it as degraded/not_provisioned
+ * (fleet-session-truth-01DOGF0A FR-4); no frontend code polls enroll.
  */
 export function isUserNotProvisionedError(err: unknown): boolean {
   const raw = toErrorString(err);

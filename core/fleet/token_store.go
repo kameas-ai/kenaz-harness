@@ -58,6 +58,15 @@ func SetExternalTokenSource(fn func() string) {
 	externalTokenSource = fn
 }
 
+// ExternalTokenSourceActive reports whether token renewal is externally
+// owned (served mode's host auth broker). In that mode the served enroll
+// supervisor owns enroll cadence, so the desktop session supervisor in
+// core/rpc/views/settings stands down.
+func ExternalTokenSourceActive() bool {
+	_, ok := externalTokens()
+	return ok
+}
+
 // externalTokens returns the installed source, if any.
 func externalTokens() (func() string, bool) {
 	externalTokenMu.RLock()

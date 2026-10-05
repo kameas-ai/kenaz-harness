@@ -120,6 +120,12 @@ type LockdownChangedPayload struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// TopicFleetSessionChanged is the broker topic the settings view publishes
+// the full FleetSession snapshot on, after every session transition
+// (fleet-session-truth-01DOGF0A FR-2). The frontend's useFleetSession store
+// is its single subscriber; every fleet surface reads that store.
+const TopicFleetSessionChanged = "fleet:session-changed"
+
 // TopicFleetLockdownChanged is the Wails broker topic name emitted by the
 // Watcher whenever the lockdown flag flips. Declared here next to the
 // payload type; stream_broker.go re-exports it for the frontend contract.

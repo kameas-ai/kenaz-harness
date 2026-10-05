@@ -893,8 +893,9 @@
 "Settings_FleetRefreshCapabilities"
 "Settings_FleetRefreshIdentity"
 "Settings_FleetSignIn"
+# 2026-10-04 fleet-session-truth-01DOGF0A review F1 — desktop-only-by-nature: the served session is owned by the host auth broker, so there is no served sign-in flow to cancel; the UserMenu Cancel renders only !isServedMode() and AccountPanel lives under SettingsView, which is boundary-panelled (NotAvailableInServedMode) in served mode. Owner: alec. (Settings_FleetSignedIn removed from this list the same day: binding deleted, Settings_FleetSession is the live substitute.)
+"Settings_FleetSignInCancel"
 "Settings_FleetSignOut"
-"Settings_FleetSignedIn"
 "Settings_Get"
 "Settings_GetAutoResumeOnKeyRotation"
 "Settings_GetMemory"

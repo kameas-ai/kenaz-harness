@@ -959,6 +959,15 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 			return nil, errors.New("Fleet_SetTelemetryConsent: bad params: " + err.Error())
 		}
 		return nil, s.api.Fleet().SetTelemetryConsent(ctx, p.Level)
+	// Settings_FleetSession — the single fleet-session snapshot
+	// (fleet-session-truth-01DOGF0A FR-1). Without it a served client had no
+	// way to read the session at all, and every fleet surface rendered the
+	// "signed out" a ServedUnsupportedError collapses to. Read-only and
+	// network-free; served mode still has no sign-in affordance (the host
+	// broker owns the session), so only the READ is ported.
+	case "Settings_FleetSession":
+		return s.api.Settings().FleetSession(ctx)
+
 	case "Fleet_TelemetryStatus":
 		st, err := s.api.Settings().FleetTelemetryStatus(ctx)
 		if err != nil {

@@ -3,38 +3,39 @@
  * SessionExpiredBanner — fleet session-expired re-auth affordance.
  * (fleet-integrity-observability WP05 / FR-005)
  *
- * Appears when the fleet token refresh fails (access token expired +
- * refresh exchange failed). The user must sign in again to restore
- * fleet capabilities (config bundles, team policy, sync).
- *
- * State is driven by the fleet:session:expired broker event. The banner
- * persists until the user signs in via the Account panel.
+ * Appears when fleet has DEFINITELY rejected the session (refresh token
+ * refused). fleet-session-truth-01DOGF0A review F8: this used to be a second
+ * reader of fleet state, driven by its own fleet:session:expired event and
+ * never cleared except by a click — so it could keep saying "expired" after
+ * the session recovered. It now renders the shared fleet-session store:
+ * shown while the snapshot is signed_out/session_expired, gone the moment
+ * the session is back (sign-in, or the backend's recovery probe).
  */
-import { ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { useEventStream } from '@/lib/useEventStream';
-
-interface SessionExpiredPayload {
-  reason?: string;
-}
+import { fleetSession } from '@/lib/fleetSession';
 
 const router = useRouter();
 
-const visible = ref(false);
-const reason = ref('');
-
-useEventStream<SessionExpiredPayload>('fleet:session:expired', (payload) => {
-  visible.value = true;
-  reason.value = payload.reason ?? '';
+const expired = computed(
+  () =>
+    fleetSession.value?.state === 'signed_out' &&
+    fleetSession.value?.reason === 'session_expired',
+);
+const dismissed = ref(false);
+// A new expiry after recovery shows the banner again.
+watch(expired, (now) => {
+  if (!now) dismissed.value = false;
 });
+const visible = computed(() => expired.value && !dismissed.value);
 
 function signInAgain() {
-  visible.value = false;
+  dismissed.value = true;
   void router.push({ path: '/settings', query: { tab: 'account' } });
 }
 
 function dismiss() {
-  visible.value = false;
+  dismissed.value = true;
 }
 </script>
 

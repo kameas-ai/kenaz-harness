@@ -720,13 +720,15 @@ export function Settings_FleetRefreshCapabilities():Promise<settings.Capabilitie
 
 export function Settings_FleetRefreshIdentity():Promise<settings.FleetIdentity>;
 
+export function Settings_FleetSession():Promise<settings.FleetSessionView>;
+
 export function Settings_FleetSetTelemetryOptIn(arg1:string,arg2:boolean):Promise<void>;
 
 export function Settings_FleetSignIn():Promise<settings.FleetIdentity>;
 
-export function Settings_FleetSignOut():Promise<void>;
+export function Settings_FleetSignInCancel():Promise<void>;
 
-export function Settings_FleetSignedIn():Promise<boolean>;
+export function Settings_FleetSignOut():Promise<void>;
 
 export function Settings_FleetTelemetryOptIns():Promise<Array<settings.TelemetryOptInView>>;
 

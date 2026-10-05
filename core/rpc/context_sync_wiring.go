@@ -19,6 +19,11 @@ import (
 // contextsyncview.SessionSyncBackend.
 type sessionSyncBackendAdapter struct {
 	ss *corefleet.SessionSyncer
+	// breaker is the context-sync append breaker (fleet-session-truth-
+	// 01DOGF0A); toggling sync for a session clears its breaker state —
+	// re-enabling is the user's explicit retry, disabling means the session
+	// is no longer "not syncing", it is simply not synced. May be nil.
+	breaker *corefleet.AppendBreaker
 }
 
 func (a *sessionSyncBackendAdapter) EnableSync(ctx context.Context, sessionID string, events []contextsyncview.SessionEventRecord) error {
@@ -26,11 +31,17 @@ func (a *sessionSyncBackendAdapter) EnableSync(ctx context.Context, sessionID st
 	for _, r := range events {
 		fleet = append(fleet, corefleet.SessionEventRecord{Seq: r.Seq, Bytes: r.Bytes})
 	}
-	return a.ss.EnableSync(ctx, sessionID, fleet)
+	err := a.ss.EnableSync(ctx, sessionID, fleet)
+	if err == nil {
+		a.breaker.Reset(sessionID)
+	}
+	return err
 }
 
 func (a *sessionSyncBackendAdapter) DisableSync(ctx context.Context, sessionID string) error {
-	return a.ss.DisableSync(ctx, sessionID)
+	err := a.ss.DisableSync(ctx, sessionID)
+	a.breaker.Reset(sessionID)
+	return err
 }
 
 func (a *sessionSyncBackendAdapter) Resume(ctx context.Context, sessionID string, sinceSeq uint64, apply func(contextsyncview.SessionEventRecord) error) error {

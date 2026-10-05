@@ -25,9 +25,11 @@
  *   - Sync status strip in the tree panel header (team cap, pull count,
  *     cursor). Hidden when fleet is not signed in / team cap absent.
  *   - "Share to team" affordance in the preview panel for files. Usable
- *     when `syncStatus.team_cap_enabled`; otherwise rendered disabled with
- *     `sharingDisabledReason` (knowledge-home-01DOGF0E WP04 — it used to be
- *     hidden, contradicting the "hidden vs broken" doctrine below).
+ *     when the fleet-session store's `shared_team_graph` capability is on
+ *     (fleet-session-truth-01DOGF0A FR-8 — the D5 switch-over); otherwise
+ *     rendered disabled with `sharingDisabledReason`
+ *     (knowledge-home-01DOGF0E WP04 — it used to be hidden, contradicting
+ *     the "hidden vs broken" doctrine below).
  *   - First-publish confirm: "This entry will be visible to your org" so
  *     users don't accidentally publish secrets into a shared layer (NFR-006).
  *   - `publish` calls `client.contexts.publish` with a deterministic nodeID
@@ -72,6 +74,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { Plus, FileText } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useFleetSession } from '@/lib/fleetSession';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type {
@@ -162,10 +165,19 @@ const publishError = ref<string | null>(null);
 /** Whether a publish call is in progress. */
 const publishLoading = ref(false);
 
-/** teamCapEnabled is true when fleet has the team-graph sharing cap. */
-const teamCapEnabled = computed(
-  () => syncStatus.value?.team_cap_enabled ?? false,
-);
+/**
+ * teamCapEnabled is true when fleet has the team-graph sharing cap.
+ *
+ * fleet-session-truth-01DOGF0A FR-8: read from the shared fleet-session
+ * capability set — the same one LeftRail's gates read — instead of this
+ * view's one-shot syncStatus() fetch, which only refreshed on mount. A
+ * capability arriving or leaving now re-renders this gate and the rail's in
+ * the same tick (dogfood F10a: the org-promote affordance stayed hidden
+ * behind a capability snapshot the rest of the app disagreed with).
+ * syncStatus still feeds the strip's cursor / pull count / errors.
+ */
+const fleetSessionStore = useFleetSession(client);
+const teamCapEnabled = computed(() => fleetSessionStore.capability('shared_team_graph'));
 
 /**
  * sharingDisabledReason — why Share… / Promote are disabled, or null when

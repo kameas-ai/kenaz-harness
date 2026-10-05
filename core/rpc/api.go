@@ -2132,6 +2132,9 @@ func New(c *core.Core, opts ...Option) *API {
 	// SettingsAPI.fleetClient() is nil. NewClient returns a nopClient when
 	// HARNESS_FLEET_DISABLED=1, which preserves the OSS-first behaviour: the
 	// settings RPC code still short-circuits via the isNop check.
+	// fleet-session-truth-01DOGF0A FR-9: enroll reports the real build
+	// version (it sent a hard-coded "0.18.0" on every enroll).
+	settingsImpl.SetFleetClientVersion(buildLabel(c))
 	if fleetClient, ferr := fleet.NewClient(fleet.ClientOpts{DataDir: dataDir}); ferr == nil {
 		settingsImpl.SetFleetClient(fleetClient, dataDir)
 	} else {
@@ -4199,6 +4202,11 @@ func New(c *core.Core, opts ...Option) *API {
 			}
 			unitMapper := corefleet.NewUnitMapper(teamID)
 			unitSyncer := corefleet.NewUnitSyncer(flCl, a.unitsMgr, unitMapper, caps, flDataDir)
+			// fleet-session-truth-01DOGF0A FR-6: the poll reports into the
+			// shared lane board (FleetSession.sync.unitPoll).
+			if a.settingsImpl != nil {
+				unitSyncer.SetLanes(a.settingsImpl.FleetSyncLanes())
+			}
 			// Read-down-auto: pull org/team units into the local clone as read
 			// layers. Self-gates on sign-in + team-graph capability.
 			unitSyncer.StartPoller(context.Background())
@@ -4290,8 +4298,21 @@ func New(c *core.Core, opts ...Option) *API {
 			projectSyncer := corefleet.NewProjectSyncer(flCl, contextSyncAudit, nil)
 			handoffHandler := corefleet.NewHandoffHandler(flCl, contextSyncAudit, nil)
 
+			// fleet-session-truth-01DOGF0A FR-6 (dogfood F7): bounded,
+			// visible appends. One breaker per process, reporting into the
+			// shared lane board; reset when sync is toggled for a session and
+			// when a fleet session ends or begins.
+			var appendLanes *corefleet.SyncLanes
+			if a.settingsImpl != nil {
+				appendLanes = a.settingsImpl.FleetSyncLanes()
+			}
+			appendBreaker := corefleet.NewAppendBreaker(appendLanes)
+			if a.settingsImpl != nil {
+				a.settingsImpl.OnFleetSessionReset(appendBreaker.ResetAll)
+			}
+
 			a.contextSyncAPI = &contextsyncview.Impl{
-				Session:  &sessionSyncBackendAdapter{ss: sessionSyncer},
+				Session:  &sessionSyncBackendAdapter{ss: sessionSyncer, breaker: appendBreaker},
 				Project:  &projectSyncBackendAdapter{ps: projectSyncer},
 				Handoff:  &handoffBackendAdapter{hh: handoffHandler},
 				Recovery: &recoveryBackendAdapter{},
@@ -4316,15 +4337,17 @@ func New(c *core.Core, opts ...Option) *API {
 			if stack.historyAdapter != nil {
 				capturedSyncer := sessionSyncer
 				stack.historyAdapter.syncHook = func(ctx context.Context, sessionID string, _ uint64, payload []byte) {
-					if err := capturedSyncer.AppendEvent(ctx, sessionID, corefleet.SessionEventRecord{
-						Seq:   0, // seq 0 signals "append as new tail"; fleet assigns the monotonic seq
-						Bytes: payload,
-					}); err != nil && err != corefleet.ErrFleetDisabled {
-						logging.L().Warn("rpc.context_sync.append_event_failed",
-							"session_id", sessionID[:min(len(sessionID), 8)],
-							"err", err.Error(),
-						)
-					}
+					// The breaker bounds retries, opens the circuit on a
+					// permanent answer (404 missing remote context), logs once
+					// per transition and surfaces the failure in
+					// FleetSession.sync.contextSync — it used to be a WARN per
+					// message and nothing else (fleet-session-truth-01DOGF0A).
+					_ = appendBreaker.Do(ctx, sessionID, func(ctx context.Context) error {
+						return capturedSyncer.AppendEvent(ctx, sessionID, corefleet.SessionEventRecord{
+							Seq:   0, // seq 0 signals "append as new tail"; fleet assigns the monotonic seq
+							Bytes: payload,
+						})
+					})
 				}
 				logging.L().Info("rpc.context_sync.append_hook_wired")
 			}

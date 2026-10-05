@@ -110,32 +110,33 @@ func TestServedFleetLockdownChanged_ReachesAnyConnectedSession(t *testing.T) {
 	}
 }
 
-// TestServedFleetSessionExpired_ReachesAnyConnectedSession pins
-// fleet:session:expired's process-wide disposition. The allowlist's
-// placeholder justification speculated this topic "plausibly carries a
-// session id already" because of its name; verified false —
-// SessionExpiredPayload (core/fleet/http.go) is {Reason} only, because
-// the "session" here is the fleet control-plane AUTH session
-// (access-token refresh failure), not a chat session.
-func TestServedFleetSessionExpired_ReachesAnyConnectedSession(t *testing.T) {
+// TestServedFleetSessionChanged_ReachesAnyConnectedSession pins
+// fleet:session-changed's process-wide disposition (fleet-session-truth-
+// 01DOGF0A). It replaced fleet:session:expired on this list (review F8):
+// the FleetSession snapshot has no chat-session id — "session" is the
+// fleet control-plane auth session.
+func TestServedFleetSessionChanged_ReachesAnyConnectedSession(t *testing.T) {
 	api, baseURL, cancel := newChatHarness(t)
 	defer cancel()
 
 	ws := dialChatWS(t, baseURL, "sess-A")
 	defer ws.Close() //nolint:errcheck
 
-	api.EventBus().Publish(corefleet.TopicFleetSessionExpired, corefleet.SessionExpiredPayload{
-		Reason: "refresh token rejected",
+	api.EventBus().Publish(corefleet.TopicFleetSessionChanged, map[string]any{
+		"state": "degraded", "reason": "needs_reauth",
 	})
 
-	frame := readUntil(t, ws, corefleet.TopicFleetSessionExpired, 2*time.Second)
+	frame := readUntil(t, ws, corefleet.TopicFleetSessionChanged, 2*time.Second)
 
-	var payload corefleet.SessionExpiredPayload
-	if err := json.Unmarshal(frame.Data, &payload); err != nil {
-		t.Fatalf("unmarshal %s frame data: %v (raw: %s)", corefleet.TopicFleetSessionExpired, err, frame.Data)
+	var payload struct {
+		State  string `json:"state"`
+		Reason string `json:"reason"`
 	}
-	if payload.Reason != "refresh token rejected" {
-		t.Errorf("payload.Reason = %q, want %q", payload.Reason, "refresh token rejected")
+	if err := json.Unmarshal(frame.Data, &payload); err != nil {
+		t.Fatalf("unmarshal %s frame data: %v (raw: %s)", corefleet.TopicFleetSessionChanged, err, frame.Data)
+	}
+	if payload.State != "degraded" || payload.Reason != "needs_reauth" {
+		t.Errorf("payload = %+v, want degraded/needs_reauth", payload)
 	}
 }
 

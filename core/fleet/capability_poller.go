@@ -73,6 +73,8 @@ type CapabilityPoller struct {
 	current Capabilities
 	// listeners holds OnChange callbacks, appended under mu.
 	listeners []func(Capabilities)
+	// notifyMu serialises listener delivery (see setCurrent).
+	notifyMu sync.Mutex
 
 	// cancel shuts down the background goroutine.
 	cancel context.CancelFunc
@@ -102,8 +104,9 @@ func (p *CapabilityPoller) Current() Capabilities {
 }
 
 // OnChange registers fn to be called whenever the enabled capability set
-// changes (a key is added or removed). fn is invoked synchronously under
-// the write lock, so implementations must be fast and non-blocking.
+// changes (a key is added or removed). fn is invoked synchronously on the
+// refreshing goroutine, after the poller's lock is released — it may read
+// the poller back (Current) — and should still be fast.
 // Multiple listeners are supported; they are called in registration order.
 func (p *CapabilityPoller) OnChange(fn func(Capabilities)) {
 	p.mu.Lock()
@@ -113,15 +116,36 @@ func (p *CapabilityPoller) OnChange(fn func(Capabilities)) {
 
 // setCurrent replaces the in-memory snapshot and fires OnChange listeners
 // when the enabled-capability set has changed.
+//
+// Listeners run AFTER the lock is released (fleet-session-truth-01DOGF0A
+// WP02). They used to run under the write lock, so any listener that read
+// the poller back — ReconcileTelemetry does, via TelemetryConsent →
+// FleetOrgTier → Current(); the fleet:session-changed publisher does, via
+// the session snapshot — re-entered p.mu and deadlocked the poller on the
+// first capability change. Copying the slice keeps registration-order
+// delivery; the snapshot passed is the one this call installed.
+//
+// Delivery is serialised by notifyMu and passes Current() AT DELIVERY TIME
+// (review F6): with the lock released, two concurrent refreshes could
+// otherwise deliver in the wrong order and leave a listener (e.g. the
+// SitesReconciler) holding the stale set last.
 func (p *CapabilityPoller) setCurrent(c Capabilities) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	prev := p.current
 	p.current = c
+	var fns []func(Capabilities)
 	if enabledSetChanged(prev, c) && len(p.listeners) > 0 {
-		for _, fn := range p.listeners {
-			fn(c)
-		}
+		fns = append(fns, p.listeners...)
+	}
+	p.mu.Unlock()
+	if len(fns) == 0 {
+		return
+	}
+	p.notifyMu.Lock()
+	defer p.notifyMu.Unlock()
+	cur := p.Current()
+	for _, fn := range fns {
+		fn(cur)
 	}
 }
 

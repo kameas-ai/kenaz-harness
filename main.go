@@ -707,14 +707,14 @@ func initSentryFromSettings(api *rpc.Bindings) {
 	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP12 (FR-016):
 	// this was hardcoded `false`, so ResolveTier permanently downgraded
 	// TierIdentified to TierAnonymous for every user, even one genuinely
-	// signed into fleet — Settings_FleetSignedIn (arity 0) is exactly
-	// what ResolveTier's second parameter wants. A read error (fleet
-	// disabled, no client) is treated as "not signed in" (the safe,
-	// anonymous-leaning default).
-	fleetSignedIn, fsErr := api.Settings_FleetSignedIn()
-	if fsErr != nil {
-		fleetSignedIn = false
-	}
+	// signed into fleet. fleet-session-truth-01DOGF0A: read from the single
+	// FleetSession snapshot (Settings_FleetSignedIn was deleted in favour of
+	// it) — TokensUsable is the snapshot's own "the stored tokens still
+	// authenticate" answer, which is what ResolveTier's second parameter
+	// wants. A read error (fleet disabled, no client) is treated as "not
+	// signed in" (the safe, anonymous-leaning default).
+	fs, fsErr := api.Settings_FleetSession()
+	fleetSignedIn := fsErr == nil && fs.TokensUsable
 	tier := coresentry.ResolveTier(s.CrashReportingTier, fleetSignedIn)
 	if initErr := coresentry.Init(tier, s.SentryDSN, Version, ""); initErr != nil {
 		logging.L().Warn("sentry.init.error", "err", initErr.Error())

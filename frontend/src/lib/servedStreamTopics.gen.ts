@@ -31,5 +31,5 @@ export const SERVED_STREAM_TOPICS = [
   'advice:recommendation',
   'advice:auto-acted',
   'fleet:lockdown:changed',
-  'fleet:session:expired',
+  'fleet:session-changed',
 ] as const;

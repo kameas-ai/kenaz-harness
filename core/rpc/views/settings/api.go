@@ -1675,6 +1675,12 @@ type SettingsAPI interface {
 	// HARNESS_FLEET_DISABLED=1.
 	FleetSignIn(ctx context.Context) (FleetIdentity, error)
 
+	// FleetSignInCancel cancels the in-flight sign-in flow (the UI's
+	// "Waiting for browser… Cancel"); the pending FleetSignIn returns
+	// context.Canceled. No-op when no flow is running.
+	// (fleet-session-truth-01DOGF0A FR-5)
+	FleetSignInCancel(ctx context.Context) error
+
 	// FleetSignOut clears persisted tokens and the identity cache.
 	// Returns fleet.ErrFleetDisabled when the kill switch is active.
 	FleetSignOut(ctx context.Context) error
@@ -1706,6 +1712,12 @@ type SettingsAPI interface {
 	// FleetProfile returns the active env profile for UI rendering.
 	// Does NOT expose ClientID, APIAudience, or any secret fields.
 	FleetProfile(ctx context.Context) (FleetProfileInfo, error)
+
+	// FleetSession returns the single fleet-session snapshot every surface
+	// reads (fleet-session-truth-01DOGF0A FR-1): state (signed_out /
+	// signing_in / signed_in / degraded / disabled), identity, claims,
+	// capabilities and sync-lane health. Network-free.
+	FleetSession(ctx context.Context) (FleetSessionView, error)
 
 	// ── Fleet capabilities (fleet-capability-surface-01NDFSEX09 WP11) ───────
 

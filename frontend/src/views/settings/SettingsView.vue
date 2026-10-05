@@ -48,6 +48,7 @@ import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSett
 import BranchAdvisorSettings from '@/components/settings/BranchAdvisorSettings.vue';
 import RiskRaterModelPicker from '@/components/settings/RiskRaterModelPicker.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { accountSectionSubtitle, useFleetSession } from '@/lib/fleetSession';
 import { debouncedSave } from '@/lib/settings';
 import { runAsyncAction } from '@/composables/useAsyncAction';
 import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
@@ -250,10 +251,22 @@ const DEFAULT_HEAD = {
   subtitle:
     'Theme, route restoration, and data-dir info. Settings persist to a single JSON file under your user config dir.',
 };
+// fleet-session-truth-01DOGF0A FR-10: the Account head used to be a static
+// "Sign in to access fleet features…" rendered above a signed-IN panel body
+// (dogfood F5 — the panel "disagreed with itself"; the culprit was this
+// head). It now derives from the shared fleet session store.
+const fleetSessionStore = useFleetSession(client);
 const currentHead = computed<{ title: string; subtitle: string }>(() => {
   const v = route?.query?.tab;
   const key = typeof v === 'string' ? v : '';
-  return SECTION_HEADS[key] ?? DEFAULT_HEAD;
+  const head = SECTION_HEADS[key] ?? DEFAULT_HEAD;
+  if (key === 'account') {
+    return {
+      title: head.title,
+      subtitle: accountSectionSubtitle(fleetSessionStore.session.value) || head.subtitle,
+    };
+  }
+  return head;
 });
 
 const settings = ref<Settings>({

@@ -2,179 +2,114 @@
 /**
  * UserMenu — account status pill + fleet-identity popover.
  *
- * v0.20.0: non-account rows (Search, Command Palette, Theme, Update Available)
- * have moved to the OS native menu bar. This component is now a pure
- * identity/account surface:
+ * fleet-session-truth-01DOGF0A WP03: this component no longer reads fleet
+ * state itself. It used to run its own refresh(): fleetSignedIn() then
+ * fleetRefreshIdentity() on a 5-minute poll, and on ANY enroll error it set
+ * identity=false — "signed out" — while Settings › Account showed the same
+ * user signed in (dogfood F5). A user_not_provisioned error then stopped
+ * the poll forever, freezing that lie until remount, and the bogus "Sign in"
+ * row plausibly spawned the redundant browser flow that timed out (B3).
  *
- *   Trigger (always rendered unless fleet is fully disabled):
- *     - signed-in:  avatar (initials) + optional env badge
- *     - signed-out: generic user silhouette icon
- *     - No update-dot overlay (that signal now lives in Help → Check for Updates)
+ * Now it renders the shared store (lib/fleetSession.ts), which the backend
+ * keeps live by pushing fleet:session-changed. No poll here (FR-2):
  *
- *   Popover (signed-in):
- *     identity header (email, org, tier) → divider → Account settings → Sign out
- *
- *   Popover (signed-out, fleet enabled):
- *     Sign in → calls fleetSignIn() directly (unchanged from v0.19.0)
- *
- *   Fleet disabled (HARNESS_FLEET_DISABLED=1): render nothing.
- *
- * OSS-first contract preserved: fleet rows do not render when disabled.
+ *   signed_in   avatar + identity header → Account settings → Sign out
+ *   degraded    same, plus "<reason>" + Retry (and "Finish setup" for
+ *               not-provisioned). Never "Sign in" while tokens are valid
+ *               (FR-3).
+ *   signing_in  "Waiting for browser…"
+ *   signed_out  Sign in
+ *   disabled    render nothing (OSS-first, HARNESS_FLEET_DISABLED=1)
  */
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import { runAsyncAction } from '@/composables/useAsyncAction';
-import { isUserNotProvisionedError } from '@/lib/errors';
-import type { FleetIdentity, FleetProfileInfo } from '@/lib/types';
+import { refreshFeatureFlags } from '@/lib/featureFlags';
+import {
+  describeFleetReason,
+  formatRoles,
+  isSignInCancelled,
+  useFleetSession,
+} from '@/lib/fleetSession';
+import { isServedMode } from '@/lib/useServedMode';
 
 const client = useHarnessClient();
 const router = useRouter();
+const fleet = useFleetSession(client);
 
-const identity = ref<FleetIdentity | null | false>(null);
-const profile = ref<FleetProfileInfo | null>(null);
-const fleetDisabled = ref(false);
 const menuOpen = ref(false);
 const loading = ref(false);
 /** Inline error state for sign-out failure — visible near the sign-out button. */
 const signOutError = ref<string | null>(null);
 
-let pollTimer: number | null = null;
-
-/**
- * IDENTITY_POLL_MS is the interval between background identity refreshes.
- *
- * Each tick calls fleetRefreshIdentity(), which is NOT a cheap liveness
- * check — it is a full POST /api/v1/enroll round trip (see fleetEnroll,
- * core/rpc/views/settings/fleet.go), re-authenticating and re-fetching
- * telemetry opt-ins as a side effect. Liveness itself is already free:
- * fleetSignedIn() below is a local, network-free token-expiry check.
- *
- * This constant used to be 15000 (15s) — a full re-enroll every 15
- * seconds, forever, for every signed-in install. Finding #98
- * (2026-09-14): production logs showed ~5000 enroll round trips in 2
- * hours from a single running install, ~10x what a lone 15s ticker
- * would produce on its own, because this poll shares no in-flight
- * de-duplication with the other fleetRefreshIdentity() call sites
- * (AccountPanel.vue mount/refresh, CedarEditor.vue mount) — any of them
- * overlapping with a tick fires as a fully independent network call.
- * The Go side now collapses concurrent callers via singleflight
- * (fleet.Client.RefreshIdentity), but this ticker was still firing far
- * more often than "once per sign-in plus on token refresh" requires.
- *
- * 5 minutes matches the cadence core/fleet's own CapabilityPoller and
- * ConfigPoller already use for "notice server-side drift" polling — the
- * same class of problem (tier/role changes landing in the enroll
- * response) this ticker exists to catch.
- */
-const IDENTITY_POLL_MS = 5 * 60 * 1000;
-
-/**
- * startPolling (re)starts the identity-refresh interval. Idempotent —
- * a no-op when already running, so it's safe to call after a fresh
- * sign-in that may have followed a stopPolling() call.
- */
-function startPolling() {
-  if (pollTimer !== null) return;
-  pollTimer = window.setInterval(() => {
-    void refresh();
-  }, IDENTITY_POLL_MS);
-}
-
-/**
- * stopPolling cancels the identity-refresh interval. Called when refresh()
- * hits a terminal, non-retryable error (ErrUserNotProvisioned) — see the
- * comment in refresh() for why this must be a hard stop rather than a
- * slower retry.
- */
-function stopPolling() {
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
 onMounted(() => {
-  void refresh();
-  startPolling();
   document.addEventListener('click', onDocumentClick);
 });
 
 onBeforeUnmount(() => {
-  stopPolling();
   document.removeEventListener('click', onDocumentClick);
 });
 
-async function refresh() {
-  try {
-    profile.value = await client.settings.fleetProfile();
-    const signedIn = await client.settings.fleetSignedIn();
-    if (signedIn) {
-      try {
-        identity.value = await client.settings.fleetRefreshIdentity();
-      } catch (e: unknown) {
-        identity.value = false;
-        // Terminal condition: SaveTokens() persists on FleetSignIn even
-        // when the subsequent enroll call fails (core/rpc/views/settings/
-        // fleet.go FleetSignIn), so fleetSignedIn() (token-expiry based)
-        // keeps reporting true forever while enroll keeps 403ing forever.
-        // Without this stop, refresh() re-runs every IDENTITY_POLL_MS and
-        // re-hits /api/v1/enroll on a permanently-failing account with no backoff
-        // — confirmed in production as 60+ consecutive
-        // fleet.rpc.enroll.start/.failed pairs. A network blip or other
-        // transient failure is NOT this condition and keeps polling at the
-        // normal cadence; only the identity-provider-confirmed "this
-        // account will never be provisioned without user action" case
-        // stops the timer.
-        if (isUserNotProvisionedError(e)) {
-          stopPolling();
-        }
-      }
-    } else {
-      identity.value = false;
-    }
-  } catch (e: any) {
-    const msg: string = e?.message ?? String(e);
-    if (msg.includes('disabled by env')) {
-      fleetDisabled.value = true;
-      identity.value = false;
-    } else {
-      identity.value = false;
-    }
-  }
-}
+const state = fleet.state;
+const fleetDisabled = computed(() => state.value === 'disabled');
+/** signed_in OR degraded: the tokens are usable (FR-3). */
+const isSignedIn = fleet.signedIn;
+const isDegraded = computed(() => state.value === 'degraded');
+const isSigningIn = computed(() => state.value === 'signing_in');
+/**
+ * Offer "Sign in" only when the snapshot SAYS signed out. An unknown state
+ * (no snapshot yet / RPC failed) offers nothing rather than a sign-in that
+ * may be a lie.
+ */
+/**
+ * Served mode: the host auth broker owns the session — there is no sign-in
+ * or sign-out affordance (Settings_FleetSignIn/SignOut are not served).
+ * The identity still renders from the served Settings_FleetSession.
+ */
+const served = isServedMode();
+const canSignIn = computed(() => !served && state.value === 'signed_out');
 
-const isSignedIn = computed(() => !!identity.value);
-
-const initials = computed(() => {
-  const id = identity.value;
-  if (!id) return '';
-  const source = id.displayName?.trim() || id.email?.trim() || '';
-  const parts = source.split(/[\s@]+/).filter(Boolean);
-  if (parts.length === 0) return '';
-  const first = parts[0]?.[0] ?? '';
-  const second = parts[1]?.[0] ?? '';
-  return (first + second).toUpperCase().slice(0, 2);
-});
-
+const profile = computed(() => fleet.session.value?.profile ?? null);
+const initials = fleet.initials;
+const emailDisplay = fleet.identityLabel;
 const badgeColor = computed(() => profile.value?.badgeColor ?? '');
 const envName = computed(() => (profile.value?.name ?? '').toUpperCase());
 
-const emailDisplay = computed(() => {
-  const id = identity.value;
-  if (!id) return '';
-  return id.email || id.displayName || '';
-});
 const orgDisplay = computed(() => {
-  const id = identity.value;
+  const id = fleet.identity.value;
   if (!id) return '';
-  return id.orgName || '';
+  // Already the primary label when email + name are absent (FR-9).
+  return id.orgName && id.orgName !== emailDisplay.value ? id.orgName : '';
 });
-const tierLabel = computed(() => {
-  const id = identity.value;
-  if (!id) return '';
-  return id.tier || '';
-});
+const tierLabel = computed(() => fleet.identity.value?.tier || '');
+/** Roles from the enroll payload (FR-9 / F8b). */
+const rolesLabel = computed(() => formatRoles(fleet.identity.value?.roles));
+
+const degradedReason = computed(() =>
+  isDegraded.value ? describeFleetReason(fleet.session.value?.reason) : '',
+);
+const needsSetup = computed(
+  () => isDegraded.value && fleet.session.value?.reason === 'not_provisioned',
+);
+/**
+ * needs_reauth: signed in, but the token predates the org-claim scope —
+ * only a fresh sign-in fixes it (refresh keeps the old scopes). One click
+ * re-runs the sign-in flow; nothing signs the user out.
+ */
+const needsReauth = computed(
+  () => isDegraded.value && fleet.session.value?.reason === 'needs_reauth',
+);
+/** Background lanes currently failing (FR-6). */
+const degradedLanes = fleet.degradedLanes;
+/** The trigger chip: the session OR any sync lane is degraded. */
+const showStatusChip = computed(
+  () => isSignedIn.value && (isDegraded.value || degradedLanes.value.length > 0),
+);
+const statusChipTitle = computed(() =>
+  [degradedReason.value, ...degradedLanes.value.map((l) => `${l.label}: ${l.reason}`)]
+    .filter(Boolean)
+    .join(' · '),
+);
 
 function openMenu() {
   menuOpen.value = !menuOpen.value;
@@ -194,6 +129,16 @@ function goToAccount() {
   close();
   void router.push('/settings?tab=account');
 }
+
+async function handleRetry() {
+  loading.value = true;
+  try {
+    await fleet.retry();
+  } finally {
+    loading.value = false;
+  }
+}
+
 async function handleSignIn() {
   // Click → kick off the PKCE flow directly. Browser opens, user
   // authenticates, then returns. On failure we route to /settings?tab=account
@@ -201,38 +146,28 @@ async function handleSignIn() {
   close();
   loading.value = true;
   try {
-    identity.value = await client.settings.fleetSignIn();
-    // A fresh, successful sign-in means whatever condition previously
-    // stopped the poll (see refresh()) no longer applies — restart it so
-    // session-expiry / role changes are picked up again. No-op if the
-    // poll was never stopped.
-    startPolling();
-  } catch {
-    // Send the user to the full panel so they can see the error and retry.
-    void router.push('/settings?tab=account');
+    const err = await fleet.signIn();
+    // The capability gates (LeftRail Marketplace/Sites, Publish-to-team)
+    // must follow a menu sign-in exactly as they follow an Account-panel
+    // one (P-4: they used to stay stale until restart).
+    await refreshFeatureFlags(client);
+    // A user cancel is not an error to explain; anything else is.
+    if (err && !isSignInCancelled(err)) void router.push('/settings?tab=account');
   } finally {
     loading.value = false;
   }
 }
+
 async function handleSignOut() {
   close();
   loading.value = true;
   signOutError.value = null;
   // (FR-003) Surface sign-out failures instead of silently ignoring them.
-  const result = await runAsyncAction({
-    action:     () => client.settings.fleetSignOut(),
-    errorLabel: 'Sign out',
-    toastMessage: (err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      return `Sign out failed: ${msg}. You may still be signed in.`;
-    },
-  });
-  if (!result.error) {
-    identity.value = false;
-  } else {
-    signOutError.value = result.err instanceof Error
-      ? result.err.message
-      : String(result.err);
+  const err = await fleet.signOut();
+  await refreshFeatureFlags(client);
+  if (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    signOutError.value = `Sign out failed: ${msg}. You may still be signed in.`;
     // Re-open the menu so the user sees the error inline.
     menuOpen.value = true;
   }
@@ -258,6 +193,7 @@ async function handleSignOut() {
           v-if="isSignedIn"
           class="grid h-5 w-5 place-items-center rounded-full bg-accent-dim font-ui text-[10px] font-semibold text-accent"
           aria-hidden="true"
+          data-testid="user-menu-avatar"
         >{{ initials }}</span>
         <span
           v-else
@@ -275,6 +211,13 @@ async function handleSignOut() {
             <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
           </svg>
         </span>
+        <!-- Degraded: a status dot on the trigger (FR-3 / FR-6). -->
+        <span
+          v-if="showStatusChip"
+          class="fleet-status-dot"
+          :title="statusChipTitle"
+          data-testid="user-menu-status-chip"
+        />
         <span
           v-if="badgeColor && isSignedIn"
           class="env-badge"
@@ -289,19 +232,83 @@ async function handleSignOut() {
         class="user-menu-popover"
         data-testid="user-menu-popover"
       >
-        <!-- Identity header (signed-in only) -->
+        <!-- Identity header (signed-in or degraded) -->
         <template v-if="isSignedIn">
-          <div class="user-menu-header">
+          <div class="user-menu-header" data-testid="user-menu-identity">
             <div class="user-menu-email">{{ emailDisplay }}</div>
             <div v-if="orgDisplay" class="user-menu-sub">{{ orgDisplay }}</div>
             <div v-if="tierLabel" class="user-menu-sub user-menu-tier">{{ tierLabel }}</div>
+            <div v-if="rolesLabel" class="user-menu-sub" data-testid="user-menu-roles">{{ rolesLabel }}</div>
+          </div>
+          <div
+            v-if="isDegraded"
+            class="user-menu-degraded"
+            role="status"
+            data-testid="user-menu-degraded"
+          >
+            <span>{{ degradedReason }}</span>
+            <a
+              v-if="needsSetup && profile?.fleetBaseUrl"
+              :href="profile.fleetBaseUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="user-menu-link"
+              data-testid="menu-finish-setup"
+            >Finish setup</a>
+            <button
+              v-if="needsReauth && !served"
+              type="button"
+              class="user-menu-link"
+              :disabled="loading"
+              data-testid="menu-reauth"
+              @click="handleSignIn"
+            >
+              {{ loading ? 'Opening browser…' : 'Update sign-in' }}
+            </button>
+            <button
+              v-else-if="!needsReauth && !served"
+              type="button"
+              class="user-menu-link"
+              :disabled="loading"
+              data-testid="menu-retry"
+              @click="handleRetry"
+            >
+              {{ loading ? 'Retrying…' : 'Retry' }}
+            </button>
+          </div>
+          <div
+            v-for="lane in degradedLanes"
+            :key="lane.key"
+            class="user-menu-degraded"
+            role="status"
+            :data-testid="`user-menu-sync-${lane.key}`"
+          >
+            <span>{{ lane.label }}: not syncing — {{ lane.reason }}</span>
           </div>
           <div class="user-menu-divider" />
         </template>
 
+        <div
+          v-if="isSigningIn"
+          class="user-menu-degraded"
+          role="status"
+          data-testid="menu-signing-in"
+        >
+          <span>Waiting for browser…</span>
+          <button
+            v-if="!served"
+            type="button"
+            class="user-menu-link"
+            data-testid="menu-sign-in-cancel"
+            @click="fleet.cancelSignIn()"
+          >
+            Cancel
+          </button>
+        </div>
+
         <!-- Fleet account rows -->
         <button
-          v-if="!isSignedIn"
+          v-if="canSignIn"
           type="button"
           role="menuitem"
           class="user-menu-item"
@@ -322,7 +329,7 @@ async function handleSignOut() {
           Account settings
         </button>
         <button
-          v-if="isSignedIn"
+          v-if="isSignedIn && !served"
           type="button"
           role="menuitem"
           class="user-menu-item user-menu-item--danger"
@@ -427,6 +434,35 @@ async function handleSignOut() {
 }
 .user-menu-item--danger {
   color: var(--danger);
+}
+.fleet-status-dot {
+  position: absolute;
+  top: 2px;
+  left: 18px;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: var(--warn);
+  border: 1px solid var(--surface-1);
+}
+.user-menu-degraded {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem 0.4rem;
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  color: var(--warn);
+}
+.user-menu-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
 }
 .user-menu-item:disabled {
   opacity: 0.6;

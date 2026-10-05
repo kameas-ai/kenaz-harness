@@ -1909,8 +1909,8 @@ func TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires(t *
 	// this test" rather than silently planting nothing -- which is exactly
 	// the difference between this and finding #67's silent version.
 	// If you append to passthroughTopics, update the entry named here.
-	const closeTarget = "\ttopicFleetSessionExpired,\n}\n"
-	const closeMutated = "\ttopicFleetSessionExpired,\n\t}\n)\n"
+	const closeTarget = "\ttopicFleetSessionChanged,\n}\n"
+	const closeMutated = "\ttopicFleetSessionChanged,\n\t}\n)\n"
 	cleanupClose := plantReplace(t, wsstreamPath, closeTarget, closeMutated)
 	defer cleanupClose()
 
