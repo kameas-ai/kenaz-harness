@@ -275,4 +275,9 @@ it('surfaces a paused label lane with the engine code and a no-loss reassurance'
   expect(lanes.text()).toContain('escalate_model');
   expect(lanes.text()).toContain('names_mismatch');
   expect(lanes.text()).toContain('nothing is lost');
+  // v0.86.0 unwired sweep: until + detail were on the wire and never shown.
+  expect(lanes.find('[data-testid="sidecar-lane-until"]').exists()).toBe(true);
+  expect(lanes.find('[data-testid="sidecar-lane-detail"]').text()).toBe('409');
+  expect(lanes.text()).toContain('retries on the next recommendation after');
+  expect(lanes.text()).not.toContain('automatically');
 });

@@ -15,6 +15,8 @@ import (
 // everything installed, and the panel surfaces the error text.
 func TestUninstall_RefusedWhileKenazUsesTheSharedEngine(t *testing.T) {
 	f := newFixture(t)
+	resets := 0
+	f.impl.ResetLabelCursor = func(context.Context) error { resets++; return nil }
 	if _, err := f.impl.Enable(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -35,5 +37,10 @@ func TestUninstall_RefusedWhileKenazUsesTheSharedEngine(t *testing.T) {
 	defer f.eng.mu.Unlock()
 	if f.eng.shutdowns != 0 {
 		t.Fatalf("engine shutdown requests = %d, want 0", f.eng.shutdowns)
+	}
+	// The engine (and its label mirror) is still there: rewinding the
+	// cursor would re-push everything for nothing.
+	if resets != 0 {
+		t.Fatalf("label cursor resets = %d on a refused uninstall, want 0", resets)
 	}
 }

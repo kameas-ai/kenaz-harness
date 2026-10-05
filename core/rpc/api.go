@@ -2518,8 +2518,19 @@ func New(c *core.Core, opts ...Option) *API {
 	// demand-driven probe, and the Settings RPC surface over them.
 	a.sidecarMgr = stack.sidecarMgr
 	a.sidecarProbe = stack.sidecarProbe
-	a.sidecarAPI = &sidecarview.Impl{Manager: stack.sidecarMgr, Release: mlsidecar.PinnedEngineRelease,
+	sidecarImpl := &sidecarview.Impl{Manager: stack.sidecarMgr, Release: mlsidecar.PinnedEngineRelease,
 		Lanes: stack.labelPusher.LaneStatus}
+	// v0.86.0 unwired sweep: Uninstall wipes the engine's label mirror,
+	// so it must also rewind the push cursor (LabelPusher.ResetCursor had
+	// no production caller).
+	// Enable/Update/Repair nudge the event-driven lane so a freshly
+	// healthy engine receives the backlog without waiting for the next
+	// label write.
+	if stack.labelPusher != nil {
+		sidecarImpl.ResetLabelCursor = stack.labelPusher.ResetCursor
+		sidecarImpl.NudgeLabels = stack.labelPusher.Nudge
+	}
+	a.sidecarAPI = sidecarImpl
 	// model-settings-reach-the-model-01PMZ101 WP07: same pattern as the
 	// compaction pair above, for the chat runner's auto-title caller.
 	a.autotitleLLM = stack.autotitleLLM
