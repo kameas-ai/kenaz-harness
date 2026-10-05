@@ -649,12 +649,21 @@ legacy_metadata, quarantined_at) and named at WARN
 (`units.drop_artifacts_legacy.orphan_quarantined`: id, hash, title) before
 the big tables drop. The quarantine table is bounded (only rows orphaned at
 drop time; nothing writes or reads it afterwards) and exists for manual
-recovery. Tests: `core/storage/sqlite/migration_1105_test.go` (P-1 on a
+recovery. An orphan whose id is already in the quarantine table is
+refused, not skipped (tampering — no legitimate path writes it twice). Tests: `core/storage/sqlite/migration_1105_test.go` (P-1 on a
 reconstructed v0.87.0 state from the newest pre-1104 snapshot + every
 seeded artifact shape, zero delta on the four units tables and every media
 refcount; P-2: seven planted mismatches refuse and boot once repaired;
 check 1 via ledger surgery; deleted-since-copy and mass-loss quarantined;
 fresh install + rewind-reopen).
+**Not a bug — do not "fix" (2026-10-05, units-debt review):**
+`sqlStore.UpdateAtVersion` reads the unit's version OUTSIDE its write
+transaction — the same shape the pull path's `UpdateWithSyncState` had
+(review M3, fixed there by re-checking `baseVersion` inside the tx). It is
+not exploitable: a concurrent bump between the read and the write makes
+the history INSERT hit `UNIQUE(unit_id, version)`, which surfaces as
+`ErrVersionConflict`. Moving the check without keeping that UNIQUE path
+would be the regression.
 **Residual:** `TestMigration1105_V087SnapshotBoots` — P-1 against the REAL
 first snapshot that carries the `*_legacy` tables — SKIPS until
 `testdata/upgrade/v0.87.0/` is committed, then activates with no edit;

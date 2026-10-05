@@ -107,20 +107,7 @@ func buildV087State(t *testing.T, ctx context.Context, dir string, afterCopy fun
 	if _, err := raw.ExecContext(ctx, "DETACH DATABASE pre"); err != nil {
 		t.Fatalf("detach: %v", err)
 	}
-	// Unrelated rows in the two sidecar tables 1105 must not touch (they
-	// are empty in every committed snapshot, which would make the
-	// zero-delta digest vacuous for them — AC-PI-3).
-	for _, stmt := range []string{
-		`INSERT INTO unit_edges (id, from_id, to_id, kind, version, created_at)
-         VALUES ('seed-edge-1105', 'seed-unit-1', 'seed-unit-2', 'references', 1, 1700000002000)`,
-		`INSERT INTO unit_sync_state (unit_id, node_id, synced_version, classification, last_synced,
-                                      synced_server_version, synced_local_version)
-         VALUES ('seed-unit-1', 'node-seed-unit-1', 0, 'team_shared', 1700000002001, 3, 1)`,
-	} {
-		if _, err := raw.ExecContext(ctx, stmt); err != nil {
-			t.Fatalf("seed sidecar row: %v", err)
-		}
-	}
+	seedUnitsSidecarRows(t, ctx, raw)
 	var n int
 	if err := raw.QueryRowContext(ctx, "SELECT COUNT(*) FROM harness_migrations WHERE id = ?", migration1105ID).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("setup: 1105 ledger rows after rewind = %d, %v", n, err)
@@ -129,6 +116,27 @@ func buildV087State(t *testing.T, ctx context.Context, dir string, afterCopy fun
 		t.Fatalf("setup: artifacts_legacy rows = %d, %v; want >= %d seeded", n, err, len(seeded))
 	}
 	return seeded, tag
+}
+
+// seedUnitsSidecarRows adds one unrelated row to each units sidecar table
+// 1105 must not touch. They are empty in every committed snapshot (v0.87.0
+// included), and rowsDigest refuses an empty table as a vacuous
+// comparison, so every database assert1105ZeroDelta sees — reconstructed
+// or a real snapshot — goes through here (AC-PI-3; review B1). OR IGNORE:
+// a future snapshot that already carries these ids keeps its own rows.
+func seedUnitsSidecarRows(t *testing.T, ctx context.Context, raw *sql.DB) {
+	t.Helper()
+	for _, stmt := range []string{
+		`INSERT OR IGNORE INTO unit_edges (id, from_id, to_id, kind, version, created_at)
+         VALUES ('seed-edge-1105', 'seed-unit-1', 'seed-unit-2', 'references', 1, 1700000002000)`,
+		`INSERT OR IGNORE INTO unit_sync_state (unit_id, node_id, synced_version, classification, last_synced,
+                                      synced_server_version, synced_local_version)
+         VALUES ('seed-unit-1', 'node-seed-unit-1', 0, 'team_shared', 1700000002001, 3, 1)`,
+	} {
+		if _, err := raw.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("seed sidecar row: %v", err)
+		}
+	}
 }
 
 // unitsState is everything 1105 must leave untouched: the full content of
@@ -305,6 +313,7 @@ func TestMigration1105_V087SnapshotBoots(t *testing.T) {
 	if legacyRows == 0 {
 		t.Logf("WARNING: %s artifacts_legacy is empty; the drop runs against an empty table here", newest)
 	}
+	seedUnitsSidecarRows(t, ctx, raw)
 	_ = raw.Close()
 	assert1105ZeroDelta(t, ctx, dir)
 }
@@ -575,6 +584,11 @@ func TestMigration1105_RefusesOnCopyMismatch(t *testing.T) {
 		// restore, when set, re-writes this unit_versions row exactly as it
 		// was before the plant (the repair for twin damage).
 		restore *twin
+		// prePlant runs before plant (setup the plant depends on).
+		prePlant []string
+		// wantQuarantined is the quarantine row count after the repaired
+		// reopen.
+		wantQuarantined int
 	}{
 		{
 			name:      "real version twin missing",
@@ -613,6 +627,21 @@ func TestMigration1105_RefusesOnCopyMismatch(t *testing.T) {
 			wantInErr: "seed-artifact-1 (now a doc unit)",
 		},
 		{
+			// An orphan whose id is already in the quarantine table: a
+			// silent DO NOTHING would swallow it while the WARN claimed it
+			// was quarantined (review LOW; ruling: refuse — tampering).
+			name: "orphan id already in quarantine",
+			prePlant: []string{
+				"DELETE FROM unit_versions WHERE unit_id = '" + deletedOnV087 + "'",
+				"DELETE FROM units WHERE id = '" + deletedOnV087 + "'",
+			},
+			plant: `INSERT INTO artifacts_legacy_orphans (id, title, content_hash, source_ref_json, legacy_metadata, quarantined_at)
+			        VALUES ('` + deletedOnV087 + `', 'planted', 'planted', '{}', '{}', '2026-01-01T00:00:00.000Z')`,
+			repair:          "DELETE FROM artifacts_legacy_orphans WHERE id = '" + deletedOnV087 + "'",
+			wantInErr:       deletedOnV087 + " is already present in artifacts_legacy_orphans",
+			wantQuarantined: 1,
+		},
+		{
 			// 1104 renames both tables in one transaction: a lone one is damage.
 			name:      "lone legacy table",
 			plant:     "ALTER TABLE artifact_versions_legacy RENAME TO avl_hidden_by_test",
@@ -643,6 +672,11 @@ func TestMigration1105_RefusesOnCopyMismatch(t *testing.T) {
 					fmt.Sprintf("DELETE FROM unit_versions WHERE unit_id = '%s' AND version = %d", tc.restore.unitID, tc.restore.version),
 					fmt.Sprintf("INSERT INTO unit_versions (unit_id, version, body, metadata, created_at) VALUES ('%s', %d, '', '%s', %d)",
 						tc.restore.unitID, tc.restore.version, strings.ReplaceAll(meta, "'", "''"), created),
+				}
+			}
+			for _, stmt := range tc.prePlant {
+				if _, err := raw.ExecContext(ctx, stmt); err != nil {
+					t.Fatalf("pre-plant %q: %v", stmt, err)
 				}
 			}
 			if _, err := raw.ExecContext(ctx, tc.plant); err != nil {
@@ -696,8 +730,8 @@ func TestMigration1105_RefusesOnCopyMismatch(t *testing.T) {
 				t.Errorf("legacy tables after the repaired reopen = %d, want 0", n)
 			}
 			var orphans int
-			if err := post.QueryRowContext(ctx, "SELECT COUNT(*) FROM artifacts_legacy_orphans").Scan(&orphans); err != nil || orphans != 0 {
-				t.Errorf("quarantined rows after a repaired (complete) copy = %d, %v; want 0", orphans, err)
+			if err := post.QueryRowContext(ctx, "SELECT COUNT(*) FROM artifacts_legacy_orphans").Scan(&orphans); err != nil || orphans != tc.wantQuarantined {
+				t.Errorf("quarantined rows after the repaired reopen = %d, %v; want %d", orphans, err, tc.wantQuarantined)
 			}
 		})
 	}

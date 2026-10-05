@@ -54,7 +54,9 @@ package units
 // a units-side loss unrecoverable. So each orphaned row (with its legacy
 // versions, as JSON) is moved into `artifacts_legacy_orphans` in the same
 // transaction and logged at WARN (id, content hash, title); then the big
-// tables are dropped. The quarantine table is tiny and bounded: it holds
+// tables are dropped. An orphan whose id is already in the quarantine
+// table is refused (tampering — no legitimate path writes it twice). The
+// quarantine table is tiny and bounded: it holds
 // only rows orphaned at drop time, nothing ever writes it again, and no
 // code reads it — it exists so a lost artifact can be recovered by hand.
 // It does not keep the legacy tables alive, so the drop contract's purpose
@@ -138,9 +140,19 @@ const sqlCreateLegacyOrphans = `
         quarantined_at   TEXT NOT NULL
     )`
 
+// sqlDropLegacyQuarantineCollision finds an orphan whose id is ALREADY in
+// the quarantine table. No legitimate path produces one (1105 runs once;
+// Down keeps the table but nothing re-creates the orphan's legacy row), so
+// it is tampering — and a silent ON CONFLICT DO NOTHING would swallow the
+// real orphan while the WARN claimed it was quarantined. Refused instead.
+const sqlDropLegacyQuarantineCollision = `
+    SELECT l.id FROM artifacts_legacy l JOIN artifacts_legacy_orphans o ON o.id = l.id
+     WHERE NOT EXISTS (SELECT 1 FROM units u WHERE u.id = l.id) ORDER BY l.id LIMIT 1`
+
 // sqlQuarantineLegacyOrphans copies every orphaned legacy row — every
-// column, plus its legacy version rows — into the quarantine table. First
-// quarantine wins (ON CONFLICT DO NOTHING): nothing re-writes a row.
+// column, plus its legacy version rows — into the quarantine table. A
+// pre-existing row with the same id is refused before this runs
+// (sqlDropLegacyQuarantineCollision), so the plain INSERT never conflicts.
 const sqlQuarantineLegacyOrphans = `
     INSERT INTO artifacts_legacy_orphans
         (id, title, content_hash, source_ref_json, legacy_metadata, quarantined_at)
@@ -162,8 +174,7 @@ const sqlQuarantineLegacyOrphans = `
                                    FROM artifact_versions_legacy v WHERE v.artifact_id = l.id))),
            strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       FROM artifacts_legacy l
-     WHERE NOT EXISTS (SELECT 1 FROM units u WHERE u.id = l.id)
-    ON CONFLICT(id) DO NOTHING`
+     WHERE NOT EXISTS (SELECT 1 FROM units u WHERE u.id = l.id)`
 
 // sqlDropArtifactsLegacy drops child before parent (no cascade can fire).
 const sqlDropArtifactsLegacy = `
@@ -221,7 +232,7 @@ func migration1105() migrations.Migration {
 		OwningMission: OwningMission,
 		UpSource: sqlCreateLegacyOrphans + ";\n" + sqlDropLegacyTableExists + ";\n" + sqlDropLegacy1104Action + ";\n" +
 			sqlDropLegacyParents + ";\n" + sqlDropLegacyMatched + ";\n" + sqlDropLegacySquatted + ";\n" +
-			sqlDropLegacyVersionsMissing + ";\n" + sqlDropLegacySynthMissing + ";\n" + sqlDropLegacyOrphans + ";\n" +
+			sqlDropLegacyVersionsMissing + ";\n" + sqlDropLegacySynthMissing + ";\n" + sqlDropLegacyOrphans + ";\n" + sqlDropLegacyQuarantineCollision + ";\n" +
 			sqlQuarantineLegacyOrphans + ";\n" + sqlDropArtifactsLegacy,
 		Up:   upDropArtifactsLegacy,
 		Down: downDropArtifactsLegacy,
@@ -321,6 +332,13 @@ func upDropArtifactsLegacy(ctx context.Context, tx migrations.WriteTx) error {
 	matched, err := count("legacy parents with an artifact unit", sqlDropLegacyMatched)
 	if err != nil {
 		return err
+	}
+
+	if dup, found, err := firstRow("quarantine collision probe", sqlDropLegacyQuarantineCollision); err != nil {
+		return err
+	} else if found {
+		return refuse("orphaned legacy artifact %s is already present in artifacts_legacy_orphans; "+
+			"refusing to quarantine over it (no legitimate path writes that row twice)", dup)
 	}
 
 	// Quarantine the orphans, naming each one at WARN.
