@@ -11,8 +11,11 @@ package sqlite_test
 // which is what applies 1104. No empty database, no in-memory store, no
 // hand-built registry (CLAUDE.md blind spots #2/#3).
 //
-// The tags: the NEWEST committed snapshot (the database an upgrading user
-// actually has) and the OLDEST (v0.63.0). No committed snapshot predates
+// The tags: the NEWEST committed snapshot that still has the pre-1104
+// `artifacts` table (the database an upgrading user reaching 1104 actually
+// has — "newest overall" stops being that once the v0.87.0 snapshot lands;
+// units-debt-01UNITD01 review M1, see snapshot_generation_test.go) and the
+// OLDEST (v0.63.0). No committed snapshot predates
 // sessions/0327 — the chain starts at v0.63.0, whose ledger already
 // carries 0327..0331 — so the 0327 damage ("artifacts with zero version
 // rows") is reproduced the only way it can be: by seeding artifacts with
@@ -48,28 +51,6 @@ func TestMigration1104_IDIsPinned(t *testing.T) {
 		t.Fatalf("units.MigrationIDArtifactsToUnits = %q, want %q (the I14 gate and the upgrade tests key on the literal)",
 			units.MigrationIDArtifactsToUnits, migration1104ID)
 	}
-}
-
-// snapshotTags returns the oldest and newest committed snapshot tags.
-func oldestAndNewestSnapshot(t *testing.T) (string, string) {
-	t.Helper()
-	entries, err := os.ReadDir(filepath.Join("testdata", "upgrade"))
-	if err != nil {
-		t.Fatalf("read snapshot dir: %v", err)
-	}
-	var tags []string
-	for _, e := range entries {
-		if e.IsDir() && upgradesnap.IsSnapshotTag(e.Name()) {
-			if _, err := os.Stat(filepath.Join("testdata", "upgrade", e.Name(), "dump.sql")); err == nil {
-				tags = append(tags, e.Name())
-			}
-		}
-	}
-	tags = upgradesnap.SortedSnapshotTags(tags)
-	if len(tags) == 0 {
-		t.Fatal("no committed snapshots")
-	}
-	return tags[0], tags[len(tags)-1]
 }
 
 // materializeSnapshot writes <tag>/dump.sql into dir/data.db and returns
@@ -205,7 +186,7 @@ func writeBlob(t *testing.T, dir, hash string) {
 // zero artifact blobs (P-1, P-2, P-3).
 func TestMigration1104_PopulatedSnapshots(t *testing.T) {
 	t.Parallel()
-	oldest, newest := oldestAndNewestSnapshot(t)
+	oldest, newest := oldestAndNewestPre1104Snapshot(t, upgradeSnapshotRoot)
 	for _, tag := range []string{oldest, newest} {
 		tag := tag
 		t.Run(tag, func(t *testing.T) {
@@ -415,7 +396,7 @@ func TestMigration1104_PopulatedSnapshots(t *testing.T) {
 func TestMigration1104_AbortsOnIDCollisionWithoutPartialState(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, newest := oldestAndNewestSnapshot(t)
+	_, newest := oldestAndNewestPre1104Snapshot(t, upgradeSnapshotRoot)
 	dir := t.TempDir()
 	raw := materializeSnapshot(t, dir, newest)
 	seedEveryArtifactShape(t, ctx, raw)
@@ -461,7 +442,7 @@ func TestMigration1104_SyntheticTenThousand(t *testing.T) {
 		t.Skip("timing run; not part of -short")
 	}
 	ctx := context.Background()
-	_, newest := oldestAndNewestSnapshot(t)
+	_, newest := oldestAndNewestPre1104Snapshot(t, upgradeSnapshotRoot)
 	dir := t.TempDir()
 	raw := materializeSnapshot(t, dir, newest)
 	tx, err := raw.BeginTx(ctx, nil)
@@ -542,7 +523,7 @@ func assertAbortedWithoutPartialState(t *testing.T, ctx context.Context, dir str
 func TestMigration1104_AbortsOnMalformedUnitMetadata(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, newest := oldestAndNewestSnapshot(t)
+	_, newest := oldestAndNewestPre1104Snapshot(t, upgradeSnapshotRoot)
 	dir := t.TempDir()
 	raw := materializeSnapshot(t, dir, newest)
 	seedEveryArtifactShape(t, ctx, raw)
@@ -581,7 +562,7 @@ func TestMigration1104_AbortsOnMalformedUnitMetadata(t *testing.T) {
 func TestMigration1104_PostCopyMismatchRollsBackEverything(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, newest := oldestAndNewestSnapshot(t)
+	_, newest := oldestAndNewestPre1104Snapshot(t, upgradeSnapshotRoot)
 	dir := t.TempDir()
 	raw := materializeSnapshot(t, dir, newest)
 	seedEveryArtifactShape(t, ctx, raw)

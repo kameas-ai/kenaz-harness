@@ -31,7 +31,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -42,7 +41,6 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
-	"github.com/kameas-ai/kenaz-harness/core/storage/sqlite/upgradesnap"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 
 	_ "modernc.org/sqlite"
@@ -58,45 +56,6 @@ func TestMigration1105_IDIsPinned(t *testing.T) {
 	}
 }
 
-// snapshotTagsByGeneration returns the newest committed snapshot whose dump
-// predates 1104 (has `artifacts`, no `artifacts_legacy`), and the newest
-// committed snapshot overall plus whether IT carries `artifacts_legacy`.
-func snapshotTagsByGeneration(t *testing.T) (newestPre1104, newest string, newestHasLegacy bool) {
-	t.Helper()
-	entries, err := os.ReadDir(filepath.Join("testdata", "upgrade"))
-	if err != nil {
-		t.Fatalf("read snapshot dir: %v", err)
-	}
-	var tags []string
-	for _, e := range entries {
-		if e.IsDir() && upgradesnap.IsSnapshotTag(e.Name()) {
-			if _, err := os.Stat(filepath.Join("testdata", "upgrade", e.Name(), "dump.sql")); err == nil {
-				tags = append(tags, e.Name())
-			}
-		}
-	}
-	tags = upgradesnap.SortedSnapshotTags(tags)
-	if len(tags) == 0 {
-		t.Fatal("no committed snapshots")
-	}
-	hasLegacy := func(tag string) bool {
-		dump, err := os.ReadFile(filepath.Join("testdata", "upgrade", tag, "dump.sql"))
-		if err != nil {
-			t.Fatalf("read %s dump: %v", tag, err)
-		}
-		return strings.Contains(string(dump), "artifacts_legacy")
-	}
-	newest = tags[len(tags)-1]
-	newestHasLegacy = hasLegacy(newest)
-	for i := len(tags) - 1; i >= 0; i-- {
-		if !hasLegacy(tags[i]) {
-			return tags[i], newest, newestHasLegacy
-		}
-	}
-	t.Fatal("no pre-1104 snapshot committed")
-	return "", "", false
-}
-
 // buildV087State leaves dir/data.db in the exact shape v0.87.0 leaves an
 // upgraded install in (see the file comment), seeded with every artifact
 // shape. afterCopy, when non-nil, runs against the production storage.DB
@@ -105,7 +64,7 @@ func snapshotTagsByGeneration(t *testing.T) (newestPre1104, newest string, newes
 // seeded artifacts and the pre-1104 snapshot tag used.
 func buildV087State(t *testing.T, ctx context.Context, dir string, afterCopy func(db storage.DB)) (map[string]seededArtifact, string) {
 	t.Helper()
-	tag, _, _ := snapshotTagsByGeneration(t)
+	_, tag := oldestAndNewestPre1104Snapshot(t, upgradeSnapshotRoot)
 	raw := materializeSnapshot(t, dir, tag)
 	seeded := seedEveryArtifactShape(t, ctx, raw)
 	pre := filepath.Join(dir, "pre1104.db")
@@ -322,17 +281,19 @@ func TestMigration1105_PopulatedV087StateDropsWithZeroUnitsDelta(t *testing.T) {
 	}
 }
 
-// TestMigration1105_V087SnapshotBoots is P-1 against the REAL v0.87.0-era
-// snapshot: it runs only once the newest committed snapshot's dump carries
-// artifacts_legacy (i.e. was taken by a build that shipped 1104). Until
-// testdata/upgrade/v0.87.0/ is committed it skips, naming why.
+// TestMigration1105_V087SnapshotBoots is P-1 against the REAL 1104-era
+// snapshot: the newest committed snapshot whose dump CREATES
+// artifacts_legacy (v0.87.0, or a later 1104-era patch tag). It skips only
+// while no snapshot tag >= v0.87.0 exists, and FAILS if one does but none
+// carries artifacts_legacy (v087SnapshotDecision; review H1).
 func TestMigration1105_V087SnapshotBoots(t *testing.T) {
 	t.Parallel()
-	_, newest, hasLegacy := snapshotTagsByGeneration(t)
-	if !hasLegacy {
-		t.Skipf("newest committed snapshot %s predates units/1104 (no artifacts_legacy in its dump); "+
-			"this test activates when the v0.87.0 snapshot is committed — until then P-1 rides on the "+
-			"reconstructed v0.87.0 state (TestMigration1105_PopulatedV087StateDropsWithZeroUnitsDelta)", newest)
+	action, newest, msg := v087SnapshotDecision(t, upgradeSnapshotRoot)
+	switch action {
+	case v087Skip:
+		t.Skip(msg)
+	case v087Fail:
+		t.Fatal(msg)
 	}
 	ctx := context.Background()
 	dir := t.TempDir()
