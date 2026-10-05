@@ -342,6 +342,20 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-05 (v0.87.0 adversarial review F2) · the repair path's re-application window ends at 0341
+
+Re-running sessions/0332 on a database units/1104 has converted fails
+("no such table: artifacts") — proven by the release probe. UNREACHABLE
+in production: Pending applies in version order so 1104 only ever runs
+after 0332, and Registry.Rollback has no production caller; the repair
+path re-applies 0341+ (hardened for the converted store) and never
+0332. Recorded so nobody "fixes" 0332 by modifying a shipped migration:
+IF a future repair feature widens the window below 0341, it must add a
+table-exists guard IN THE REPAIR PATH, not in 0332. **Owner:** whoever
+builds a wider repair. Also noted (F4): the 0341 composition tests pin
+v0.85.2/v0.63.0 while 1104's pin the newest snapshot — re-point 0341's
+at the newest tag when next touched.
+
 ### 2026-10-04 (install-framework-01DOGF0B WP01/WP02) · Marketplace "Install" for workflow / agent_pack / bundle was badge-only — nothing consumes `installed/`; the skill badge lied the other way
 
 **Class:** registered/advertised capability with no consumer.

@@ -446,8 +446,7 @@ describe('ContextsView', () => {
       expect(btn.exists()).toBe(true);
       expect((btn.element as HTMLButtonElement).disabled).toBe(true);
       const reason = w.find('[data-testid=context-share-disabled-reason]');
-      expect(reason.text()).toContain('team sync is not active on this device');
-      expect(reason.text()).toContain('signed-in fleet connection with the team-graph capability');
+      expect(reason.text()).toContain('does not have the team-graph capability');
       expect(w.find('[data-testid=context-share-account-link]').attributes('href')).toBe('#/settings?tab=account');
       await btn.trigger('click');
       await flushPromises();
@@ -1195,14 +1194,14 @@ describe('ContextsView sharing affordances (knowledge-home-01DOGF0E WP04, P-5)',
     w.unmount();
   });
 
-  it('unreadable sync status → disabled with a reason that says it could not be read', async () => {
+  it('sync status unreadable → reason still renders from the session store (D5 switch-over)', async () => {
     const { client } = provide({ tree, files: { 'notes.md': '# n' } });
     (client.contexts as any).syncStatus = async () => {
       throw new Error('fleet not wired');
     };
     const w = await selectNotes(client);
     expect((w.find('[data-testid=context-publish-btn]').element as HTMLButtonElement).disabled).toBe(true);
-    expect(w.find('[data-testid=context-share-disabled-reason]').text()).toContain('could not be read');
+    expect(w.find('[data-testid=context-share-disabled-reason]').text()).toContain('team-graph capability');
     w.unmount();
   });
 });
@@ -1248,7 +1247,7 @@ describe('ContextsView folder sharing state (knowledge-home-01DOGF0E WP05, P-6)'
     expect(reason.attributes('data-share-target')).toBe('folder');
     expect(reason.text()).toContain('Sharing works per file today — select a file in “kameas-ai” to share it.');
     expect(reason.text()).toContain('pending a product decision');
-    expect(reason.text()).toContain('team sync is not active on this device');
+    expect(reason.text()).toContain('does not have the team-graph capability');
     expect(publishSpy).not.toHaveBeenCalled();
     expect(promoteSpy).not.toHaveBeenCalled();
     w.unmount();
@@ -1295,8 +1294,8 @@ describe('ContextsView folder sharing state (knowledge-home-01DOGF0E WP05, P-6)'
     await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
     await flushPromises();
     const text = w.find('[data-testid=context-share-disabled-reason]').text();
-    expect(text).toContain('fleet not set up, signed out, or the team-graph capability is missing');
-    expect(text).not.toContain('could not be read');
+    expect(text).toContain('does not have the team-graph capability');
+    
     w.unmount();
   });
 

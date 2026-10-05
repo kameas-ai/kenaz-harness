@@ -40,9 +40,9 @@ func TestPI_ReadTokenState_ReadsPreviousReleaseSlots(t *testing.T) {
 	SetExternalTokenSource(nil)
 
 	cases := []struct {
-		name               string
-		refresh            string
-		expires            time.Time
+		name                string
+		refresh             string
+		expires             time.Time
 		accessValid, usable bool
 	}{
 		{"valid access", "rt", time.Now().Add(time.Hour), true, true},

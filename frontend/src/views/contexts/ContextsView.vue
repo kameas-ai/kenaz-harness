@@ -186,12 +186,11 @@ const teamCapEnabled = computed(() => fleetSessionStore.capability('shared_team_
  * the control cannot learn the feature exists or what would enable it
  * (dogfood F10b — "i see no way to promote my kameas-ai context").
  *
- * Source: `syncStatus` (Contexts_SyncStatus → core/fleet/context_graph_sync.go
- * team_cap_enabled). It can only tell "read it, cap is off" from "could not
- * read it"; signed-out vs degraded vs capability-missing needs
- * fleet-session-truth-01DOGF0A's FleetSession. Whichever of A / E lands
- * second swaps this computed for FleetSession-derived sentences — the gate
- * (`teamCapEnabled`) stays where it is (docs/missions/knowledge-home.md D5).
+ * Source: the FleetSession store (fleet-session-truth-01DOGF0A) — the D5
+ * switch-over, completed at release assembly (adversarial-review F1: both
+ * branches had assumed the other would do it). The store's state splits
+ * signed-out / needs-reauth / degraded / capability-missing; the gate
+ * (`teamCapEnabled`) reads the same store.
  */
 /**
  * folderShareReason — the interim folder state for FR-7. Folder-level
@@ -208,17 +207,28 @@ function folderShareReason(folderPath: string): string {
 
 const sharingDisabledReason = computed<string | null>(() => {
   if (teamCapEnabled.value) return null;
-  if (syncStatus.value === null) {
-    // The binding itself failed (loadSyncStatus's catch path).
-    return 'Sharing is unavailable — fleet team-sync status could not be read. Sharing needs a signed-in fleet connection with the team-graph capability.';
+  const snap = fleetSessionStore.session.value;
+  const st = snap?.state;
+  // needs-reauth is a degraded reason, not a state (the token lacks a
+  // required claim/scope until the user re-signs-in).
+  if (st === 'degraded' && snap?.reason === 'needs_reauth') {
+    return 'Sharing is paused — your sign-in needs an update. Use “Update sign-in” in the account menu, then sharing resumes.';
   }
-  // A successful read with the cap off. The API cannot say WHY: with no
-  // syncer wired (fleet not configured — local-only) Context_SyncStatus
-  // returns a zeroed view with no error (core/rpc/views/contexts/impl.go),
-  // which is indistinguishable from "signed in, capability missing". So
-  // this names the possibilities rather than guessing one. A's
-  // FleetSession is what can split them (decision record D5).
-  return 'Sharing is off — team sync is not active on this device (fleet not set up, signed out, or the team-graph capability is missing). Sharing needs a signed-in fleet connection with the team-graph capability.';
+  switch (st) {
+    case 'signed_out':
+      return 'Sharing is off — you are signed out of fleet. Sign in with a team-graph-enabled account to share.';
+    case 'degraded':
+      return 'Sharing is paused — the fleet connection is degraded right now. It retries automatically; sharing resumes when the connection recovers.';
+    case 'signing_in':
+      return 'Sharing will be available once sign-in completes.';
+    case 'signed_in':
+      // Signed in but the team-graph capability is off for this account.
+      return 'Sharing is off — this account does not have the team-graph capability. Ask an admin to enable team context sharing.';
+    case 'disabled':
+    default:
+      // Fleet disabled/not configured (local-only), or no snapshot yet.
+      return 'Sharing is off — fleet team sync is not set up on this device. Sharing needs a signed-in fleet connection with the team-graph capability.';
+  }
 });
 
 /** What the sharing controls act on: the last-clicked folder, else the selected file. */
