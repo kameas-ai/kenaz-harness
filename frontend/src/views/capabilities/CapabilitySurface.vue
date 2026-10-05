@@ -33,6 +33,7 @@ import {
   catalogOnlyKind,
   catalogRows,
   catalogSource,
+  VISIBILITY_LABELS,
   reasonElId,
 } from './catalogBrowse';
 import { BUILTIN_TOOLS, type BuiltinTool } from './plugins/builtinTools';
@@ -682,7 +683,7 @@ defineExpose({ focusBrowse });
                 <div class="flex flex-wrap items-center gap-2 font-ui text-[13px] text-ink">
                   <span>{{ row.entry.slug }}</span>
                   <span class="text-[10px] uppercase tracking-[0.14em] text-ink-dim">{{ kindNoun(row.entry.kind) }}</span>
-                  <span class="text-[10px] uppercase tracking-[0.14em] text-ink-dim">{{ SOURCE_LABELS[catalogSource(row.entry.visibility)] }}</span>
+                  <span class="text-[10px] uppercase tracking-[0.14em] text-ink-dim">{{ VISIBILITY_LABELS[row.entry.visibility] ?? SOURCE_LABELS[catalogSource(row.entry.visibility)] }}</span>
                   <span
                     v-if="row.residue"
                     class="text-[10px] uppercase tracking-[0.14em] text-ink-muted"

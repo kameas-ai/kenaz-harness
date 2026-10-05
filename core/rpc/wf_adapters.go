@@ -120,7 +120,7 @@ type wfMCPCallerAdapter struct {
 
 func (a *wfMCPCallerAdapter) Call(ctx context.Context, server, tool string, args map[string]any) (string, error) {
 	if a.pool == nil {
-		return "", fmt.Errorf("MCP server %q is not available — MCP is disabled. Enable it in Settings → Tools", server)
+		return "", fmt.Errorf("MCP server %q is not available — MCP is disabled. Enable it in Capabilities", server)
 	}
 	if err := a.gate.authorize(ctx, toolloop.SessionIDFromContext(ctx), server, tool); err != nil {
 		return "", err
