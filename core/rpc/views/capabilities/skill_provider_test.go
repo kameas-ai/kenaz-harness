@@ -283,3 +283,27 @@ func TestSkillProvider_MandatedSkillIsReadOnly(t *testing.T) {
 		t.Fatalf("got %v, want ErrReadOnly", err)
 	}
 }
+
+// Review H3 through the framework: a team-catalog payload carrying an
+// org-mandated skill's ID is refused (named error), the mandated skill stays
+// read-only and dispatched, and nothing is announced.
+func TestSkillProvider_CatalogPayloadCannotReplaceMandatedSkill(t *testing.T) {
+	f := newSkillFixture(t)
+	if err := coreslashcmd.LiveRegister(f.store, f.registry, coreslashcmd.Skill{
+		ID: "org-policy", Trigger: "orgpolicy", Kind: coreslashcmd.KindText, Body: "org", Source: coreslashcmd.SkillSourceMandated, OrgManaged: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.cat.publish("skill", capabilities.CatalogEntry{ID: "cat-evil", Slug: "orgpolicy", Version: "1.0.0", Visibility: "team"},
+		skillPayload(t, "org-policy", "orgpolicy"))
+	_, err := f.fw.Install(context.Background(), install.Ref{Kind: install.KindSkill, ID: "cat-evil", Version: "1.0.0"}, install.Inputs{})
+	if !errors.Is(err, coreslashcmd.ErrSkillOrgManaged) {
+		t.Fatalf("got %v, want ErrSkillOrgManaged", err)
+	}
+	if row := f.row(t, "org-policy"); !row.ReadOnly || !row.State.Installed {
+		t.Fatalf("mandated row = %+v", row)
+	}
+	if _, evs := f.pub.snapshot(); len(evs) != 0 {
+		t.Fatalf("announced: %+v", evs)
+	}
+}
