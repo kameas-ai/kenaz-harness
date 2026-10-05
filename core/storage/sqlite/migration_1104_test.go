@@ -504,3 +504,116 @@ func TestMigration1104_SyntheticTenThousand(t *testing.T) {
 	}
 	t.Logf("Open (all pending migrations incl. %s) over %d artifacts + %d versions: %s", migration1104ID, total+1, total+2, elapsed)
 }
+
+// assertAbortedWithoutPartialState checks the all-or-nothing outcome of a
+// failed 1104 on dir: legacy tables intact under their OLD names, no
+// artifact unit, no *_legacy table, no ledger row.
+func assertAbortedWithoutPartialState(t *testing.T, ctx context.Context, dir string) {
+	t.Helper()
+	check := openRawSQLiteAt(t, filepath.Join(dir, "data.db"))
+	defer func() { _ = check.Close() }()
+	var n int
+	if err := check.QueryRowContext(ctx, "SELECT COUNT(*) FROM artifacts").Scan(&n); err != nil || n == 0 {
+		t.Errorf("legacy `artifacts` not intact after abort: %d rows, %v", n, err)
+	}
+	if err := check.QueryRowContext(ctx, "SELECT COUNT(*) FROM artifact_versions").Scan(&n); err != nil || n == 0 {
+		t.Errorf("legacy `artifact_versions` not intact after abort: %d rows, %v", n, err)
+	}
+	if err := check.QueryRowContext(ctx, "SELECT COUNT(*) FROM units WHERE kind='artifact'").Scan(&n); err != nil || n != 0 {
+		t.Errorf("artifact units after abort = %d, %v; want 0", n, err)
+	}
+	if err := check.QueryRowContext(ctx, "SELECT COUNT(*) FROM unit_versions uv JOIN artifacts a ON a.id = uv.unit_id").Scan(&n); err != nil || n != 0 {
+		t.Errorf("copied unit_versions after abort = %d, %v; want 0", n, err)
+	}
+	if err := check.QueryRowContext(ctx, "SELECT COUNT(*) FROM harness_migrations WHERE id = ?", migration1104ID).Scan(&n); err != nil || n != 0 {
+		t.Errorf("ledger rows for the aborted 1104 = %d, %v; want 0", n, err)
+	}
+	if err := check.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('artifacts_legacy','artifact_versions_legacy','idx_units_meta_content_hash')").Scan(&n); err != nil || n != 0 {
+		t.Errorf("objects created by the aborted 1104 survived (%d)", n)
+	}
+}
+
+// TestMigration1104_AbortsOnMalformedUnitMetadata (review F6): a
+// pre-existing unit whose metadata is not JSON would make the migration's
+// json_extract indexes unbuildable. Open must fail naming that unit, write
+// nothing, and boot once the row is repaired.
+func TestMigration1104_AbortsOnMalformedUnitMetadata(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, newest := oldestAndNewestSnapshot(t)
+	dir := t.TempDir()
+	raw := materializeSnapshot(t, dir, newest)
+	seedEveryArtifactShape(t, ctx, raw)
+	if _, err := raw.ExecContext(ctx, "UPDATE units SET metadata = '{broken' WHERE id = 'seed-unit-2'"); err != nil {
+		t.Fatalf("seed malformed metadata: %v", err)
+	}
+	_ = raw.Close()
+
+	_, err := storagesqlite.Open(newConfig(dir))
+	if err == nil {
+		t.Fatal("Open succeeded over a unit with malformed metadata")
+	}
+	if !strings.Contains(err.Error(), "seed-unit-2") || !strings.Contains(err.Error(), "not valid JSON") {
+		t.Fatalf("abort error does not name the offending unit clearly: %v", err)
+	}
+	assertAbortedWithoutPartialState(t, ctx, dir)
+
+	fix := openRawSQLiteAt(t, filepath.Join(dir, "data.db"))
+	if _, err := fix.ExecContext(ctx, "UPDATE units SET metadata = '{}' WHERE id = 'seed-unit-2'"); err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	_ = fix.Close()
+	db, err := storagesqlite.Open(newConfig(dir))
+	if err != nil {
+		t.Fatalf("Open after repairing the row: %v", err)
+	}
+	_ = db.Close(ctx)
+}
+
+// TestMigration1104_PostCopyMismatchRollsBackEverything (review F7): the
+// collision test aborts BEFORE the copy; this one forces the abort AFTER
+// it. A trigger tampers with one copied version row's hash, so the
+// in-transaction verification fails once the INSERTs have already run.
+// Everything must roll back — copy, indexes, renames, ledger — and the
+// database must reopen cleanly once the tamper is gone.
+func TestMigration1104_PostCopyMismatchRollsBackEverything(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, newest := oldestAndNewestSnapshot(t)
+	dir := t.TempDir()
+	raw := materializeSnapshot(t, dir, newest)
+	seedEveryArtifactShape(t, ctx, raw)
+	if _, err := raw.ExecContext(ctx, `
+        CREATE TRIGGER tamper_1104 AFTER INSERT ON unit_versions
+        WHEN NEW.unit_id = 'seed-artifact-1' AND NEW.version = 2
+        BEGIN
+            UPDATE unit_versions SET metadata = json_set(metadata, '$.content_hash', 'tampered') WHERE id = NEW.id;
+        END`); err != nil {
+		t.Fatalf("create tamper trigger: %v", err)
+	}
+	_ = raw.Close()
+
+	_, err := storagesqlite.Open(newConfig(dir))
+	if err == nil {
+		t.Fatal("Open succeeded although a copied version row no longer matches its source")
+	}
+	if !strings.Contains(err.Error(), "verification failed") {
+		t.Fatalf("abort error is not the post-copy verification: %v", err)
+	}
+	assertAbortedWithoutPartialState(t, ctx, dir)
+
+	fix := openRawSQLiteAt(t, filepath.Join(dir, "data.db"))
+	if _, err := fix.ExecContext(ctx, "DROP TRIGGER tamper_1104"); err != nil {
+		t.Fatalf("drop trigger: %v", err)
+	}
+	_ = fix.Close()
+	db, err := storagesqlite.Open(newConfig(dir))
+	if err != nil {
+		t.Fatalf("reopen after the abort: %v", err)
+	}
+	defer func() { _ = db.Close(ctx) }()
+	var n int
+	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM harness_migrations WHERE id = ? AND action = 'applied'", migration1104ID).Scan(&n); err != nil || n != 1 {
+		t.Errorf("1104 ledger rows after the clean reopen = %d, %v; want 1", n, err)
+	}
+}

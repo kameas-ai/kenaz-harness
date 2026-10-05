@@ -5149,22 +5149,14 @@ func newArtifactsStack(c *core.Core, media coreatt.MediaStore) (coreart.Store, *
 	if purger, ok := store.(coreart.ScopePurger); ok {
 		if sm := c.SessionManager(); sm != nil {
 			sm.AddDeleteObserver(func(ctx context.Context, sessionID string) error {
-				hashes, err := purger.PurgeSession(ctx, sessionID)
-				if err != nil {
-					return err
-				}
-				_, err = coreatt.ReleaseUnreferenced(ctx, media, hashes)
-				return err
+				purgeArtifactsAfterDelete(ctx, "session", sessionID, purger.PurgeSession, media)
+				return nil
 			})
 		}
 		if pm := c.ProjectManager(); pm != nil {
 			pm.AddDeleteObserver(func(ctx context.Context, projectID string) error {
-				hashes, err := purger.PurgeProject(ctx, projectID)
-				if err != nil {
-					return err
-				}
-				_, err = coreatt.ReleaseUnreferenced(ctx, media, hashes)
-				return err
+				purgeArtifactsAfterDelete(ctx, "project", projectID, purger.PurgeProject, media)
+				return nil
 			})
 		}
 	}
@@ -5172,6 +5164,25 @@ func newArtifactsStack(c *core.Core, media coreatt.MediaStore) (coreart.Store, *
 		coreart.WithSessionReader(&artifactSessionProjectReader{mgr: c.SessionManager()}),
 	)
 	return store, mgr
+}
+
+// purgeArtifactsAfterDelete runs an artifacts ScopePurger after the session
+// or project row is ALREADY gone, then releases the media the purged units
+// pinned. A failure is logged, not returned (review F10, decision record
+// D8): returning it would report "delete failed" for a session/project that
+// no longer exists and that the user cannot delete again, and there is no
+// retry path. The cost — orphaned artifact units whose scope id names a
+// deleted session/project, and their bytes — is recorded in
+// docs/unwired-ledger.md (2026-10-04, purge-retry) with an owner.
+func purgeArtifactsAfterDelete(ctx context.Context, kind, id string, purge func(context.Context, string) ([]string, error), media coreatt.MediaStore) {
+	hashes, err := purge(ctx, id)
+	if err != nil {
+		logging.L().Warn("rpc.artifacts.purge_failed", "scope", kind, "id", id, "err", err.Error())
+		return
+	}
+	if _, err := coreatt.ReleaseUnreferenced(ctx, media, hashes); err != nil {
+		logging.L().Warn("rpc.artifacts.media_release_failed", "scope", kind, "id", id, "err", err.Error())
+	}
 }
 
 // newArtifactsAPI returns the real Store + Manager-backed

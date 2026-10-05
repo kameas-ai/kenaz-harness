@@ -340,6 +340,33 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-04 (artifacts-as-units-01DOGF0C review F10) · artifact purge after a session/project delete has no retry — purge-retry
+
+`purgeArtifactsAfterDelete` (`core/rpc/api.go`) runs after the session or
+project row is already gone. If it fails, the error is logged
+(`rpc.artifacts.purge_failed`) and the delete still reports success.
+Returning the error would show "delete failed" for an item that no longer
+exists and cannot be deleted again. The residue is artifact units whose
+`scope_id` / `metadata.session_id` / `metadata.project_id` name a deleted
+row, and the media they pin. These are still visible and deletable one by
+one in the Library's Captured view. No sweep re-runs the purge. Fix shape: a
+boot-time sweep that purges artifact units whose session/project no longer
+exists. Blocker: none technical; it was descoped from the review round.
+Owner: artifacts-as-units-01DOGF0C follow-up (filed 2026-10-04).
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C review F11) · session delete funnel deletes promoted artifacts — pre-existing, preserved
+
+`rpc/views/sessions` `DeleteWithOptions` (default cascade) lists artifacts
+by ORIGIN session and deletes all of them, including ones the user promoted
+to project or global scope. That contradicts what promotion is for. The core
+session-delete observer only deletes session-SCOPED units and unlinks
+promoted ones. The legacy store behaved the same way as the funnel, so
+artifacts-as-units kept it as is: a storage migration is the wrong place to
+change delete semantics. Decision needed: should the funnel skip promoted
+artifacts (filter `ScopeKind=session`)? Owner: the product owner, raised by
+artifacts-as-units-01DOGF0C. Decision record:
+`docs/missions/artifacts-as-units.md` "Review follow-ups".
+
 ### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `units.KindArtifact` defined, accepted by the schema, used only in tests — CLOSED
 
 `core/units/unit.go` has declared `KindArtifact = "artifact"` and the

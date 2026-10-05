@@ -28,6 +28,8 @@ package units
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
@@ -122,6 +124,18 @@ const sqlArtifactsToUnitsCopy = `
 const (
 	sqlArtifactsToUnitsCollisions = `SELECT COUNT(*) FROM artifacts a JOIN units u ON u.id = a.id`
 
+	// sqlArtifactsToUnitsBadMetadata finds a pre-existing units /
+	// unit_versions row whose metadata is not valid JSON. The expression
+	// indexes this migration adds evaluate json_extract(metadata, ...) on
+	// EVERY row — one malformed row would fail the CREATE INDEX with an
+	// opaque "malformed JSON" (and, had the index existed, every later write
+	// to that row). Probed first so the abort names the row (review F6).
+	sqlArtifactsToUnitsBadMetadata = `
+    SELECT 'units ' || id FROM units WHERE NOT json_valid(metadata)
+    UNION ALL
+    SELECT 'unit_versions ' || id || ' (unit ' || unit_id || ')' FROM unit_versions WHERE NOT json_valid(metadata)
+    LIMIT 1`
+
 	sqlArtifactsToUnitsParentsWant = `SELECT COUNT(*) FROM artifacts`
 	sqlArtifactsToUnitsParentsGot  = `
     SELECT COUNT(*) FROM artifacts a JOIN units u ON u.id = a.id
@@ -171,7 +185,7 @@ func migration1104() migrations.Migration {
 		ID:            MigrationIDArtifactsToUnits,
 		Version:       1104,
 		OwningMission: OwningMission,
-		UpSource: sqlArtifactsToUnitsCollisions + ";\n" + sqlArtifactsToUnitsCopy +
+		UpSource: sqlArtifactsToUnitsBadMetadata + ";\n" + sqlArtifactsToUnitsCollisions + ";\n" + sqlArtifactsToUnitsCopy +
 			sqlArtifactsToUnitsParentsWant + ";\n" + sqlArtifactsToUnitsParentsGot + ";\n" +
 			sqlArtifactsToUnitsVersionsWant + ";\n" + sqlArtifactsToUnitsVersionsGot + ";\n" +
 			sqlArtifactsToUnitsSynthWant + ";\n" + sqlArtifactsToUnitsSynthGot + ";\n" +
@@ -219,6 +233,18 @@ func upArtifactsToUnits(ctx context.Context, tx migrations.WriteTx) error {
 			return 0, fmt.Errorf("%s: %w", label, err)
 		}
 		return n, nil
+	}
+
+	var bad string
+	switch err := tx.QueryRow(ctx, sqlArtifactsToUnitsBadMetadata).Scan(&bad); {
+	case err == nil:
+		return fmt.Errorf("%s: %s has metadata that is not valid JSON; repair or remove that row before upgrading "+
+			"(the migration's json_extract indexes cannot be built over it) — aborting, nothing written",
+			MigrationIDArtifactsToUnits, bad)
+	case errors.Is(err, sql.ErrNoRows):
+		// every existing metadata value parses
+	default:
+		return fmt.Errorf("%s: metadata validity probe: %w", MigrationIDArtifactsToUnits, err)
 	}
 
 	collisions, err := count("id collision probe", sqlArtifactsToUnitsCollisions)

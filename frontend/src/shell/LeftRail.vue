@@ -85,7 +85,10 @@ const newProjectDraft = ref('');
 const renamingProjectId = ref<string | null>(null);
 const renameProjectDraft = ref('');
 const projectMenu = ref<{ id: string; x: number; y: number } | null>(null);
-const deleteModal = ref<{ project: Project; cascade: boolean } | null>(null);
+// artifactCount: project-scoped artifacts that the delete will remove
+// permanently (artifacts-as-units-01DOGF0C: project delete purges them —
+// spec FR-6). null while counting / when the count could not be read.
+const deleteModal = ref<{ project: Project; cascade: boolean; artifactCount: number | null } | null>(null);
 
 const collapsed = ref<Set<string>>(new Set());
 let focusedProjectRenameId: string | null = null;
@@ -459,7 +462,18 @@ async function commitProjectRename(id: string) {
 
 function startProjectDelete(p: Project) {
   closeProjectMenu();
-  deleteModal.value = { project: p, cascade: false };
+  deleteModal.value = { project: p, cascade: false, artifactCount: null };
+  void client.artifacts
+    .list({ projectId: p.id, scopeKind: 'project' })
+    .then((rows) => {
+      if (deleteModal.value?.project.id === p.id) {
+        deleteModal.value.artifactCount = (rows ?? []).length;
+      }
+    })
+    .catch(() => {
+      // Count unavailable (served mode / stub): the copy below still says
+      // project artifacts are deleted, just without a number.
+    });
 }
 
 function cancelProjectDelete() {
@@ -985,6 +999,14 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <p class="mt-2 font-ui text-xs text-ink-muted">
           Sessions in this project become global unless you opt to delete
           them as well.
+        </p>
+        <p class="mt-2 font-ui text-xs text-signal-danger" data-testid="delete-project-artifacts-warning">
+          <template v-if="deleteModal.artifactCount !== null">
+            {{ deleteModal.artifactCount }} artifact{{ deleteModal.artifactCount === 1 ? '' : 's' }}
+            promoted to this project will be permanently deleted.
+          </template>
+          <template v-else>Artifacts promoted to this project will be permanently deleted.</template>
+          Deleting the sessions too also deletes the artifacts captured in them.
         </p>
         <label class="mt-3 flex items-center gap-2 font-ui text-xs text-ink">
           <input

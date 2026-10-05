@@ -213,4 +213,59 @@ func TestArtifactsStack_IsUnitsBacked_EveryConsumerWritesUnits(t *testing.T) {
 	if _, err := os.Stat(headPath); !os.IsNotExist(err) {
 		t.Errorf("purged artifact's bytes still on disk after the session delete (err=%v) — the observer did not release them", err)
 	}
+
+	// ---- FR-6 for projects, through the real stack (review F3): a
+	// project-scoped artifact survives GC while live, and deleting the
+	// project through projects.Manager — the production observer —
+	// purges it and releases its bytes; a session-scoped artifact that only
+	// carried the project link survives with the link nulled.
+	proj, err := c.ProjectManager().Create(ctx, "doomed project", "")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	pid := proj.ID
+	psess, err := c.SessionManager().CreateInProject(ctx, "in project", &pid)
+	if err != nil {
+		t.Fatalf("create session in project: %v", err)
+	}
+	pcap, err := mgr.Capture(ctx, []coreart.CaptureCandidate{{
+		Title: "promote me", MimeType: "text/plain", Bytes: []byte("project scoped bytes"),
+		Source: coreart.SourceUserPin, SourceRef: coreart.ArtifactSourceRef{MessageID: "m"},
+	}, {
+		Title: "stay in session", MimeType: "text/plain", Bytes: []byte("session scoped bytes"),
+		Source: coreart.SourceUserPin, SourceRef: coreart.ArtifactSourceRef{MessageID: "m"},
+	}}, psess.ID)
+	if err != nil || len(pcap) != 2 {
+		t.Fatalf("capture in project session: %v (%d)", err, len(pcap))
+	}
+	if _, err := store.UpdateScope(ctx, pcap[0].ID, coreart.ScopeKindProject, pid); err != nil {
+		t.Fatalf("promote to project: %v", err)
+	}
+	projPath := filepath.Join(dataDir, "media", pcap[0].ContentHash)
+	prow, _ := media.List(ctx, coreatt.MediaFilter{ContentHash: pcap[0].ContentHash})
+	for _, r := range prow {
+		_ = media.Delete(ctx, r.ID)
+	}
+	if _, err := media.PruneOrphans(ctx); err != nil {
+		t.Fatalf("PruneOrphans: %v", err)
+	}
+	if _, err := os.Stat(projPath); err != nil {
+		t.Fatalf("media GC deleted a live project-scoped artifact's bytes: %v", err)
+	}
+	if err := c.ProjectManager().Delete(ctx, pid); err != nil {
+		t.Fatalf("project Delete: %v", err)
+	}
+	if _, err := store.Get(ctx, pcap[0].ID); err == nil {
+		t.Error("project-scoped artifact unit survived its project's delete in the production wiring")
+	}
+	if _, err := os.Stat(projPath); !os.IsNotExist(err) {
+		t.Errorf("purged project artifact's bytes still on disk (err=%v)", err)
+	}
+	kept, err := store.Get(ctx, pcap[1].ID)
+	if err != nil {
+		t.Fatalf("session-scoped artifact deleted by a project delete: %v", err)
+	}
+	if kept.ProjectID != nil {
+		t.Errorf("surviving artifact still linked to deleted project %q", *kept.ProjectID)
+	}
 }

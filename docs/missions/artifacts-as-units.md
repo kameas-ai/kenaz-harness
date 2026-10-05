@@ -288,3 +288,51 @@ noting that this is the first snapshot whose dump has `artifacts_legacy` /
 `artifact_versions_legacy` and kind='artifact' units (it needs no
 `expectedChangedTablesArtifactsToUnits` entry), and that it is the
 populated-table base for the next release's `units/1105` drop.
+
+## Review follow-ups (2026-10-04)
+
+- **Release note (F4).** "Deleting a project now permanently deletes the
+  artifacts promoted to that project. Artifacts that were only captured in
+  the project's sessions stay (their project link is cleared) unless you
+  also delete the sessions, which deletes the artifacts captured in them.
+  The delete-project confirmation shows how many project artifacts will
+  go." Before this release the project row's FK only cleared `project_id`
+  and left a project-scoped artifact with no project. The confirm modal
+  (`LeftRail.vue`) and `rpc/views/projects/impl.go` now say so.
+- **Fleet guard (F5).** `Unit_PromoteAsMergeRequest`, `Unit_ResolveMerge`
+  and `Unit_ResolveEnshrine` refuse `kind='artifact'` units with
+  `fleetview.ErrArtifactUnitNotShareable`. This is what makes the "delegated
+  exception" in `core/units/unit.go` true at the RPC boundary: an artifact's
+  title and metadata (message ids, content hash) cannot be proposed to
+  fleet, and a resolution cannot rewrite or fork an artifact row.
+- **Malformed metadata (F6).** 1104 probes `json_valid(metadata)` on every
+  existing `units` / `unit_versions` row first and aborts naming the row;
+  otherwise its json_extract indexes would fail to build with an opaque
+  error.
+- **Purge failure semantics (F10) — chosen: log and succeed.** The purge
+  runs after the session/project row is already deleted. Returning its error
+  told the user "delete failed" about something that no longer exists and
+  cannot be deleted again, with no retry. `purgeArtifactsAfterDelete`
+  (`core/rpc/api.go`) logs `rpc.artifacts.purge_failed` /
+  `rpc.artifacts.media_release_failed` and returns nil. The residue (artifact
+  units whose scope id names a deleted session/project) and the missing
+  retry are on the ledger (2026-10-04, "purge-retry"). `session.Manager` and
+  `projects.Manager` still propagate observer errors in general; this
+  observer just chooses not to raise one.
+- **Synthesized-v1 numbering (F9) — for the future version-history
+  reader.** An artifact migrated with no legacy version rows has a
+  `unit_versions` v1 whose metadata carries `"synthesized": true`. That row
+  is the capture, not a revision, so its first real revision is v2. Artifacts
+  captured after 1104 have no v1 row until their first revision (which is
+  v1). A history UI must label `synthesized` rows "original capture" and not
+  count them as edits; numbering is not comparable across the two groups.
+- **Session-delete funnel deletes promoted artifacts (F11, pre-existing,
+  preserved).** `rpc/views/sessions` `DeleteWithOptions` lists artifacts by
+  ORIGIN session (`ArtifactFilter{SessionID}`) and deletes every one of
+  them, including artifacts promoted to project or global scope. The legacy
+  store did the same and this mission keeps it identical (the contract
+  suite pins List-by-origin). The core observer path only deletes
+  session-SCOPED units and unlinks promoted ones, so the two paths disagree
+  for promoted artifacts. That is recorded on the ledger (2026-10-04,
+  "session delete funnel deletes promoted artifacts") as a product question,
+  not changed here.

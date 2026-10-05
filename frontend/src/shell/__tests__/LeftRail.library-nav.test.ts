@@ -46,3 +46,42 @@ describe('LeftRail — Library entry', () => {
     w.unmount();
   });
 });
+
+describe('LeftRail — project delete warns about artifacts (artifacts-as-units-01DOGF0C)', () => {
+  it('counts the project-scoped artifacts the delete will remove', async () => {
+    const stub = defineComponent({ render: () => h('div') });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/sessions/:id?', name: 'sessions', component: stub }],
+    });
+    await router.push('/sessions');
+    await router.isReady();
+    let seenFilter: unknown;
+    const w = mount(LeftRail, {
+      global: {
+        plugins: [router, {
+          install(app) {
+            provideFakeClient(app, {
+              projects: {
+                list: async () => [{ id: 'p1', name: 'Alpha', description: '', createdAt: '', updatedAt: '' }],
+                remove: async () => undefined,
+                listSessions: async () => [],
+              } as any,
+              artifacts: {
+                list: async (f: unknown) => { seenFilter = f; return [{ id: 'a' }, { id: 'b' }]; },
+              } as any,
+            });
+          },
+        }],
+      },
+    });
+    await flushPromises();
+    await w.find('[data-testid="project-header-p1"]').trigger('contextmenu');
+    await nextTick();
+    await w.find('[data-testid="project-menu-delete-p1"]').trigger('click');
+    await flushPromises();
+    expect(seenFilter).toEqual({ projectId: 'p1', scopeKind: 'project' });
+    expect(w.find('[data-testid="delete-project-artifacts-warning"]').text()).toContain('2 artifacts promoted to this project will be permanently deleted');
+    w.unmount();
+  });
+});

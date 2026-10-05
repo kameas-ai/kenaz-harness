@@ -27,6 +27,7 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -202,12 +203,15 @@ var expectedChangedTables = map[string][]string{
 //
 // Declaring these four tables waives the generic row-count/digest loop for
 // them, which is exactly the masking risk the scheduled_chat_runs comments
-// above warn about. It is NOT left uncovered: assertArtifactsMigratedToUnits
-// re-asserts all four by content on every tag — the seed artifact's head
-// and both versions in units/unit_versions, the legacy rows unchanged under
-// their new names, and every non-artifact units / unit_versions row
-// byte-identical to the pre-Open dump (the document rows a careless copy
-// would clobber).
+// above warn about. assertArtifactsMigratedToUnits narrows that waiver back
+// down on every tag: the legacy tables' full row content (a name-independent
+// digest) must equal the pre-Open `artifacts` / `artifact_versions` content
+// under their new names; every non-artifact units / unit_versions row must be
+// byte-identical to the pre-Open dump; and the copy is checked for the SEED
+// artifact only (head + both versions) — so a migration that mis-copied some
+// other artifact into units would be caught by migration_1104_test.go's
+// seeded snapshots, not by this loop. That is the residual cost of the
+// waiver, stated so nobody reads this table as fully covered.
 //
 // Kept as its own map (merged in testUpgradeSnapshot) rather than spliced
 // into each expectedChangedTables entry so the one reason reads once. A
@@ -349,6 +353,10 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// artifacts-as-units-01DOGF0C: the document rows sharing the units
 	// tables, captured BEFORE units/1104 copies artifacts in beside them.
 	preNonArtifactUnits := snapshotNonArtifactUnits(t, ctx, raw)
+	preLegacy := map[string]string{
+		"artifacts":         rowsDigest(t, ctx, raw, "artifacts"),
+		"artifact_versions": rowsDigest(t, ctx, raw, "artifact_versions"),
+	}
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -447,7 +455,7 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// per-table loop below. ----
 	assertAdviceLabelsTableMigrated(t, ctx, db)
 	assertUnitsTableSurvivesUntouched(t, ctx, db, tag)
-	assertArtifactsMigratedToUnits(t, ctx, db, rawPath, tag, preNonArtifactUnits)
+	assertArtifactsMigratedToUnits(t, ctx, db, rawPath, tag, preNonArtifactUnits, preLegacy)
 
 	// ---- automation-actually-runs-01PMZ404 UNIT-13 (owner ruling
 	// A-10): rerun_policy is refused on save but tolerated on load. A
@@ -1201,7 +1209,7 @@ func snapshotNonArtifactUnits(t *testing.T, ctx context.Context, raw *sql.DB) ma
 //   - the legacy tables are present under *_legacy names with their rows;
 //   - every non-artifact units / unit_versions row is byte-identical to
 //     the pre-Open dump.
-func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storage.DB, rawPath, tag string, pre map[string]string) {
+func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storage.DB, rawPath, tag string, pre, preLegacy map[string]string) {
 	t.Helper()
 	r := db.Reader()
 	var applied int
@@ -1238,6 +1246,14 @@ func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storag
 
 	post := openRawSQLiteAt(t, rawPath)
 	defer func() { _ = post.Close() }()
+	// The legacy tables are the recovery copy: their full content must be
+	// the pre-Open tables' content under the new names (review F8 —
+	// replaces a count-only check).
+	for oldName, newName := range map[string]string{"artifacts": "artifacts_legacy", "artifact_versions": "artifact_versions_legacy"} {
+		if got := rowsDigest(t, ctx, post, newName); got != preLegacy[oldName] {
+			t.Errorf("%s: %s content differs from the pre-Open %s content — the retained copy was altered", tag, newName, oldName)
+		}
+	}
 	got := snapshotNonArtifactUnits(t, ctx, post)
 	for table, before := range pre {
 		if got[table] != before {
@@ -1245,4 +1261,52 @@ func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storag
 				tag, table, before, got[table])
 		}
 	}
+}
+
+// rowsDigest renders every row of table (all columns, ordered by rowid) as
+// text, independent of the table's NAME, so a renamed table can be compared
+// to its pre-rename self.
+func rowsDigest(t *testing.T, ctx context.Context, raw *sql.DB, table string) string {
+	t.Helper()
+	rows, err := raw.QueryContext(ctx, "SELECT * FROM "+table+" ORDER BY rowid")
+	if err != nil {
+		t.Fatalf("rowsDigest %s: %v", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatalf("rowsDigest %s columns: %v", table, err)
+	}
+	var b strings.Builder
+	b.WriteString(strings.Join(cols, ",") + "\n")
+	vals := make([]any, len(cols))
+	ptrs := make([]any, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	n := 0
+	for rows.Next() {
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatalf("rowsDigest %s scan: %v", table, err)
+		}
+		for i, v := range vals {
+			if i > 0 {
+				b.WriteByte('|')
+			}
+			switch x := v.(type) {
+			case nil:
+				b.WriteString("NULL")
+			case []byte:
+				b.WriteString(string(x))
+			default:
+				b.WriteString(fmt.Sprint(x))
+			}
+		}
+		b.WriteByte('\n')
+		n++
+	}
+	if n == 0 {
+		t.Fatalf("rowsDigest %s: no rows — every snapshot seeds seed-artifact-1, so an empty table means the comparison is vacuous", table)
+	}
+	return b.String()
 }
