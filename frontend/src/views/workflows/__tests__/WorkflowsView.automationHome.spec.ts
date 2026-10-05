@@ -32,7 +32,7 @@ import { HarnessClientKey } from '@/lib/harnessClientContext';
 vi.mock('@/shell/CanvasHead.vue', () => ({
   default: { template: '<div />' },
 }));
-vi.mock('@/views/marketplace/PublishDialog.vue', () => ({
+vi.mock('@/views/catalog/PublishDialog.vue', () => ({
   default: { template: '<div />' },
 }));
 

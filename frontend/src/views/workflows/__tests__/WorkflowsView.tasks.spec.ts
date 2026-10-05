@@ -30,7 +30,7 @@ import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { Settings, TaskRow } from '@/lib/types';
 
 vi.mock('@/shell/CanvasHead.vue', () => ({ default: { template: '<div />' } }));
-vi.mock('@/views/marketplace/PublishDialog.vue', () => ({ default: { template: '<div />' } }));
+vi.mock('@/views/catalog/PublishDialog.vue', () => ({ default: { template: '<div />' } }));
 
 async function mountTasksTab(client: ReturnType<typeof createFakeHarnessClient>) {
   const router = createRouter({

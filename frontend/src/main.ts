@@ -157,13 +157,11 @@ export const routes: RouteRecordRaw[] = [
     name: 'sites',
     component: () => import('@/views/sites/SitesView.vue'),
   },
-  {
-    // fleet-share-and-sync-01NDFSEX14 WP03 — Team catalog browser.
-    // Only useful when signed in; hidden by nav when signedIn is false.
-    path: '/marketplace',
-    name: 'marketplace',
-    component: () => import('@/views/marketplace/MarketplaceView.vue'),
-  },
+  // install-framework-01DOGF0B Phase 4 WP08: the Marketplace folded into
+  // the Capabilities surface (/tools) and MarketplaceView was deleted. Old
+  // links, palette history and a persisted lastRoute land there, query kept
+  // (?kind= picks a kind chip).
+  { path: '/marketplace', redirect: (to) => ({ path: '/tools', query: to.query }) },
   {
     // WP08: catch-all not-found route (FR-011).
     path: '/:pathMatch(.*)*',

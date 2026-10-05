@@ -4,8 +4,10 @@
 // and bundles. Wire contract: §2a of kenaz-fleet/docs/contract-harness-sync.md.
 //
 // Fork-removal recipe: delete this file + core/fleet/catalog_install.go +
-// core/rpc/views/catalog/ + frontend/src/views/marketplace/ + the
-// "Publish to team" menu items on workflow/pack/bundle views.
+// core/rpc/views/catalog/ + frontend/src/views/catalog/ (PublishDialog) +
+// the catalog browse in frontend/src/views/capabilities/ (catalogBrowse.ts,
+// CatalogListingDetail.vue) + the "Publish to team" menu items on
+// workflow/pack/bundle views.
 package fleet
 
 import (

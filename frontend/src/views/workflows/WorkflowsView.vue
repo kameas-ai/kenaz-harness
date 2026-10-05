@@ -31,7 +31,7 @@ import RunsHistoryTab from './RunsHistoryTab.vue';
 import SchedulesTab from './SchedulesTab.vue';
 import TasksTab from './tasks/TasksTab.vue';
 // fleet-share-and-sync-01NDFSEX14 WP03 — Publish to team catalog
-import PublishDialog from '@/views/marketplace/PublishDialog.vue';
+import PublishDialog from '@/views/catalog/PublishDialog.vue';
 import { signedIn } from '@/lib/featureFlags';
 import { push as pushToast } from '@/composables/useToastQueue';
 import {

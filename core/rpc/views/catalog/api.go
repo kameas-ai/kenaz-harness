@@ -1,9 +1,12 @@
 // Package catalog is the view-scoped RPC surface for catalog publish/list/
 // install/uninstall (fleet-share-and-sync-01NDFSEX14 WP02).
 //
-// The frontend Marketplace view and per-kind Publish dialogs bind here.
-// Fork-removal recipe: delete this package + MarketplaceView.vue +
-// PublishDialog.vue + per-kind "Publish to team" buttons.
+// The Capabilities surface's fleet-catalog browse (frontend
+// views/capabilities/catalogBrowse.ts — the Marketplace view folded into it
+// in install-framework-01DOGF0B Phase 4) and per-kind Publish dialogs bind
+// here. Fork-removal recipe: delete this package + the catalog browse in
+// views/capabilities/ + views/catalog/PublishDialog.vue + per-kind
+// "Publish to team" buttons.
 package catalog
 
 import "context"
