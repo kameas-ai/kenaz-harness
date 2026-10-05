@@ -50,15 +50,22 @@ func sessionTransitionKey(v FleetSessionView) string {
 	v.UpdatedAt = ""
 	v.LastAttemptAt = ""
 	v.NextRetryAt = ""
+	v.Message = "" // per-attempt error text; the reason code is the transition
 	v.Capabilities.FetchedAt = ""
 	for _, lane := range []*FleetSyncLaneView{&v.Sync.ContextSync, &v.Sync.UnitPoll, &v.Sync.Telemetry} {
 		lane.LastSuccessAt = ""
 		lane.NextRetryAt = ""
+		// Per-attempt detail, not a transition (review F8): the count and
+		// the error text move on every failed attempt.
+		lane.ConsecutiveFailures = 0
+		lane.LastError = ""
 		if len(lane.Sessions) > 0 {
 			ss := append([]FleetSyncSessionView(nil), lane.Sessions...)
 			for i := range ss {
 				ss[i].NextRetryAt = ""
 				ss[i].Dropped = 0
+				ss[i].ConsecutiveFailures = 0
+				ss[i].LastError = ""
 			}
 			lane.Sessions = ss
 		}
@@ -67,20 +74,31 @@ func sessionTransitionKey(v FleetSessionView) string {
 	return string(b)
 }
 
-// sessionExpiredTap forwards the client's fleet:session:expired event to
-// the real broker AND folds it into the session track: the server has
-// declared the session dead (refresh failed) even though tokens may still
-// be stored, so the snapshot must say signed_out, not signed_in.
+// sessionExpiredTap consumes the client's fleet:session:expired IN-PROCESS
+// and folds it into the session track: the server has definitely rejected
+// the refresh (core/fleet refreshFailed — transport failures no longer fire
+// it, review F2), so the snapshot says signed_out/session_expired even
+// though tokens may still be stored. Every other topic is forwarded.
+//
+// fleet:session:expired itself is no longer forwarded to the frontend
+// (review F8): SessionExpiredBanner was its second reader and now reads the
+// same snapshot as every other surface.
+//
+// The expiry is NOT sticky: the cadence re-probes after a backoff
+// (sessionEnrollDue) and any request fleet accepts clears it (onAuthOK).
 type sessionExpiredTap struct {
 	api   *API
 	inner fleet.BrokerSink
 }
 
 func (t sessionExpiredTap) Emit(topic string, payload any) {
-	if t.inner != nil {
-		t.inner.Emit(topic, payload)
+	if topic != fleet.TopicFleetSessionExpired {
+		if t.inner != nil {
+			t.inner.Emit(topic, payload)
+		}
+		return
 	}
-	if topic != fleet.TopicFleetSessionExpired || t.api == nil || t.api.fleet == nil {
+	if t.api == nil || t.api.fleet == nil {
 		return
 	}
 	reason := ""
@@ -88,10 +106,33 @@ func (t sessionExpiredTap) Emit(topic string, payload any) {
 		reason = p.Reason
 	}
 	t.api.fleet.mu.Lock()
-	t.api.fleet.sess.expired = true
-	t.api.fleet.sess.lastErr = reason
+	tr := &t.api.fleet.sess
+	tr.expired = true
+	tr.lastErr = reason
+	if tr.failures < 1 {
+		tr.failures = 1
+	}
+	tr.nextRetryAt = time.Now().Add(enrollBackoff(tr.failures))
 	t.api.fleet.mu.Unlock()
 	t.api.publishFleetSession("session_expired")
+}
+
+// onFleetAuthOK runs when fleet accepts the token (fleet.Client
+// SetAuthOKHook): a recorded expiry is evidently wrong, clear it.
+func (a *API) onFleetAuthOK() {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	expired := a.fleet.sess.expired
+	a.fleet.mu.RUnlock()
+	if !expired {
+		return
+	}
+	a.fleet.mu.Lock()
+	a.fleet.sess.expired = false
+	a.fleet.mu.Unlock()
+	a.publishFleetSession("auth_ok")
 }
 
 // ── backend-owned refresh cadence (FR-2 / FR-4) ─────────────────────────────
@@ -126,8 +167,14 @@ func (a *API) runSessionSupervisor(ctx context.Context) {
 // Not-provisioned stops automatic retries (FR-4: kept from the production
 // fix — 60+ enroll/fail pairs); transient failures back off exponentially.
 func sessionEnrollDue(tr sessionTrack, ts fleet.TokenState, now time.Time) bool {
-	if !ts.Usable() || tr.signingIn || tr.expired || tr.autoRetryStopped {
+	if !ts.Usable() || tr.signingIn || tr.autoRetryStopped {
 		return false
+	}
+	if tr.expired {
+		// Re-probe a recorded expiry after its backoff: a definite rejection
+		// re-records it, anything else clears it (review F2 — it used to be
+		// sticky until restart).
+		return !now.Before(tr.nextRetryAt)
 	}
 	if tr.lastAttemptAt.IsZero() {
 		return true

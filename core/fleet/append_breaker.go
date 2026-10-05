@@ -37,7 +37,9 @@ func (e *AppendStatusError) Error() string {
 //     context, 401/403, expired session): no further posts for that session
 //     until it is reset (sync re-enabled / disabled, sign-in);
 //   - backs off exponentially on transient failures (30s → 10m) and opens
-//     after appendMaxConsecutiveFailures in a row;
+//     after appendMaxConsecutiveFailures in a row — a transient-open circuit
+//     half-opens: one probe per appendBackoffMax, a success closes it;
+//   - ignores caller-context cancellation (not a fleet failure);
 //   - logs WARN once per transition (first failure, circuit open), Debug for
 //     everything held back;
 //   - reports every failing session into the shared SyncLanes board, so the
@@ -56,6 +58,11 @@ type AppendBreaker struct {
 type appendState struct {
 	failures  int
 	open      bool
+	// permanent: the circuit opened on an answer retrying cannot change
+	// (404 / 401 / 403 / expired) — latched until Reset. A circuit opened by
+	// transient failures half-opens: one probe every appendBackoffMax
+	// (review F4).
+	permanent bool
 	nextRetry time.Time
 	reason    string
 	lastErr   string
@@ -91,6 +98,11 @@ func (b *AppendBreaker) Do(ctx context.Context, sessionID string, fn func(contex
 	err := fn(ctx)
 	if errors.Is(err, ErrFleetDisabled) {
 		return nil
+	}
+	if err != nil && ctx.Err() != nil && errors.Is(err, context.Canceled) {
+		// The CALLER cancelled (a user-stopped turn, shutdown): says nothing
+		// about fleet. Not a failure — no backoff, no circuit (review F3).
+		return err
 	}
 	b.record(sessionID, err)
 	return err
@@ -131,10 +143,11 @@ func (b *AppendBreaker) allow(sessionID string) bool {
 	if !ok {
 		return true
 	}
-	if st.open || b.now().Before(st.nextRetry) {
+	if (st.open && st.permanent) || b.now().Before(st.nextRetry) {
 		st.dropped++
 		return false
 	}
+	// Backoff elapsed, or a transient-open circuit's half-open probe.
 	return true
 }
 
@@ -161,9 +174,13 @@ func (b *AppendBreaker) record(sessionID string, err error) {
 	reason, permanent := classifyAppendError(err)
 	st.reason = reason
 	wasOpen := st.open
-	if permanent || st.failures >= appendMaxConsecutiveFailures {
+	if permanent {
 		st.open = true
+		st.permanent = true
 		st.nextRetry = time.Time{}
+	} else if st.failures >= appendMaxConsecutiveFailures {
+		st.open = true
+		st.nextRetry = b.now().Add(appendBackoffMax) // half-open probe
 	} else {
 		d := appendBackoffBase << (st.failures - 1)
 		if d > appendBackoffMax || d <= 0 {
@@ -209,7 +226,7 @@ func classifyAppendError(err error) (reason string, permanent bool) {
 	switch {
 	case errors.Is(err, ErrTokenExpired), errors.Is(err, ErrNotSignedIn):
 		return "session_expired", true
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded):
 		return "network", false
 	}
 	return "network", false

@@ -4664,6 +4664,8 @@ export interface FleetSessionView {
   /** 'enroll' | 'token_claim' */
   emailSource?: string;
   nameSource?: string;
+  /** Stored tokens still authenticate (signing_in + true = a re-auth). */
+  tokensUsable: boolean;
   claims: { hasSubject: boolean; hasOrgClaim: boolean };
   capabilities: CapabilitiesView;
   profile?: FleetProfileInfo;

@@ -266,7 +266,7 @@ async function handleSignOut() {
               {{ loading ? 'Opening browser…' : 'Update sign-in' }}
             </button>
             <button
-              v-else-if="!needsReauth"
+              v-else-if="!needsReauth && !served"
               type="button"
               class="user-menu-link"
               :disabled="loading"

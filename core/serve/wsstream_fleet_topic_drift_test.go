@@ -2,7 +2,7 @@ package serve
 
 // wsstream_fleet_topic_drift_test.go — drift guard for the fleet topic
 // string literals in wsstream.go's const block
-// (topicFleetLockdownChanged / topicFleetSessionExpired).
+// (topicFleetLockdownChanged / topicFleetSessionChanged).
 //
 // core/serve is not on scripts/ci/check-no-fleet-imports.sh's allowlist:
 // core/fleet is the control-plane client and core/serve is the
@@ -10,7 +10,7 @@ package serve
 // them decoupled (an OSS fork that deletes core/fleet/ must still build
 // core/serve/). wsstream.go therefore hand-copies the two fleet topic
 // string literals instead of importing corefleet.TopicFleetLockdownChanged
-// / corefleet.TopicFleetSessionExpired directly.
+// / corefleet.TopicFleetSessionChanged directly.
 //
 // A hand-copied literal with no drift check is exactly how the
 // three-copy topic-list bug (findings #62/#63, served-topic-single-source)
@@ -37,10 +37,6 @@ func TestFleetTopicLiterals_MatchCorefleetConstants(t *testing.T) {
 		t.Errorf("wsstream.go's topicFleetLockdownChanged = %q, want corefleet.TopicFleetLockdownChanged = %q",
 			topicFleetLockdownChanged, corefleet.TopicFleetLockdownChanged)
 	}
-	if topicFleetSessionExpired != corefleet.TopicFleetSessionExpired {
-		t.Errorf("wsstream.go's topicFleetSessionExpired = %q, want corefleet.TopicFleetSessionExpired = %q",
-			topicFleetSessionExpired, corefleet.TopicFleetSessionExpired)
-	}
 
 	if topicFleetSessionChanged != corefleet.TopicFleetSessionChanged {
 		t.Errorf("wsstream.go's topicFleetSessionChanged = %q, want corefleet.TopicFleetSessionChanged = %q",
@@ -56,14 +52,8 @@ func TestFleetTopicLiterals_MatchCorefleetConstants(t *testing.T) {
 	if !containsString(passthroughTopics, corefleet.TopicFleetLockdownChanged) {
 		t.Errorf("passthroughTopics does not contain %q", corefleet.TopicFleetLockdownChanged)
 	}
-	if !containsString(passthroughTopics, corefleet.TopicFleetSessionExpired) {
-		t.Errorf("passthroughTopics does not contain %q", corefleet.TopicFleetSessionExpired)
-	}
 	if !processWideTopics[corefleet.TopicFleetLockdownChanged] {
 		t.Errorf("processWideTopics[%q] = false, want true", corefleet.TopicFleetLockdownChanged)
-	}
-	if !processWideTopics[corefleet.TopicFleetSessionExpired] {
-		t.Errorf("processWideTopics[%q] = false, want true", corefleet.TopicFleetSessionExpired)
 	}
 }
 

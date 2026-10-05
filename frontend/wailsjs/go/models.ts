@@ -7372,6 +7372,7 @@ export namespace settings {
 	    identitySource?: string;
 	    emailSource?: string;
 	    nameSource?: string;
+	    tokensUsable: boolean;
 	    claims: FleetSessionClaims;
 	    capabilities: CapabilitiesView;
 	    profile?: FleetProfileInfo;
@@ -7394,6 +7395,7 @@ export namespace settings {
 	        this.identitySource = source["identitySource"];
 	        this.emailSource = source["emailSource"];
 	        this.nameSource = source["nameSource"];
+	        this.tokensUsable = source["tokensUsable"];
 	        this.claims = this.convertValues(source["claims"], FleetSessionClaims);
 	        this.capabilities = this.convertValues(source["capabilities"], CapabilitiesView);
 	        this.profile = this.convertValues(source["profile"], FleetProfileInfo);

@@ -251,11 +251,14 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			// Attempt token refresh.
 			refreshed, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
 			if refreshErr != nil {
-				return Identity{}, ErrTokenExpired
+				// Only a definite rejection is an expired session; a
+				// transport failure is retryable (review F2).
+				return Identity{}, c.refreshFailed("enroll refresh", refreshErr)
 			}
 			if saveErr := SaveTokens(refreshed); saveErr != nil {
 				return Identity{}, saveErr
 			}
+			c.notifyAuthOK()
 			newTS = refreshed
 		}
 		// Retry with new token.

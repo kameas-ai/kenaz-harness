@@ -134,8 +134,9 @@ func TestFleetSessionEvents_CapabilityChange_EmitsWithoutDeadlock(t *testing.T) 
 }
 
 // A server-side session death (the client's fleet:session:expired) is a
-// transition to signed_out even though tokens are still stored, and the
-// original event still reaches the broker (SessionExpiredBanner).
+// transition to signed_out even though tokens are still stored. The raw
+// event is consumed in-process (review F8: SessionExpiredBanner reads the
+// snapshot now), so it must NOT reach the broker.
 func TestFleetSessionEvents_SessionExpiredTap(t *testing.T) {
 	r, b := newEventRig(t)
 	r.setToken(jwtFor("sub-alice", "zitadel-org-1"))
@@ -151,8 +152,8 @@ func TestFleetSessionEvents_SessionExpiredTap(t *testing.T) {
 			sawExpired = true
 		}
 	}
-	if !sawExpired {
-		t.Fatalf("tap swallowed fleet:session:expired")
+	if sawExpired {
+		t.Fatalf("tap forwarded fleet:session:expired; the snapshot is its only UI carrier now")
 	}
 	ev := b.sessionEvents()
 	if l := last(ev); l == nil || l.State != FleetSessionSignedOut || l.Reason != FleetReasonSessionExpired {
@@ -176,7 +177,8 @@ func TestSessionEnrollDue(t *testing.T) {
 		{"failing, before backoff", sessionTrack{lastAttemptAt: now, failures: 2, nextRetryAt: now.Add(time.Minute)}, usable, false},
 		{"failing, backoff elapsed", sessionTrack{lastAttemptAt: now.Add(-time.Hour), failures: 2, nextRetryAt: now.Add(-time.Second)}, usable, true},
 		{"not provisioned stops", sessionTrack{lastAttemptAt: now.Add(-time.Hour), failures: 1, autoRetryStopped: true}, usable, false},
-		{"expired", sessionTrack{expired: true}, usable, false},
+		{"expired, before re-probe backoff", sessionTrack{expired: true, failures: 1, nextRetryAt: now.Add(time.Minute)}, usable, false},
+		{"expired, re-probe due (review F2: not sticky)", sessionTrack{expired: true, failures: 1, nextRetryAt: now.Add(-time.Second)}, usable, true},
 		{"signing in", sessionTrack{signingIn: true}, usable, false},
 	}
 	for _, c := range cases {

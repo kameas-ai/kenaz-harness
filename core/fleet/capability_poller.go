@@ -73,6 +73,8 @@ type CapabilityPoller struct {
 	current Capabilities
 	// listeners holds OnChange callbacks, appended under mu.
 	listeners []func(Capabilities)
+	// notifyMu serialises listener delivery (see setCurrent).
+	notifyMu sync.Mutex
 
 	// cancel shuts down the background goroutine.
 	cancel context.CancelFunc
@@ -122,6 +124,11 @@ func (p *CapabilityPoller) OnChange(fn func(Capabilities)) {
 // the session snapshot — re-entered p.mu and deadlocked the poller on the
 // first capability change. Copying the slice keeps registration-order
 // delivery; the snapshot passed is the one this call installed.
+//
+// Delivery is serialised by notifyMu and passes Current() AT DELIVERY TIME
+// (review F6): with the lock released, two concurrent refreshes could
+// otherwise deliver in the wrong order and leave a listener (e.g. the
+// SitesReconciler) holding the stale set last.
 func (p *CapabilityPoller) setCurrent(c Capabilities) {
 	p.mu.Lock()
 	prev := p.current
@@ -131,8 +138,14 @@ func (p *CapabilityPoller) setCurrent(c Capabilities) {
 		fns = append(fns, p.listeners...)
 	}
 	p.mu.Unlock()
+	if len(fns) == 0 {
+		return
+	}
+	p.notifyMu.Lock()
+	defer p.notifyMu.Unlock()
+	cur := p.Current()
 	for _, fn := range fns {
-		fn(c)
+		fn(cur)
 	}
 }
 

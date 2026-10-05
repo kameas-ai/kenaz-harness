@@ -120,6 +120,10 @@ type FleetSessionView struct {
 	// from when enroll omitted them: "enroll" or "token_claim" (FR-9).
 	EmailSource  string             `json:"emailSource,omitempty"`
 	NameSource   string             `json:"nameSource,omitempty"`
+	// TokensUsable is true when the stored tokens can still authenticate
+	// and no definite rejection is recorded. A signing_in snapshot with
+	// usable tokens is a RE-auth: gates stay open (review F5).
+	TokensUsable bool               `json:"tokensUsable"`
 	Claims       FleetSessionClaims `json:"claims"`
 	Capabilities CapabilitiesView   `json:"capabilities"`
 	Profile      *FleetProfileInfo  `json:"profile,omitempty"`
@@ -219,6 +223,7 @@ func (a *API) fleetSessionSnapshot() FleetSessionView {
 		HasOrgClaim: ts.Claims.OrgID != "",
 	}
 	v.AutoRetry = !tr.autoRetryStopped
+	v.TokensUsable = ts.Usable() && !tr.expired
 
 	switch {
 	case tr.signingIn:

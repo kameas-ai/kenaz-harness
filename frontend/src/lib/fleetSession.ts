@@ -91,6 +91,7 @@ export function seedFleetSessionFromAppInfo(caps: Record<string, boolean> | null
   _session.value = {
     state: Object.keys(caps).length > 0 ? 'signed_in' : 'signed_out',
     autoRetry: true,
+    tokensUsable: Object.keys(caps).length > 0,
     claims: { hasSubject: false, hasOrgClaim: false },
     capabilities: { tier: '', enabled: { ...caps }, fetchedAt: '', source: 'appinfo' },
     sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
@@ -227,6 +228,7 @@ function disabledSnapshot(): FleetSessionView {
   return {
     state: 'disabled',
     autoRetry: false,
+    tokensUsable: false,
     claims: { hasSubject: false, hasOrgClaim: false },
     capabilities: { tier: '', enabled: {}, fetchedAt: '', source: 'default-deny' },
     sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
@@ -249,8 +251,13 @@ export const fleetSessionState = computed<FleetSessionState | 'unknown'>(
  * degraded session is still signed in — it must never show "Sign in" (FR-3).
  */
 export const fleetSignedIn = computed<boolean>(() => {
-  const st = _session.value?.state;
-  return st === 'signed_in' || st === 'degraded';
+  const s = _session.value;
+  const st = s?.state;
+  if (st === 'signed_in' || st === 'degraded') return true;
+  // A re-auth (Update sign-in) runs the flow with the old tokens still
+  // valid: the session has not ended, so no gate closes for the up-to-10
+  // minutes the browser flow may take (review F5).
+  return st === 'signing_in' && s?.tokensUsable === true;
 });
 
 export const fleetIdentity = computed<FleetIdentity | null>(

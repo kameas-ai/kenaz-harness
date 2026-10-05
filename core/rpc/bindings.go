@@ -1728,12 +1728,6 @@ func (b *Bindings) Settings_FleetSignOut() error {
 	return b.api.Settings().FleetSignOut(b.ctx())
 }
 
-// Settings_FleetSignedIn reports whether valid tokens exist.
-func (b *Bindings) Settings_FleetSignedIn() (bool, error) {
-	defer sentry.WrapBinding("Settings_FleetSignedIn")()
-	return b.api.Settings().FleetSignedIn(b.ctx())
-}
-
 // Settings_FleetSession returns the single fleet-session snapshot every
 // surface reads (fleet-session-truth-01DOGF0A FR-1). The same shape is
 // pushed on fleet:session-changed.

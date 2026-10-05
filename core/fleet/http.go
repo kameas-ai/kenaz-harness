@@ -60,13 +60,12 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 		if ts.RefreshToken != "" {
 			newTS, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
 			if refreshErr != nil {
-				// Proactive refresh failed → emit session-expired event and bail.
-				c.emitSessionExpired("proactive refresh failed: " + refreshErr.Error())
-				return nil, ErrTokenExpired
+				return nil, c.refreshFailed("proactive refresh failed", refreshErr)
 			}
 			if saveErr := SaveTokens(newTS); saveErr != nil {
 				return nil, saveErr
 			}
+			c.notifyAuthOK()
 			ts = newTS
 		} else {
 			// Expired with no refresh token → session is dead.
@@ -146,6 +145,9 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 			// counter, which is why it read as noise). The context is now
 			// released when the caller closes the body.
 			resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+			// The server accepted the token (anything but 401): the session
+			// is alive, whatever an earlier refresh hiccup suggested.
+			c.notifyAuthOK()
 			return resp, nil
 		}
 
@@ -178,17 +180,53 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 		}
 		newTS, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
 		if refreshErr != nil {
-			c.emitSessionExpired("refresh token exchange failed: " + refreshErr.Error())
-			return nil, ErrTokenExpired
+			return nil, c.refreshFailed("refresh token exchange failed", refreshErr)
 		}
 		if saveErr := SaveTokens(newTS); saveErr != nil {
 			return nil, saveErr
 		}
+		c.notifyAuthOK()
 		ts = newTS
 		// Continue outer loop with new token.
 	}
 
 	return nil, errors.New("fleet: unexpected retry exhaustion")
+}
+
+// refreshFailed maps a RefreshTokenSet failure (fleet-session-truth-01DOGF0A
+// review F2). Only a DEFINITE rejection — RefreshTokenSet wraps
+// ErrTokenExpired around a non-200 from the token endpoint — means the
+// session is dead and fires fleet:session:expired. A transport failure
+// (laptop waking from sleep, VPN down, DNS) proves nothing about the
+// session: it used to fire the same event, which the session snapshot then
+// held as signed_out/session_expired while the tokens were still good.
+// Transport failures now return a retryable ErrFleetUnreachable instead.
+func (c *Client) refreshFailed(where string, err error) error {
+	if errors.Is(err, ErrTokenExpired) {
+		c.emitSessionExpired(where + ": " + err.Error())
+		return ErrTokenExpired
+	}
+	return fmt.Errorf("%w (token refresh, %s): %v", ErrFleetUnreachable, where, err)
+}
+
+// SetAuthOKHook registers fn to run whenever fleet accepts this client's
+// token (a non-401 response, or a refreshed token saved). The settings view
+// uses it to clear a stale "session expired" (review F2 belt-and-braces).
+// fn must be cheap; it runs on the request goroutine.
+func (c *Client) SetAuthOKHook(fn func()) {
+	if c == nil || c.isNop {
+		return
+	}
+	c.authOK.Store(&fn)
+}
+
+func (c *Client) notifyAuthOK() {
+	if c == nil {
+		return
+	}
+	if p := c.authOK.Load(); p != nil && *p != nil {
+		(*p)()
+	}
 }
 
 // cancelOnClose releases a request's per-call context when the response

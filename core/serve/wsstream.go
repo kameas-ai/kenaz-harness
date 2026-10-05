@@ -87,9 +87,9 @@ const (
 	topicLLMStreamChunk  = "llm:stream-chunk"
 	topicLLMStreamClosed = "llm:stream-closed"
 
-	// topicFleetLockdownChanged / topicFleetSessionExpired mirror the
-	// literals corefleet.TopicFleetLockdownChanged (core/fleet/lockdown.go)
-	// and corefleet.TopicFleetSessionExpired (core/fleet/http.go) publish
+	// topicFleetLockdownChanged / topicFleetSessionChanged mirror the
+	// literals corefleet.TopicFleetLockdownChanged and
+	// corefleet.TopicFleetSessionChanged (core/fleet/lockdown.go) publish
 	// on. They are hand-copied rather than imported because core/serve is
 	// not on scripts/ci/check-no-fleet-imports.sh's allowlist — core/fleet
 	// is the control-plane client and core/serve is the served-mode
@@ -102,9 +102,11 @@ const (
 	// test — test-file imports don't count toward the fleet-import gate)
 	// fails loudly.
 	topicFleetLockdownChanged = "fleet:lockdown:changed"
-	topicFleetSessionExpired  = "fleet:session:expired"
-	// topicFleetSessionChanged mirrors corefleet.TopicFleetSessionChanged
-	// (fleet-session-truth-01DOGF0A FR-2), same hand-copy rule as above.
+	// topicFleetSessionChanged: fleet-session-truth-01DOGF0A FR-2. It
+	// replaced fleet:session:expired here (review F8, 2026-10-04): that
+	// event is now consumed in-process by the settings view's session tap
+	// and reaches the UI only as this snapshot, so it is no longer emitted
+	// to the bus or forwarded.
 	topicFleetSessionChanged = "fleet:session-changed"
 
 	// defaultStreamQueueCap is the per-connection frame queue depth. 512
@@ -294,17 +296,6 @@ var passthroughTopics = []string{
 	// a global banner, not a per-session component. processWideTopics
 	// entry below.
 	topicFleetLockdownChanged,
-
-	// topicFleetSessionExpired (mirrors corefleet.TopicFleetSessionExpired
-	// — see the const block above): the allowlist's placeholder note
-	// speculated this "plausibly carries a session id already" because of
-	// the name. Verified false: SessionExpiredPayload (core/fleet/http.go)
-	// is {Reason} only, and the "session" in the name is the fleet
-	// control-plane AUTH session (access-token refresh failure), not a
-	// chat session — there is no session id to carry. Its only frontend
-	// consumer (SessionExpiredBanner.vue) is a global banner.
-	// processWideTopics entry below.
-	topicFleetSessionExpired,
 
 	// topicFleetSessionChanged (fleet-session-truth-01DOGF0A FR-2): the
 	// FleetSession snapshot — the process's ONE fleet session, no chat
@@ -582,8 +573,8 @@ func (s *Server) runPump(ctx context.Context, p *streamPump, sessionID string) {
 // difference here is that a session id would be actively wrong, not
 // merely absent, so this is exempted rather than left to fail closed.
 //
-// TopicContextBootstrapProgress, topicFleetLockdownChanged,
-// topicFleetSessionExpired: served-mode-topic-forwarding-gaps follow-up
+// TopicContextBootstrapProgress, topicFleetLockdownChanged (and, until
+// 2026-10-04, topicFleetSessionExpired): served-mode-topic-forwarding-gaps follow-up
 // (2026-09, closing the allowlist scripts/ci/allowlists/served-mode-
 // topic-forwarding-gaps.txt froze on fix/z303-mcp-health-truth /
 // PR #336). Each payload was verified to carry no session id and to be
@@ -595,8 +586,8 @@ func (s *Server) runPump(ctx context.Context, p *streamPump, sessionID string) {
 // header) and was fixed by adding a SessionID field to the payload
 // instead (core/rpc/views/elicit/api.go), not by broadcasting it.
 //
-// The two fleet entries are keyed by the topicFleetLockdownChanged /
-// topicFleetSessionExpired literals (const block above), not by
+// The fleet entries are keyed by the topicFleetLockdownChanged /
+// topicFleetSessionChanged literals (const block above), not by
 // corefleet's exported constants — core/serve does not import core/fleet
 // (scripts/ci/check-no-fleet-imports.sh). See
 // TestFleetTopicLiterals_MatchCorefleetConstants for the drift guard.
@@ -605,7 +596,6 @@ var processWideTopics = map[string]bool{
 	mcpview.TopicMCPHealthChanged:     true,
 	rpc.TopicContextBootstrapProgress: true,
 	topicFleetLockdownChanged:         true,
-	topicFleetSessionExpired:          true,
 	topicFleetSessionChanged:          true,
 }
 

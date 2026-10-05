@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -56,6 +57,9 @@ type Client struct {
 	// concurrent enroll attempts are always for the same session and can
 	// always share one result.
 	enrollSF singleflight.Group
+
+	// authOK is the SetAuthOKHook callback (fleet-session-truth-01DOGF0A).
+	authOK atomic.Pointer[func()]
 }
 
 // SetSessionBroker wires the event broker into the client. When set, a

@@ -598,7 +598,6 @@ interface WailsBindingsLike {
   Settings_FleetSignIn(): Promise<FleetIdentity>;
   Settings_FleetSignOut(): Promise<void>;
   Settings_FleetSignInCancel(): Promise<void>;
-  Settings_FleetSignedIn(): Promise<boolean>;
   Settings_FleetRefreshIdentity(): Promise<FleetIdentity>;
   Settings_FleetProfile(): Promise<FleetProfileInfo>;
   // fleet-session-truth-01DOGF0A FR-1
@@ -2508,8 +2507,6 @@ export interface SettingsClient {
   fleetSignInCancel(): Promise<void>;
   /** Clear tokens and identity cache. */
   fleetSignOut(): Promise<void>;
-  /** True iff valid fleet tokens exist. */
-  fleetSignedIn(): Promise<boolean>;
   /** Re-call the fleet enroll endpoint and update the cached identity. */
   fleetRefreshIdentity(): Promise<FleetIdentity>;
   /**
@@ -4565,7 +4562,6 @@ export function createHarnessClient(): HarnessClient {
       fleetSignIn: () => b().Settings_FleetSignIn(),
       fleetSignOut: () => b().Settings_FleetSignOut(),
       fleetSignInCancel: () => b().Settings_FleetSignInCancel(),
-      fleetSignedIn: () => b().Settings_FleetSignedIn(),
       fleetRefreshIdentity: () => b().Settings_FleetRefreshIdentity(),
       fleetProfile: () => b().Settings_FleetProfile(),
       fleetSession: () => b().Settings_FleetSession(),
@@ -5524,6 +5520,7 @@ export function fakeFleetSession(
   return {
     state: 'signed_out',
     autoRetry: true,
+    tokensUsable: false,
     claims: { hasSubject: false, hasOrgClaim: false },
     capabilities: { tier: '', enabled: {}, fetchedAt: '', source: 'default-deny' },
     sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
@@ -6092,7 +6089,6 @@ export function createFakeHarnessClient(
       }),
       fleetSignOut: noop,
       fleetSignInCancel: noop,
-      fleetSignedIn: async () => false,
       fleetRefreshIdentity: async () => ({
         userId: '', orgId: '', teamId: '',
       }),

@@ -580,8 +580,15 @@ func (s *UnitSyncer) reportPoll(err error, consecutive int, nextRetry time.Time)
 			"err", err.Error(), "consecutive", consecutive)
 		return
 	}
-	logging.L().Warn("fleet.unit.poll.pull_failed",
-		"err", err.Error(), "consecutive", consecutive)
+	if consecutive == unitPollWarnThreshold {
+		// Once per threshold crossing (review F8); the lane carries the
+		// running count from here on.
+		logging.L().Warn("fleet.unit.poll.pull_failed",
+			"err", err.Error(), "consecutive", consecutive)
+	} else {
+		logging.L().Debug("fleet.unit.poll.pull_failed",
+			"err", err.Error(), "consecutive", consecutive)
+	}
 	reason := "server_error"
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, ErrFleetUnreachable) {

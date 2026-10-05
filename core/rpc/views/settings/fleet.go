@@ -198,8 +198,11 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	// Wire the session-expired broker into the client if already set. The
 	// tap folds the event into the session track and republishes the
 	// FleetSession snapshot (fleet-session-truth-01DOGF0A WP02).
-	if a.fleet.lockdownBroker != nil && c != nil {
+	if c != nil {
+		// Always tap: the session-expired event is consumed in-process even
+		// before a broker is wired.
 		c.SetSessionBroker(sessionExpiredTap{api: a, inner: a.fleet.lockdownBroker})
+		c.SetAuthOKHook(a.onFleetAuthOK)
 	}
 	// Lane-health changes republish the snapshot (registered once).
 	if !a.fleet.lanesHooked {
@@ -961,13 +964,13 @@ func (a *API) StopFleetBackground() {
 	// A stopped background is a session that no longer exists: forget its
 	// transitions and lane health so nothing from it is shown afterwards.
 	a.fleet.sess = sessionTrack{}
-	lanes := a.fleet.lanes
 	pipeline := a.fleet.otlpPipeline
 	tracker := a.fleet.usageTracker
 	mcpCatalog := a.fleet.mcpCatalog
 	syncKindRegistry := a.fleet.syncKindRegistry
 	a.fleet.mu.Unlock()
-	lanes.Reset()
+	// Lane health is reset by FleetSignOut AFTER the tokens are cleared
+	// (review F8), not here.
 
 	// Clear the org-provisioned recipe overlay (fleet-org-config-
 	// inheritance-01NORGX01 WP02 / spec §5's "removing fleet cleanly
@@ -1034,6 +1037,11 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 	if err := fleet.ClearTokens(); err != nil {
 		logging.L().Warn("fleet.rpc.sign_out.clear_tokens_partial", "err", err.Error())
 		signOutErr = err // surface to caller; sign-out proceeds regardless
+	}
+	// Lane health is reset only now that the tokens are gone, so the
+	// reset's publish cannot emit a transient signed_in snapshot (review F8).
+	if a.fleet != nil {
+		a.fleet.lanes.Reset()
 	}
 	dataDir := a.fleetDataDir()
 	if dataDir != "" {
