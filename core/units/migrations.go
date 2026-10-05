@@ -306,6 +306,10 @@ func Migrations() []migrations.Migration {
 		// kind='artifact' units, verify, rename the legacy tables. See
 		// migration_artifacts_to_units.go.
 		migration1104(),
+		// units/1105 — units-debt-01UNITD01: verify the 1104 copy, then
+		// drop the retained *_legacy tables (one release after the copy).
+		// See migration_drop_legacy_artifacts.go.
+		migration1105(),
 	}
 }
 

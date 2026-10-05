@@ -280,9 +280,11 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// chat-single-writer-01DOGF0G's sessions/0341 one more, hence 61;
 	// agentgraph-settings-linkage-01DOGF0D's sessions/0342 one more,
 	// hence 62; and units/1104-artifacts-to-units
-	// (artifacts-as-units-01DOGF0C WP04) one more, hence 63.
-	if count != 63 {
-		t.Errorf("ledger count = %d, want 63", count)
+	// (artifacts-as-units-01DOGF0C WP04) one more, hence 63; and
+	// units/1105-drop-artifacts-legacy (units-debt-01UNITD01 WP02) one
+	// more, hence 64.
+	if count != 64 {
+		t.Errorf("ledger count = %d, want 64", count)
 	}
 }
 

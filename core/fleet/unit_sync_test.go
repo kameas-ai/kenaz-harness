@@ -11,6 +11,10 @@ import (
 )
 
 // newUnitTestManager returns a units.Manager backed by the in-memory store.
+// In-memory is deliberate here: these tests pin the syncer's 3-way baseline
+// DECISIONS, not persistence. Anything asserting that a write survives (or
+// does not survive) a storage round trip lives in unit_sync_atomic_test.go /
+// unit_sync_artifacts_test.go on real sqlite (WP-PI AC-PI-2).
 func newUnitTestManager() *units.Manager {
 	return units.NewManager(units.NewMemoryStore())
 }

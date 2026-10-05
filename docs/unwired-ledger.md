@@ -388,7 +388,18 @@ IF a future repair feature widens the window below 0341, it must add a
 table-exists guard IN THE REPAIR PATH, not in 0332. **Owner:** whoever
 builds a wider repair. Also noted (F4): the 0341 composition tests pin
 v0.85.2/v0.63.0 while 1104's pin the newest snapshot — re-point 0341's
-at the newest tag when next touched.
+at the newest tag when next touched. **F4 CLOSED 2026-10-05 by
+units-debt-01UNITD01 WP03:** the three 0341 tests now select
+`newestSnapshotBefore0341` (`core/storage/sqlite/migration_0341_test.go`)
+— the newest committed snapshot whose ledger predates 0341 (v0.86.0
+today), not a hard-coded tag; "newest overall" would silently stop
+re-running 0341 once a post-0341 snapshot lands. The repair-window
+finding above (F2) stays open; units/1105 tolerates it — re-applying 1105
+after a ledger rewind is a no-op once the tables are gone
+(`TestMigration1105_FreshInstallAndReopenAfterRewind`), and
+`TestMigration0341_ReapplyAfterUnitsConversionDoesNotBrick` now runs 0341's
+re-application against a database with NO artifacts table of either
+generation.
 
 ### 2026-10-04 (install-framework-01DOGF0B WP01/WP02) · Marketplace "Install" for workflow / agent_pack / bundle was badge-only — nothing consumes `installed/`; the skill badge lied the other way
 
@@ -597,7 +608,7 @@ produced.
 — every capture, revision, promote and delete in production writes
 `kind='artifact'` units. Decision record: `docs/missions/artifacts-as-units.md`.
 
-### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `artifacts_legacy` / `artifact_versions_legacy` retained read-only — DROP due next release
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `artifacts_legacy` / `artifact_versions_legacy` retained read-only — DROP due next release — CLOSED
 
 Migration `units/1104-artifacts-to-units` RENAMES the legacy tables
 instead of dropping them (spec FR-3.3: never drop in the migration that
@@ -614,6 +625,49 @@ first snapshot that carries the `*_legacy` tables, per the I14 gate.
 Blocker: one shipped release of 1104 against real installs. Owner:
 artifacts-as-units-01DOGF0C (filed 2026-10-04). Do not fold it into 1104
 or into the same release.
+
+**Closed 2026-10-05 by units-debt-01UNITD01 WP02** (target: the release
+after v0.87.0 — it must not ship in v0.87.0 itself). Migration
+`units/1105-drop-artifacts-legacy` (`core/units/migration_drop_legacy_artifacts.go`)
+drops both tables child-first, `IF EXISTS`-guarded, after verifying the
+1104 copy in the same transaction: both legacy tables present or neither;
+1104 ledgered `applied`; no legacy id held by a non-artifact unit; every
+legacy version of a still-present artifact unit — and every synthesized v1
+of a version-less one — has its `unit_versions` twin (version, content
+hash, byte size, created_at). Any failure returns
+`ErrLegacyArtifactsUnverified` — Open fails closed, both tables intact.
+Deliberate deviation from the units-debt spec FR-2's literal row-count
+equality (orchestrator ruling, 2026-10-05: QUARANTINE, not refuse): legacy
+rows whose artifact UNIT is absent — deleted on v0.87.0 (artifact delete,
+session / project purge), or lost to a bug/tamper, which looks identical
+— are neither refused (the literal check would fail Open for every user
+who deleted an artifact during the retention release; mutation-tested:
+"literal: 16 legacy vs 11 units") nor silently dropped: each is copied,
+with its legacy versions as JSON, into the retained table
+**`artifacts_legacy_orphans`** (id, title, content_hash, source_ref_json,
+legacy_metadata, quarantined_at) and named at WARN
+(`units.drop_artifacts_legacy.orphan_quarantined`: id, hash, title) before
+the big tables drop. The quarantine table is bounded (only rows orphaned at
+drop time; nothing writes or reads it afterwards) and exists for manual
+recovery. An orphan whose id is already in the quarantine table is
+refused, not skipped (tampering — no legitimate path writes it twice). Tests: `core/storage/sqlite/migration_1105_test.go` (P-1 on a
+reconstructed v0.87.0 state from the newest pre-1104 snapshot + every
+seeded artifact shape, zero delta on the four units tables and every media
+refcount; P-2: seven planted mismatches refuse and boot once repaired;
+check 1 via ledger surgery; deleted-since-copy and mass-loss quarantined;
+fresh install + rewind-reopen).
+**Not a bug — do not "fix" (2026-10-05, units-debt review):**
+`sqlStore.UpdateAtVersion` reads the unit's version OUTSIDE its write
+transaction — the same shape the pull path's `UpdateWithSyncState` had
+(review M3, fixed there by re-checking `baseVersion` inside the tx). It is
+not exploitable: a concurrent bump between the read and the write makes
+the history INSERT hit `UNIQUE(unit_id, version)`, which surfaces as
+`ErrVersionConflict`. Moving the check without keeping that UNIQUE path
+would be the regression.
+**Resolved residual (2026-10-05):** `TestMigration1105_V087SnapshotBoots`
+runs against the real `testdata/upgrade/v0.87.0/` snapshot (committed on
+release/v0.88.0, 3490ee44) and PASSES; the guard fails loudly if a tag
+>= v0.87.0 ever exists without a legacy-carrying snapshot.
 
 ### 2026-10-04 (artifacts-as-units-01DOGF0C WP01, D4) · artifact version history is write-only — `Store.ListVersions` has no production reader
 

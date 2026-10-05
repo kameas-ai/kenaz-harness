@@ -54,6 +54,11 @@ type UnitStore interface {
 	GetSyncState(ctx context.Context, unitID string) (units.SyncState, error)
 	GetSyncStateByNodeID(ctx context.Context, nodeID string) (units.SyncState, error)
 	UpsertSyncState(ctx context.Context, st units.SyncState) (units.SyncState, error)
+	// CreateWithSyncState / UpdateWithSyncState write a pulled unit and its
+	// sync baseline in ONE storage transaction (units-debt-01UNITD01 FR-4):
+	// the pull path never leaves a unit without its baseline.
+	CreateWithSyncState(ctx context.Context, u units.Unit, st units.SyncState) (units.Unit, units.SyncState, error)
+	UpdateWithSyncState(ctx context.Context, id string, baseVersion int, body string, metadata json.RawMessage, st units.SyncState) (units.Unit, units.SyncState, error)
 }
 
 // UnitConflict records a pull-time divergence: the server advanced a unit
@@ -397,25 +402,22 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 
 	st, err := s.store.GetSyncStateByNodeID(ctx, n.ID)
 	if errors.Is(err, units.ErrSyncStateNotFound) {
-		// First sight of this server node → create a fresh local read layer.
-		created, cerr := s.store.Create(ctx, mapped)
-		if cerr != nil {
-			return false, fmt.Errorf("fleet: unit pull: create %s: %w", n.ID, cerr)
-		}
-		// Record BOTH baselines so the first subsequent delta compares in the
-		// correct counter spaces. SyncedServerVersion = server's version at
-		// creation; SyncedLocalVersion = the local unit's Version after Create
-		// (always 0 since Create forces Version=0, but using created.Version
-		// is self-documenting and safe against future Create changes).
-		if _, serr := s.store.UpsertSyncState(ctx, units.SyncState{
-			UnitID:              created.ID,
+		// First sight of this server node → create a fresh local read layer
+		// AND record BOTH baselines, in one storage transaction
+		// (units-debt-01UNITD01 FR-4, C-review D-1). Two separate writes
+		// could leave a unit with no sidecar row: the next PushDirty would
+		// read it as never-synced and push it back as locally-new, and the
+		// next pull could not resolve this node id to it and would try to
+		// create it again. SyncedServerVersion = server's version at
+		// creation; SyncedLocalVersion is set by the store to the created
+		// unit's Version (always 0 — Create forces Version=0).
+		if _, _, cerr := s.store.CreateWithSyncState(ctx, mapped, units.SyncState{
 			NodeID:              n.ID,
 			SyncedServerVersion: n.Version,
-			SyncedLocalVersion:  created.Version,
 			Classification:      string(n.Classification),
 			LastSynced:          time.Now().UTC(),
-		}); serr != nil {
-			return false, fmt.Errorf("fleet: unit pull: sidecar create %s: %w", n.ID, serr)
+		}); cerr != nil {
+			return false, fmt.Errorf("fleet: unit pull: create %s: %w", n.ID, cerr)
 		}
 		return true, nil
 	}
@@ -456,23 +458,39 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 	}
 
 	// Clean fast-forward: server advanced, local is unchanged since last sync.
-	// Apply the server body and advance BOTH baselines.
-	if _, err := s.store.Update(ctx, local.ID, mapped.Body, mapped.Metadata); err != nil {
-		return false, fmt.Errorf("fleet: unit pull: update %s: %w", local.ID, err)
-	}
-	updated, err := s.store.Get(ctx, local.ID)
-	if err != nil {
-		return false, err
-	}
-	if _, err := s.store.UpsertSyncState(ctx, units.SyncState{
-		UnitID:              local.ID,
+	// Apply the server body and advance BOTH baselines in one storage
+	// transaction (units-debt-01UNITD01 FR-4). Split, a failure after the
+	// update left the local Version ahead of SyncedLocalVersion: the next
+	// pull read the server's own body as an un-synced local edit and
+	// surfaced a conflict of the unit against itself. The store sets
+	// SyncedLocalVersion to the unit's Version after the bump.
+	//
+	// local.Version is passed as the base and re-checked inside the write
+	// transaction: a local edit that lands after the Get above makes the
+	// fast-forward NOT clean, and it takes the same path as any other
+	// both-sides-moved case — surfaced as a conflict, local body kept,
+	// sidecar not advanced.
+	if _, _, err := s.store.UpdateWithSyncState(ctx, local.ID, local.Version, mapped.Body, mapped.Metadata, units.SyncState{
 		NodeID:              n.ID,
-		SyncedServerVersion: n.Version,       // server counter at this pull
-		SyncedLocalVersion:  updated.Version, // local counter after the fast-forward apply
+		SyncedServerVersion: n.Version, // server counter at this pull
 		Classification:      string(n.Classification),
 		LastSynced:          time.Now().UTC(),
 	}); err != nil {
-		return false, fmt.Errorf("fleet: unit pull: sidecar update %s: %w", local.ID, err)
+		if errors.Is(err, units.ErrVersionConflict) {
+			latest := local.Version + 1 // at least one local edit raced in
+			if cur, gerr := s.store.Get(ctx, local.ID); gerr == nil {
+				latest = cur.Version
+			}
+			s.recordConflict(UnitConflict{
+				UnitID:        local.ID,
+				NodeID:        n.ID,
+				LocalVersion:  latest,
+				SyncedVersion: st.SyncedServerVersion,
+				ServerVersion: n.Version,
+			})
+			return false, nil
+		}
+		return false, fmt.Errorf("fleet: unit pull: update %s: %w", local.ID, err)
 	}
 	return true, nil
 }
