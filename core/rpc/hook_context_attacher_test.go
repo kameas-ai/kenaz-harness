@@ -83,8 +83,11 @@ func TestSessionStartAdditionalContext_AttachedToNewSession(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	atts := systemAttachmentContents(t, mgr, rec.ID)
-	if len(atts) != 1 || atts[0].Content != text {
-		t.Fatalf("system attachments on the new session = %+v, want exactly the hook's additional_context", atts)
+	if len(atts) != 1 || atts[0].Content != hookContextAttachmentContent(hooks.EventSessionStart, text) {
+		t.Fatalf("system attachments on the new session = %+v, want exactly the hook's additional_context under its provenance heading", atts)
+	}
+	if !strings.HasPrefix(atts[0].Content, "Additional context from the user's session_start hook:") {
+		t.Fatalf("attachment lacks its provenance heading: %q", atts[0].Content)
 	}
 	if atts[0].Position == 0 {
 		t.Fatalf("hook context took position 0, the slot Sessions_SetSystemPrompt owns and deletes")
@@ -97,7 +100,7 @@ func TestSessionStartAdditionalContext_AttachedToNewSession(t *testing.T) {
 	}
 	var found bool
 	for _, a := range systemAttachmentContents(t, mgr, rec.ID) {
-		if a.Content == text {
+		if strings.Contains(a.Content, text) {
 			found = true
 		}
 	}
@@ -120,12 +123,12 @@ func TestSubagentStartAdditionalContext_AttachedToChildBeforeFirstTurn(t *testin
 		attachedTo  []string
 		modelBefore int
 	)
-	recording := func(ctx context.Context, sessionID, s string) error {
+	recording := func(ctx context.Context, event, sessionID, s string) error {
 		mu.Lock()
 		attachedTo = append(attachedTo, sessionID)
 		modelBefore = len(stack.model.snapshotRequests())
 		mu.Unlock()
-		return attach(ctx, sessionID, s)
+		return attach(ctx, event, sessionID, s)
 	}
 	stack.seam.SetRunSpawner(NewSubagentRunSpawner(SubagentRunSpawnerDeps{
 		LLM:               stack.llmAPI,
@@ -164,8 +167,8 @@ func TestSubagentStartAdditionalContext_AttachedToChildBeforeFirstTurn(t *testin
 		t.Fatalf("model had been called %d time(s) before the context was attached — it must land before the child's first turn", modelBefore)
 	}
 	atts := systemAttachmentContents(t, mgr, child)
-	if len(atts) != 1 || atts[0].Content != text {
-		t.Fatalf("child system attachments = %+v, want the hook's additional_context", atts)
+	if len(atts) != 1 || atts[0].Content != hookContextAttachmentContent(hooks.EventSubagentStart, text) {
+		t.Fatalf("child system attachments = %+v, want the hook's additional_context under its provenance heading", atts)
 	}
 	if got := systemAttachmentContents(t, mgr, parent.ID); len(got) != 0 {
 		t.Fatalf("parent session got attachments %+v; the context belongs to the child", got)

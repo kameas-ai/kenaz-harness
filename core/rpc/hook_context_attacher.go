@@ -15,9 +15,11 @@ package rpc
 // turn: a session-scoped, system-kind attachment, which
 // LLMProviderAdapter.buildAttachmentsBlock composes into the system
 // prompt. That makes hook context durable for the session's lifetime
-// (it is session-start context, not a one-turn note) and visible and
-// removable in the session's attachments, rather than invisible prompt
-// text.
+// (it is session-start context, not a one-turn note), listed in the
+// session's Resolved Context panel with a Remove action (session-scope
+// rows are removable there since the sweep review, 2026-10-04), and
+// prefixed with a provenance heading naming the hook event, so both the
+// model and the user can tell it came from a hook.
 
 import (
 	"context"
@@ -31,7 +33,15 @@ import (
 )
 
 // hookContextAttacher persists hook additional_context onto a session.
-type hookContextAttacher func(ctx context.Context, sessionID, text string) error
+// event is the hook event name, used for the provenance heading.
+type hookContextAttacher func(ctx context.Context, event, sessionID, text string) error
+
+// hookContextAttachmentContent prefixes hook text with a provenance
+// heading — the attachment-path twin of the chat runner's
+// pendingContextHeading.
+func hookContextAttachmentContent(event, text string) string {
+	return "Additional context from the user's " + event + " hook:\n\n" + strings.TrimSpace(text)
+}
 
 // newHookContextAttacher returns nil when there is no attachments manager
 // (nil-core chassis) — callers treat nil as "no delivery path" and log.
@@ -39,10 +49,11 @@ func newHookContextAttacher(mgr *coreatt.Manager) hookContextAttacher {
 	if mgr == nil {
 		return nil
 	}
-	return func(ctx context.Context, sessionID, text string) error {
+	return func(ctx context.Context, event, sessionID, text string) error {
 		if sessionID == "" || strings.TrimSpace(text) == "" {
 			return nil
 		}
+		content := hookContextAttachmentContent(event, text)
 		existing, err := mgr.List(ctx, coreatt.ScopeFilter{
 			ScopeKind: coreatt.ScopeKindSession,
 			ScopeID:   sessionID,
@@ -59,12 +70,12 @@ func newHookContextAttacher(mgr *coreatt.Manager) hookContextAttacher {
 				pos = a.Position + 1
 			}
 		}
-		hash := sha256.Sum256([]byte(text))
+		hash := sha256.Sum256([]byte(content))
 		_, err = mgr.Add(ctx, coreatt.Attachment{
 			ScopeKind:     coreatt.ScopeKindSession,
 			ScopeID:       sessionID,
 			ContentSource: "inline:" + hex.EncodeToString(hash[:]),
-			Content:       text,
+			Content:       content,
 			Kind:          coreatt.KindSystem,
 			Position:      pos,
 		})
@@ -85,7 +96,7 @@ func deliverHookContext(ctx context.Context, attach hookContextAttacher, event, 
 			"reason", "no attachments manager", "len", len(text))
 		return
 	}
-	if err := attach(ctx, sessionID, text); err != nil {
+	if err := attach(ctx, event, sessionID, text); err != nil {
 		logging.L().Warn("rpc.hook_context.attach_failed",
 			"event", event, "session_id", sessionID, "err", err.Error())
 	}

@@ -133,13 +133,16 @@ type HookOutput struct {
 	// AdditionalContext reaches the model as system context. Where it
 	// lands depends on the event (v0.86.0 unwired sweep, 2026-10-04):
 	//   - pre_tool_use / post_tool_use / post_tool_use_failure: the
-	//     session's NEXT model call on a chat run (the chat runner's
-	//     PendingContext queue); dropped, with a log line, on a
+	//     session's next ASSISTANT-TURN model call on a chat run (the
+	//     chat runner's PendingContext queue; router / review / escalation
+	//     calls do not consume it); dropped, with a log line, on a
 	//     library-graph run outside chat.
 	//   - session_start / subagent_start: persisted as a session-scoped
-	//     system attachment on the new (or child) session, so it is part
-	//     of that session's system prompt from its first turn on and is
-	//     visible/removable in the session's attachments.
+	//     system attachment on the new (or child) session, under an
+	//     "Additional context from the user's <event> hook:" heading, so
+	//     it is part of that session's system prompt from its first turn
+	//     on. It is listed in the session's Resolved Context panel, where
+	//     the user can remove it.
 	//   - user_prompt_submit / setup: those events do not fire yet (see
 	//     scripts/ci/allowlists/i17-eventless-hook-events.txt).
 	//   - every other event: ignored.

@@ -310,13 +310,17 @@ func (a *LLMProviderAdapter) withPendingContext(q *pendingContextQueue) *LLMProv
 	return a
 }
 
-// buildPendingContextBlock drains the hook additional_context queued for
-// this session since its last model call ("" when nothing is queued).
-func (a *LLMProviderAdapter) buildPendingContextBlock() string {
-	if a == nil || a.pending == nil {
-		return ""
+// takePendingContext removes this session's queued hook context for a
+// PRIMARY turn call only (req.StreamToChat — the assistant_turn model
+// node). Every other caller of Generate on the run (router, exit-gate
+// review, escalation rungs, compaction, task-state gate) gets nil and
+// leaves the queue untouched, so an auxiliary verdict can never consume
+// context meant for the assistant (review follow-up M2, 2026-10-04).
+func (a *LLMProviderAdapter) takePendingContext(req coreag.LLMRequest) []string {
+	if a == nil || a.pending == nil || !req.StreamToChat {
+		return nil
 	}
-	return a.pending.drain(a.sessionID)
+	return a.pending.take(a.sessionID)
 }
 
 // WithKnobsDefault pins the session-knobs resolver onto the adapter
@@ -624,6 +628,21 @@ func KernelMessagesToWire(msgs []coreag.Message) []corellm.Message {
 // into the kernel's StreamSink (pulled from ctx via the kernel-pinned
 // helper), and returns the final response.
 func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
+	pending := a.takePendingContext(req)
+	resp, err := a.generate(ctx, req, pending)
+	if err != nil && len(pending) > 0 {
+		// A failed primary call must not swallow hook context (review
+		// follow-up L3): put it back for the retry / next turn.
+		a.pending.requeue(a.sessionID, pending)
+		logging.L().Info("chat.pending_context.requeued_after_error",
+			"session_id", a.sessionID, "entries", len(pending), "err", err.Error())
+	}
+	return resp, err
+}
+
+// generate is Generate's body; pending is the hook context this call
+// took from the queue (nil for auxiliary calls).
+func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest, pending []string) (coreag.LLMResponse, error) {
 	if a == nil || a.reg == nil {
 		return coreag.LLMResponse{}, errors.New("chat: nil llm registry adapter")
 	}
@@ -698,10 +717,13 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		// gap rather than a half-wire.
 		// Recap sits before the user's custom instructions so a user
 		// instruction about verbosity still wins the last word.
-		// The hook-context layer sits right after attachments: it is
-		// session context, not an instruction, so the user's own custom
-		// instructions keep the last word.
-		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildAttachmentsBlock(ctx), a.buildPendingContextBlock(), a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), a.buildUserInstructionsBlock()),
+		// The hook-context layer is the second-to-last layer (review
+		// follow-up L4): it appears and disappears turn to turn, so it
+		// sits as late as possible to keep the stable prefix (node prompt,
+		// attachments, env, recap, ask bar) byte-identical for prompt
+		// caching — and directly BEFORE the user's custom instructions,
+		// which keep the last word.
+		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildAttachmentsBlock(ctx), a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), renderPendingContext(pending), a.buildUserInstructionsBlock()),
 		Messages: llmMsgs,
 		Tools:    a.tools,
 	}

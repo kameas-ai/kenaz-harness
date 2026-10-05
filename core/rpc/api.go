@@ -2815,10 +2815,20 @@ func New(c *core.Core, opts ...Option) *API {
 	// session id cannot inherit approvals the user threw away
 	// (confirm-each-enforcement-01PMAG05 review finding 7, wired by the
 	// 2026-08-13 adversarial review).
-	if a.confirmSessionGrants != nil {
-		grants := a.confirmSessionGrants
+	//
+	// v0.86.0 sweep review (L5): the same teardown forgets any hook
+	// additional_context still queued for the session in the chat runner.
+	// One hook, both duties — WithDeleteHookOpt replaces, not chains.
+	grants := a.confirmSessionGrants
+	chatRunnerForDelete := stack.chatRunner
+	if grants != nil || chatRunnerForDelete != nil {
 		a.sessionsAPI = sessions.WithDeleteHookOpt(a.sessionsAPI, func(sessionID string) {
-			grants.RevokeSession(sessionID)
+			if grants != nil {
+				grants.RevokeSession(sessionID)
+			}
+			if chatRunnerForDelete != nil {
+				chatRunnerForDelete.ForgetSession(sessionID)
+			}
 		})
 	}
 	// Wire export dependencies (Cedar gate) at boot time so the Cedar

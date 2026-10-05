@@ -14,6 +14,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/kameas-ai/kenaz-harness/core/bundle/channels/localpath"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/integrity"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/manifest"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 func TestManager_SpawnWritesShutdownTokenBeforeTheEngineExists(t *testing.T) {
@@ -83,5 +88,65 @@ func TestEnsureLocalToken_NeverRotatesAnExistingToken(t *testing.T) {
 	again, err := ensureLocalToken(l)
 	if err != nil || again != first {
 		t.Fatalf("ensureLocalToken rotated a token another client may hold: %q -> %q (%v)", first, again, err)
+	}
+}
+
+// TestManager_Update_NoTokenOnDisk_StillRequestsShutdown is the Update
+// consumer's half (review L7): the swap-flow test hand-writes the token,
+// which is exactly the fixture shape that hid this defect. Here nothing
+// writes it but Update itself.
+func TestManager_Update_NoTokenOnDisk_StillRequestsShutdown(t *testing.T) {
+	l := NewLayout(t.TempDir())
+	setupVerifiedVersion(t, l, "1.0.0", []byte("v1 bytes"))
+	if _, ok, _ := ReadLocalToken(l); ok {
+		t.Fatal("precondition: no token on disk")
+	}
+
+	channelRoot := t.TempDir()
+	_, sha := buildTestEngineZip(t, channelRoot, "engine-v2.zip", []byte("v2 bytes"))
+	if err := os.WriteFile(channelRoot+"/engine-v2.zip.sig", []byte("sig-bytes"), 0o600); err != nil {
+		t.Fatalf("write sig: %v", err)
+	}
+	stub := newStubSidecar()
+	defer stub.Close()
+	stub.setHealth(HealthPayload{
+		SidecarVersion:    "2.0.0",
+		ExePath:           l.VersionDir("2.0.0") + "/kameas-ml/" + EngineExecutableName(""),
+		ContractVersions:  map[string][]string{"branch_now": {"0123456789abcdef"}},
+		LifecycleProtocol: 1,
+	})
+	m := &Manager{
+		Layout:   l,
+		Client:   NewClient(stub.URL(), nil),
+		ClientID: "harness",
+		Version:  "0.86.0",
+		Registry: testChannelRegistryForUpdate(),
+		Creds:    secrets.NoopResolver{},
+		Verifier: Verifier{TrustVerifier: fakeTrustVerifier{ok: true, wantBytes: []byte("sig-bytes")}, Policy: integrity.SigningRequired},
+	}
+	result, _ := m.UpdateAndActivate(context.Background(), InstallRequest{
+		ChannelKind:    localpath.Kind,
+		ChannelPath:    channelRoot,
+		Version:        "2.0.0",
+		ArtifactPath:   "engine-v2.zip",
+		ExpectedSHA256: sha,
+		Signature:      &manifest.SignatureRef{Kind: "ed25519_detached", Locator: "engine-v2.zip.sig"},
+		Source:         "local_path:" + channelRoot,
+	})
+	if !result.Flipped {
+		t.Fatalf("install/flip half failed: %+v", result)
+	}
+	if !result.ShutdownRequested || result.ShutdownErr != nil {
+		t.Fatalf("Update did not ask the old engine to stop (ShutdownErr=%v) — with no token on disk this is the pre-fix production behaviour", result.ShutdownErr)
+	}
+	tok, ok, err := ReadLocalToken(l)
+	if err != nil || !ok || tok == "" {
+		t.Fatalf("Update did not leave a shutdown token on disk: ok=%v err=%v", ok, err)
+	}
+	stub.mu.Lock()
+	calls := append([]string(nil), stub.shutdownCalls...)
+	stub.mu.Unlock()
+	if len(calls) != 1 || calls[0] != "Bearer "+tok {
+		t.Fatalf("shutdown requests = %q, want one bearing the on-disk token", calls)
 	}
 }
