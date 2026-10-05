@@ -11,6 +11,9 @@ import (
 // it. Materializing such an id must refuse rather than project the
 // turns as one graph. Driven on the SQL log: on NewMemoryEventLog the
 // reuse cannot happen across a restart, so the defect is invisible there.
+// openTestDB's DDL is the hand-mirrored 0309 schema (core/agentgraph
+// cannot import core/session); the chat-package pins use the registered
+// migration's own UpSource.
 func TestMaterializeRun_RefusesRunIDReusedAcrossRestarts(t *testing.T) {
 	t.Parallel()
 	log := NewSQLEventLog(openTestDB(t))
