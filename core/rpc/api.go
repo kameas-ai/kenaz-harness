@@ -7632,6 +7632,16 @@ func buildChatRunner(
 		streamCheckpoints = historyAdapter.mgr
 	}
 
+	// agentgraph-settings-linkage-01DOGF0D WP03: the durable turn -> run
+	// link (session_turn_runs, migration 0342). session.Manager's
+	// RecordTurnRun matches chat.TurnRunRecorder exactly. Nil leaves
+	// turns unlinkable — the transcript then shows the run affordance
+	// disabled with a reason rather than a link.
+	var turnRuns chat.TurnRunRecorder
+	if historyAdapter != nil && historyAdapter.mgr != nil {
+		turnRuns = historyAdapter.mgr
+	}
+
 	// Usage hook (token-cost-telemetry-01KQ8TD7 WP02 + backend-context-
 	// window-length-01KQ8TD3 WP02 + WP03). The closure fires from
 	// HookPostLLM (after session_write persists the assistant message, so
@@ -7774,6 +7784,7 @@ func buildChatRunner(
 		// routing gate and the max-turns dial have already rewritten by
 		// the time the run starts.
 		RunSpecRecorder: graphMgr.TrackExternalRun,
+		TurnRuns:        turnRuns,
 		GraphLoader: func() (coreag.Graph, error) {
 			g, err := graphMgr.LoadGraphSpec("chat_default")
 			if err != nil {

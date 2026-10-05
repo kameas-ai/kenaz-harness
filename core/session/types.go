@@ -123,6 +123,21 @@ type StreamCheckpoint struct {
 	UpdatedAt time.Time
 }
 
+// TurnRun links one chat turn to the agent-graph kernel run that
+// executed it (agentgraph-settings-linkage-01DOGF0D WP03, migration
+// sessions/0342-session-turn-runs). TurnSpanID is the id every move of
+// the turn carries; RunID is what /agentgraph/run/:runId resolves.
+// GraphID + SpecDigest record which graph, and which version of it,
+// the run used.
+type TurnRun struct {
+	RunID      string
+	SessionID  string
+	TurnSpanID string
+	GraphID    string
+	SpecDigest string
+	CreatedAt  time.Time
+}
+
 // ContextKind values for Record.ContextKind. Validated at the manager
 // boundary so callers cannot persist unknown values.
 const (

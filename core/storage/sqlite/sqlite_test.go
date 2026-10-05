@@ -175,7 +175,10 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// are numerically lower — see migrations_blocked_permission_requests.go
 	// / migrations_scheduled_chat_runs_trigger.go for why registering
 	// below an already-applied version is safe on this runner.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340}
+	// 0342 (session_turn_runs: the chat turn -> agent-graph run mapping)
+	// lands with agentgraph-settings-linkage-01DOGF0D WP03; 0341 is
+	// reserved for chat-single-writer-01DOGF0G (order G -> D -> C).
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 342}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -263,7 +266,9 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	//   core/advice/labels.CaptureAdvisor) = 59 +
 	// 1 laya-advisors/1601-advice-labels-revision (laya-advisors-01LAYA001
 	//   WP14: the revision column + push-cursor table behind the label
-	//   push lane) = 60.
+	//   push lane) = 60 +
+	// 1 session_turn_runs (0342, agentgraph-settings-linkage-01DOGF0D
+	//   WP03: the chat turn -> agent-graph run mapping) = 61.
 	//
 	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
 	// before 0336 and bundle/700 landed, so 43+6. The merged tree had all
@@ -272,9 +277,9 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// WP09 (0340) adds one more, hence 54; WP05 (0337) adds one more
 	// still, hence 55; cedar-policy/1300 adds one more, hence 56; WP06
 	// (0338) and WP08 (0339) add one more each, hence 58; laya-advisors/
-	// 1600 adds one more, hence 59; laya-advisors/1601 one more, hence 60.
-	if count != 60 {
-		t.Errorf("ledger count = %d, want 60", count)
+	// 1600 adds one more, hence 59; laya-advisors/1601 one more, hence 60; 0342 one more, hence 61.
+	if count != 61 {
+		t.Errorf("ledger count = %d, want 61", count)
 	}
 }
 

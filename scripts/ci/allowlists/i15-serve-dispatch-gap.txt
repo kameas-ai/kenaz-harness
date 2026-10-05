@@ -95,7 +95,7 @@
 # CLASS: gated -- the affordance carries !isServedMode() (or, for
 # PermissionDialsPanel's pair, WP05's equivalent explicit-failure-state
 # pattern, noted per-entry). WP04's + WP07's own output.
-# 27 entries.
+# 28 entries.
 
 # Caller(s) ChatInput.vue carry the WP04 served-mode gate.
 "Attachments_AddMedia"
@@ -171,6 +171,15 @@
 # explicit-failure-state treatment at ChatInput.vue:351-370 — catch
 # ServedUnsupportedError, hide the paperclip. Gated, not panelled.
 "Settings_GetMultimodalInput"
+
+# agentgraph-settings-linkage-01DOGF0D WP03/WP04, 2026-10-04. The turn ->
+# run mapping exists only to link transcript turns to
+# /agentgraph/run/:runId[/graph], which are Graph_* surfaces with no serve
+# dispatch (D-701). Its only caller (SessionsView.vue's turn-run fetch for
+# MessageList's TurnRunLinks strip) is gated on !isServedMode(), so a
+# served build neither calls it nor renders a link that would dead-end.
+# Ports together with Graph_MaterializeRun if Graph_* is ever served.
+"Sessions_TurnRuns"
 
 # CLASS: boundary-panelled -- the only caller (or callers, ALL of them)
 # is/are inside a view that renders NotAvailableInServedMode. Grown by

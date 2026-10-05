@@ -279,6 +279,23 @@ type DeleteOptions struct {
 // FR-014 default).
 func (o DeleteOptions) DeleteArtifactsCascade() bool { return !o.PreserveArtifacts }
 
+// TurnRun links one chat turn to the agent-graph run that executed it
+// (agentgraph-settings-linkage-01DOGF0D WP03). The transcript keys a
+// turn by TurnSpanID (Message.TurnSpanID on every move of the turn) and
+// links to /agentgraph/run/:runId/graph and /agentgraph/run/:runId.
+// Turns with no TurnRun predate the mapping (migration 0342) and must
+// not be linked: pre-fix run ids were reused across restarts.
+type TurnRun struct {
+	RunID      string `json:"runId"`
+	TurnSpanID string `json:"turnSpanId"`
+	GraphID    string `json:"graphId"`
+	// SpecDigest identifies which version of GraphID the run executed
+	// ("sha256:<hex>").
+	SpecDigest string `json:"specDigest"`
+	// CreatedAt is RFC3339Nano.
+	CreatedAt string `json:"createdAt"`
+}
+
 // SessionUsage is the per-session cumulative token + cost aggregate
 // returned by GetUsage (token-cost-telemetry-01KQ8TD7 WP03).
 type SessionUsage struct {
@@ -379,6 +396,11 @@ type SessionsAPI interface {
 	// Aggregate with CostSource="unknown" for sessions with no usage
 	// data yet.
 	GetUsage(ctx context.Context, id string) (SessionUsage, error)
+
+	// TurnRuns returns the session's recorded chat turn -> agent-graph
+	// run mappings, oldest first (agentgraph-settings-linkage-01DOGF0D
+	// WP03). Empty for a session whose turns all predate the mapping.
+	TurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error)
 
 	// ResumeMessage opens a continuation stream against the partial
 	// assistant row identified by messageID. The returned subscription

@@ -1367,7 +1367,9 @@ func (m *Manager) materializeRun(runID string) (GraphSpec, error) {
 //
 //  1. a run this manager started — the exact resolved spec;
 //  2. a run the chat runner registered — likewise exact;
-//  3. the library graph named by the run's own run_start event.
+//  3. the library graph named by the run's own run_start event —
+//     exact when its SpecDigest matches the digest run_start recorded
+//     (WP03 of agentgraph-settings-linkage-01DOGF0D), degraded otherwise.
 //
 // Tier 3 is a degraded answer, not an equivalent one: it recovers the
 // topology after an eviction or a restart, but the routing gate rewrites
@@ -1393,7 +1395,7 @@ func (m *Manager) runSpecFor(runID string) (coreag.Graph, string, error) {
 	if external && len(tracked.Nodes) > 0 {
 		return tracked, "", nil
 	}
-	graphID := m.graphIDFromLog(runID)
+	graphID, recordedDigest := m.runStartFromLog(runID)
 	if graphID == "" {
 		return coreag.Graph{}, "", fmt.Errorf("agentgraph: run %q not found", runID)
 	}
@@ -1401,25 +1403,37 @@ func (m *Manager) runSpecFor(runID string) (coreag.Graph, string, error) {
 	if err != nil {
 		return coreag.Graph{}, "", fmt.Errorf("agentgraph: run %q references graph %q: %w", runID, graphID, err)
 	}
+	// agentgraph-settings-linkage-01DOGF0D WP03: run_start now records
+	// which VERSION of the spec executed (spec_digest). When the library
+	// file still hashes to that digest, it IS the spec that ran — tier 3
+	// is exact, and warning the viewer would be a false alarm. A
+	// mismatch (routing-gate rewrite, dial override, a since-edited
+	// file) or a pre-WP03 run with no digest keeps the honest fallback
+	// marker.
+	if recordedDigest != "" && coreag.SpecDigest(g) == recordedDigest {
+		return g, "", nil
+	}
 	return g, coreag.SpecProvenanceLibraryFallback, nil
 }
 
-// graphIDFromLog reads the graph id off the run's run_start event.
-func (m *Manager) graphIDFromLog(runID string) string {
-	var out string
+// runStartFromLog reads the graph id and the recorded spec digest off
+// the run's run_start event. The digest is "" for runs started before
+// agentgraph-settings-linkage-01DOGF0D WP03.
+func (m *Manager) runStartFromLog(runID string) (graphID, specDigest string) {
 	_ = m.log.Replay(runID, func(ev coreag.Event) error {
-		if ev.Kind != coreag.EventRunStart || out != "" {
+		if ev.Kind != coreag.EventRunStart || graphID != "" {
 			return nil
 		}
 		var p struct {
-			GraphID string `json:"graph_id"`
+			GraphID    string `json:"graph_id"`
+			SpecDigest string `json:"spec_digest"`
 		}
 		if err := json.Unmarshal(ev.Payload, &p); err == nil {
-			out = p.GraphID
+			graphID, specDigest = p.GraphID, p.SpecDigest
 		}
 		return nil
 	})
-	return out
+	return graphID, specDigest
 }
 
 // userLibraryDir returns the on-disk graph library path or "" when

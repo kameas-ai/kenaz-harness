@@ -1,6 +1,8 @@
 package agentgraph
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -479,6 +481,29 @@ func DumpYAML(g Graph) ([]byte, error) {
 		return nil, fmt.Errorf("agentgraph: yaml encode: %w", err)
 	}
 	return out, nil
+}
+
+// SpecDigest returns a stable content digest of a graph spec,
+// "sha256:<hex>", or "" if the spec cannot be encoded
+// (agentgraph-settings-linkage-01DOGF0D WP03).
+//
+// It identifies WHICH VERSION of a spec a run executed without storing
+// the spec itself: the kernel stamps it on run_start, the chat runner
+// records it against the turn, and materialization compares it with the
+// library file's digest to decide whether a tier-3 fallback is in fact
+// the exact spec. Canvas layout and SpecProvenance are excluded — they
+// are presentation / projection metadata, not execution semantics, and
+// a layout-only edit must not make a run look like it used a different
+// graph. JSON encoding sorts map keys, so attrs maps hash stably.
+func SpecDigest(g Graph) string {
+	g.Layout = nil
+	g.SpecProvenance = ""
+	raw, err := json.Marshal(g)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // DumpJSON emits canonical JSON bytes for a Graph. Suitable for the

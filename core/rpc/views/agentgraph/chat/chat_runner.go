@@ -185,6 +185,17 @@ type GraphLoader func() (coreag.Graph, error)
 // cannot be shown as graphs.
 type RunSpecRecorder func(runID string, g coreag.Graph)
 
+// TurnRunRecorder persists which kernel run executed a chat turn
+// (agentgraph-settings-linkage-01DOGF0D WP03, migration
+// sessions/0342-session-turn-runs). RunSpecRecorder above is in-memory
+// and bounded; this is the durable half — it is what lets a transcript
+// turn from yesterday link to /agentgraph/run/:runId. *session.Manager
+// satisfies it. specDigest is agentgraph.SpecDigest of the resolved
+// spec: which version of graphID the run executed.
+type TurnRunRecorder interface {
+	RecordTurnRun(ctx context.Context, sessionID, turnSpanID, runID, graphID, specDigest string) error
+}
+
 // AnswerInjector pushes the latest user message answer into the
 // kernel's AskBus for the supplied (runID, askNodeID).
 //
@@ -241,6 +252,10 @@ type Config struct {
 	// RunSpecRecorder registers each turn's resolved spec so the run can
 	// be materialized as a graph afterwards (WP12). Nil disables it.
 	RunSpecRecorder RunSpecRecorder
+	// TurnRuns records each turn's run id against its turn span (WP03 of
+	// agentgraph-settings-linkage-01DOGF0D). Nil means turns are not
+	// linkable to their run graphs after the fact; chat still runs.
+	TurnRuns TurnRunRecorder
 	// ReasoningBudget resolves the extended-thinking budget per run.
 	// Nil is safe and means "reasoning off" (today's behaviour).
 	ReasoningBudget ReasoningBudgetResolver
@@ -1407,6 +1422,19 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// not the file on disk.
 	if r.cfg.RunSpecRecorder != nil {
 		r.cfg.RunSpecRecorder(subID, graph)
+	}
+	// agentgraph-settings-linkage-01DOGF0D WP03: the durable turn -> run
+	// link. Same placement rule as the recorder above (the digest must
+	// describe the RESOLVED spec), and recorded before the kernel run
+	// starts so the live turn is linkable the moment StartStream returns.
+	// A failure is logged, never fatal: the link is observability, the
+	// turn is the product.
+	env.TurnSpanID = turnSpanID
+	if r.cfg.TurnRuns != nil {
+		if terr := r.cfg.TurnRuns.RecordTurnRun(ctx, sessionID, turnSpanID, subID, graph.ID, coreag.SpecDigest(graph)); terr != nil {
+			logging.L().Warn("chat.turn_run.record_failed",
+				"session_id", sessionID, "run_id", subID, "err", terr.Error())
+		}
 	}
 
 	// Register the per-turn usage hook via HookPostLLM so it fires

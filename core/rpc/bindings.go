@@ -330,6 +330,16 @@ func (b *Bindings) Sessions_GetUsage(id string) (sessions.SessionUsage, error) {
 	return b.api.Sessions().GetUsage(b.ctx(), id)
 }
 
+// Sessions_TurnRuns returns the session's recorded chat turn ->
+// agent-graph run mappings (agentgraph-settings-linkage-01DOGF0D WP03),
+// so the transcript can link each turn to /agentgraph/run/:runId/graph
+// and RunView. Desktop-only: every route it feeds is a Graph_* surface
+// with no serve dispatch (D-701), so the caller gates on !isServedMode().
+func (b *Bindings) Sessions_TurnRuns(sessionID string) ([]sessions.TurnRun, error) {
+	defer sentry.WrapBinding("Sessions_TurnRuns")()
+	return b.api.Sessions().TurnRuns(b.ctx(), sessionID)
+}
+
 // Sessions_ClearTitle resets the session's name to "" and auto_titled=0,
 // re-enabling future auto-title attempts
 // (session-auto-titling-01KQ8TDS WP04).

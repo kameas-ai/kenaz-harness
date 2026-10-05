@@ -218,6 +218,17 @@ type Store interface {
 	// clean-close and error-close call sites can call it
 	// unconditionally.
 	DeleteStreamCheckpoint(ctx context.Context, sessionID, subID string) error
+
+	// RecordTurnRun persists the turn -> run mapping for one chat run
+	// (agentgraph-settings-linkage-01DOGF0D WP03). Keyed by run id;
+	// re-recording the same run id overwrites it (a run is one turn).
+	// Returns ErrSessionNotFound when the session does not exist.
+	RecordTurnRun(ctx context.Context, tr TurnRun) error
+
+	// ListTurnRuns returns every recorded turn -> run mapping for a
+	// session, oldest first. Empty (not an error) for a session with no
+	// recorded runs — every turn before migration 0342 is in that state.
+	ListTurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error)
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
@@ -231,6 +242,7 @@ type memStore struct {
 	lastUsage    map[string]*LastUsage        // session_id -> last usage snapshot
 	knobsDefault map[string]*llm.RequestKnobs // session_id -> knobs_default override
 	checkpoints  map[string]*StreamCheckpoint // "sessionID\x00subID" -> checkpoint
+	turnRuns     map[string]TurnRun           // run_id -> mapping
 }
 
 // NewMemoryStore returns an in-memory Store. Useful for tests and as
@@ -243,6 +255,7 @@ func NewMemoryStore() Store {
 		lastUsage:    map[string]*LastUsage{},
 		knobsDefault: map[string]*llm.RequestKnobs{},
 		checkpoints:  map[string]*StreamCheckpoint{},
+		turnRuns:     map[string]TurnRun{},
 	}
 }
 
@@ -534,6 +547,34 @@ func (s *memStore) DeleteStreamCheckpoint(_ context.Context, sessionID, subID st
 	defer s.mu.Unlock()
 	delete(s.checkpoints, checkpointKey(sessionID, subID))
 	return nil
+}
+
+func (s *memStore) RecordTurnRun(_ context.Context, tr TurnRun) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[tr.SessionID]; !ok {
+		return ErrSessionNotFound
+	}
+	s.turnRuns[tr.RunID] = tr
+	return nil
+}
+
+func (s *memStore) ListTurnRuns(_ context.Context, sessionID string) ([]TurnRun, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]TurnRun, 0)
+	for _, tr := range s.turnRuns {
+		if tr.SessionID == sessionID {
+			out = append(out, tr)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].RunID < out[j].RunID
+	})
+	return out, nil
 }
 
 func (s *memStore) Reorder(_ context.Context, ids []string, now time.Time) error {
@@ -1277,6 +1318,65 @@ func (s *sqlStore) GetStreamCheckpoint(ctx context.Context, sessionID, subID str
 		HasTool:   hasToolArg != 0,
 		UpdatedAt: time.Unix(0, updatedNS),
 	}, true, nil
+}
+
+// RecordTurnRun persists one chat turn -> run mapping
+// (agentgraph-settings-linkage-01DOGF0D WP03, migration
+// sessions/0342-session-turn-runs). Keyed by run_id: re-recording a run
+// overwrites it. The session must exist — the FK would reject an orphan
+// anyway; checking first turns that into ErrSessionNotFound instead of
+// an opaque constraint error.
+func (s *sqlStore) RecordTurnRun(ctx context.Context, tr TurnRun) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		var one int
+		if err := tx.QueryRow(ctx, "SELECT 1 FROM sessions WHERE id = ?", tr.SessionID).Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSessionNotFound
+			}
+			return err
+		}
+		_, err := tx.Exec(ctx, `
+            INSERT INTO session_turn_runs (run_id, session_id, turn_span_id, graph_id, spec_digest, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (run_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                turn_span_id = excluded.turn_span_id,
+                graph_id = excluded.graph_id,
+                spec_digest = excluded.spec_digest,
+                created_at = excluded.created_at
+        `, tr.RunID, tr.SessionID, tr.TurnSpanID, tr.GraphID, tr.SpecDigest, tr.CreatedAt.UnixNano())
+		return err
+	})
+}
+
+// ListTurnRuns returns a session's recorded turn -> run mappings, oldest
+// first. A session whose turns all predate migration 0342 returns an
+// empty slice.
+func (s *sqlStore) ListTurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error) {
+	rows, err := s.db.Reader().Query(ctx, `
+        SELECT run_id, turn_span_id, graph_id, spec_digest, created_at
+        FROM session_turn_runs
+        WHERE session_id = ?
+        ORDER BY created_at ASC, run_id ASC
+    `, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]TurnRun, 0)
+	for rows.Next() {
+		var (
+			tr        TurnRun
+			createdNS int64
+		)
+		if err := rows.Scan(&tr.RunID, &tr.TurnSpanID, &tr.GraphID, &tr.SpecDigest, &createdNS); err != nil {
+			return nil, err
+		}
+		tr.SessionID = sessionID
+		tr.CreatedAt = time.Unix(0, createdNS)
+		out = append(out, tr)
+	}
+	return out, rows.Err()
 }
 
 // DeleteStreamCheckpoint removes the checkpoint row for
