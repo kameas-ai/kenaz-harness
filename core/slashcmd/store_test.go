@@ -298,6 +298,51 @@ func TestLiveRegister_TriggerShadowed(t *testing.T) {
 	}
 }
 
+// ── Re-install replaces the skill's own registration (install-framework WP05) ─
+
+// TestLiveRegister_ReinstallReplacesOwnRegistration: an update re-registers a
+// skill already in the store. Before the fix the skill's previous
+// registration occupied its own trigger, so every update failed as shadowed.
+// A re-install of a shadowed skill must still never evict the command that
+// shadows it.
+func TestLiveRegister_ReinstallReplacesOwnRegistration(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	reg, err := slashcmd.NewRegistry(slashcmd.Deps{})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	v1 := slashcmd.Skill{ID: "s", Source: slashcmd.SkillSourceCatalog, Trigger: "scmd", Kind: slashcmd.KindText, Body: "v1", Version: "1.0.0"}
+	if err := slashcmd.LiveRegister(store, reg, v1); err != nil {
+		t.Fatalf("v1: %v", err)
+	}
+	if err := slashcmd.RenameLocalTrigger(store, reg, "s", "mys"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	v2 := v1
+	v2.Body, v2.Version = "v2", "2.0.0"
+	if err := slashcmd.LiveRegister(store, reg, v2); err != nil {
+		t.Fatalf("re-install (update) failed: %v", err)
+	}
+	got, err := store.Get("s")
+	if err != nil || got.Version != "2.0.0" || got.LocalTrigger != "mys" {
+		t.Fatalf("stored = %+v, %v — want v2 with the user's local alias kept", got, err)
+	}
+	if _, ok := reg.Lookup("mys"); !ok {
+		t.Fatal("updated skill not registered under its local alias")
+	}
+
+	// A shadowed skill re-installed must not evict the built-in /help.
+	shadow := slashcmd.Skill{ID: "h", Source: slashcmd.SkillSourceCatalog, Trigger: "help", Kind: slashcmd.KindText, Body: "x"}
+	_ = slashcmd.LiveRegister(store, reg, shadow)
+	if err := slashcmd.LiveRegister(store, reg, shadow); !errors.Is(err, slashcmd.ErrTriggerShadowed) {
+		t.Fatalf("re-install of a shadowed skill = %v, want ErrTriggerShadowed", err)
+	}
+	if cmd, ok := reg.Lookup("help"); !ok || cmd.Description() == "" {
+		t.Fatal("built-in /help was evicted by a shadowed skill's re-install")
+	}
+}
+
 // ── EffectiveTrigger uses LocalTrigger when set ───────────────────────────────
 
 func TestSkill_EffectiveTrigger(t *testing.T) {

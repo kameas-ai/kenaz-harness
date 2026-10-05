@@ -534,6 +534,25 @@ install and fails with `install.ErrNotConsumed` when the consumer does not
 list the capability (`TestInstall_BadgeOnly_RefusedWithErrNotConsumed`,
 `core/install/framework_test.go`). Planted proofs:
 `install-provider-coverage/{unregistered-kind,registered-without-consumer-test,catalog-kind-without-install-kind}`.
+
+**Progress (WP04/WP05, 2026-10-05).** `mcp_recipe`, `skill` and `workflow`
+have registered providers with consumer tests and left the coverage
+allowlist: MCP recipes adapt the existing recipe install (consumer: the
+supervisor's persisted enabled list); skills fetch in `Verify`, are checked
+by the single `SignatureVerifier`, and `LiveRegister` the same bytes
+(consumer: skill store + slash registry); workflows install shipped
+templates through wfcatalog `Store.Save` + cron and fleet workflow payloads
+through `WorkflowsAPI.InstallDocument` (consumer: `Workflows_List`). Every
+per-kind install binding (`Tools_InstallRecipe`, `Tools_UninstallRecipe`,
+`Slashcmd_SkillInstall`, `Slashcmd_SkillUninstall`,
+`Workflows_CatalogInstall`) routes through the framework. Still standing:
+`bundle` (WP06) and `agent_pack` (WP07) stay allowlisted, and
+`Catalog_Install` + the Marketplace keep refusing workflow / agent_pack /
+bundle — the Marketplace is folded into the surface in Phase 3, and until
+then its workflow refusal copy still names Workflows › Catalog, which WP05
+retired (`?tab=catalog` now redirects to `/tools?kind=workflow`, so the
+copy's pointer still lands; the wording is Phase 3's to change — the WP02
+copy is frozen for this phase). Owner: alec / install-framework-01DOGF0B.
 ### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored
 
 Every chat turn now links to its run graph (WP04), so materialization

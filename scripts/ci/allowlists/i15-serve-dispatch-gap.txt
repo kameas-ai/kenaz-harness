@@ -190,7 +190,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 188 entries.
+# 187 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -540,16 +540,19 @@
 
 # Called through workflowsClient.ts, a separate bridge module (not part of
 # HarnessClient/harnessClient.ts). All UI callers are views/workflows/*
-# (WorkflowsView.vue itself, CatalogView.vue, CatalogPreviewDrawer.vue,
-# RunsHistoryTab.vue, ScheduledInbox.vue, WorkflowEditor.vue,
-# SimpleTemplateEditor.vue, WorkflowSchedulesSection.vue) and
-# components/workflows/WorkflowGraphEditor.vue -- all boundary-panelled.
-# (views/settings/WorkflowsSettingsPanel.vue was deleted by
-# nav-ia-sweep-01DOGF0F, 2026-10-04.)
+# (WorkflowsView.vue itself, RunsHistoryTab.vue, ScheduledInbox.vue,
+# WorkflowEditor.vue, SimpleTemplateEditor.vue,
+# WorkflowSchedulesSection.vue), components/workflows/WorkflowGraphEditor.vue
+# and views/capabilities/plugins/WorkflowDetail.vue (Workflows_CatalogGet /
+# _CatalogInstall, the "Add capability" workflow plugin) -- all
+# boundary-panelled. (views/settings/WorkflowsSettingsPanel.vue was deleted
+# by nav-ia-sweep-01DOGF0F, 2026-10-04; CatalogView.vue /
+# CatalogPreviewDrawer.vue and the Workflows_CatalogList binding by
+# install-framework-01DOGF0B WP05, 2026-10-05 — Capability_List is the live
+# substitute.)
 "Workflows_CancelRun"
 "Workflows_CatalogGet"
 "Workflows_CatalogInstall"
-"Workflows_CatalogList"
 "Workflows_Delete"
 "Workflows_Get"
 "Workflows_List"

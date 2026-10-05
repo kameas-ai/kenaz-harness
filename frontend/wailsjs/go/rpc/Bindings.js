@@ -1938,10 +1938,6 @@ export function Workflows_CatalogInstall(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_CatalogInstall'](arg1);
 }
 
-export function Workflows_CatalogList() {
-  return window['go']['rpc']['Bindings']['Workflows_CatalogList']();
-}
-
 export function Workflows_Delete(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_Delete'](arg1);
 }

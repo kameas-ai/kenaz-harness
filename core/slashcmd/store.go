@@ -313,7 +313,20 @@ func BootLoad(store *SkillStore, registry *Registry) (int, error) {
 //
 // ErrTriggerShadowed is informational: the skill was saved successfully;
 // it just won't be dispatched until the conflict is resolved.
+//
+// Re-installing a skill already in the store (an update to a newer catalog
+// version — install-framework-01DOGF0B WP05) replaces that skill's OWN
+// registration and keeps the user's local trigger alias. Before this, the
+// skill's previous registration occupied its own trigger, so every update
+// failed as "shadowed". A trigger held by any other command is never
+// touched.
 func LiveRegister(store *SkillStore, registry *Registry, skill Skill) error {
+	if prev, err := store.Get(skill.ID); err == nil {
+		registry.unregisterSkill(prev.EffectiveTrigger(), prev.ID)
+		if skill.LocalTrigger == "" {
+			skill.LocalTrigger = prev.LocalTrigger
+		}
+	}
 	if err := store.Save(skill); err != nil {
 		return err
 	}

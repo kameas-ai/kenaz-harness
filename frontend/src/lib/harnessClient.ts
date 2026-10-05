@@ -4157,7 +4157,7 @@ const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
   'Slashcmd_SkillList', 'Config_GetFlags', 'Corpus_ListCorpora', 'Corpus_ListFiles',
   'Corpus_ListChunks', 'Graph_ListGraphs', 'Graph_GetRunTrace', 'Compaction_ListCustomStrategies',
   'Compaction_GetTierExplain', 'Branches_List', 'Branches_ListWithBranchTree', 'Workflows_List',
-  'Workflows_ScheduleList', 'Workflows_ScheduleRunHistory', 'Workflows_CatalogList', 'ScheduledChat_List',
+  'Workflows_ScheduleList', 'Workflows_ScheduleRunHistory', 'ScheduledChat_List',
   'ScheduledChat_History', 'Update_ListSkippedVersions', 'Nodes_Catalog', 'Nodes_ListUserOverrides',
   'CedarPolicy_ListPlanModeActions', 'Search_Sessions', 'Search_Unified', 'Onboarding_ListStarters',
   'Elicit_ListPending', 'Confirm_ListPending', 'Secrets_List', 'LLM_ListDetectedLocalRuntimes',

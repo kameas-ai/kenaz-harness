@@ -11,7 +11,5 @@
 # listed). Until a kind leaves this file, the Marketplace keeps that kind's
 # Install disabled-with-reason (WP02's fleet.ErrCatalogKindNotInstallable).
 
-skill       # 2026-10-05 blocker: the skill provider over fleet.InstallSkill / slashcmd.LiveRegister (install-framework-01DOGF0B WP05) owner: alec / install-framework-01DOGF0B
-workflow    # 2026-10-05 blocker: the workflow provider over wfcatalog Store.Save + cron (install-framework-01DOGF0B WP05) owner: alec / install-framework-01DOGF0B
 bundle      # 2026-10-05 blocker: the FR-2 bundle payload format (a kenaz.yaml archive) must be accepted by the fleet team before a bundle provider can consume it (install-framework-01DOGF0B WP06) owner: alec / fleet team
 agent_pack  # 2026-10-05 blocker: the agent_pack disposition — loader-dir provider or drop the kind — per the decision record's criteria (install-framework-01DOGF0B WP07) owner: alec / install-framework-01DOGF0B

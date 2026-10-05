@@ -415,6 +415,56 @@ func TestCatalogInstall_PersistsAndReturnsRef(t *testing.T) {
 	}
 }
 
+// TestNew_PersistedCopyOfBuiltinWinsAfterRestart — install-framework-01DOGF0B
+// WP05. A template installed from the catalog is a persisted copy under the
+// builtin's id. Hydration used to skip any persisted id already present as a
+// builtin, so after the next launch Workflows_List reported it as "builtin"
+// (not installed) and Get served the shipped version over the user's copy.
+// Real sqlite store: this asserts a round trip through SQL.
+func TestNew_PersistedCopyOfBuiltinWinsAfterRestart(t *testing.T) {
+	store := newWP07TestStore(t)
+	builtins, _ := corewf.LoadBuiltins()
+	ctx := context.Background()
+	first := New(Config{Engine: corewf.NewEngine(), Catalog: builtins, Store: store, WorkflowCatalog: newTestCatalogWithStore(t, store)})
+	if _, err := first.Catalog_Install(ctx, "plan_implement_review"); err != nil {
+		t.Fatalf("Catalog_Install: %v", err)
+	}
+
+	restarted := New(Config{Engine: corewf.NewEngine(), Catalog: builtins, Store: store})
+	sums, err := restarted.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, s := range sums {
+		if s.ID == "plan_implement_review" {
+			if s.Source != "user" {
+				t.Fatalf("after restart the installed template reads Source=%q, want \"user\"", s.Source)
+			}
+			return
+		}
+	}
+	t.Fatal("installed template missing from List after restart")
+}
+
+// TestInstallDocument_KeepsIDAndRejectsOpaquePayloads — WP05 / FR-2.
+func TestInstallDocument_KeepsIDAndRejectsOpaquePayloads(t *testing.T) {
+	store := newWP07TestStore(t)
+	api := New(Config{Engine: corewf.NewEngine(), Store: store})
+	ctx := context.Background()
+	res, err := api.InstallDocument(ctx, []byte("id: doc-flow\nname: Doc flow\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n"))
+	if err != nil {
+		t.Fatalf("InstallDocument: %v", err)
+	}
+	if res.WorkflowID != "doc-flow" {
+		t.Fatalf("WorkflowID = %q, want the document's own id (not a fresh import id)", res.WorkflowID)
+	}
+	for _, bad := range []string{"", "{not json", "just: [a, yaml, list]"} {
+		if _, err := api.InstallDocument(ctx, []byte(bad)); !errors.Is(err, ErrWorkflowPayloadMalformed) {
+			t.Errorf("payload %q: got %v, want ErrWorkflowPayloadMalformed", bad, err)
+		}
+	}
+}
+
 // TestCatalogInstall_NoCatalogReturnsUnavailable.
 func TestCatalogInstall_NoCatalogReturnsUnavailable(t *testing.T) {
 	api := New(Config{Engine: corewf.NewEngine()})

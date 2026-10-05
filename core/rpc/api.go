@@ -2950,8 +2950,9 @@ func New(c *core.Core, opts ...Option) *API {
 	// applier below — can route through it. capability:installed /
 	// capability:uninstalled go out on the same broker every other desktop
 	// topic uses. Skill and workflow providers register later in New(),
-	// once their consumers exist (WP05).
-	a.installFw = install.New(chatBrokerAdapter{broker: a.broker}, nil)
+	// in the fleet block, once their consumers and the fleet client exist
+	// (WP05). The signature verifier reads the catalog key per call.
+	a.installFw = install.New(chatBrokerAdapter{broker: a.broker}, installSignatureVerifier(a.catalogPubKey))
 	a.capabilitiesAPI = capabilitiesview.New(a.installFw)
 	if err := a.installFw.Register(install.KindMCPRecipe, capabilitiesview.NewMCPProvider(a.toolsAPI)); err != nil {
 		logging.L().Error("install.register.failed", "kind", string(install.KindMCPRecipe), "err", err)
@@ -4294,13 +4295,35 @@ func New(c *core.Core, opts ...Option) *API {
 				// source exists in or out of this repo. See
 				// docs/unwired-ledger.md's catalog/skill pubkey entry
 				// and core/rpc/views/catalog/impl.go's pubKeyBase64 doc.
-				PubKeyBase64: "",
-				Emitter:      flAudit, // FR-501: wire audit for skill_published/installed/uninstalled
+				// The install-verification key now lives in ONE place:
+				// installSignatureVerifier (install_wiring.go), which reads
+				// catalogview.API.PubKey per call (install-framework-01DOGF0B
+				// WP05) — the former PubKeyBase64: "" placeholder here.
+				Emitter: flAudit, // FR-501: wire audit for skill_published/installed/uninstalled
 			})
 			logging.L().Info("rpc.slashcmd.skill_deps_wired",
 				"fleet_client_nil", flCl == nil,
 				"signer_nil", catalogSigner == nil,
 			)
+			// install-framework-01DOGF0B WP05: fleet catalog skills install
+			// through the framework — Verify fetches the signed payload, the
+			// single verifier checks it, the slashcmd view LiveRegisters the
+			// same bytes; installed state is the skill store + slash
+			// registry. Slashcmd_SkillInstall / _SkillUninstall route here.
+			if err := a.installFw.Register(install.KindSkill,
+				capabilitiesview.NewSkillProvider(fleetCatalogSeam{client: flCl}, skillStore, slashAPI, slashAPI)); err != nil {
+				logging.L().Error("install.register.failed", "kind", string(install.KindSkill), "err", err)
+			}
+		}
+
+		// install-framework-01DOGF0B WP05: workflows install through the
+		// framework — shipped templates via the wfcatalog Store.Save + cron
+		// path (Workflows_CatalogInstall routes here), fleet workflow
+		// payloads via WorkflowsAPI.InstallDocument. Installed state is
+		// Workflows_List's persisted (user) rows.
+		if err := a.installFw.Register(install.KindWorkflow,
+			capabilitiesview.NewWorkflowProvider(a.Workflows(), fleetCatalogSeam{client: flCl})); err != nil {
+			logging.L().Error("install.register.failed", "kind", string(install.KindWorkflow), "err", err)
 		}
 
 		// fleet-context-sync-01NDFSEX15 WP06: wire the E2E-encrypted
@@ -11634,6 +11657,15 @@ func (a *API) Fleet() fleetview.FleetAPI { return a.fleetAPI }
 // Catalog implements HarnessAPI. Returns the fleet catalog publish/list/install surface.
 // (fleet-share-and-sync-01NDFSEX14 WP02)
 func (a *API) Catalog() catalogview.CatalogAPI { return a.catalogAPI }
+
+// catalogPubKey is the catalog signing key the install framework's single
+// verifier reads per call (empty today — register C-2).
+func (a *API) catalogPubKey() string {
+	if cv, ok := a.catalogAPI.(*catalogview.API); ok {
+		return cv.PubKey()
+	}
+	return ""
+}
 
 // Capabilities implements HarnessAPI (install-framework-01DOGF0B). Never
 // nil: a chassis that never constructed the framework gets a surface whose

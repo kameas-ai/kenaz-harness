@@ -6,8 +6,12 @@ package fleet
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,10 +187,12 @@ func TestInstallSkill_RoundTrip(t *testing.T) {
 		t.Fatalf("PublishSkill: %v", err)
 	}
 
-	// Install via InstallSkill. pubKeyBase64="" means verify is skipped (same
-	// as the catalog install path when the server-side key lookup is pending).
-	if err := InstallSkill(context.Background(), c, store, registry, "", item.ID, item.Version); err != nil {
-		t.Fatalf("InstallSkill: %v", err)
+	// Install the way the install framework's skill provider does:
+	// FetchCatalogItem (Verify) then InstallSkillPayload (Install) on the
+	// same bytes. The signature verdict is the framework's step, pinned in
+	// TestCatalogSignatureVerdict_*.
+	if err := installSkillForTest(t, c, store, registry, item.ID, item.Version); err != nil {
+		t.Fatalf("install: %v", err)
 	}
 
 	// Skill must be registered under its trigger.
@@ -205,18 +211,63 @@ func TestInstallSkill_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestInstallSkill_FleetDisabled verifies that InstallSkill returns
+// TestFetchCatalogItem_FleetDisabled verifies that the fetch step returns
 // ErrFleetDisabled for a nop client.
-func TestInstallSkill_FleetDisabled(t *testing.T) {
+func TestFetchCatalogItem_FleetDisabled(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	store := slashcmd.NewSkillStore(dir)
-	registry, _ := slashcmd.NewRegistry(slashcmd.Deps{})
-
-	err := InstallSkill(context.Background(), nil, store, registry, "", "cat-id", "1.0.0")
-	if err != ErrFleetDisabled {
+	if _, err := FetchCatalogItem(context.Background(), nil, "cat-id", "1.0.0"); err != ErrFleetDisabled {
 		t.Errorf("expected ErrFleetDisabled, got: %v", err)
 	}
+}
+
+// TestInstallSkillPayload_MalformedPayloadIsANamedError pins FR-2's "opaque
+// payload → named install error, never a silent success" for skills.
+func TestInstallSkillPayload_MalformedPayloadIsANamedError(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	registry, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	for _, payload := range [][]byte{[]byte("not json"), []byte(`{"body":"no id"}`)} {
+		err := InstallSkillPayload(store, registry, "cat", "1.0.0", payload)
+		if !errors.Is(err, ErrCatalogPayloadMalformed) {
+			t.Errorf("payload %q: got %v, want ErrCatalogPayloadMalformed", payload, err)
+		}
+	}
+	if skills, _ := store.List(); len(skills) != 0 {
+		t.Errorf("a malformed payload persisted %d skill(s)", len(skills))
+	}
+}
+
+// TestCatalogSignatureVerdict pins the single verification hook's fleet
+// half (register C-2): no key → unverified with the C-2 reason, no error;
+// a real key verifies a good signature and rejects a bad one.
+func TestCatalogSignatureVerdict(t *testing.T) {
+	t.Parallel()
+	ok, reason, err := CatalogSignatureVerdict("", []byte("p"), "sig")
+	if ok || err != nil || !strings.Contains(reason, "C-2") {
+		t.Fatalf("no key: got (%v, %q, %v)", ok, reason, err)
+	}
+
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	pubB64 := base64.StdEncoding.EncodeToString(pub)
+	payload := []byte(`{"id":"x"}`)
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(priv, payload))
+	if ok, _, err := CatalogSignatureVerdict(pubB64, payload, sig); !ok || err != nil {
+		t.Fatalf("good signature: got (%v, %v)", ok, err)
+	}
+	if ok, _, err := CatalogSignatureVerdict(pubB64, []byte("tampered"), sig); ok || !errors.Is(err, ErrCatalogSignatureMismatch) {
+		t.Fatalf("tampered payload: got (%v, %v), want ErrCatalogSignatureMismatch", ok, err)
+	}
+}
+
+// installSkillForTest composes the provider's Verify-fetch and Install
+// steps without the framework.
+func installSkillForTest(t *testing.T, c *Client, store *slashcmd.SkillStore, registry *slashcmd.Registry, id, version string) error {
+	t.Helper()
+	item, err := FetchCatalogItem(context.Background(), c, id, version)
+	if err != nil {
+		return err
+	}
+	return InstallSkillPayload(store, registry, id, version, item.PayloadBytes)
 }
 
 // ── UninstallSkill ────────────────────────────────────────────────────────────
@@ -400,8 +451,8 @@ func TestUninstallSkill_ByCatalogID(t *testing.T) {
 	if item.ID == skill.ID {
 		t.Fatalf("fixture invalid: catalog ID %q equals store ID; the test needs them distinct", item.ID)
 	}
-	if err := InstallSkill(context.Background(), c, store, registry, "", item.ID, item.Version); err != nil {
-		t.Fatalf("InstallSkill: %v", err)
+	if err := installSkillForTest(t, c, store, registry, item.ID, item.Version); err != nil {
+		t.Fatalf("install: %v", err)
 	}
 
 	if err := UninstallSkill(store, registry, item.ID); err != nil {

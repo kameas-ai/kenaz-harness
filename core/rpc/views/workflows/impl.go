@@ -2,7 +2,9 @@
 package workflows
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -229,10 +231,13 @@ func New(cfg Config) *API {
 				"error", err.Error(),
 			)
 		} else {
+			// A persisted row wins over the builtin of the same id: it is
+			// the user's installed (and possibly edited) copy. Before
+			// install-framework-01DOGF0B WP05 the builtin shadowed it on
+			// every restart — a template installed from the catalog read
+			// back as "builtin" (not installed) after the next launch, and
+			// edits to it were silently replaced by the shipped version.
 			for _, s := range summaries {
-				if _, ok := a.byID[s.ID]; ok {
-					continue
-				}
 				w, err := cfg.Store.Load(context.Background(), s.ID)
 				if err != nil {
 					slog.Warn("workflows: failed to load persisted workflow",
@@ -780,6 +785,80 @@ func (a *API) Catalog_Install(ctx context.Context, id string) (CatalogInstallRes
 		Scheduled:          ref.Scheduled,
 		MissingCredentials: ref.MissingCredentials,
 	}, nil
+}
+
+// ErrWorkflowPayloadMalformed is returned by InstallDocument when a fleet
+// workflow payload is not a workflow document (install-framework-01DOGF0B
+// FR-2: an opaque payload is a named install error, never a silent
+// success).
+var ErrWorkflowPayloadMalformed = errors.New("workflows: payload is not a workflow document")
+
+// InstallDocument installs a workflow delivered as a document — the fleet
+// catalog's workflow payload (install-framework-01DOGF0B WP05, FR-2) —
+// through the same consumer path a catalog builtin takes: Cedar save gate,
+// Store.Save, the in-memory catalog Workflows_List reads, the save audit,
+// and a cron arm when the document carries schedule + timezone.
+//
+// Accepted formats (FR-2 workflow format, research/fleet-payload-brief.md):
+// a YAML document in the corewf schema (yaml tags — what ExportYAML
+// writes), or a JSON object in the corewf json-tag shape (what the
+// Workflows › Publish dialog sends today). The document's id is kept —
+// unlike Save's YAML import, which mints a fresh id — so the installed
+// workflow is addressable by the id the catalog advertised (its slug).
+func (a *API) InstallDocument(ctx context.Context, payload []byte) (CatalogInstallResult, error) {
+	if a == nil || a.cfg.Disabled {
+		return CatalogInstallResult{}, ErrFeatureDisabled
+	}
+	if a.cfg.Store == nil {
+		return CatalogInstallResult{}, ErrStorageUnavailable
+	}
+	w, err := decodeWorkflowDocument(payload)
+	if err != nil {
+		return CatalogInstallResult{}, err
+	}
+	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cedarMode(), corewf.CollectStepKinds(w)); gerr != nil {
+		return CatalogInstallResult{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	saved, err := a.cfg.Store.Save(ctx, w)
+	if err != nil {
+		return CatalogInstallResult{}, err
+	}
+	a.mu.Lock()
+	a.byID[saved.ID] = saved
+	a.source[saved.ID] = "user"
+	a.mu.Unlock()
+	corewf.EmitSaved(ctx, a.cfg.Audit, saved)
+	res := CatalogInstallResult{WorkflowID: saved.ID}
+	if a.scheduler != nil && saved.Schedule != "" {
+		if err := a.scheduler.Register(ctx, saved.ID, saved.Schedule, saved.Timezone); err == nil {
+			res.Scheduled = true
+		}
+	}
+	return res, nil
+}
+
+// decodeWorkflowDocument parses a workflow payload (see InstallDocument)
+// and applies the save-time validation.
+func decodeWorkflowDocument(payload []byte) (corewf.Workflow, error) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return corewf.Workflow{}, fmt.Errorf("%w: empty payload", ErrWorkflowPayloadMalformed)
+	}
+	var (
+		w   corewf.Workflow
+		err error
+	)
+	if trimmed[0] == '{' {
+		if err = json.Unmarshal(trimmed, &w); err != nil {
+			return corewf.Workflow{}, fmt.Errorf("%w: %v", ErrWorkflowPayloadMalformed, err)
+		}
+	} else if w, err = corewf.LoadYAML(trimmed); err != nil {
+		return corewf.Workflow{}, fmt.Errorf("%w: %v", ErrWorkflowPayloadMalformed, err)
+	}
+	if err := corewf.ValidateForSave(w); err != nil {
+		return corewf.Workflow{}, fmt.Errorf("%w: %v", ErrWorkflowPayloadMalformed, err)
+	}
+	return w, nil
 }
 
 // projectCatalogEntry converts a catalog.Entry to the wire CatalogEntry.

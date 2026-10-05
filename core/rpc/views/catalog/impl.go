@@ -73,6 +73,17 @@ func (a *API) WithPubKey(pubKeyBase64 string) *API {
 	return a
 }
 
+// PubKey returns the catalog signing public key — the one key source the
+// install framework's single SignatureVerifier reads for every fleet-backed
+// kind (install-framework-01DOGF0B WP05). Empty today: register C-2, see
+// pubKeyBase64's doc above.
+func (a *API) PubKey() string {
+	if a == nil {
+		return ""
+	}
+	return a.pubKeyBase64
+}
+
 // Catalog_Publish implements CatalogAPI.
 func (a *API) Catalog_Publish(ctx context.Context, input PublishInput) (CatalogItemView, error) {
 	if a.client == nil {

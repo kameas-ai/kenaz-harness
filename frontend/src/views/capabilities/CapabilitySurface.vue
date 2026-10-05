@@ -7,7 +7,8 @@
  * the detail pane is the row kind's plugin (plugins/registry.ts).
  *
  * WP04 renders the MCP-recipe provider and replaces Tools › Registry (the
- * retired RegistryTab.vue browse list) and KenazToolsPanel.vue. Rail
+ * retired RegistryTab.vue browse list) and KenazToolsPanel.vue; WP05 adds
+ * the skill and workflow providers and replaces Workflows › Catalog. Rail
  * entries are untouched until Phase 4 — the surface mounts inside the
  * Tools view.
  *
@@ -15,7 +16,7 @@
  * reason and are rendered as rows, never as a hidden tab (P-5).
  */
 import { computed, nextTick, onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useEventStream } from '@/lib/useEventStream';
 import { categoryIconFor, categoryLabel } from '@/lib/recipeCategories';
@@ -41,6 +42,7 @@ import type {
 
 const client = useHarnessClient();
 const router = useRouter();
+const route = useRoute();
 
 /** Category the long-tail callout points at (carried over from RegistryTab). */
 const AUTOMATION_CATEGORY = 'automation';
@@ -127,7 +129,15 @@ onMounted(() => {
 
 // ── filters ──────────────────────────────────────────────────────────
 const query = ref('');
-const kindFilter = ref<KindFilter>('all');
+// `?kind=` deep links (e.g. the retired Workflows › Catalog tab redirects to
+// /tools?kind=workflow) open the surface on that kind.
+function kindFromQuery(): KindFilter {
+  const raw = route?.query?.kind;
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (v === 'builtin' || KIND_PLUGINS.some((p) => p.kind === v)) return v as KindFilter;
+  return 'all';
+}
+const kindFilter = ref<KindFilter>(kindFromQuery());
 const sourceFilter = ref<SourceFilter>('all');
 const categoryFilter = ref<string | null>(null);
 
@@ -325,7 +335,7 @@ function gotoLearned() {
         v-model="query"
         type="search"
         aria-label="Search capabilities"
-        placeholder="Search tools, MCP servers…"
+        placeholder="Search tools, MCP servers, skills, workflows…"
         class="w-full rounded-sm border border-border-muted bg-surface-1 py-2 pl-8 pr-3 font-ui text-[12px] text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
         data-testid="capability-search"
       />

@@ -2031,9 +2031,10 @@ func TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires(t *
 	// that plantReplace fails LOUDLY with "the anchor may have moved; update
 	// this test" rather than silently planting nothing -- which is exactly
 	// the difference between this and finding #67's silent version.
-	// If you append to passthroughTopics, update the entry named here.
-	const closeTarget = "\ttopicFleetSessionChanged,\n}\n"
-	const closeMutated = "\ttopicFleetSessionChanged,\n\t}\n)\n"
+	// If you append to passthroughTopics, update the entry named here
+	// (install-framework-01DOGF0B WP04 appended the two capability topics).
+	const closeTarget = "\tinstall.TopicCapabilityUninstalled,\n}\n"
+	const closeMutated = "\tinstall.TopicCapabilityUninstalled,\n\t}\n)\n"
 	cleanupClose := plantReplace(t, wsstreamPath, closeTarget, closeMutated)
 	defer cleanupClose()
 

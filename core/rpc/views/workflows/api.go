@@ -285,4 +285,12 @@ type WorkflowsAPI interface {
 	// still succeeds — callers inspect MissingCredentials and may
 	// redirect to /providers/add.
 	Catalog_Install(ctx context.Context, id string) (CatalogInstallResult, error)
+
+	// InstallDocument installs a workflow delivered as a document (the
+	// fleet catalog's workflow payload, install-framework-01DOGF0B FR-2)
+	// through the same consumer path as Catalog_Install: Cedar save gate,
+	// Store.Save, the catalog Workflows_List reads, cron arm. The
+	// document's id is kept. Returns ErrWorkflowPayloadMalformed for a
+	// payload that is not a valid workflow document.
+	InstallDocument(ctx context.Context, payload []byte) (CatalogInstallResult, error)
 }

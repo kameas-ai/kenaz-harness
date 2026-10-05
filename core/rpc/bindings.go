@@ -2427,14 +2427,25 @@ func (b *Bindings) Slashcmd_SkillPublish(name, projectID, visibility string) err
 	return b.api.Slash().SkillPublish(b.ctx(), name, projectID, visibility)
 }
 
+// Slashcmd_SkillInstall installs a fleet catalog skill through the install
+// framework (install-framework-01DOGF0B WP05): payload fetched once,
+// verified by the single verifier, live-registered, consumer-confirmed,
+// capability:installed emitted.
 func (b *Bindings) Slashcmd_SkillInstall(catalogID, version string) error {
 	defer sentry.WrapBinding("Slashcmd_SkillInstall")()
-	return b.api.Slash().SkillInstall(b.ctx(), catalogID, version)
+	return installSkill(b.ctx(), b.api.Capabilities().Framework(), catalogID, version)
 }
 
+// Slashcmd_SkillUninstall removes a skill (catalog id or store id) through
+// the install framework: org-mandated skills are refused, the slash
+// registry must confirm it is gone, capability:uninstalled is emitted.
 func (b *Bindings) Slashcmd_SkillUninstall(skillID string) error {
 	defer sentry.WrapBinding("Slashcmd_SkillUninstall")()
-	return b.api.Slash().SkillUninstall(b.ctx(), skillID)
+	fw := b.api.Capabilities().Framework()
+	if fw == nil {
+		return capabilitiesview.ErrUnavailable
+	}
+	return fw.Uninstall(b.ctx(), install.KindSkill, skillID)
 }
 
 func (b *Bindings) Slashcmd_SkillRenameLocalTrigger(skillID, newTrigger string) error {
@@ -2816,14 +2827,10 @@ func (b *Bindings) Workflows_CancelRun(runID string) error {
 }
 
 // ── workflow catalog bindings (p0-wiring-fixes WP02) ──────────────────────
-// Workflows_CatalogList returns the full catalog of installable workflow
-// templates. Delegates to the WorkflowsAPI catalog seam (WP03 of
-// workflows-agentic-01KW2D3X). Returns ErrCatalogUnavailable when no
-// catalog backend is wired.
-func (b *Bindings) Workflows_CatalogList() ([]workflowsview.CatalogEntry, error) {
-	defer sentry.WrapBinding("Workflows_CatalogList")()
-	return b.api.Workflows().Catalog_List(b.ctx())
-}
+// Workflows_CatalogList was deleted by install-framework-01DOGF0B WP05: the
+// shipped templates are listed by Capability_List (the workflow provider
+// reads the same catalog seam), and the Workflows › Catalog browse tab it
+// fed is retired.
 
 // Workflows_CatalogGet returns the full YAML source + entry metadata for
 // the catalog item identified by id. The preview drawer uses this to render
@@ -2839,7 +2846,7 @@ func (b *Bindings) Workflows_CatalogGet(id string) (workflowsview.CatalogPreview
 // catalog backend is wired.
 func (b *Bindings) Workflows_CatalogInstall(id string) (workflowsview.CatalogInstallResult, error) {
 	defer sentry.WrapBinding("Workflows_CatalogInstall")()
-	return b.api.Workflows().Catalog_Install(b.ctx(), id)
+	return installWorkflowTemplate(b.ctx(), b.api.Capabilities().Framework(), id)
 }
 
 // ── scheduled chat runs (scheduled-chat-runs-01KX5R8B, WP04) ──────────

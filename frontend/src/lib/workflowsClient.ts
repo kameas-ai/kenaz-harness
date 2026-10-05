@@ -12,6 +12,18 @@
  * exactly; see that file for the source of truth.
  */
 
+import type { InjectionKey } from 'vue';
+
+/**
+ * WorkflowsClientKey — lets a component outside WorkflowsView (the
+ * "Add capability" surface's workflow plugin, install-framework-01DOGF0B
+ * WP05) receive an injected WorkflowsClient; production falls back to
+ * createWorkflowsClient().
+ */
+export const WorkflowsClientKey: InjectionKey<WorkflowsClient> = Symbol.for(
+  'kenaz.workflowsClient',
+) as InjectionKey<WorkflowsClient>;
+
 export interface WorkflowsSummary {
   id: string;
   name: string;
@@ -128,9 +140,13 @@ export interface WorkflowsCatalogInstallResult {
   missingCredentials?: string[];
 }
 
-/** WorkflowsCatalogClient groups the WP03 catalog methods. */
+/**
+ * WorkflowsCatalogClient groups the WP03 catalog methods. `list()` was
+ * removed by install-framework-01DOGF0B WP05: the shipped templates are
+ * listed by the "Add capability" surface (Capability_List); what remains
+ * is the workflow detail plugin's preview + install.
+ */
 export interface WorkflowsCatalogClient {
-  list(): Promise<WorkflowsCatalogEntry[]>;
   get(id: string): Promise<WorkflowsCatalogPreview>;
   install(id: string): Promise<WorkflowsCatalogInstallResult>;
 }
@@ -219,7 +235,6 @@ interface BridgeShape {
   ) => Promise<WorkflowsRunResult>;
   Workflows_Save: (input: WorkflowsSaveInput) => Promise<WorkflowsSaveOutput>;
   Workflows_Delete: (id: string) => Promise<void>;
-  Workflows_CatalogList: () => Promise<WorkflowsCatalogEntry[]>;
   Workflows_CatalogGet: (id: string) => Promise<WorkflowsCatalogPreview>;
   Workflows_CatalogInstall: (id: string) => Promise<WorkflowsCatalogInstallResult>;
   // Scheduler (workflows-agentic-01KW2D3X WP02)
@@ -263,7 +278,6 @@ export function createWorkflowsClient(): WorkflowsClient {
     save: (input) => bridge().Workflows_Save(input),
     remove: (id) => bridge().Workflows_Delete(id),
     catalog: {
-      list: () => bridge().Workflows_CatalogList(),
       get: (id) => bridge().Workflows_CatalogGet(id),
       install: (id) => bridge().Workflows_CatalogInstall(id),
     },
@@ -330,9 +344,6 @@ export function createFakeWorkflowsClient(
         })),
     remove: seed.remove ?? (() => Promise.resolve()),
     catalog: {
-      list:
-        catalogSeed.list ??
-        (() => Promise.resolve([])),
       get:
         catalogSeed.get ??
         ((id) =>

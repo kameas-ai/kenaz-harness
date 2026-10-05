@@ -428,3 +428,138 @@ describe('CapabilitySurface — built-in tools keep a no-install home (FR-4)', (
     w.unmount();
   });
 });
+
+// ── WP05: skills and workflows in the same surface ──────────────────────────
+
+describe('CapabilitySurface — skills and workflows (WP05, P-3 UI half / P-5)', () => {
+  function skillItem(id: string, overrides: Partial<CapabilityItem> = {}): CapabilityItem {
+    return {
+      kind: 'skill',
+      id,
+      name: id,
+      version: '1.0.0',
+      source: 'org_catalog',
+      state: { installed: false, consumer: 'slash registry' },
+      ...overrides,
+    };
+  }
+  function workflowItem(id: string, overrides: Partial<CapabilityItem> = {}): CapabilityItem {
+    return {
+      kind: 'workflow',
+      id,
+      name: id,
+      version: 'v1',
+      source: 'builtin',
+      state: { installed: false, consumer: 'workflows store' },
+      ...overrides,
+    };
+  }
+
+  async function mountWith(listing: CapabilityListing | CapabilityListing[], path = '/') {
+    const listings = Array.isArray(listing) ? listing : [listing];
+    const s = setup(listings);
+    const uninstall = vi.fn(async () => undefined);
+    const update = vi.fn(async (_kind: string, id: string) => skillItem(id, { state: { installed: true } }));
+    s.client.capabilities.uninstall = uninstall;
+    s.client.capabilities.update = update as never;
+    const r = router();
+    await r.push(path);
+    await r.isReady();
+    const w = mount(CapabilitySurface, {
+      global: { plugins: [r], provide: { [HarnessClientKey as symbol]: s.client } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    return { w, s, uninstall, update };
+  }
+
+  it('offers Skills and Workflows kind chips beside the MCP and built-in ones', async () => {
+    const { w } = await mountWith({ items: [] });
+    for (const k of ['all', 'builtin', 'mcp_recipe', 'skill', 'workflow']) {
+      expect(w.find(`[data-testid=capability-kind-chip-${k}]`).exists()).toBe(true);
+    }
+    w.unmount();
+  });
+
+  it('?kind=workflow (the retired Workflows › Catalog redirect) opens on workflows', async () => {
+    const { w } = await mountWith({ items: [workflowItem('daily_ea_briefing'), skillItem('cat-standup')] }, '/?kind=workflow');
+    expect(w.get('[data-testid=capability-kind-chip-workflow]').attributes('aria-pressed')).toBe('true');
+    expect(w.find('[data-testid=capability-row-workflow-daily_ea_briefing]').exists()).toBe(true);
+    expect(w.find('[data-testid=capability-row-skill-cat-standup]').exists()).toBe(false);
+    expect(w.find('[data-testid=websearch-tool-row]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it('a skill installs through Capability_Install with its catalog version; the badge follows the consumer', async () => {
+    const { w, s } = await mountWith([
+      { items: [skillItem('cat-standup')] },
+      { items: [skillItem('cat-standup', { state: { installed: true, version: '1.0.0' } })] },
+    ]);
+    await w.get('[data-testid=capability-install-skill-cat-standup]').trigger('click');
+    await flushPromises();
+    expect(s.install).toHaveBeenCalledWith('skill', 'cat-standup', '1.0.0');
+    expect(w.get('[data-testid=capability-state-skill-cat-standup]').text()).toBe('Installed');
+    w.unmount();
+  });
+
+  it('workflows and skills use the generic Remove (Capability_Uninstall) behind a confirmation', async () => {
+    const { w, uninstall } = await mountWith([
+      { items: [workflowItem('daily_ea_briefing', { state: { installed: true } })] },
+      { items: [workflowItem('daily_ea_briefing')] },
+    ]);
+    await w.get('[data-testid=capability-row-workflow-daily_ea_briefing] button').trigger('click');
+    await flushPromises();
+    await w.get('[data-testid=capability-remove-workflow-daily_ea_briefing]').trigger('click');
+    expect(uninstall).not.toHaveBeenCalled();
+    await w.get('[data-testid=capability-remove-confirm-workflow-daily_ea_briefing]').trigger('click');
+    await flushPromises();
+    expect(uninstall).toHaveBeenCalledWith('workflow', 'daily_ea_briefing');
+    expect(w.get('[data-testid=capability-state-workflow-daily_ea_briefing]').text()).toBe('Not installed');
+    w.unmount();
+  });
+
+  it('an org-required skill is read-only: no Remove, the reason instead', async () => {
+    const { w } = await mountWith({
+      items: [skillItem('org-policy', { read_only: true, read_only_reason: 'Required by your org', state: { installed: true } })],
+    });
+    await w.get('[data-testid=capability-row-skill-org-policy] button').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid=capability-remove-skill-org-policy]').exists()).toBe(false);
+    expect(w.get('[data-testid=capability-read-only-skill-org-policy]').text()).toContain('Required by your org');
+    w.unmount();
+  });
+
+  it('an update-available row offers Update (Capability_Update)', async () => {
+    const { w, update } = await mountWith({
+      items: [skillItem('cat-u', { version: '1.2.10', state: { installed: true, version: '1.2.9', update_available: true } })],
+    });
+    await w.get('[data-testid=capability-update-skill-cat-u]').trigger('click');
+    await flushPromises();
+    expect(update).toHaveBeenCalledWith('skill', 'cat-u');
+    w.unmount();
+  });
+
+  it('signed out: installed skills and shipped workflow templates stay listed; each fleet source is a reason row (P-5)', async () => {
+    const { w } = await mountWith({
+      items: [
+        skillItem('cat-standup', { source: 'team_catalog', state: { installed: true } }),
+        workflowItem('daily_ea_briefing'),
+      ],
+      unavailable: [
+        { kind: 'skill', source: 'org_catalog', reason: 'signed_out' },
+        { kind: 'skill', source: 'team_catalog', reason: 'signed_out' },
+        { kind: 'workflow', source: 'org_catalog', reason: 'signed_out' },
+      ],
+    });
+    expect(w.get('[data-testid=capability-unavailable-skill-org_catalog]').text()).toContain('Skills · Org catalog');
+    expect(w.get('[data-testid=capability-unavailable-skill-team_catalog]').text()).toContain('Sign in');
+    expect(w.get('[data-testid=capability-unavailable-workflow-org_catalog]').text()).toContain('Workflows');
+    expect(w.find('[data-testid=capability-row-skill-cat-standup]').exists()).toBe(true);
+    expect(w.find('[data-testid=capability-install-workflow-daily_ea_briefing]').exists()).toBe(true);
+    // The Team-catalog chip still shows its reason row instead of vanishing.
+    await w.get('[data-testid=capability-source-chip-team_catalog]').trigger('click');
+    expect(w.find('[data-testid=capability-unavailable-skill-team_catalog]').exists()).toBe(true);
+    expect(w.find('[data-testid=capability-unavailable-skill-org_catalog]').exists()).toBe(false);
+    w.unmount();
+  });
+});

@@ -8,8 +8,10 @@
  * registered here for the row's kind.
  */
 import type { Component } from 'vue';
-import type { CapabilityItem, CapabilityKind, CapabilitySource } from '@/lib/types';
+import type { CapabilityItem, CapabilityKind } from '@/lib/types';
 import McpRecipeDetail from './McpRecipeDetail.vue';
+import SkillDetail from './SkillDetail.vue';
+import WorkflowDetail from './WorkflowDetail.vue';
 
 export interface KindPlugin {
   kind: CapabilityKind;
@@ -35,6 +37,20 @@ export const KIND_PLUGINS: readonly KindPlugin[] = [
     detail: McpRecipeDetail,
     ownsRemove: true,
   },
+  {
+    kind: 'skill',
+    label: 'Skills',
+    noun: 'skill',
+    detail: SkillDetail,
+    ownsRemove: false,
+  },
+  {
+    kind: 'workflow',
+    label: 'Workflows',
+    noun: 'workflow',
+    detail: WorkflowDetail,
+    ownsRemove: false,
+  },
 ];
 
 export function pluginFor(kind: CapabilityKind): KindPlugin | undefined {
@@ -54,13 +70,7 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
   { id: 'mcp-custom', kind: 'mcp_recipe', label: 'Custom MCP server' },
 ];
 
-export const SOURCE_LABELS: Record<CapabilitySource, string> = {
-  builtin: 'Built-in',
-  registry: 'Registry',
-  org_catalog: 'Org catalog',
-  team_catalog: 'Team catalog',
-  local: 'Local',
-};
+export { SOURCE_LABELS } from './labels';
 
 /**
  * needsFlow — a row whose install needs the per-kind flow: any requirement

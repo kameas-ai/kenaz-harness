@@ -1031,8 +1031,6 @@ export function Workflows_CatalogGet(arg1:string):Promise<workflows.CatalogPrevi
 
 export function Workflows_CatalogInstall(arg1:string):Promise<workflows.CatalogInstallResult>;
 
-export function Workflows_CatalogList():Promise<Array<workflows.CatalogEntry>>;
-
 export function Workflows_Delete(arg1:string):Promise<void>;
 
 export function Workflows_Get(arg1:string):Promise<workflows.Workflow>;
