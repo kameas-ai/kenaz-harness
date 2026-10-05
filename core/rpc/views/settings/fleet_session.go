@@ -118,8 +118,8 @@ type FleetSessionView struct {
 	IdentitySource string         `json:"identitySource,omitempty"`
 	// EmailSource / NameSource say where identity.email / displayName came
 	// from when enroll omitted them: "enroll" or "token_claim" (FR-9).
-	EmailSource  string             `json:"emailSource,omitempty"`
-	NameSource   string             `json:"nameSource,omitempty"`
+	EmailSource string `json:"emailSource,omitempty"`
+	NameSource  string `json:"nameSource,omitempty"`
 	// TokensUsable is true when the stored tokens can still authenticate
 	// and no definite rejection is recorded. A signing_in snapshot with
 	// usable tokens is a RE-auth: gates stay open (review F5).

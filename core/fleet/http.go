@@ -206,6 +206,12 @@ func (c *Client) refreshFailed(where string, err error) error {
 		c.emitSessionExpired(where + ": " + err.Error())
 		return ErrTokenExpired
 	}
+	if errors.Is(err, context.Canceled) {
+		// The caller cancelled mid-refresh: preserve Canceled so callers
+		// (the append breaker's not-a-failure rule) see a cancellation,
+		// not a transport failure (delta review #3).
+		return fmt.Errorf("fleet: token refresh (%s) cancelled: %w", where, err)
+	}
 	return fmt.Errorf("%w (token refresh, %s): %v", ErrFleetUnreachable, where, err)
 }
 

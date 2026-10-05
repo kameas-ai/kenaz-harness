@@ -311,8 +311,17 @@ func RefreshTokenSet(ctx context.Context, profile EnvProfile, refreshToken strin
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized {
+		// OAuth2 rejects a dead refresh token with 400 invalid_grant (or
+		// 401 invalid_client): a DEFINITE rejection — the session is over.
 		return TokenSet{}, fmt.Errorf("%w: status %d during refresh: %s", ErrTokenExpired, resp.StatusCode, body)
+	}
+	if resp.StatusCode != http.StatusOK {
+		// IdP 5xx / 429 / anything else says nothing about the refresh
+		// token's validity: transient, NOT ErrTokenExpired, so the session
+		// is not shown as expired over an IdP hiccup
+		// (fleet-session-truth-01DOGF0A delta review #4).
+		return TokenSet{}, fmt.Errorf("fleet: token endpoint status %d during refresh: %s", resp.StatusCode, body)
 	}
 	return parseTokenResponse(body)
 }

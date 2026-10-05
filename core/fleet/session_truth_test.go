@@ -473,3 +473,79 @@ func TestCapabilityPoller_ConcurrentSetCurrent_LastDeliveryIsCurrent(t *testing.
 		t.Fatalf("deliveries (sites_hosting per call) = %v; the last delivery carried the stale set", got)
 	}
 }
+
+// Delta review #2: a rate limit is transient — it must not latch sync off.
+func TestAppendBreaker_429_IsTransient(t *testing.T) {
+	lanes := NewSyncLanes()
+	b := NewAppendBreaker(lanes)
+	now := time.Unix(1_000_000, 0)
+	b.now = func() time.Time { return now }
+	posts := 0
+	_ = b.Do(context.Background(), "s", func(context.Context) error { posts++; return &AppendStatusError{Status: 429} })
+	if s := lanes.Snapshot(LaneContextSync).Sessions[0]; s.Open || s.Reason != "rate_limited" {
+		t.Fatalf("429 → %+v, want a transient (not open) rate_limited failure", s)
+	}
+	now = now.Add(appendBackoffMax)
+	_ = b.Do(context.Background(), "s", func(context.Context) error { posts++; return nil })
+	if posts != 2 || lanes.Snapshot(LaneContextSync).Status != LaneOK {
+		t.Fatalf("posts=%d lane=%+v, want a retry after backoff that recovers", posts, lanes.Snapshot(LaneContextSync))
+	}
+}
+
+// Delta review #3: a cancel during the token refresh stays a cancellation.
+func TestClientDo_CancelDuringRefresh_PreservesCanceled(t *testing.T) {
+	SetExternalTokenSource(nil)
+	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt"})
+	_ = keyring.Set(keyringService, keyExpiresAt(), "1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/v2/token" {
+			// Hang until the client gives up (bounded so srv.Close can
+			// never wait forever on this handler).
+			select {
+			case <-r.Context().Done():
+			case <-time.After(3 * time.Second):
+			}
+			return
+		}
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	c := makeTestClient(t, srv.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	_, err := c.Get(ctx, "/api/v1/x")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled preserved through the refresh wrap", err)
+	}
+	if reason, _ := classifyAppendError(err); reason == "" {
+		t.Fatal("unreachable")
+	}
+	// And the breaker treats it as not-a-failure.
+	lanes := NewSyncLanes()
+	bk := NewAppendBreaker(lanes)
+	_ = bk.Do(ctx, "s", func(context.Context) error { return err })
+	if lanes.Snapshot(LaneContextSync).Status == LaneDegraded {
+		t.Fatal("a cancel during refresh was counted as a sync failure")
+	}
+}
+
+// Delta review #4: an IdP 5xx during refresh is not an expired session.
+func TestRefreshTokenSet_IdP5xx_IsNotExpired(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	_, err := RefreshTokenSet(context.Background(), EnvProfile{ZitadelIssuer: srv.URL, NativeClientID: "c"}, "rt")
+	if err == nil || errors.Is(err, ErrTokenExpired) {
+		t.Fatalf("err = %v, want a non-expired transient error", err)
+	}
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"invalid_grant"}`, http.StatusBadRequest)
+	}))
+	defer srv2.Close()
+	_, err = RefreshTokenSet(context.Background(), EnvProfile{ZitadelIssuer: srv2.URL, NativeClientID: "c"}, "rt")
+	if !errors.Is(err, ErrTokenExpired) {
+		t.Fatalf("400 invalid_grant err = %v, want ErrTokenExpired", err)
+	}
+}

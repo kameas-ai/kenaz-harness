@@ -56,8 +56,8 @@ type AppendBreaker struct {
 }
 
 type appendState struct {
-	failures  int
-	open      bool
+	failures int
+	open     bool
 	// permanent: the circuit opened on an answer retrying cannot change
 	// (404 / 401 / 403 / expired) — latched until Reset. A circuit opened by
 	// transient failures half-opens: one probe every appendBackoffMax
@@ -219,6 +219,11 @@ func classifyAppendError(err error) (reason string, permanent bool) {
 			return "not_authorized", true
 		case se.Status >= 500:
 			return "server_error", false
+		case se.Status == http.StatusTooManyRequests:
+			// A rate limit says "later", not "never" (delta review #2).
+			return "rate_limited", false
+		case se.Status == http.StatusRequestTimeout:
+			return "network", false
 		default:
 			return fmt.Sprintf("status_%d", se.Status), true
 		}
