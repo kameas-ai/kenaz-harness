@@ -2,7 +2,7 @@
  * SettingsTabs — vertical icon-rail structure test.
  *
  * After the settings-nav redesign the strip is a grouped vertical rail
- * (mirroring the app LeftRail). This pins the structure: the six category
+ * (mirroring the app LeftRail). This pins the structure: the five category
  * group headers render, every nav item carries an icon + its settings-tab
  * test id, and the full item set is present.
  */
@@ -14,13 +14,13 @@ import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 // vue-router returns undefined outside a router context — SettingsTabs
 // guards for this and degrades to "no active state".
 describe('SettingsTabs — vertical nav rail', () => {
-  it('renders the six category group headers', () => {
+  // nav-ia-sweep-01DOGF0F WP05: the Runtime group left for Workflows.
+  it('renders the five category group headers', () => {
     const wrapper = mount(SettingsTabs);
     const headers = wrapper.findAll('h3').map((h) => h.text());
     expect(headers).toEqual([
       'App',
       'Authoring',
-      'Runtime',
       'Integrations',
       'Security',
       'Privacy',
@@ -40,45 +40,37 @@ describe('SettingsTabs — vertical nav rail', () => {
     // "Tasks" entry is restored (Runtime group moves 1 -> 2 items).
     // laya-advisors-01LAYA001 WP13: +1 — Recommendations (local ML engine)
     // sub-tab in Authoring.
-    expect(items).toHaveLength(26);
+    // nav-ia-sweep-01DOGF0F WP05: -3 — Runtime (Scheduled Chats, Tasks) and
+    // Authoring › Workflows moved to the Workflows surface.
+    expect(items).toHaveLength(23);
     for (const item of items) {
       // lucide-vue-next renders an <svg>; every row should carry one.
       expect(item.find('svg').exists()).toBe(true);
     }
   });
 
-  // Inverted by subagent-control-and-background-tasks-01PMZB11 UNIT-11
-  // per CLAUDE.md's rule for a pinned-absence test whose reason has
-  // become false: the test is INVERTED, not deleted, so the history of
-  // why the entry was ever absent stays readable. This test previously
-  // asserted the entry's absence with a comment that opened "core/tasks
-  // .Registry never receives a row in production ... bash.Options
-  // .BackgroundSpawn has no non-test assignment." UNIT-3
-  // (core/rpc/background_task_wiring_test.go) made that false: the
-  // BackgroundSpawn/BackgroundEnd options are now assigned in
-  // core/rpc/builtins_wiring.go from a real *coretasks.Registry, ids are
-  // allocated before cmd.Start() so the registry writers actually attach,
-  // and Tasks_List/Tasks_Tail return real rows/lines for a live task.
-  it('offers a Tasks entry — the background-task subsystem has a real producer (UNIT-3)', async () => {
-    const router = createRouter({
-      history: createMemoryHistory(),
-      routes: [
-        { path: '/', name: 'home', component: { render: () => null } },
-        { path: '/settings', name: 'settings', component: { render: () => null } },
-      ],
-    });
-    await router.push('/');
-    await router.isReady();
-
-    const wrapper = mount(SettingsTabs, { global: { plugins: [router] } });
-    const tasks = wrapper.find('[data-testid="settings-tab-tasks"]');
-    expect(tasks.exists(), 'the Tasks nav entry must exist').toBe(true);
-    expect(tasks.text()).toBe('Tasks');
-
-    await tasks.trigger('click');
-    await flushPromises();
-    expect(router.currentRoute.value.path).toBe('/settings');
-    expect(router.currentRoute.value.query.tab).toBe('tasks');
+  // History: the Tasks entry was removed 2026-08-14 (no producer), then
+  // restored by subagent-control-and-background-tasks-01PMZB11 UNIT-11 once
+  // bash.Options.BackgroundSpawn had a real caller (see
+  // core/rpc/background_task_wiring_test.go). nav-ia-sweep-01DOGF0F WP05
+  // (owner ruling F9a) MOVED it — with Scheduled Chats and the Workflows
+  // panel — to the Workflows surface. The capability is not gone: its
+  // real-parent mount is pinned in
+  // views/workflows/__tests__/WorkflowsView.tasks.spec.ts, and the old URL
+  // redirects (__tests__/legacySettingsRedirects.test.ts).
+  it('offers no Tasks, Scheduled Chats or Workflows entry — they live under Workflows now', () => {
+    const wrapper = mount(SettingsTabs);
+    for (const id of [
+      'settings-tab-tasks',
+      'settings-tab-scheduled-chats',
+      'settings-tab-workflows',
+    ]) {
+      expect(wrapper.find(`[data-testid="${id}"]`).exists(), id).toBe(false);
+    }
+    const labels = wrapper.findAll('[data-testid^="settings-tab-"]').map((e) => e.text());
+    for (const gone of ['Tasks', 'Scheduled Chats', 'Workflows']) {
+      expect(labels).not.toContain(gone);
+    }
   });
 
   // consent-surfaces-truth-01PMTR01 WP06 (FR-007). The denial panel is a

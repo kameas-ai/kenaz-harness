@@ -48,7 +48,9 @@ const router = useRouter() as ReturnType<typeof useRouter> | undefined;
 
 function openTasksPanel() {
   if (!router) return;
-  void router.push('/settings?tab=tasks');
+  // nav-ia-sweep-01DOGF0F WP05: Tasks moved from Settings › Runtime to
+  // Workflows › Tasks (the old URL still redirects, but don't rely on it).
+  void router.push({ path: '/workflows', query: { tab: 'tasks' } });
 }
 
 const emit = defineEmits<{
