@@ -374,3 +374,43 @@ func TestApplyMandatedSkills_ShadowedIsSilent(t *testing.T) {
 		t.Error("built-in 'help' was overwritten by the mandated skill")
 	}
 }
+
+// TestUninstallSkill_ByCatalogID — install-framework-01DOGF0B WP01. The
+// Marketplace knows only the catalog_id; the store keys on the payload's
+// skill ID. Pre-fix, UninstallSkill(catalogID) returned ErrSkillNotFound for
+// every SkillPublish'd skill, so the Uninstall button the registry-backed
+// badge shows would always fail.
+func TestUninstallSkill_ByCatalogID(t *testing.T) {
+	fake := &fakeCatalogServer{}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	stubTokens(t, TokenSet{AccessToken: "at-u", RefreshToken: "rt-u", ExpiresAt: time.Now().Add(time.Hour)})
+	c := makeTestClient(t, srv.URL)
+	store, registry, signer, caps := makeSkillTestSetup(t)
+
+	skill := slashcmd.Skill{
+		ID: "by-catalog", Trigger: "bycat", Kind: slashcmd.KindText,
+		Body: "x", Source: slashcmd.SkillSourceCatalog,
+	}
+	item, err := PublishSkill(context.Background(), c, caps, signer, skill, CatalogVisTeam)
+	if err != nil {
+		t.Fatalf("PublishSkill: %v", err)
+	}
+	if item.ID == skill.ID {
+		t.Fatalf("fixture invalid: catalog ID %q equals store ID; the test needs them distinct", item.ID)
+	}
+	if err := InstallSkill(context.Background(), c, store, registry, "", item.ID, item.Version); err != nil {
+		t.Fatalf("InstallSkill: %v", err)
+	}
+
+	if err := UninstallSkill(store, registry, item.ID); err != nil {
+		t.Fatalf("UninstallSkill(catalogID): %v", err)
+	}
+	if _, ok := registry.Lookup("bycat"); ok {
+		t.Error("'bycat' still registered after UninstallSkill by catalog ID")
+	}
+	if _, err := store.Get("by-catalog"); err == nil {
+		t.Error("skill still in store after UninstallSkill by catalog ID")
+	}
+}

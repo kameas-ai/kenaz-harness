@@ -17,7 +17,12 @@ type CatalogItemView struct {
 	Description string `json:"description"`
 	Visibility  string `json:"visibility"`
 	PublishedAt string `json:"published_at,omitempty"` // RFC3339
-	Installed   bool   `json:"installed"`
+	// Installed is per kind (install-framework-01DOGF0B WP01): for
+	// kind=skill it means the skill is in the skill store (live-registered);
+	// for every other kind it means a downloaded payload sits under
+	// <dataDir>/installed/ — residue nothing consumes, which the UI offers
+	// to remove but does not call "installed" (see docs/unwired-ledger.md).
+	Installed bool `json:"installed"`
 }
 
 // PublishInput is the form the frontend submits when publishing an item.

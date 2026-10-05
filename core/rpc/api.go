@@ -3953,6 +3953,11 @@ func New(c *core.Core, opts ...Option) *API {
 		} else {
 			a.catalogAPI = catalogview.NewAPI(nil, nil, "").WithEmitter(flAudit)
 		}
+		// install-framework-01DOGF0B WP01: kind=skill installed state is
+		// read from the skill store (the consumer), not installed/.
+		if cv, ok := a.catalogAPI.(*catalogview.API); ok && skillStore != nil {
+			cv.WithSkillStore(skillStore)
+		}
 
 		// Sync (WP05) — wired with a nil Syncer when fleet is disabled.
 		// The Syncer is a lightweight object; we create it unconditionally but
