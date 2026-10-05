@@ -151,6 +151,16 @@ type fleetState struct {
 	// outcome, backoff, sign-in in flight — that the FleetSession snapshot
 	// derives degraded / signed-out from (fleet-session-truth-01DOGF0A).
 	sess sessionTrack
+
+	// emitMu serialises snapshot publication so the dedupe key and the
+	// emitted order agree; lastEmitKey is the transition key of the last
+	// snapshot published (fleet-session-truth-01DOGF0A WP02).
+	emitMu      sync.Mutex
+	lastEmitKey string
+
+	// lanesHooked / supervisorStarted make their one-time wiring idempotent.
+	lanesHooked       bool
+	supervisorStarted bool
 }
 
 // newFleetState returns a fleetState with its always-present members built.
@@ -169,10 +179,36 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	defer a.fleet.mu.Unlock()
 	a.fleet.client = c
 	a.fleet.dataDir = dataDir
-	// Wire the session-expired broker into the client if already set.
+	// Wire the session-expired broker into the client if already set. The
+	// tap folds the event into the session track and republishes the
+	// FleetSession snapshot (fleet-session-truth-01DOGF0A WP02).
 	if a.fleet.lockdownBroker != nil && c != nil {
-		c.SetSessionBroker(a.fleet.lockdownBroker)
+		c.SetSessionBroker(sessionExpiredTap{api: a, inner: a.fleet.lockdownBroker})
 	}
+	// Lane-health changes republish the snapshot (registered once).
+	if !a.fleet.lanesHooked {
+		a.fleet.lanesHooked = true
+		a.fleet.lanes.OnChange(func() { a.publishFleetSession("sync_lane") })
+	}
+	a.startFleetBackgroundLocked()
+	// Backend-owned identity refresh cadence: replaces the per-component
+	// five-minute enroll poll the UI used to run (FR-2). Not under go test.
+	if !a.fleet.supervisorStarted && c != nil && !c.IsNop() && !testing.Testing() {
+		a.fleet.supervisorStarted = true
+		go a.runSessionSupervisor(context.Background())
+	}
+}
+
+// startFleetBackgroundLocked (re)creates whichever of the capability
+// poller, config poller and lockdown watcher are missing. Caller holds
+// a.fleet.mu. Called from SetFleetClient at boot and again after a
+// successful sign-in: StopFleetBackground (sign-out) nils all three, and
+// before fleet-session-truth-01DOGF0A nothing ever recreated them, so a
+// sign-out followed by a sign-in in the same process left capabilities
+// default-deny and the lockdown watcher dead until restart.
+func (a *API) startFleetBackgroundLocked() {
+	c := a.fleet.client
+	dataDir := a.fleet.dataDir
 	// Start the capability poller lazily. When c is a nop client the poller
 	// will degrade gracefully on every Refresh call.
 	//
@@ -213,6 +249,15 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	if a.fleet.poller == nil {
 		p := fleet.NewCapabilityPoller(c, dataDir)
 		a.fleet.poller = p
+		// One listener per poller: a capability arriving or leaving
+		// re-evaluates export (a tier change can move effective consent)
+		// and republishes the session snapshot so every gate re-renders in
+		// the same tick (FR-8). ReconcileTelemetry no-ops without a
+		// pipeline. Listeners run outside the poller's lock (WP02).
+		p.OnChange(func(fleet.Capabilities) {
+			a.ReconcileTelemetry(context.Background())
+			a.publishFleetSession("capabilities")
+		})
 		if !testing.Testing() {
 			p.Start(context.Background())
 		}
@@ -253,7 +298,7 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	}
 	// Wire the broker into the fleet client for session-expired events (FR-005).
 	if a.fleet.client != nil {
-		a.fleet.client.SetSessionBroker(sink)
+		a.fleet.client.SetSessionBroker(sessionExpiredTap{api: a, inner: sink})
 	}
 }
 
@@ -326,13 +371,11 @@ func (a *API) SetFleetOTLPPipeline(
 		}
 	}
 	// A tier change can move EFFECTIVE consent (a downgrade fails closed,
-	// an upgrade un-clamps a stored level), so re-evaluate export whenever
-	// the capability snapshot changes.
-	if a.fleet.poller != nil {
-		a.fleet.poller.OnChange(func(fleet.Capabilities) {
-			a.ReconcileTelemetry(context.Background())
-		})
-	}
+	// an upgrade un-clamps a stored level), so export is re-evaluated
+	// whenever the capability snapshot changes — by the single listener
+	// startFleetBackgroundLocked registers on every poller it creates
+	// (fleet-session-truth-01DOGF0A WP02 moved it there so a poller
+	// recreated after sign-in carries it too).
 }
 
 // SetFleetTelemetryResourceFunc supplies a lazy accessor for the startup OTel
@@ -405,6 +448,7 @@ func (a *API) FleetSessionEnded(ctx context.Context) {
 		pipeline.SetTelemetryOptIns(nil)
 	}
 	a.ReconcileTelemetry(ctx) // not enrolled ⇒ DropAll + Deactivate
+	a.publishFleetSession("served_session_ended")
 }
 
 // SetFleetExportUnauthorizedHook wires the pipeline's 401 callback (served
@@ -742,6 +786,14 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 		return FleetIdentity{}, err
 	}
 	logging.L().Info("fleet.rpc.sign_in.tokens_saved")
+	// A fresh sign-in clears whatever ended or stalled the previous session
+	// (expiry, not-provisioned stop) and restarts the background workers a
+	// prior sign-out tore down (fleet-session-truth-01DOGF0A WP02).
+	a.fleet.mu.Lock()
+	a.fleet.sess.expired = false
+	a.fleet.sess.autoRetryStopped = false
+	a.startFleetBackgroundLocked()
+	a.fleet.mu.Unlock()
 	id, err := a.fleetEnroll(ctx)
 	if err != nil {
 		logging.L().Error("fleet.rpc.sign_in.enroll_failed", "err", err.Error())
@@ -877,6 +929,7 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 	} else {
 		logging.L().Info("fleet.rpc.sign_out.success")
 	}
+	a.publishFleetSession("sign_out")
 	return signOutErr
 }
 
@@ -943,6 +996,7 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	// say so if the failure is recorded.
 	if err != nil {
 		a.recordEnrollOutcome(nil, err)
+		a.publishFleetSession("enroll_failed")
 		logging.L().Error("fleet.rpc.enroll.failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
@@ -991,6 +1045,7 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	// (user.id = JWT sub, org.id = enroll org_id, machine.id = nodeID).
 	a.ReconcileTelemetry(ctx)
 
+	a.publishFleetSession("enroll_ok")
 	return fleetIdentityToView(id), nil
 }
 
