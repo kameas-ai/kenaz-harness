@@ -40,6 +40,7 @@ import { logEvent } from "./eventLog";
 import { isServedMode } from "./useServedMode";
 import { useConnectionState } from "./useConnectionState";
 import { friendly } from "./errors";
+import { liveSpanId } from "./transcript";
 import type { ContentBlock, Message, Session } from "./types";
 
 /**
@@ -505,7 +506,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
    * same either way.
    */
   function liveSpanID(subID: string): string {
-    return `live:${subID}`;
+    return liveSpanId(subID);
   }
 
   /**

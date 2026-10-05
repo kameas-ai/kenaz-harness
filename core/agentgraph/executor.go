@@ -214,6 +214,13 @@ type Env struct {
 	SessionID string
 	// ProjectID is the optional project the session belongs to.
 	ProjectID string
+	// TurnSpanID is the id of the user message that opened the chat
+	// turn this run executes, when the run IS a chat turn
+	// (agentgraph-settings-linkage-01DOGF0D WP03). Recorded on the
+	// run_start event so the log is self-describing: a run can be traced
+	// back to its turn without the session_turn_runs side table. Empty
+	// for runs that are not chat turns.
+	TurnSpanID string
 
 	// Graph is the spec being executed. Read-only; nodes look up their
 	// peers (e.g. Loop bodies) by ID.

@@ -7122,6 +7122,26 @@ export namespace sessions {
 	        this.pricingDataDate = source["pricingDataDate"];
 	    }
 	}
+	export class TurnRun {
+	    runId: string;
+	    turnSpanId: string;
+	    graphId: string;
+	    specDigest: string;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TurnRun(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.turnSpanId = source["turnSpanId"];
+	        this.graphId = source["graphId"];
+	        this.specDigest = source["specDigest"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
 
 }
 

@@ -695,6 +695,7 @@ function makeSessionsStub(
     setSystemPrompt: async () => undefined,
     moveToProject: async () => undefined,
     resumeMessage: async () => ({ subscriptionId: '', originalMessageId: '' }),
+    turnRuns: async () => [],
     getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown', messageCount: 0, pricingDataDate: '' }),
     saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '' }, scopeKind: 'session' as const, createdAt: '', contentHash: '' }),
     suggestTitle: async () => '',

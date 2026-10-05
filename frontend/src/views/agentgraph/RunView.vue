@@ -42,6 +42,7 @@ import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import GraphCanvas from '@/components/canvas/GraphCanvas.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { materializeErrorMessage } from '@/lib/errors';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import { useManifestStore } from '@/composables/useNodeManifest';
@@ -72,6 +73,13 @@ const submittingApproval = ref(false);
 
 let pollHandle: ReturnType<typeof setTimeout> | null = null;
 let cancelled = false;
+/**
+ * Set when the backend reports the run does not exist. Terminal for the
+ * poll: an unknown run id does not start existing 500 ms later, and
+ * polling it forever just repaints the same red banner
+ * (agentgraph-settings-linkage-01DOGF0D review H1).
+ */
+let runNotFound = false;
 
 const POLL_MS = 500;
 
@@ -104,7 +112,19 @@ async function pollOnce() {
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
+    if (/not found/i.test(error.value)) runNotFound = true;
   }
+}
+
+/**
+ * The poll stops on any state that cannot change on its own — completed,
+ * failed, abandoned — and on a not-found run. `abandoned` was missing
+ * here before, so an abandoned run polled forever.
+ */
+function pollIsDone(): boolean {
+  if (runNotFound) return true;
+  const st = status.value?.state;
+  return st === 'completed' || st === 'failed' || st === 'abandoned';
 }
 
 // ── the run, as a graph (WP05) ───────────────────────────────────────
@@ -138,7 +158,7 @@ async function refreshGraph() {
       graphError.value = parsed.error ?? 'The projected run does not parse.';
     }
   } catch (err) {
-    graphError.value = err instanceof Error ? err.message : String(err);
+    graphError.value = materializeErrorMessage(err);
   }
 }
 
@@ -224,8 +244,7 @@ function schedulePoll() {
   if (cancelled) return;
   pollHandle = setTimeout(async () => {
     await pollOnce();
-    const st = status.value;
-    if (st && (st.state === 'completed' || st.state === 'failed')) return;
+    if (pollIsDone()) return;
     schedulePoll();
   }, POLL_MS);
 }
@@ -304,6 +323,7 @@ onMounted(async () => {
   // this view opened returns its whole trace in one tail, and a run with
   // no events at all still has a topology worth drawing.
   await refreshGraph();
+  if (pollIsDone()) return;
   schedulePoll();
 });
 

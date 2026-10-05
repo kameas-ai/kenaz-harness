@@ -461,6 +461,31 @@ func (m *Manager) DeleteStreamCheckpoint(ctx context.Context, sessionID, subID s
 	return m.store.DeleteStreamCheckpoint(ctx, sessionID, subID)
 }
 
+// RecordTurnRun persists which agent-graph run executed a chat turn
+// (agentgraph-settings-linkage-01DOGF0D WP03). The signature matches
+// chat.TurnRunRecorder so production wiring passes *Manager directly.
+// The row's CreatedAt is stamped from the manager clock.
+func (m *Manager) RecordTurnRun(ctx context.Context, sessionID, turnSpanID, runID, graphID, specDigest string) error {
+	if sessionID == "" || runID == "" {
+		return errors.New("session: record turn run: session id and run id required")
+	}
+	return m.store.RecordTurnRun(ctx, TurnRun{
+		RunID:      runID,
+		SessionID:  sessionID,
+		TurnSpanID: turnSpanID,
+		GraphID:    graphID,
+		SpecDigest: specDigest,
+		CreatedAt:  m.now(),
+	})
+}
+
+// ListTurnRuns returns a session's recorded turn -> run mappings, oldest
+// first. Read by Sessions_TurnRuns to link transcript turns to their
+// run graphs.
+func (m *Manager) ListTurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error) {
+	return m.store.ListTurnRuns(ctx, sessionID)
+}
+
 // Rename changes a session's display name.
 func (m *Manager) Rename(ctx context.Context, id, name string) error {
 	name = strings.TrimSpace(name)

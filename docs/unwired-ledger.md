@@ -455,6 +455,18 @@ becomes symbol-gateable at **WP03**: once the provider contract exists,
 is computed from its consumer" is a registration↔consumer pair the
 pass-2 tripwire pattern can enforce. WP03 owns adding that gate, with a
 planted-violation proof in `scripts/ci/gates_can_fail_test.go`.
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · a redriven run's status reads "failed" for the seconds before its redrive starts
+
+Between a chat run's failed attempt and the overflow redrive's
+`run_start` (the window is the pre-redrive compaction, typically
+seconds), `statusFromLog` honestly derives "failed" from the first
+attempt's events — an open RunView stops polling and shows failed for
+a run that is about to continue. Data is correct and nothing is lost;
+reopening the view shows the redrive. **Blocker:** a durable
+"redrive pending" record the status derivation can consult.
+**Owner:** the follow-up to 01DOGF0D that persists exact run state
+(spec §5 follow-up). Deleted when that record exists and the status
+test asserts "running" across the whole redrive window.
 
 ### 2026-09-30 (laya-advisors-01LAYA001 WP13) · the dated-nil `sidecarProbe` is replaced; two dated justifications remain
 

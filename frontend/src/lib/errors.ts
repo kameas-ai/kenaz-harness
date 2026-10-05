@@ -416,3 +416,26 @@ function extractAfter(s: string, prefix: string): string | null {
   if (i === -1) return null;
   return s.slice(i + prefix.length);
 }
+
+// ── Materialize: reused pre-fix chat run id (agentgraph-settings-linkage-01DOGF0D) ─
+
+/**
+ * The backend's ErrRunIDReused text (core/agentgraph/materialize.go). The
+ * backend refuses only TRUE reuse — a run started again after it had
+ * completed, or several starts under a pre-ULID "chat-<n>" id — never a
+ * resumed or overflow-redriven run. Matched on this stable fragment.
+ */
+const RUN_ID_REUSED_MARKER = 'run id was reused by several runs';
+
+/**
+ * materializeErrorMessage turns a Graph_MaterializeRun failure into the
+ * sentence the run views show (review L6): the reused-run-id refusal in
+ * plain words, anything else as-is.
+ */
+export function materializeErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (raw.includes(RUN_ID_REUSED_MARKER)) {
+    return 'This run graph cannot be shown: its run id was used by more than one run (this happens to turns recorded before run ids were made unique), so its steps cannot be separated from the other runs\'.';
+  }
+  return raw;
+}

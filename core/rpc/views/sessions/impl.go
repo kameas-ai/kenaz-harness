@@ -952,6 +952,29 @@ func WithUsageManager(api SessionsAPI, mgr usage.Manager) SessionsAPI {
 	return api
 }
 
+// TurnRuns implements SessionsAPI (agentgraph-settings-linkage-01DOGF0D
+// WP03): the persisted turn -> run mappings from session_turn_runs.
+func (a *managerAPI) TurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error) {
+	if sessionID == "" {
+		return nil, errors.New("rpc/sessions: TurnRuns: session id required")
+	}
+	rows, err := a.mgr.ListTurnRuns(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("rpc/sessions: TurnRuns: %w", err)
+	}
+	out := make([]TurnRun, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, TurnRun{
+			RunID:      r.RunID,
+			TurnSpanID: r.TurnSpanID,
+			GraphID:    r.GraphID,
+			SpecDigest: r.SpecDigest,
+			CreatedAt:  r.CreatedAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	return out, nil
+}
+
 // GetUsage implements SessionsAPI. Returns the per-session cumulative
 // token + cost aggregate from session_messages columns added in
 // migration 0314. Falls back to an zeroed Aggregate when the usage

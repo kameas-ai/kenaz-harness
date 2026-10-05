@@ -281,8 +281,11 @@ func TestChatGraph_SingleTurnNoTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
+	// Prefix only: a per-process memory kernel cannot show run-id reuse
+	// across restarts (01DOGF0D WP-PI AC-PI-2). Uniqueness across runner
+	// instances is pinned on the SQL log in run_id_unique_test.go.
 	if !strings.HasPrefix(subID, "chat-") {
-		t.Errorf("subID = %q, want chat-N prefix", subID)
+		t.Errorf("subID = %q, want chat-<ULID>", subID)
 	}
 
 	closed := waitForClosed(t, broker)

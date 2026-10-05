@@ -156,6 +156,7 @@ import type {
   PermissionRequest,
   PermissionMode,
   SessionUsage,
+  TurnRun,
   DriftReport,
   PolicyFileDetail,
   ParseResult,
@@ -288,6 +289,8 @@ interface WailsBindingsLike {
   ): Promise<ResumeMessageResult>;
   /** Returns the cumulative token + cost aggregate (token-cost-telemetry WP03). */
   Sessions_GetUsage(id: string): Promise<SessionUsage>;
+  /** Turn -> run links (agentgraph-settings-linkage-01DOGF0D WP03). Desktop-only. */
+  Sessions_TurnRuns(sessionID: string): Promise<TurnRun[]>;
   Sessions_SaveAsArtifact(
     sessionID: string,
     messageID: string,
@@ -1606,6 +1609,14 @@ export interface SessionsClient {
    * session (token-cost-telemetry-01KQ8TD7 WP03).
    */
   getUsage(id: string): Promise<SessionUsage>;
+  /**
+   * turnRuns returns the session's recorded chat turn -> agent-graph run
+   * links, oldest first (agentgraph-settings-linkage-01DOGF0D WP03). Turns
+   * that predate the mapping have no entry. Desktop-only: served mode
+   * rejects with ServedUnsupportedError (the run routes it feeds are
+   * Graph_* surfaces with no serve dispatch, D-701).
+   */
+  turnRuns(sessionId: string): Promise<TurnRun[]>;
   /**
    * saveAsArtifact pins a message (or a sub-range thereof) as a
    * `user_pin` artifact. `rangeStart` / `rangeEnd` are byte offsets
@@ -4257,6 +4268,8 @@ export function createHarnessClient(): HarnessClient {
         b().Sessions_ResumeMessage(sessionId, messageId),
       getUsage: (id: string): Promise<SessionUsage> =>
         b().Sessions_GetUsage(id),
+      turnRuns: (sessionId: string): Promise<TurnRun[]> =>
+        b().Sessions_TurnRuns(sessionId),
       saveAsArtifact: (sessionId, messageId, title, rangeStart, rangeEnd) =>
         b().Sessions_SaveAsArtifact(
           sessionId,
@@ -5586,6 +5599,7 @@ export function createFakeHarnessClient(
         subscriptionId: `fake-resume-${Math.random().toString(36).slice(2, 8)}`,
         originalMessageId: messageId,
       }),
+      turnRuns: async () => [],
       getUsage: async () => ({
         promptTokens: 0,
         completionTokens: 0,

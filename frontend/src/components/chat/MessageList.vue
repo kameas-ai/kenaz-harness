@@ -32,7 +32,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import MessageBubble from './MessageBubble.vue';
 import MoveTrail from './MoveTrail.vue';
-import { foldedTurnCounts, projectTranscript } from '@/lib/transcript';
+import TurnRunLinks from './TurnRunLinks.vue';
+import { foldedTurnCounts, projectTranscript, runIdFromLiveSpan } from '@/lib/transcript';
 import type { Artifact, MemoryScopeKind, Message } from '@/lib/types';
 
 const props = defineProps<{
@@ -130,6 +131,16 @@ const props = defineProps<{
    * FR-021.)
    */
   initialScrollPosition?: number;
+  /**
+   * Turn span id -> kernel run id for this session's chat turns
+   * (agentgraph-settings-linkage-01DOGF0D WP04, `Sessions_TurnRuns`).
+   * When provided, every assistant answer gets a TurnRunLinks strip:
+   * "View run graph" + "Run details" for a recorded turn, the
+   * disabled-with-reason note for one that predates the mapping.
+   * Undefined (served builds — Graph_* has no serve dispatch, D-701 — and
+   * any caller that does not track runs) renders no strip at all.
+   */
+  turnRuns?: ReadonlyMap<string, string>;
 }>();
 
 const emit = defineEmits<{
@@ -176,6 +187,40 @@ const emit = defineEmits<{
    */
   (e: 'scroll-position', pos: number): void;
 }>();
+
+function runIdFor(m: Message): string {
+  if (!props.turnRuns || !m.turnSpanId) return '';
+  // A live (or just-committed, not yet reloaded) turn carries
+  // `live:<sub id>`, and the sub id IS the run id (review H2) — the
+  // recorded mapping is keyed by the durable span and cannot match it.
+  return runIdFromLiveSpan(m.turnSpanId) || props.turnRuns.get(m.turnSpanId) || '';
+}
+
+/**
+ * Which bubbles carry the turn -> run strip: assistant answers only, and
+ * only when the parent supplied a run map. A live (streaming) answer is
+ * linked as soon as its run is recorded — the backend writes the mapping
+ * before StartStream returns — but is never marked "not recorded" while
+ * that fetch is still in flight. Summary and archived rows are history
+ * scaffolding, not turns.
+ */
+function showsRunLinks(m: Message): boolean {
+  if (!props.turnRuns || m.role !== 'assistant') return false;
+  if (isSummaryRow(m) || isArchivedRow(m)) return false;
+  if (m.streaming === true) return runIdFor(m) !== '';
+  return true;
+}
+
+/**
+ * The strip is mounted through a zero-or-one `v-for` rather than `v-if`
+ * ON PURPOSE: a false `v-if` leaves a `<!--v-if-->` comment node in the
+ * DOM, which would perturb the byte-exact classic-session golden
+ * (MessageList.classic-golden.test.ts) for every caller that passes no
+ * run map. An empty `v-for` leaves only empty-text fragment anchors.
+ */
+function runLinkSlots(m: Message): string[] {
+  return showsRunLinks(m) ? [`run-links-${m.id}`] : [];
+}
 
 function artifactsFor(messageId: string): readonly Artifact[] {
   if (!props.artifactsByMessage) return [];
@@ -429,6 +474,11 @@ defineExpose({ scrollToBottom });
             @jump-to-summary="onJumpToSummary"
             @branch-from-turn="() => emit('branch-from-turn', item.message)"
             @resume="(mid) => emit('resume', mid)"
+          />
+          <TurnRunLinks
+            v-for="slot in runLinkSlots(item.message)"
+            :key="slot"
+            :run-id="runIdFor(item.message)"
           />
         </div>
       </template>

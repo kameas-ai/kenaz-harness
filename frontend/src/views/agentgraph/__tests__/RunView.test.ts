@@ -29,6 +29,8 @@ interface MountOpts {
   /** Materialized projection the run graph renders from (WP05). */
   materializedYAML?: string;
   materializeError?: string;
+  /** getRunStatus rejects with this message. */
+  statusError?: string;
 }
 
 function defaultStatus(over: Partial<GraphRunStatus> = {}): GraphRunStatus {
@@ -50,7 +52,10 @@ function defaultStatus(over: Partial<GraphRunStatus> = {}): GraphRunStatus {
 function mountWith(opts: MountOpts = {}) {
   const status = opts.status ?? defaultStatus();
   const trace = opts.trace ?? [];
-  const getRunStatus = vi.fn(async () => status);
+  const getRunStatus = vi.fn(async () => {
+    if (opts.statusError) throw new Error(opts.statusError);
+    return status;
+  });
   const getRunTrace = vi.fn(async () => trace);
   const resume = vi.fn(opts.resumeImpl ?? (async () => undefined));
   const resolveApproval = vi.fn(opts.resolveApprovalImpl ?? (async () => undefined));
@@ -439,5 +444,36 @@ describe('RunView — the run as a graph', () => {
     expect(wrapper.find('[data-testid="trace-event-1"]').exists()).toBe(true);
     // The projection failing is not a run failure; the status card stays clean.
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+  });
+
+  // agentgraph-settings-linkage-01DOGF0D review H1: neither a not-found
+  // run nor a terminal one may keep a 500 ms poll alive.
+  it('stops polling a run that does not exist', async () => {
+    vi.useFakeTimers();
+    try {
+      const { wrapper, getRunStatus } = mountWith({
+        statusError: 'agentgraph: run "run-1" not found',
+      });
+      await flushPromises();
+      const calls = getRunStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(getRunStatus.mock.calls.length).toBe(calls);
+      expect(wrapper.text()).toContain('not found');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops polling an abandoned run', async () => {
+    vi.useFakeTimers();
+    try {
+      const { getRunStatus } = mountWith({ status: defaultStatus({ state: 'abandoned' }) });
+      await flushPromises();
+      const calls = getRunStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(getRunStatus.mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

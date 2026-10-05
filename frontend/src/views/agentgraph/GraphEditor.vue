@@ -18,6 +18,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { materializeErrorMessage } from '@/lib/errors';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type { GraphSpec, GraphValidationResult } from '@/lib/types';
@@ -358,7 +359,7 @@ async function load() {
       editingId.value = spec.id;
       markClean();
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = materializeErrorMessage(err);
     }
     return;
   }
@@ -611,10 +612,11 @@ defineExpose({
         data-testid="editor-materialized-degraded"
         role="status"
       >
-        Degraded projection — the resolved spec this run executed was no longer
-        available, so it was projected against the library graph instead.
-        Per-run dial overrides and any gate rewrite are unrecoverable: the
-        topology shown may differ from the one that ran.
+        Reconstructed from the library graph — the exact spec for this turn is
+        no longer in memory, and the library file could not be verified as the
+        version that ran.
+        Degraded projection: per-run dial overrides and any gate rewrite are
+        unrecoverable, so the topology shown may differ from the one that ran.
       </div>
       <div
         v-if="isUnreviewed"

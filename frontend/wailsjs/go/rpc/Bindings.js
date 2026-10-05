@@ -1278,6 +1278,10 @@ export function Sessions_SuggestTitle(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_SuggestTitle'](arg1);
 }
 
+export function Sessions_TurnRuns(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_TurnRuns'](arg1);
+}
+
 export function SetContext(arg1) {
   return window['go']['rpc']['Bindings']['SetContext'](arg1);
 }

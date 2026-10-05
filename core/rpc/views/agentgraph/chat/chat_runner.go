@@ -17,6 +17,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/event"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -212,6 +213,17 @@ type GraphLoader func() (coreag.Graph, error)
 // cannot be shown as graphs.
 type RunSpecRecorder func(runID string, g coreag.Graph)
 
+// TurnRunRecorder persists which kernel run executed a chat turn
+// (agentgraph-settings-linkage-01DOGF0D WP03, migration
+// sessions/0342-session-turn-runs). RunSpecRecorder above is in-memory
+// and bounded; this is the durable half — it is what lets a transcript
+// turn from yesterday link to /agentgraph/run/:runId. *session.Manager
+// satisfies it. specDigest is agentgraph.SpecDigest of the resolved
+// spec: which version of graphID the run executed.
+type TurnRunRecorder interface {
+	RecordTurnRun(ctx context.Context, sessionID, turnSpanID, runID, graphID, specDigest string) error
+}
+
 // AnswerInjector pushes the latest user message answer into the
 // kernel's AskBus for the supplied (runID, askNodeID).
 //
@@ -268,6 +280,10 @@ type Config struct {
 	// RunSpecRecorder registers each turn's resolved spec so the run can
 	// be materialized as a graph afterwards (WP12). Nil disables it.
 	RunSpecRecorder RunSpecRecorder
+	// TurnRuns records each turn's run id against its turn span (WP03 of
+	// agentgraph-settings-linkage-01DOGF0D). Nil means turns are not
+	// linkable to their run graphs after the fact; chat still runs.
+	TurnRuns TurnRunRecorder
 	// ReasoningBudget resolves the extended-thinking budget per run.
 	// Nil is safe and means "reasoning off" (today's behaviour).
 	ReasoningBudget ReasoningBudgetResolver
@@ -851,7 +867,6 @@ type ChatRunner struct {
 	mu         sync.Mutex
 	subs       map[string]*chatSub
 	pausedSubs map[string]*pausedTurn // keyed by profileID; last-write-wins
-	nextID     uint64
 	// adviceStates is laya-advisors-01LAYA001 WP07's per-session,
 	// process-lifetime bookkeeping for the post-turn advice hook (see
 	// advice_hook.go's sessionAdviceState doc comment). Protected by mu
@@ -975,6 +990,22 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	}
 	if sessionID == "" {
 		return "", errors.New("chat: session id required")
+	}
+
+	// The turn's run id (agentgraph-settings-linkage-01DOGF0D WP02). It
+	// is both the stream subscription id the frontend holds and the
+	// kernel RunID every event of this turn is written under — and the
+	// event log is PERSISTENT (api.go buildAgentGraphEventLog ->
+	// NewSQLEventLog). It used to be "chat-<n>" from a per-process
+	// counter that restarted at 0 on every boot, so today's chat-1 and
+	// yesterday's chat-1 shared one run id in one durable log and
+	// materializing either projected both turns as one graph. A ULID is
+	// unique across restarts with no coordination. Allocated first, before
+	// anything this turn writes, so an allocation failure leaves no
+	// partial state behind (whichever writer owns the user row).
+	subID, err := newChatRunID()
+	if err != nil {
+		return "", err
 	}
 
 	// laya-advisors-01LAYA001 WP08: detect + audit a user-initiated model
@@ -1197,11 +1228,6 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// risk-rated-autonomy-01PMRA01 WP05: nil RiskRater leaves rung 0's
 	// layer-3 branch at the WP02/WP03 stub (always Confirm).
 	toolAdapter.withRater(r.cfg.RiskRater)
-
-	r.mu.Lock()
-	r.nextID++
-	subID := fmt.Sprintf("chat-%d", r.nextID)
-	r.mu.Unlock()
 
 	bridge := NewStreamBridge(r.cfg.Broker, subID, sessionID)
 
@@ -1438,6 +1464,19 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// not the file on disk.
 	if r.cfg.RunSpecRecorder != nil {
 		r.cfg.RunSpecRecorder(subID, graph)
+	}
+	// agentgraph-settings-linkage-01DOGF0D WP03: the durable turn -> run
+	// link. Same placement rule as the recorder above (the digest must
+	// describe the RESOLVED spec), and recorded before the kernel run
+	// starts so the live turn is linkable the moment StartStream returns.
+	// A failure is logged, never fatal: the link is observability, the
+	// turn is the product.
+	env.TurnSpanID = turnSpanID
+	if r.cfg.TurnRuns != nil {
+		if terr := r.cfg.TurnRuns.RecordTurnRun(ctx, sessionID, turnSpanID, subID, graph.ID, coreag.SpecDigest(graph)); terr != nil {
+			logging.L().Warn("chat.turn_run.record_failed",
+				"session_id", sessionID, "run_id", subID, "err", terr.Error())
+		}
 	}
 
 	// Register the per-turn usage hook via HookPostLLM so it fires
@@ -3098,4 +3137,16 @@ type historyAdapterFunc func(ctx context.Context, sessionID string, n int) ([]co
 // History satisfies agentgraph.HistoryReader.
 func (f historyAdapterFunc) History(ctx context.Context, sessionID string, n int) ([]coreag.Message, error) {
 	return f(ctx, sessionID, n)
+}
+
+// newChatRunID returns a globally unique chat run id, "chat-<ULID>"
+// (agentgraph-settings-linkage-01DOGF0D WP02). The "chat-" prefix is
+// kept so a run id still says where it came from in logs and URLs; no
+// consumer parses what follows it.
+func newChatRunID() (string, error) {
+	u, err := event.NewULID()
+	if err != nil {
+		return "", fmt.Errorf("chat: allocate run id: %w", err)
+	}
+	return "chat-" + string(u), nil
 }

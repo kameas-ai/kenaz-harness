@@ -205,11 +205,28 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 
 	// Run start event.
 	var startBatch EventBatch
-	_ = startBatch.AppendKind(env.RunID, "", EventRunStart, map[string]any{
-		"graph_id":     env.Graph.ID,
-		"entrypoints":  env.Graph.Entrypoints,
+	startPayload := map[string]any{
+		"graph_id":      env.Graph.ID,
+		"entrypoints":   env.Graph.Entrypoints,
 		"max_in_flight": k.maxInFlight,
-	})
+	}
+	// agentgraph-settings-linkage-01DOGF0D WP03: make run_start
+	// self-describing — which session and turn the run belongs to, and
+	// WHICH VERSION of the spec executed (spec_digest). The exact
+	// resolved spec is not persisted (spec §5 out of scope); the digest
+	// is what lets a later materialization tell whether the library file
+	// it falls back to is the spec that ran. Empty ids are omitted so a
+	// non-chat run's payload is unchanged apart from the digest.
+	if env.SessionID != "" {
+		startPayload["session_id"] = env.SessionID
+	}
+	if env.TurnSpanID != "" {
+		startPayload["turn_span_id"] = env.TurnSpanID
+	}
+	if d := SpecDigest(*env.Graph); d != "" {
+		startPayload["spec_digest"] = d
+	}
+	_ = startBatch.AppendKind(env.RunID, "", EventRunStart, startPayload)
 	// Emit one kind_alias_resolved event per (old → new) pair seen
 	// during the wire decode of this graph (NFR-003 / WP08). The
 	// once-per-process slog warning fires the first time a process
