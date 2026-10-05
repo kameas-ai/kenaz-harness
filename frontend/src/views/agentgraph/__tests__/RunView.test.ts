@@ -398,9 +398,16 @@ describe('RunView — the run as a graph', () => {
   it('badges a degraded projection on the canvas itself', async () => {
     const { wrapper } = mountWith({ materializedYAML: MATERIALIZED_DEGRADED_YAML });
     await flushPromises();
-    expect(wrapper.get('[data-testid="canvas-notice"]').text()).toContain(
-      'Degraded projection',
-    );
+    const notice = wrapper.get('[data-testid="canvas-notice"]').text();
+    expect(notice).toContain('Degraded projection');
+    // feat/graph-resolved-spec WP02 (review F3): the reconstruction is
+    // labelled with both causes that are now true — the run predates
+    // spec recording, or its spec exceeded the size bound.
+    expect(notice).toContain("exact spec was never recorded");
+    expect(notice).toContain('predates recording');
+    expect(notice).toContain('exceeded the size bound');
+    expect(notice).toContain('current library graph');
+    expect(notice).not.toContain('evicted');
   });
 
   it('does not badge a healthy projection', async () => {
@@ -426,7 +433,8 @@ describe('RunView — the run as a graph', () => {
   });
 
   /*
-   * A run whose resolved spec was evicted cannot be projected at all.
+   * A run with no recorded spec and no library graph to reconstruct
+   * from cannot be projected at all.
    * That must not take the trace list down with it — the trace is the
    * surface that still works, and it is the one this view existed for
    * before the graph pane arrived.

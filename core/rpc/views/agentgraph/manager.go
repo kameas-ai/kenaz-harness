@@ -1448,9 +1448,11 @@ func (m *Manager) runTrace(runID string, since int64) ([]RunTraceEvent, error) {
 //
 // The registry is bounded: a desktop session can run thousands of chat
 // turns and a resolved chat_default is not small. Oldest entries are
-// evicted once the cap is reached, so "materialize the turn I just ran"
-// always works and "materialize a turn from two hours ago" degrades to
-// the run_start graph_id fallback in materializeRun.
+// evicted once the cap is reached. Eviction no longer degrades
+// materialization: the kernel persists every run's resolved spec
+// (feat/graph-resolved-spec), which runSpecFor reads first. This map
+// covers the instant before the kernel's write, and answers
+// statusFromLog's "is this run live in this process" question.
 func (m *Manager) TrackExternalRun(runID string, g coreag.Graph) {
 	if m == nil || runID == "" {
 		return
@@ -1512,24 +1514,42 @@ func (m *Manager) materializeRun(runID string) (GraphSpec, error) {
 	return GraphSpec{ID: mg.ID, Name: mg.Name, Scope: "materialized", YAML: string(out), SpecProvenance: mg.SpecProvenance}, nil
 }
 
-// runSpecFor resolves the spec a run executed, in decreasing order of
-// fidelity, and REPORTS which tier answered (WP12 review finding F2).
+// runSpecFor resolves the spec a run executed and REPORTS how it was
+// obtained (WP12 review finding F2).
 //
-//  1. a run this manager started — the exact resolved spec;
-//  2. a run the chat runner registered — likewise exact;
-//  3. the library graph named by the run's own run_start event —
-//     exact when its SpecDigest matches the digest run_start recorded
-//     (WP03 of agentgraph-settings-linkage-01DOGF0D), degraded otherwise.
+//  1. the spec the kernel persisted for this run at run start
+//     (feat/graph-resolved-spec WP01: the RunSpecStore half of the
+//     shared EventLog) — exact, and cross-checked against the
+//     spec_digest run_start recorded, so a stored row that is not the
+//     spec the run started with is refused rather than served;
+//  2. a run this manager started, or one the chat runner registered —
+//     likewise exact. Only reachable in the instant between
+//     registration and the kernel's write, or on a log without the
+//     store half;
+//  3. runs with NO recorded spec — every run from before the store
+//     existed, or one whose spec was refused as oversized — are
+//     reconstructed from the library graph their run_start names, and
+//     ALWAYS marked SpecProvenanceLibraryFallback.
 //
-// Tier 3 is a degraded answer, not an equivalent one: it recovers the
-// topology after an eviction or a restart, but the routing gate rewrites
-// chat_default in place and the max-turns dial overrides the loop cap
-// before a run starts, so the library file can describe a DIFFERENT
-// graph than the one that executed. Returning it unmarked would let a
-// viewer read a routed run as a classic one and never know, which is why
-// the second return value flows through to Graph.SpecProvenance and into
-// the graph's own description.
+// A run with a persisted spec never reaches step 3: the library file can
+// have been edited since the run, and showing the edited graph as "what
+// ran" is exactly the lie the store exists to end. The former
+// digest-verified tier-3 upgrade (library file hashing to run_start's
+// spec_digest served as exact) is deleted with it — a reconstruction is
+// labelled as one.
 func (m *Manager) runSpecFor(runID string) (coreag.Graph, string, error) {
+	if store, ok := m.log.(coreag.RunSpecStore); ok {
+		g, found, err := store.LoadRunSpec(runID)
+		if err != nil {
+			return coreag.Graph{}, "", fmt.Errorf("agentgraph: run %q: %w", runID, err)
+		}
+		if found {
+			if _, recorded := m.runStartFromLog(runID); recorded != "" && recorded != coreag.SpecDigest(g) {
+				return coreag.Graph{}, "", fmt.Errorf("agentgraph: run %q: stored spec does not match the spec_digest its run_start recorded", runID)
+			}
+			return g, "", nil
+		}
+	}
 	m.mu.RLock()
 	entry, started := m.runs[runID]
 	tracked, external := m.externalRuns[runID]
@@ -1545,7 +1565,16 @@ func (m *Manager) runSpecFor(runID string) (coreag.Graph, string, error) {
 	if external && len(tracked.Nodes) > 0 {
 		return tracked, "", nil
 	}
-	graphID, recordedDigest := m.runStartFromLog(runID)
+	return m.reconstructUnrecordedRunSpec(runID)
+}
+
+// reconstructUnrecordedRunSpec is the only path left for a run whose
+// exact spec was never recorded: the library graph its run_start names,
+// as that file is NOW, marked SpecProvenanceLibraryFallback so the
+// materialized graph's description and the run views say it is a
+// reconstruction (feat/graph-resolved-spec WP02).
+func (m *Manager) reconstructUnrecordedRunSpec(runID string) (coreag.Graph, string, error) {
+	graphID, _ := m.runStartFromLog(runID)
 	if graphID == "" {
 		return coreag.Graph{}, "", fmt.Errorf("agentgraph: run %q not found", runID)
 	}
@@ -1553,22 +1582,13 @@ func (m *Manager) runSpecFor(runID string) (coreag.Graph, string, error) {
 	if err != nil {
 		return coreag.Graph{}, "", fmt.Errorf("agentgraph: run %q references graph %q: %w", runID, graphID, err)
 	}
-	// agentgraph-settings-linkage-01DOGF0D WP03: run_start now records
-	// which VERSION of the spec executed (spec_digest). When the library
-	// file still hashes to that digest, it IS the spec that ran — tier 3
-	// is exact, and warning the viewer would be a false alarm. A
-	// mismatch (routing-gate rewrite, dial override, a since-edited
-	// file) or a pre-WP03 run with no digest keeps the honest fallback
-	// marker.
-	if recordedDigest != "" && coreag.SpecDigest(g) == recordedDigest {
-		return g, "", nil
-	}
 	return g, coreag.SpecProvenanceLibraryFallback, nil
 }
 
 // runStartFromLog reads the graph id and the recorded spec digest off
 // the run's run_start event. The digest is "" for runs started before
-// agentgraph-settings-linkage-01DOGF0D WP03.
+// agentgraph-settings-linkage-01DOGF0D WP03; runSpecFor holds a
+// persisted spec to it.
 func (m *Manager) runStartFromLog(runID string) (graphID, specDigest string) {
 	_ = m.log.Replay(runID, func(ev coreag.Event) error {
 		if ev.Kind != coreag.EventRunStart || graphID != "" {

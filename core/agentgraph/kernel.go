@@ -203,6 +203,14 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		env.Compactor = k.compactor
 	}
 
+	// feat/graph-resolved-spec WP01: persist the exact spec this run
+	// executes — env.Graph as handed to the kernel, i.e. post alias
+	// rewrite, post routing gate, post dial — once per run, BEFORE
+	// run_start, so every run with a run_start has its spec unless the
+	// write was refused (oversized, store error). Insert-once, so the
+	// Resume / redrive re-entry into Run keeps the first row.
+	k.recordRunSpec(env)
+
 	// Run start event.
 	var startBatch EventBatch
 	startPayload := map[string]any{
@@ -212,11 +220,12 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 	}
 	// agentgraph-settings-linkage-01DOGF0D WP03: make run_start
 	// self-describing — which session and turn the run belongs to, and
-	// WHICH VERSION of the spec executed (spec_digest). The exact
-	// resolved spec is not persisted (spec §5 out of scope); the digest
-	// is what lets a later materialization tell whether the library file
-	// it falls back to is the spec that ran. Empty ids are omitted so a
-	// non-chat run's payload is unchanged apart from the digest.
+	// WHICH VERSION of the spec executed (spec_digest). Since
+	// feat/graph-resolved-spec the spec itself is persisted (above); the
+	// digest is the cross-check a reader holds the stored spec to, so a
+	// snapshot row that is not the spec this run started with is refused
+	// rather than served as exact. Empty ids are omitted so a non-chat
+	// run's payload is unchanged apart from the digest.
 	if env.SessionID != "" {
 		startPayload["session_id"] = env.SessionID
 	}

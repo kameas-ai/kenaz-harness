@@ -212,8 +212,10 @@ type MaterializeOption func(*materializer)
 
 // WithSpecProvenance marks HOW the caller obtained the source spec
 // (WP12 review F2). Callers that resolved the exact spec the run
-// executed pass nothing; a caller falling back to the library file
-// passes SpecProvenanceLibraryFallback, which stamps the graph and
+// executed (since feat/graph-resolved-spec: the spec the kernel
+// persisted at run start) pass nothing; a caller reconstructing an
+// unrecorded run from the library file passes
+// SpecProvenanceLibraryFallback, which stamps the graph and
 // appends a plain-language warning to its description so a degraded
 // projection can never be mistaken for a faithful one.
 func WithSpecProvenance(p string) MaterializeOption {
@@ -1215,9 +1217,10 @@ func (b *materializedBuilder) finish() Graph {
 			"not an authored graph. Tool arguments are summarised and errors are classified, never reproduced.",
 		m.runID, graphID, len(m.fires))
 	if m.specProvenance == SpecProvenanceLibraryFallback {
-		desc += " DEGRADED: projected against the library spec; the resolved spec this run executed was no " +
-			"longer available, so per-run dial overrides and any gate rewrite are unrecoverable and the " +
-			"topology shown may differ from the topology that ran."
+		desc += " DEGRADED: reconstructed from the library spec as it is now; the resolved spec this run " +
+			"executed was never recorded (the run predates per-run spec recording, or its spec exceeded the " +
+			"size bound), so per-run dial overrides, any gate rewrite and any later edit to the graph are " +
+			"unrecoverable and the topology shown may differ from the topology that ran."
 	}
 	out := Graph{
 		SpecVersion:    SpecVersion,

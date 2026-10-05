@@ -516,7 +516,7 @@ becomes symbol-gateable at **WP03**: once the provider contract exists,
 is computed from its consumer" is a registration↔consumer pair the
 pass-2 tripwire pattern can enforce. WP03 owns adding that gate, with a
 planted-violation proof in `scripts/ci/gates_can_fail_test.go`.
-### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored — CLOSED 2026-10-05
 
 Every chat turn now links to its run graph (WP04), so materialization
 quality on *old* runs is user-visible. The resolved spec a run executed
@@ -551,6 +551,44 @@ owner as the redrive-window entry below). Deleted when tier 3 is
 reachable only for runs that predate that store, and a test materializes
 a 65th-turn run with exact provenance after an edit to its library file.
 
+**Closed 2026-10-05** by branch `feat/graph-resolved-spec` (target
+v0.88.0), both halves of the deletion condition met:
+
+- *The store.* Migration `sessions/0343-agent-graph-run-specs`
+  (`core/session/migrations_agent_graph_run_specs.go`):
+  `agent_graph_run_specs(run_id PK, graph_id, spec_digest, spec_json,
+  created_at_ns)`. Written by the kernel itself (`Kernel.Run` →
+  `recordRunSpec`, `core/agentgraph/run_spec_store.go`) once per run,
+  before `run_start`, from `env.Graph` — the spec it executes, post alias
+  / routing gate / dial. Insert-once (Resume and the overflow redrive
+  keep the first row); bounded per row by `MaxRunSpecBytes` (1 MiB;
+  measured 2026-10-05: `chat_default` encodes to ~5.0 KiB of JSON (5028
+  bytes; ~2.7 KiB resolved with the routing gate off), `toolloop_default`
+  ~4.2 KiB (4259 bytes)); digest re-checked on read. An oversized spec is
+  not stored and renders as a labelled reconstruction (pinned by
+  `TestKernel_OversizedSpecRunCompletesAndRendersAsReconstruction`).
+- *Tier 3 reachable only for runs that predate it.* `runSpecFor` reads
+  the persisted spec first and holds it to `run_start`'s `spec_digest`;
+  a run with a stored spec never reaches the library reconstruction.
+  The digest-verified upgrade described above is **deleted** — what
+  remains (`reconstructUnrecordedRunSpec`) always stamps
+  `library_fallback`, and the banners now say the run predates per-run
+  spec recording. Its only reader,
+  `TestMaterializeRun_LibraryFallbackVerifiedBySpecDigest`, is deleted.
+- *The test.* `TestMaterializeRun_65thTurnAfterLibraryEdit_IsExact`
+  (`core/rpc/views/agentgraph/materialize_persisted_spec_test.go`) is
+  the condition verbatim; `TestMaterializeRun_EditedGraphStillShowsWhatRan`
+  does the same across a restart, and
+  `TestMaterializeRun_PreSnapshotRunOnUpgradedInstall_IsLabelledReconstruction`
+  boots the v0.86.0 snapshot to prove pre-store runs still render,
+  labelled.
+
+Not done here, and not a lie: the blocker named a retention policy.
+`agent_graph_run_specs` has the same lifecycle as `agent_graph_events`,
+which has none either; the per-row bound caps the growth rate (one row
+per run). A retention sweep belongs with event-log retention, whenever
+that is specced — not a dated item here because nothing claims it exists.
+
 ### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · a redriven run's status reads "failed" for the seconds before its redrive starts
 
 Between a chat run's failed attempt and the overflow redrive's
@@ -563,6 +601,10 @@ reopening the view shows the redrive. **Blocker:** a durable
 **Owner:** the follow-up to 01DOGF0D that persists exact run state
 (spec §5 follow-up). Deleted when that record exists and the status
 test asserts "running" across the whole redrive window.
+*2026-10-05:* `feat/graph-resolved-spec` — the spec-persistence half of
+that follow-up — persists the resolved **spec**, not run **state**, so
+this entry stays open; its owner is now the redrive-state half alone (a
+durable redrive-pending record), not yet specced.
 ### 2026-10-04 (artifacts-as-units-01DOGF0C review F10) · artifact purge after a session/project delete has no retry — purge-retry
 
 `purgeArtifactsAfterDelete` (`core/rpc/api.go`) runs after the session or

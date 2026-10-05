@@ -132,7 +132,8 @@ function pollIsDone(): boolean {
 const runGraph = ref<ParsedGraph | null>(null);
 /**
  * Why the graph gets its own error ref instead of sharing `error`: a run
- * whose resolved spec was evicted cannot be projected at all, and that
+ * whose graph cannot be projected at all (no recorded spec and no
+ * library graph left to reconstruct from), and that
  * must not blank the trace list — the trace is the surface that still
  * works. The graph pane says why it is empty; everything else carries on.
  */
@@ -190,7 +191,7 @@ const isDegraded = computed(
 );
 const canvasNotice = computed(() =>
   isDegraded.value
-    ? 'Degraded projection — the resolved spec this run executed was evicted, so this topology may differ from the one that ran.'
+    ? "Degraded projection — this run's exact spec was never recorded (it predates recording or exceeded the size bound); showing the current library graph, which may differ from the one that ran."
     : '',
 );
 
