@@ -42,6 +42,14 @@ func TestFleetTopicLiterals_MatchCorefleetConstants(t *testing.T) {
 			topicFleetSessionExpired, corefleet.TopicFleetSessionExpired)
 	}
 
+	if topicFleetSessionChanged != corefleet.TopicFleetSessionChanged {
+		t.Errorf("wsstream.go's topicFleetSessionChanged = %q, want corefleet.TopicFleetSessionChanged = %q",
+			topicFleetSessionChanged, corefleet.TopicFleetSessionChanged)
+	}
+	if !containsString(passthroughTopics, corefleet.TopicFleetSessionChanged) || !processWideTopics[corefleet.TopicFleetSessionChanged] {
+		t.Errorf("%q must be a process-wide passthrough topic", corefleet.TopicFleetSessionChanged)
+	}
+
 	// Belt-and-braces: also confirm the literals are actually wired into
 	// passthroughTopics and processWideTopics (a drift-free literal that
 	// nobody registered would still leave the gap findings #62/#63 fixed).

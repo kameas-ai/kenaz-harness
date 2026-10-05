@@ -1,0 +1,307 @@
+/**
+ * fleetSession.ts — THE fleet-session store (fleet-session-truth-01DOGF0A).
+ *
+ * Dogfood 2026-10-04: seven surfaces gave four different answers about one
+ * fleet session. UserMenu said signed OUT (it collapsed any enroll error to
+ * "signed out"), Settings › Account said signed IN, its header said "Sign in
+ * to access…", the rail gates said whatever boot AppInfo said, and Contexts
+ * said team sync was off. Each surface ran its own reads on its own clock.
+ *
+ * This module is the only fleet-session state the frontend has:
+ *
+ *   - ONE backend snapshot (`Settings_FleetSession`, FR-1), read once on
+ *     first use and again after each action or window focus;
+ *   - kept live by ONE subscription to `fleet:session-changed` (FR-2), the
+ *     full snapshot pushed on every backend transition;
+ *   - every fleet surface — UserMenu, Account panel + section head,
+ *     featureFlags' `signedIn` / `capability`, LeftRail, ContextsView,
+ *     CedarEditor — reads it. None of them polls.
+ *
+ * `degraded` (tokens usable, last identity refresh failed) counts as signed
+ * in: the popover never offers "Sign in" while tokens are valid (FR-3).
+ */
+
+import { computed, effectScope, ref, type EffectScope } from 'vue';
+import { useEventStream } from './useEventStream';
+import type {
+  FleetIdentity,
+  FleetSessionState,
+  FleetSessionView,
+} from './types';
+
+/** Broker topic the backend pushes snapshots on (core/fleet TopicFleetSessionChanged). */
+export const FLEET_SESSION_CHANGED = 'fleet:session-changed';
+
+/**
+ * FOCUS_RETRY_MS — after automatic retries have stopped (not provisioned,
+ * FR-4), regaining window focus re-attempts the identity refresh once this
+ * long has passed since the last attempt. The user likely went to the fleet
+ * SPA to finish signup; coming back is the moment to look again.
+ */
+export const FOCUS_RETRY_MS = 10 * 60 * 1000;
+
+/** The slice of the harness client the store needs (structural, test-friendly). */
+export interface FleetSessionSource {
+  settings: {
+    fleetSession(): Promise<FleetSessionView>;
+    fleetRefreshIdentity(): Promise<unknown>;
+    fleetSignIn(): Promise<unknown>;
+    fleetSignOut(): Promise<void>;
+  };
+}
+
+const _session = ref<FleetSessionView | null>(null);
+let _client: FleetSessionSource | null = null;
+let _scope: EffectScope | null = null;
+let _readSeq = 0;
+let _focusHandler: (() => void) | null = null;
+
+/** Install a snapshot (the event handler; tests seed through it too). */
+export function applyFleetSession(v: FleetSessionView | null): void {
+  _session.value = v;
+}
+
+function ensureSubscribed(): void {
+  if (_scope) return;
+  _scope = effectScope(true);
+  _scope.run(() => {
+    // The single subscriber of fleet:session-changed.
+    // Literal (not FLEET_SESSION_CHANGED) so check-served-mode-topic-forwarding
+    // can see this consumer.
+    useEventStream<FleetSessionView>('fleet:session-changed', (v) => {
+      // A pushed snapshot is newer than any read still in flight.
+      _readSeq++;
+      applyFleetSession(v);
+    });
+  });
+  if (typeof window !== 'undefined') {
+    _focusHandler = () => void onWindowFocus();
+    window.addEventListener('focus', _focusHandler);
+  }
+}
+
+/**
+ * refreshFleetSession re-reads the snapshot. Never throws. A transport error
+ * keeps the previous snapshot rather than inventing "signed out"; with no
+ * previous snapshot the store stays null ("unknown"), which every reader
+ * treats as not signed in AND not offering a sign-in it cannot back.
+ */
+export async function refreshFleetSession(client?: FleetSessionSource): Promise<void> {
+  if (client) _client = client;
+  const c = _client;
+  if (!c) return;
+  // Last-request-wins: a read issued before an action (sign-in) must not
+  // land after the post-action read and roll the store back.
+  const mySeq = ++_readSeq;
+  try {
+    const v = await c.settings.fleetSession();
+    if (mySeq === _readSeq) applyFleetSession(v);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (mySeq === _readSeq && msg.includes('disabled by env')) {
+      applyFleetSession(disabledSnapshot());
+    }
+    // Otherwise keep what we had: an RPC hiccup is not a session change.
+  }
+}
+
+async function onWindowFocus(): Promise<void> {
+  const s = _session.value;
+  if (
+    s &&
+    s.state === 'degraded' &&
+    !s.autoRetry &&
+    (!s.lastAttemptAt || Date.now() - Date.parse(s.lastAttemptAt) >= FOCUS_RETRY_MS)
+  ) {
+    await retryFleetSession();
+    return;
+  }
+  await refreshFleetSession();
+}
+
+/** Explicit retry (FR-4 recovery path): one identity refresh, then re-read. */
+export async function retryFleetSession(): Promise<void> {
+  const c = _client;
+  if (!c) return;
+  try {
+    await c.settings.fleetRefreshIdentity();
+  } catch {
+    // The failure is recorded backend-side and arrives in the snapshot.
+  }
+  await refreshFleetSession();
+}
+
+/**
+ * signInFleet runs the sign-in flow. Resolves to the error (or null) so the
+ * caller can route to the full Account panel on failure; the session state
+ * itself always comes from the snapshot.
+ */
+export async function signInFleet(): Promise<unknown | null> {
+  const c = _client;
+  if (!c) return new Error('fleet session store has no client');
+  let err: unknown | null = null;
+  try {
+    await c.settings.fleetSignIn();
+  } catch (e) {
+    err = e;
+  }
+  await refreshFleetSession();
+  return err;
+}
+
+/** signOutFleet signs out; resolves to the error (or null). */
+export async function signOutFleet(): Promise<unknown | null> {
+  const c = _client;
+  if (!c) return new Error('fleet session store has no client');
+  let err: unknown | null = null;
+  try {
+    await c.settings.fleetSignOut();
+  } catch (e) {
+    err = e;
+  }
+  await refreshFleetSession();
+  return err;
+}
+
+function disabledSnapshot(): FleetSessionView {
+  const lane = { status: 'unknown', consecutiveFailures: 0 };
+  return {
+    state: 'disabled',
+    autoRetry: false,
+    claims: { hasSubject: false, hasOrgClaim: false },
+    capabilities: { tier: '', enabled: {}, fetchedAt: '', source: 'default-deny' },
+    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
+    updatedAt: '',
+  };
+}
+
+// ── derived views (module-level so non-component code can read them) ────────
+
+/** The raw snapshot (null until the first read lands). */
+export const fleetSession = computed<FleetSessionView | null>(() => _session.value);
+
+/** Session state; 'unknown' until the first snapshot. */
+export const fleetSessionState = computed<FleetSessionState | 'unknown'>(
+  () => _session.value?.state ?? 'unknown',
+);
+
+/**
+ * True while the session's tokens are usable: signed_in OR degraded. A
+ * degraded session is still signed in — it must never show "Sign in" (FR-3).
+ */
+export const fleetSignedIn = computed<boolean>(() => {
+  const st = _session.value?.state;
+  return st === 'signed_in' || st === 'degraded';
+});
+
+export const fleetIdentity = computed<FleetIdentity | null>(
+  () => (fleetSignedIn.value ? (_session.value?.identity ?? null) : null),
+);
+
+/**
+ * Primary label for the identity header. Never empty while signed in
+ * (FR-9 / P-9: enroll returned email:"" and the popover rendered a blank
+ * line): email → display name → org name → "Signed in".
+ */
+export const fleetIdentityLabel = computed<string>(() => {
+  if (!fleetSignedIn.value) return '';
+  const id = _session.value?.identity;
+  return (
+    id?.email?.trim() ||
+    id?.displayName?.trim() ||
+    id?.orgName?.trim() ||
+    'Signed in'
+  );
+});
+
+/**
+ * Avatar initials. Never blank while signed in: name/email initials, else
+ * the org name's initial (FR-9), else "·".
+ */
+export const fleetInitials = computed<string>(() => {
+  if (!fleetSignedIn.value) return '';
+  const id = _session.value?.identity;
+  const source = id?.displayName?.trim() || id?.email?.trim() || '';
+  const parts = source.split(/[\s@]+/).filter(Boolean);
+  if (parts.length > 0) {
+    return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase().slice(0, 2);
+  }
+  const org = id?.orgName?.trim();
+  if (org) return org[0]!.toUpperCase();
+  return '·';
+});
+
+/**
+ * fleetSessionCapability(key) — true only when signed in AND the snapshot's
+ * capability set enables `key`. The one capability truth FR-8 asks for.
+ */
+export function fleetSessionCapability(key: string): boolean {
+  if (!fleetSignedIn.value) return false;
+  const caps = _session.value?.capabilities;
+  if (!caps || caps.source === 'default-deny') return false;
+  return caps.enabled?.[key] === true;
+}
+
+/**
+ * describeFleetReason turns a snapshot reason code into short UI copy.
+ * The raw message stays available for detail rows.
+ */
+export function describeFleetReason(reason: string | undefined): string {
+  switch (reason) {
+    case 'network':
+      return "Can't reach fleet";
+    case 'not_provisioned':
+      return 'Fleet account setup not finished';
+    case 'server_error':
+      return 'Fleet returned an error';
+    case 'not_configured':
+      return 'Fleet is not configured in this build';
+    case 'session_expired':
+      return 'Your fleet session expired';
+    case 'sign_in_cancelled':
+      return 'Sign-in cancelled';
+    case 'sign_in_failed':
+      return 'Sign-in failed';
+    default:
+      return reason ? `Fleet: ${reason}` : '';
+  }
+}
+
+/**
+ * useFleetSession — the component entry point. Pass the harness client; the
+ * first caller triggers the initial read and the single event subscription.
+ */
+export function useFleetSession(client?: FleetSessionSource) {
+  ensureSubscribed();
+  // One initial read per client; later consumers share it, and the event
+  // subscription keeps it current after that.
+  if (client && client !== _client) {
+    void refreshFleetSession(client);
+  }
+  return {
+    session: fleetSession,
+    state: fleetSessionState,
+    signedIn: fleetSignedIn,
+    identity: fleetIdentity,
+    identityLabel: fleetIdentityLabel,
+    initials: fleetInitials,
+    capability: fleetSessionCapability,
+    refresh: refreshFleetSession,
+    retry: retryFleetSession,
+    signIn: signInFleet,
+    signOut: signOutFleet,
+  };
+}
+
+/** Test-only: drop all module state (snapshot, client, subscription). */
+export function _resetFleetSessionForTest(): void {
+  _scope?.stop();
+  _scope = null;
+  if (_focusHandler && typeof window !== 'undefined') {
+    window.removeEventListener('focus', _focusHandler);
+  }
+  _focusHandler = null;
+  _client = null;
+  _readSeq = 0;
+  _session.value = null;
+}

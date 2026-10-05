@@ -103,6 +103,9 @@ const (
 	// fails loudly.
 	topicFleetLockdownChanged = "fleet:lockdown:changed"
 	topicFleetSessionExpired  = "fleet:session:expired"
+	// topicFleetSessionChanged mirrors corefleet.TopicFleetSessionChanged
+	// (fleet-session-truth-01DOGF0A FR-2), same hand-copy rule as above.
+	topicFleetSessionChanged = "fleet:session-changed"
 
 	// defaultStreamQueueCap is the per-connection frame queue depth. 512
 	// frames is roughly 30 s of token-level chunks at a typical streaming
@@ -302,6 +305,12 @@ var passthroughTopics = []string{
 	// consumer (SessionExpiredBanner.vue) is a global banner.
 	// processWideTopics entry below.
 	topicFleetSessionExpired,
+
+	// topicFleetSessionChanged (fleet-session-truth-01DOGF0A FR-2): the
+	// FleetSession snapshot — the process's ONE fleet session, no chat
+	// session id. Its single frontend consumer is the useFleetSession
+	// store, which every fleet surface reads. processWideTopics entry below.
+	topicFleetSessionChanged,
 }
 
 // PassthroughTopics returns a copy of passthroughTopics: the bus topics
@@ -597,6 +606,7 @@ var processWideTopics = map[string]bool{
 	rpc.TopicContextBootstrapProgress: true,
 	topicFleetLockdownChanged:         true,
 	topicFleetSessionExpired:          true,
+	topicFleetSessionChanged:          true,
 }
 
 // sessionIDOf extracts the session id from a bus event payload without
