@@ -173,6 +173,11 @@ var cwdSensitiveGates = []string{
 	// os.Getwd() if `git rev-parse --show-toplevel` fails — the same
 	// class every other entry here was added to catch.
 	"check-advice-kinds.sh",
+
+	// check-install-provider-coverage.sh (install-framework-01DOGF0B
+	// WP03): scans core/install, core/fleet and core/rpc by repo-relative
+	// path; sources lib/ci-gate.sh so the verdict is cwd-independent.
+	"check-install-provider-coverage.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -1740,6 +1745,38 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "#!/usr/bin/env bash\n" +
 				"# planted probe for TestGates_PlantedViolationFires.\n" +
 				"grep -oE '^\\tcase \"[a-z]+\":' somefile.go\n",
+		},
+		// install-framework-01DOGF0B WP03: check-install-provider-coverage.sh.
+		// The badge-only catalog install's gate question (WP02 ledger entry)
+		// becomes symbol-gateable once the provider contract exists; these
+		// three plants prove each direction of the pairing can fail.
+		{
+			// A new install kind nobody registered or allowlisted — the
+			// surface could advertise it with no install path.
+			name:       "install-provider-coverage/unregistered-kind",
+			gate:       "check-install-provider-coverage.sh",
+			file:       "core/install/provider.go",
+			append:     "\nconst KindZzGateProbe Kind = \"zz_gate_probe\"\n",
+			wantOutput: "install.KindZzGateProbe (\"zz_gate_probe\") has no registered provider",
+		},
+		{
+			// A provider registered with no consumer test — FR-1's "each
+			// provider has an integration test asserting the consumer sees
+			// the capability" would be a claim nothing checks.
+			name:       "install-provider-coverage/registered-without-consumer-test",
+			gate:       "check-install-provider-coverage.sh",
+			file:       "core/rpc/zz_gate_probe_install.go",
+			content:    "package rpc\n\nfunc zzGateProbeInstall(fw interface{ Register(any, any) error }) {\n\t_ = fw.Register(install.KindAgentPack, nil)\n}\n",
+			wantOutput: "has no consumer test",
+		},
+		{
+			// A fleet catalog kind with no install kind — the Marketplace
+			// could list it and nothing could install it.
+			name:       "install-provider-coverage/catalog-kind-without-install-kind",
+			gate:       "check-install-provider-coverage.sh",
+			file:       "core/fleet/catalog.go",
+			append:     "\nconst CatalogKindZzGateProbe CatalogItemKind = \"zz_gate_probe\"\n",
+			wantOutput: "CatalogItemKind \"zz_gate_probe\" has no install.Kind",
 		},
 	}
 

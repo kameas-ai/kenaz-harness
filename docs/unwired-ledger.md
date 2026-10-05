@@ -518,6 +518,24 @@ pass-2 tripwire pattern can enforce. WP03 owns adding that gate, with a
 planted-violation proof in `scripts/ci/gates_can_fail_test.go`.
 ### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored — CLOSED 2026-10-05
 
+
+**Gate added (WP03, 2026-10-05).** `scripts/ci/check-install-provider-coverage.sh`
+(wired into `pr.yml`) pairs, in both directions: every `core/fleet`
+`CatalogItemKind` value ↔ an `install.Kind` (`core/install/provider.go`);
+every `install.Kind` ↔ a production `Register(install.Kind<Name>, …)` under
+`core/rpc/` **plus** a `TestInstallProvider_<Name>_ConsumerSeesInstall`
+consumer test — or a dated line in
+`scripts/ci/allowlists/install-provider-coverage.txt` naming the blocker and
+owner; and every allowlist line ↔ a real, still-unregistered kind (the
+allowlist shrinks as providers land). "InstalledState is computed from its
+consumer" is not grep-checkable, so it is enforced at runtime instead:
+`install.Framework.Install` re-reads `Provider.InstalledState` after every
+install and fails with `install.ErrNotConsumed` when the consumer does not
+list the capability (`TestInstall_BadgeOnly_RefusedWithErrNotConsumed`,
+`core/install/framework_test.go`). Planted proofs:
+`install-provider-coverage/{unregistered-kind,registered-without-consumer-test,catalog-kind-without-install-kind}`.
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored
+
 Every chat turn now links to its run graph (WP04), so materialization
 quality on *old* runs is user-visible. The resolved spec a run executed
 lives only in `Manager.TrackExternalRun`'s process-local map, capped at
