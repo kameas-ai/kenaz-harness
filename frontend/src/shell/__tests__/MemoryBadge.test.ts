@@ -6,8 +6,8 @@
  *   2. Shows global count from healthSnapshot when no projectId.
  *   3. Shows project-scoped count from listChunks when projectId supplied.
  *   4. Formats count correctly: 0, 845, 1.2k, 12k.
- *   5. Click with non-zero count navigates to /memory.
- *   6. Click with non-zero count + projectId navigates to /memory?project=<id>.
+ *   5. Click with non-zero count navigates to /knowledge/learned.
+ *   6. Click with non-zero count + projectId navigates to /knowledge/learned?project=<id>.
  *   7. Click with zero count opens the onboarding modal.
  *   8. Zero-modal "Got it" button closes the modal.
  *   9. Tooltip text references chunk count.
@@ -21,7 +21,7 @@ import MemoryBadge from '@/shell/MemoryBadge.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 
 const memRoute = {
-  path: '/memory',
+  path: '/knowledge/learned',
   component: defineComponent({ render: () => h('div', 'memory') }),
 };
 const rootRoute = {
@@ -135,18 +135,18 @@ describe('MemoryBadge (v0.5.6)', () => {
     expect(w.find('[data-testid="memory-badge-count"]').text()).toBe(expected);
   });
 
-  it('click with non-zero count navigates to /memory', async () => {
+  it('click with non-zero count navigates to /knowledge/learned', async () => {
     const { w, router } = await mountBadge({ total: 100 });
     await w.find('[data-testid="memory-badge"]').trigger('click');
     await flushPromises();
-    expect(router.currentRoute.value.path).toBe('/memory');
+    expect(router.currentRoute.value.path).toBe('/knowledge/learned');
   });
 
-  it('click with non-zero count + projectId navigates to /memory?project=<id>', async () => {
+  it('click with non-zero count + projectId navigates to /knowledge/learned?project=<id>', async () => {
     const { w, router } = await mountBadge({ projectId: 'proj-xyz', projectChunks: 5 });
     await w.find('[data-testid="memory-badge"]').trigger('click');
     await flushPromises();
-    expect(router.currentRoute.value.path).toBe('/memory');
+    expect(router.currentRoute.value.path).toBe('/knowledge/learned');
     expect(router.currentRoute.value.query).toMatchObject({ project: 'proj-xyz' });
   });
 

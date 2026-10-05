@@ -51,13 +51,28 @@ const (
 // DefaultOIDCScopes is the standard OIDC scope set requested during sign-in.
 // offline_access is required for refresh tokens; the zitadel roles scope is
 // required for role assertion (enabled on the kameas-native Zitadel app).
+//
+// ZitadelResourceOwnerScope is what makes Zitadel put the
+// urn:zitadel:iam:user:resourceowner:id claim in the access token
+// (fleet-session-truth-01DOGF0A, dogfood B3a root cause). Without it the
+// token carries no org claim, ReconcileTelemetry finds
+// no_resource_owner_claim and deactivates OTLP export on every tick — and
+// Fleet's receiver 401s any batch whose kameas.org.id differs from that
+// claim, so there is no client-side substitute (enroll's org_id is Fleet's
+// internal UUID, a different namespace). Tokens and refresh tokens minted
+// before this scope was added keep the old scope set; only a fresh sign-in
+// adds the claim — the session snapshot reports that as needs_reauth.
 var DefaultOIDCScopes = []string{
 	"openid",
 	"profile",
 	"email",
 	"urn:zitadel:iam:org:project:roles",
+	ZitadelResourceOwnerScope,
 	"offline_access",
 }
+
+// ZitadelResourceOwnerScope requests the resource-owner (org) claims.
+const ZitadelResourceOwnerScope = "urn:zitadel:iam:user:resourceowner"
 
 // Per-environment constants. Issuers and fleet base URLs are non-secret
 // public values; client IDs and audiences are also public-by-design

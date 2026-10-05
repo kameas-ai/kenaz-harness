@@ -47,7 +47,9 @@ shipped product boundary, not unwired code. Read that doc before flagging
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
 `check-knob-coverage.sh` (registered config field with no consumer),
-`check-seam-implementers.sh`, `check-node-dispatch.sh`,
+`check-seam-implementers.sh` (interface fields of `*Config`/`*Options`/
+`*Deps` structs, and of `*Env` structs since the 2026-10-04 v0.86.0
+sweep), `check-node-dispatch.sh`,
 `check-serve-dispatch-drift.sh`, `scripts/ci/check-codegen.sh`'s
 served-stream-topics block (`frontend/src/lib/servedStreamTopics.gen.ts`
 generated from `core/serve/wsstream.go`'s `passthroughTopics` — findings
@@ -339,6 +341,354 @@ prose and in a TS union; they do not call `MoveKinds()`.
 ---
 
 ## Open — ungated findings
+
+### 2026-10-05 (v0.87.0 adversarial review F2) · the repair path's re-application window ends at 0341
+
+Re-running sessions/0332 on a database units/1104 has converted fails
+("no such table: artifacts") — proven by the release probe. UNREACHABLE
+in production: Pending applies in version order so 1104 only ever runs
+after 0332, and Registry.Rollback has no production caller; the repair
+path re-applies 0341+ (hardened for the converted store) and never
+0332. Recorded so nobody "fixes" 0332 by modifying a shipped migration:
+IF a future repair feature widens the window below 0341, it must add a
+table-exists guard IN THE REPAIR PATH, not in 0332. **Owner:** whoever
+builds a wider repair. Also noted (F4): the 0341 composition tests pin
+v0.85.2/v0.63.0 while 1104's pin the newest snapshot — re-point 0341's
+at the newest tag when next touched.
+
+### 2026-10-04 (install-framework-01DOGF0B WP01/WP02) · Marketplace "Install" for workflow / agent_pack / bundle was badge-only — nothing consumes `installed/`; the skill badge lied the other way
+
+**Class:** registered/advertised capability with no consumer.
+
+**Finding.** `fleet.Client.Install` (`core/fleet/catalog_install.go`)
+fetched a catalog item, (skipped) signature verification, wrote
+`<DataDir>/installed/<kind>/<id>@<version>/payload` + `meta.json`, and
+returned success — no registration, no store save, no event. The only
+reader of `installed/` was the badge set inside `Catalog_List`
+(`core/rpc/views/catalog/impl.go`); `Catalog_Installed` has zero `.vue`
+callers. So Marketplace Install for **workflow**, **agent_pack** and
+**bundle** reported success and painted "Installed" while delivering no
+capability. Opposite-direction lie on the same code: **skill** installs
+bypass `installed/` entirely (`slashcmd.SkillInstall` →
+`fleet.InstallSkill` → `slashcmd.LiveRegister` → `SkillStore`), so a
+successfully installed skill still showed "Install".
+
+**Verification pass (dogfood 2026-10-04, CONFIRMED, re-read against
+`main` @ `b8079d48`;** `kitty-specs/dogfood-2026-10-04/notes.md`
+§"Marketplace installed/ verification"). Per kind, the runtime consumer and
+why `installed/` never reaches it:
+- workflow — workflows load from sqlite + builtins via a *different,
+  same-named* catalog (`Workflows_CatalogInstall` → wfcatalog over
+  `LoadBuiltins` → `Store.Save` + cron arm). Never reads `installed/`.
+- agent_pack — agent profiles load only from `<dataDir>/agents`
+  (`core/agents/loader.go`). Never reads `installed/`.
+- bundle — the bundle list reads `kenaz.lock`; `Bundle.Install` needs a
+  directory with a `kenaz.yaml` manifest, which `Catalog_Install` never
+  wrote (it wrote an opaque `payload` file).
+- skill — bypasses `installed/`; consumed by the slash registry.
+
+**Disposition (this PR, Phase 0).**
+- WP01 (`fix(marketplace): WP01`): `Catalog_List` reads kind=skill
+  installed state from the `SkillStore` (`WithSkillStore`, wired in
+  `core/rpc/api.go`), not `installed/`. `fleet.ResolveSkillStoreID` maps
+  the catalog_id the Marketplace sends to the store's skill ID (they differ
+  for every `SkillPublish`'d skill), so the now-visible Uninstall works.
+  Pins: `TestCatalogList_SkillInstalledStateFromSkillStore` (P-1),
+  `TestCatalogList_SkillResidueInInstalledDirIsNotInstalled`,
+  `TestUninstallSkill_ByCatalogID` — each fails with the behaviour reverted.
+- WP02 (`fix(marketplace): WP02`): `Client.Install` refuses **every** kind
+  with `fleet.ErrCatalogKindNotInstallable`, the message naming the kind
+  and the working alternative, and writes nothing — the payload-writing
+  code is deleted (skill is refused too: on this path it was equally
+  unconsumed; skills install via `SkillInstall`). `MarketplaceView.vue`
+  shows workflow / agent_pack / bundle Install **disabled, not hidden**,
+  with the reason as visible text (`item-install-unsupported-<slug>`,
+  linked by `aria-describedby`). Existing residue is labelled
+  "Downloaded — not active" (never "Installed") and keeps a
+  "Remove download" action — `Client.Uninstall` and `InstalledItems` stay
+  as the cleanup path. Pins: `TestCatalog_Install_RefusesEveryKind`,
+  `TestCatalogInstall_RefusesUnconsumedKinds`, `MarketplaceView.spec.ts`
+  4 (P-2), 2 and 5 — each fails against the pre-fix code.
+
+**Still standing (dated-justified, 2026-10-04).** `Client.Install`'s
+`dataDir` and `pubKeyBase64` parameters are unread, kept so the per-kind
+providers and the C-2 per-device key plug into the existing call chain
+(catalog/impl.go's `pubKeyBase64` / `WithPubKey`, already justified under
+register C-2). `Catalog_Installed` keeps zero `.vue` callers (pre-existing
+NARROW, `harnessClient.ts`); WP08 is its intended reader. Blocker: the
+install framework (install-framework-01DOGF0B Phases 1–3). Owner: alec /
+install-framework-01DOGF0B.
+
+Two residue gaps the Phase-0 cleanup path does not reach (dated
+2026-10-04, review F5; owner: install-framework-01DOGF0B **WP08**, which
+deletes both lines when its offer-to-finish-or-remove flow reads
+`installed/` directly):
+- **Withdrawn-item residue is unreachable.** "Remove download" lives on
+  the item's Marketplace card, which comes from `Catalog_List` (the live
+  fleet listing). Once a publisher withdraws the item, the card is gone
+  and its `installed/` payload has no removal surface — the one RPC that
+  would list it, `Catalog_Installed`, has no `.vue` caller.
+- **`installed/skill/` residue has no removal surface.** WP01 made the
+  skill store the only authority for a skill's installed state, so a
+  skill payload an earlier release's `Catalog_Install` wrote under
+  `installed/skill/` never surfaces as a card state at all; nothing
+  offers to remove it (it is inert — the slash registry never reads it).
+
+Review follow-ups landed with this entry
+(`fix(marketplace): review follow-ups`): `rpc.New`'s `WithSkillStore`
+wiring is pinned at chassis level
+(`TestChassis_CatalogList_SkillInstalledStateIsWiredToSkillStore`);
+`fleet.ResolveSkillStoreID` matches CatalogID (+version) before the exact
+store ID so a colliding catalog_id cannot cross-delete another skill;
+`Client.Uninstall` — now the promoted "Remove download" path — refuses
+any kind/catalogID/version that is not a single clean path segment
+(`ErrCatalogInvalidPathSegment`; before, a version of
+`/../../../../victim` removed a directory outside `installed/`) and an
+empty data dir.
+
+**What deletes this entry.** Each kind gaining a *consumed* install
+through the provider framework, its installed state read from the consumer:
+workflow (WP05 — wfcatalog `Store.Save`, listed by `Workflows_List`),
+bundle (WP06 — `Bundle.Install` from a `kenaz.yaml` directory, listed by
+`Bundle_List`), agent_pack (WP07 — written to `<dataDir>/agents` + loader
+reload, **or** the kind dropped from the catalog with the reason recorded
+here), plus WP08 offering to finish or remove existing `installed/`
+residue. When the last kind lands, `ErrCatalogKindNotInstallable`, the
+`INSTALL_UNSUPPORTED_REASON` map in `MarketplaceView.vue`, and this entry
+are deleted together.
+
+**Gate question — could a gate see "install writes a directory nothing
+reads"?** Not with the existing gates, and not cheaply as a new one. Every
+gate in the inventory pairs *symbols* (registration ↔ predicate, exported
+func ↔ call site, package ↔ importer); this class is a filesystem *path*
+written by one function and read by none, reached through
+`filepath.Join` fragments (`"installed"`, a runtime `kind`) that no
+grep can pair with a reader reliably — a path-literal write/read scan
+would both miss computed paths and flag every write whose reader lives in
+another process (fleet, sidecars). No gate is extended here. The class
+becomes symbol-gateable at **WP03**: once the provider contract exists,
+"every `CatalogItemKind` has a registered provider whose `InstalledState`
+is computed from its consumer" is a registration↔consumer pair the
+pass-2 tripwire pattern can enforce. WP03 owns adding that gate, with a
+planted-violation proof in `scripts/ci/gates_can_fail_test.go`.
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored
+
+Every chat turn now links to its run graph (WP04), so materialization
+quality on *old* runs is user-visible. The resolved spec a run executed
+lives only in `Manager.TrackExternalRun`'s process-local map, capped at
+`maxTrackedExternalRuns = 64` (`core/rpc/views/agentgraph/manager.go`).
+After a restart, or 64 turns later, `runSpecFor` answers from tier 3:
+the library graph named by the run's own `run_start`. That is a
+projection of the run's events onto *today's* file, which may not be
+the spec that ran.
+
+**Disposition: dated justification, not wired.** Persisting the exact
+resolved spec per run was explicitly out of scope (spec §5). Instead
+WP03 records a SHA-256 `agentgraph.SpecDigest` of the resolved spec
+(layout and provenance excluded) on `run_start` and in
+`session_turn_runs.spec_digest`. At tier 3 the manager compares it with
+the library file's digest: **equal** ⇒ the file *is* the spec that ran,
+exact provenance, no banner; **different or absent** (file edited since,
+a resolved spec that never matched a file, or a pre-WP03 run) ⇒
+`SpecProvenanceLibraryFallback`, and the editor says so in plain words
+("Reconstructed from the library graph — the exact spec for this turn
+is no longer in memory…"). Pin:
+`TestMaterializeRun_LibraryFallbackVerifiedBySpecDigest` (fresh manager
+on a SQL log = after a restart). So nothing is presented as faithful
+that is not — the gap is fidelity, not honesty: a digest-mismatched run
+still renders against the wrong topology, under a banner.
+
+**Blocker:** a per-run spec store (a `run_specs(run_id, spec_json)` side
+table or an event carrying the resolved spec) with a retention policy —
+specs are larger than any row the event log holds today. **Owner:** the
+01DOGF0D follow-up that persists exact run state (spec §5; the same
+owner as the redrive-window entry below). Deleted when tier 3 is
+reachable only for runs that predate that store, and a test materializes
+a 65th-turn run with exact provenance after an edit to its library file.
+
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · a redriven run's status reads "failed" for the seconds before its redrive starts
+
+Between a chat run's failed attempt and the overflow redrive's
+`run_start` (the window is the pre-redrive compaction, typically
+seconds), `statusFromLog` honestly derives "failed" from the first
+attempt's events — an open RunView stops polling and shows failed for
+a run that is about to continue. Data is correct and nothing is lost;
+reopening the view shows the redrive. **Blocker:** a durable
+"redrive pending" record the status derivation can consult.
+**Owner:** the follow-up to 01DOGF0D that persists exact run state
+(spec §5 follow-up). Deleted when that record exists and the status
+test asserts "running" across the whole redrive window.
+### 2026-10-04 (artifacts-as-units-01DOGF0C review F10) · artifact purge after a session/project delete has no retry — purge-retry
+
+`purgeArtifactsAfterDelete` (`core/rpc/api.go`) runs after the session or
+project row is already gone. If it fails, the error is logged
+(`rpc.artifacts.purge_failed`) and the delete still reports success.
+Returning the error would show "delete failed" for an item that no longer
+exists and cannot be deleted again. The residue is artifact units whose
+`scope_id` / `metadata.session_id` / `metadata.project_id` name a deleted
+row, and the media they pin. These are still visible and deletable one by
+one in the Library's Captured view. No sweep re-runs the purge. Fix shape: a
+boot-time sweep that purges artifact units whose session/project no longer
+exists. Blocker: none technical; it was descoped from the review round.
+Owner: artifacts-as-units-01DOGF0C follow-up (filed 2026-10-04).
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C review F11) · session delete funnel deletes promoted artifacts — pre-existing, preserved
+
+`rpc/views/sessions` `DeleteWithOptions` (default cascade) lists artifacts
+by ORIGIN session and deletes all of them, including ones the user promoted
+to project or global scope. That contradicts what promotion is for. The core
+session-delete observer only deletes session-SCOPED units and unlinks
+promoted ones. The legacy store behaved the same way as the funnel, so
+artifacts-as-units kept it as is: a storage migration is the wrong place to
+change delete semantics. Decision needed: should the funnel skip promoted
+artifacts (filter `ScopeKind=session`)? Owner: the product owner, raised by
+artifacts-as-units-01DOGF0C. Decision record:
+`docs/missions/artifacts-as-units.md` "Review follow-ups".
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `units.KindArtifact` defined, accepted by the schema, used only in tests — CLOSED
+
+`core/units/unit.go` has declared `KindArtifact = "artifact"` and the
+`units.kind` CHECK has admitted `'artifact'` since
+`unified-context-artifacts-01NCTXU01` (units/1100), but every reference was
+in a test (`resolution_test.go`, `store_mem_test.go`, `store_sql_test.go`)
+and artifacts kept living in their own `artifacts` / `artifact_versions`
+tables. 01NCTXU01 FR-003 ("artifacts are units with kind=artifact") was
+ratified and never implemented — a schema that promised a shape no writer
+produced.
+
+**Closed** by artifacts-as-units-01DOGF0C: migration
+`units/1104-artifacts-to-units` copies every artifact and version onto
+`units` / `unit_versions` (ids preserved, verified in-transaction), and
+`core/rpc/api.go` `newArtifactsStack` now builds `artifacts.NewUnitsStore`
+— every capture, revision, promote and delete in production writes
+`kind='artifact'` units. Decision record: `docs/missions/artifacts-as-units.md`.
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `artifacts_legacy` / `artifact_versions_legacy` retained read-only — DROP due next release
+
+Migration `units/1104-artifacts-to-units` RENAMES the legacy tables
+instead of dropping them (spec FR-3.3: never drop in the migration that
+copies — dropping in place is how `sessions/0327` and `sessions/0332`
+destroyed `artifact_versions`). Nothing reads or writes them after 1104:
+the legacy store implementation was deleted with the store switch. They are
+a recovery copy for one release of real upgrades.
+
+**Follow-up (dated, owned):** the release AFTER the one that ships 1104
+adds `units/1105-drop-artifacts-legacy` (`DROP TABLE
+artifact_versions_legacy` first, then `artifacts_legacy` — child before
+parent so no cascade fires), with a populated-snapshot test from the
+first snapshot that carries the `*_legacy` tables, per the I14 gate.
+Blocker: one shipped release of 1104 against real installs. Owner:
+artifacts-as-units-01DOGF0C (filed 2026-10-04). Do not fold it into 1104
+or into the same release.
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP01, D4) · artifact version history is write-only — `Store.ListVersions` has no production reader
+
+`kenaz__update_artifact`, plan-mode Edit and edit-file sync all append
+revisions (`Manager.WriteVersion`), but nothing outside the store
+implementations and their tests calls `ListVersions`, and
+`ArtifactsAPI.Get` / the Captured preview always serve the ORIGINAL
+capture's bytes (`Artifact.ContentHash`). A user who asks the model to
+update an artifact sees the old content in the Library. Found while
+mapping versions onto `unit_versions`; not fixed here because it is a
+product decision (show history and latest, or serve latest only), not a
+storage one. Blocker: that decision. Owner: the next artifacts/Library
+mission — escalate to the owner before wiring, do not delete the
+WriteVersion path (it is the only revision capability).
+### 2026-10-04 · v0.86.0 release-start unwired sweep — findings and dispositions
+
+**Scope.** Base `main` `b8079d48`. Fresh surface: `v0.85.0..HEAD` (the
+fs-gate/policy family, the mlsidecar spawn-lock flip) **plus the
+v0.85.0 ML-engine surface itself** (`v0.84.0..v0.85.0`: `core/mlsidecar`,
+`core/advice/sidecar.go`, `core/rpc/views/sidecar`, the Recommendations
+panel) — the v0.85.0 sweep ran at the *start* of that release, before the
+engine mission merged, so that code had never been swept.
+`cmd/kenaz-ml-sign` and the engine-publication seams are **not on
+`main`** (they live only on `feat/engine-publication`) and were not swept;
+the next sweep after that branch lands owns them. Already-ledgered items
+(engine-publication residuals, marketplace badge-only lie, fail-closed
+shared-engine residual, `LaneStatus`) were not re-found.
+
+Baseline before any fix: `check-no-unwired-gates.sh`, builtin-tool
+registration, broker topics, knob coverage, output ports, serve-dispatch
+drift, agentgraph convergence, seam implementers, node dispatch, single
+move writer, Cedar gate arguments and Cedar singleton — all clean. Every
+find below is one those gates could not see.
+
+| # | Find (pass) | Disposition | Class / commit |
+|---|---|---|---|
+| 1 | **`SubagentStartEvent.AdditionalContext` discarded** (pass 2). `subagent_run_spawner.go` fired `subagent_start` with `_, _ =` while `hooks/fire.go` documented the context as "prepended to the child's system context". VERIFIED as briefed. | **Wired** — merged context becomes a session-scoped system attachment on the CHILD session before `StartStream`; the doc now says what happens (and that the decision is not honoured). | Documented lie, producer live / consumer missing — `fix(hooks)` 9caf4197 |
+| 2 | **`agentgraph.Env.PendingContext` had zero production writers** (pass 2, then confirmed by the widened gate). No non-test `PendingContextAppender` existed, so every `pre_tool_use` / `post_tool_use` `additional_context` was dropped on every chat run; the field doc's "it is still logged" was also false. | **Wired** — `chat.pendingContextQueue` (per-session, bounded at 64) set on every chat run's Env after `EnvDefaults`; `LLMProviderAdapter` drains it into the next **primary** (`StreamToChat`, i.e. `assistant_turn`) call's system prompt — router / exit-gate / escalation / compaction calls leave it queued (review M2); a failed primary call re-queues it (L3); it is the second-to-last prompt layer, before user instructions (L4); session delete forgets the queue and overflow logs once per burst (L5). Library-graph runs outside chat still drop it — now with a real log line (residual below). | Seam with no implementer — 9caf4197 |
+| 3 | `post_tool_use_failure` result discarded with `_, _ =` (pass 2). | **Wired** through the same `forwardHookContext`. | 9caf4197 |
+| 4 | `session_start` `AdditionalContext` discarded by `Manager.Create` while `SessionHookRunner`'s doc promised it (pass 2). | **Wired** — rpc-level decorator on the session hook runner attaches it to the new session (never at position 0, which `Sessions_SetSystemPrompt` owns and deletes), under a provenance heading, removable from the Resolved Context panel (review M1/L6). | 9caf4197 |
+| 5 | `HookDryRunDrawer` labelled every event's context "injected" (pass 5). | **Wired** — event-aware label ("not delivered for this event" outside the five events that deliver it). | 9caf4197 |
+| 6 | Stale comment: `exec_control.go` said `SubagentStartEvent` "is never constructed anywhere" (pass 2). | **Fixed** (comment). | 9caf4197 |
+| 7 | `PromptTemplateSource`'s `wiring:deferred` directive sat above its doc comment, where `checkseams`' one-line-up rule never saw it (found by the widened gate). | **Fixed** — directive moved; deferral reason unchanged (versioned-model-profile-01PMDL04 WP02+). | Vacuous-allow directive — 9caf4197 |
+| 8 | **`mlsidecar.WriteLocalToken` had zero non-test callers** (pass 3). kenaz-ml reads `lease/shutdown.token` on every shutdown, fails closed without it, and never creates it ("written user-read-only by the spawning client"). Production never wrote it: `Update` never stopped the old engine and `Uninstall` RemoveAll'd the root under a running engine. Every test hand-wrote the token (blind spot #2). | **Wired** — `spawnLocked` writes it under the spawn lock before the process exists; `Update`/`Uninstall` use `ensureLocalToken` (write-if-absent, never rotate). Latent in the field only because `PinnedEngineRelease` is still unpublished — it would have shipped live with the pin. | Fixture doing the production layer's job — `fix(mlsidecar)` 92a0d21b |
+| 9 | **`LabelPusher.ResetCursor` had zero non-test callers** (pass 3). The pusher's "rebuildable mirror" guarantee never held: Uninstall wipes the engine's label mirror but the harness cursor survived. | **Wired** — `sidecar.Impl.ResetLabelCursor` after a successful Uninstall only. | Documented guarantee with no caller — dc7e5083 |
+| 10 | `LabelPusher.Run` had zero callers, test or production; `Nudge`'s doc still promised "(or Run tick)" (pass 3). | **Deleted** — `Nudge` is the live substitute. The gap a ticker would have covered is closed by `NudgeLabels` (Enable/Update/Repair nudge when they leave the engine healthy). | Live substitute — dc7e5083 |
+| 11 | `StatusView.LabelLanes[].until/.detail` sent, never rendered, while the panel promised "it retries automatically" (pass 1 + 5). | **Wired** — the panel shows retry time and engine detail; copy says the lane retries on the next recommendation after that time (there is no timer). | Output with no reader + overclaiming copy — dc7e5083 |
+| 12 | `advice.WithSidecarCacheCapacity` — zero callers anywhere (pass 3). | **Deleted** — `defaultAdviceCacheCapacity` is the live value; no product surface tunes it. | No consumer, no product intent — c9adfd92 |
+| 13 | `advice.WithSidecarBudget` / `WithSidecarContractsTTL` — test-only callers (pass 3). | **Unexported** (`withSidecar*`), matching `withSidecarClock`. | Test seam exported as a tunable — c9adfd92 |
+| 14a | `mlsidecar.Client.Lease` — doc claimed callers use its 404 for legacy detection; zero callers (pass 3). | **Justified** (dated 2026-10-04). Legacy detection reads `/health`'s `lifecycle_protocol`, leases are file-based, contracts come from `/v1/contracts`. **Blocker:** the engine-interop ruling on whether clients must perform the HTTP registration handshake (`POST /v1/clients/lease`). **Owner:** alec. **Deleted by:** that ruling — wire `Lease` into adoption, or delete it with `LeaseWire*` and the stub handler. Doc now says "no production caller". | Cross-repo wire contract — c9adfd92 |
+| 14b | `mlsidecar.Client.SystemOne` — zero callers (pass 3). | **Justified** (dated 2026-10-04), on its OWN blocker, not Lease's. `/v1/systemone` is the raw laya pass-through the design §3.2 owner ruling kept in the engine's contract; no harness feature asks laya a raw System-One question (every advisor goes through `/v1/recommend/{kind}` with a feature contract). **Blocker:** a product decision that some harness surface needs raw laya answers outside the advice-kind contract — none is specced or roadmapped. **Owner:** alec. **Deleted by:** the next sweep if no spec has claimed it by then (delete the method, `SystemOne*` wire types and the stub's `/v1/systemone` handler together), or by the spec that wires it. | Wire completeness, no product consumer — c9adfd92 |
+
+**Gate extension (rule: a class the gates could not see).**
+`check-seam-implementers.sh`'s derivation (`scripts/ci/cmd/checkseams`)
+now also scans exported structs whose name ends in **`Env`** —
+`agentgraph.Env`'s interface fields are exactly G-1a's
+optional-collaborator shape, but the struct's name kept them out of
+scope, which is how find #2 survived with the gate green. Widened, it
+fired on exactly `PendingContextAppender` (pre-fix) and
+`PromptTemplateSource` (find #7). Planted-violation proof:
+`TestGates_PlantedViolationFires/seam-implementers/derived-env-field-unsatisfiable`,
+verified failing against the pre-widening checker. No allowlist changed.
+
+**Declined gate — finds #8–#10, #12–#14 (zero-call-site exported
+functions outside the I10 name heuristic).** A general "exported func
+with no non-test caller" gate over-reports badly (Wails bindings, wire
+mirrors, interface methods, `json` decode targets all look unconsumed to
+a grep), and an allowlist big enough to hold that noise would be the
+"clean verdict indistinguishable from did not look" class
+`gates_can_fail_test.go` exists to prevent. The CLAUDE.md pass-3 scan
+over `git diff <last-tag>..HEAD` *is* the mechanism; this sweep's
+scratch scan (exported `func` declarations in files changed since
+v0.84.0, filtered to symbols added since then, with zero non-test
+references) is reproducible from that description. Finding #8's real
+root cause — fixtures that do the production layer's job — is blind
+spot #2, which no file-level gate can see.
+
+**Residuals, not drained (each with blocker + owner):**
+
+- **Hook `additional_context` on library-graph runs outside the chat
+  runner** is still dropped (now logged as
+  `agentgraph.hook_context.dropped`). Blocker: those runs drive LLM nodes
+  through the graph manager's own provider path, which has no per-session
+  system-prompt layer to drain into; giving it one is graph-runtime
+  work, not a sweep fix. Owner: alec — the agent-graph convergence
+  mission (01PMGX01) closes or re-dates this.
+- **`user_prompt_submit` / `setup` additional_context** — those events
+  still do not fire at all; already held by
+  `scripts/ci/allowlists/i17-eventless-hook-events.txt` (no new entry).
+- **Hook-attached session context is persistent**, by design: a
+  `session_start` / `subagent_start` attachment stays in that session's
+  system prompt every turn until the user removes it. It carries an
+  "Additional context from the user's <event> hook:" heading (review
+  L6), and the session's Resolved Context panel now offers Remove on
+  session-scope rows (review M1 — until the review follow-up every row
+  there was mounted read-only, so "removable" was false and the context
+  could not be taken back). Recorded so a later reader does not mistake
+  it for a one-turn note.
+
+**Not findings (recorded so the next sweep skips them):** mlsidecar wire
+types carry decode-only fields with no Go reader (`HealthPayload`/
+`KindContract`/`LabelPushResponse` fields such as `DTypes`,
+`SupportedVersions`, `Replaced`, `Stale`, `Generation`, `Slot`,
+`Refusal`) — wire mirrors of the engine's contract, not claims.
+`StatusView.Supported` has no frontend reader, but its doc already names
+`Available` as "the single 'may the Enable button be offered' bit".
+`SettingsView.vue`'s `TODO(compaction-strategy-ui-01KQ8TDI WP06)`
+deprecated-model chip predates the fresh surface and describes a missing
+feature, not a lie.
 
 ### 2026-09-30 (laya-advisors-01LAYA001 WP13) · the dated-nil `sidecarProbe` is replaced; two dated justifications remain
 
@@ -2850,9 +3200,11 @@ regenerating `frontend/wailsjs/` with the Wails toolchain plus a
   posture at all, and where, is the same product question as
   `Options.DefaultDeny` (deliberately `false`, `api.go`'s `buildCedarGate`).
   Both dials should be designed together or not at all.
-- **Owner / deleting change:** a Settings → Workflows panel mission that
-  surfaces both strictness dials, adds
-  `Settings_{Get,Set}CedarStrictWorkflowMode`, and deletes this entry.
+- **Owner / deleting change:** a mission that surfaces both strictness
+  dials on the Workflows surface (Workflows › Schedules / Library — the
+  Settings → Workflows panel was retired into it by nav-ia-sweep-01DOGF0F,
+  2026-10-04), adds `Settings_{Get,Set}CedarStrictWorkflowMode`, and deletes
+  this entry.
 
 Until then the policy file's header says exactly this, and no longer claims
 a "Settings → Workflows panel" that does not exist.
@@ -4445,6 +4797,95 @@ fetches and an overall install deadline).**
      release.yml step's url/key_id asserts are a start).
 
 ## Drained
+
+### 2026-10-04 · CLOSED — chat run ids were a per-process counter written into a persistent log (`agentgraph-settings-linkage-01DOGF0D` WP02)
+
+Found by the spec's verification pass, not by a user: no surface linked
+a historical chat turn to its run yet, so nothing exercised it — the
+mission that adds that link is what would have exposed it. Class: **a
+latent identity defect behind a missing consumer.**
+
+- `chat_runner.go` minted run ids as `r.nextID++; "chat-%d"` — reset to
+  0 on every boot — and used the same string as the kernel `RunID`
+  written to `agent_graph_events`, which `buildAgentGraphEventLog` backs
+  with `NewSQLEventLog` (persistent). Today's `chat-1` and yesterday's
+  `chat-1` shared one run id; `MaterializeRun("chat-1")` would have
+  projected several unrelated turns as one graph.
+- **Drained — wired** (WP02): `newChatRunID` returns `chat-<ULID>`
+  (`core/event.NewULID`); sub id and kernel run id stay one string; the
+  counter is gone. Pin: `TestChatRunID_UniqueAcrossRestartsOnSQLEventLog`
+  (two runner instances = a simulated restart, one real sqlite log, the
+  production `0309` DDL). Red proof: `newChatRunID` reverted to the
+  constant `"chat-1"` → FAIL.
+- **Pre-fix rows are kept** (an audit trail, no destructive migration)
+  and are never linked: no `session_turn_runs` row exists for them, so
+  the transcript shows "Run graph not recorded for this turn". A direct
+  `MaterializeRun` of a legacy id whose log holds several starts refuses
+  with `agentgraph.ErrRunIDReused` instead of merging turns (pin
+  `TestMaterializeRun_RefusesRunIDReusedAcrossRestarts`); resume and the
+  overflow redrive — one run continuing under one id — still
+  materialize as one graph.
+- **Why the suite never saw it:** every agentgraph test of run identity
+  ran on `NewMemoryEventLog`, which dies with the "process". Blind spot
+  #2 in its event-log shape; WP-PI moved the identity pins to real
+  sqlite and recorded which memory-log tests stay and why.
+
+### 2026-10-04 · CLOSED — every user chat turn had two writers; the second was the only path into fleet sync (`chat-single-writer-01DOGF0G`)
+
+Dogfood finding F12 ("i keep seeing messages i send in chats get
+duplicated"). Class: **rival writer**, plus a **comment asserting an
+invariant nothing enforced**.
+
+- **Two writers for one row.** The chat surface persisted each turn via
+  `Sessions_AppendMessage` / `SendMessageWithBlocks`; `LLM.StartStream`
+  then read that row's text back and `ChatRunner.StartStream` re-appended
+  it through the HistoryWriter, anchoring the turn's span on the copy.
+  Every typed turn since the graph-chat migration (5fe2fbcf, 2026-04-27,
+  v0.1.x — the dev profile's oldest surviving pair is 2026-06-07) was
+  stored twice (dev profile: 40
+  pairs, 0.7–17 ms apart), and every history read handed the model each
+  user message twice. Text+image sends were doubled too (the flattened
+  text was re-appended text-only); only image/document-only sends escaped.
+  The runner's comment ("the multimodal send, where the frontend already
+  landed the user's row") described a property of ALL sends as if it held
+  for one. **Drained — wired** (WP02): the runner takes a `UserTurn`
+  reference (id + text + announce) and has no code path that writes a user
+  row; the span is the caller's row, `TurnSpan.LatestUserMessageID` the
+  only fallback. Pin: `TestChatTurn_UserMessageStoredOnce_AppendThenStartStream`
+  (`core/rpc`, real sqlite, append → StartStream; verified failing on
+  `b8079d48`).
+- **The duplicate was load-bearing for fleet sync.** The re-append was the
+  ONLY path by which a user turn reached `SessionSyncer.AppendEvent`
+  (`llmHistoryWriter.AppendEntry` → `syncHook`); image-only sends never
+  synced at all. **Drained — wired:** `llmHistoryWriter.AnnounceUserTurn`
+  (`chat.UserTurnAnnouncer`) emits the same `{id, role}` event for the
+  existing row, once per fresh turn, never on the keychain redrive. Pinned
+  by assertion (d) of the test above and by the key-rotation redrive test
+  (one announcement across start + redrive).
+- **Assistant-side twin.** Not any of the spec's three candidates: the
+  backend-error `PartialPersister` path re-persisted text the move journal
+  already owned (a parked last fire, or an absorbed `final`) as a
+  kind-less failed row. **Drained — wired** (WP04):
+  `turnJournal.UnpersistedTail`. Pin:
+  `TestChatRunner_BackendErrorAfterCompletedFire_WritesTheAnswerOnce`.
+- **Stored history.** `sessions/0341-dedupe-user-turns` (WP05) removes
+  existing pairs pair-type-aware (an image-bearing row always survives)
+  and the assistant twins; populated-snapshot test
+  `TestMigration0341_DedupesDoubledTurnsAgainstUpgradedDatabase`.
+- **Why the suite never saw it:** frontend tests fake `startStream`;
+  backend chat-runner tests called `StartStream(…, userMessage)` directly
+  and skipped the frontend append. Blind spot #2 in a new shape — the
+  fixture bypassed the OTHER writer.
+- **Residual, not drained — recorded so the next sweep does not re-find
+  it as new:** (1) equal-content assistant rows that are BOTH classic
+  failed partials (pre-0336 periodic-flush residue; 0337's strict-prefix
+  rule leaves them; neither is "the answer") — 4 on the dev profile.
+  (2) whole-turn partials from before finding #105 whose text differs from
+  the move they duplicate. (3) the destructive-migration gate sees a
+  procedural `Up` only through its `UpSource` text: a named-function `Up`
+  whose UpSource omitted the word DELETE would be invisible (0337 and 0341
+  both state it). **Owner:** alec — a follow-up to the chat-turn-integrity
+  repair family for (1)/(2); a gate change for (3) dates or closes it.
 
 ### 2026-10-03 · CLOSED — graph file nodes bypassed fs.Gate; a corrupt user policy failed the graph path OPEN (`graph-fs-gate-01GFSG01`)
 

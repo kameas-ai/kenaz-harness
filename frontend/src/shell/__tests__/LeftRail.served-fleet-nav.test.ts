@@ -15,6 +15,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { defineComponent, h, nextTick, readonly, ref } from 'vue';
 import LeftRail from '@/shell/LeftRail.vue';
+import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import { initFeatureFlags } from '@/lib/featureFlags';
 import type { AppInfo } from '@/lib/types';
@@ -103,16 +104,25 @@ describe('LeftRail — fleet nav in served mode', () => {
     // assertions above would pass for the wrong reason.
     initFeatureFlags(makeAppInfo({ sites_hosting: true }));
     const w = await mountRail();
-    expect(w.text()).toContain('Sessions');
+    // (Was 'Sessions' — that rail entry was removed by nav-ia-sweep-01DOGF0F
+    // WP03; Tools is an ungated served-capable surface.)
+    expect(w.text()).toContain('Tools');
   });
 
   // served-mode-is-a-real-mode-01PMZ707 WP03 (AC-709). Graph_* has no
   // serve dispatch case (D-701) — the rail entry would route into
   // GraphsView.vue's own boundary panel, so it is hidden at the nav layer
   // too, mirroring Sites/Marketplace above.
+  //
+  // agentgraph-settings-linkage-01DOGF0D WP05 removed the rail entry on
+  // every build and moved it to Settings › Authoring, so the served gate now
+  // has to hold there (pin P-6): no SettingsTabs entry either.
   it('hides Agent graphs — Graph_* has no serve dispatch case', async () => {
     initFeatureFlags(makeAppInfo({}));
     const w = await mountRail();
     expect(w.find('[data-testid=nav-agentgraph]').exists()).toBe(false);
+    const tabs = mount(SettingsTabs);
+    expect(tabs.find('[data-testid^="settings-tab-"]').exists(), 'tabs mounted').toBe(true);
+    expect(tabs.find('[data-testid="settings-tab-agent-graphs"]').exists()).toBe(false);
   });
 });

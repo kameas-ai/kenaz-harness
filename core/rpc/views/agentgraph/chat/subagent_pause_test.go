@@ -202,7 +202,7 @@ func TestChatRunner_DriveRun_ReleasesPauseEntryOnAbort(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", "hello")
+	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestChatRunner_DriveRun_StaleCleanupDoesNotClearNewerRunsPause(t *testing.T
 
 	// Run A: starts, completes its trivial body, then stalls in
 	// driveRun's cleanup defer.
-	subIDA, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", "hello-a")
+	subIDA, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", testTurn("hello-a"))
 	if err != nil {
 		t.Fatalf("StartStream (run A): %v", err)
 	}
@@ -391,7 +391,7 @@ func TestChatRunner_DriveRun_StaleCleanupDoesNotClearNewerRunsPause(t *testing.T
 	// SubagentPause.BeginRun in StartStream itself, before spawning
 	// driveRun), so this happens before the test proceeds — no race
 	// against B's own goroutine scheduling.
-	subIDB, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", "hello-b")
+	subIDB, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", testTurn("hello-b"))
 	if err != nil {
 		t.Fatalf("StartStream (run B): %v", err)
 	}

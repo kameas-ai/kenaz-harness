@@ -3,8 +3,9 @@
  * BackgroundTaskChip — chat-header chip showing the count of running
  * background tasks owned by the current session.
  *
- * Clicking the chip opens the Settings → Tasks panel filtered to this
- * session. The chip hides itself when there are no running tasks.
+ * Clicking the chip opens Workflows › Tasks (Settings → Tasks until
+ * nav-ia-sweep-01DOGF0F WP05). The chip hides itself when there are no
+ * running tasks.
  *
  * (background-task-monitor-01KZNP3C WP06; mounted by
  * subagent-control-and-background-tasks-01PMZB11 UNIT-11 — this

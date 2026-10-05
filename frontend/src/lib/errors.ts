@@ -209,8 +209,10 @@ export function friendlyUnsupportedFeatureError(err: unknown): string | null {
  *
  * TERMINAL, not transient: the same tokens will 403 with this code on
  * every retry until the user finishes signup out-of-band at the SPA host.
- * Callers that poll (UserMenu's periodic identity refresh) must stop
- * rather than back off — see UserMenu.vue's refresh().
+ * The backend session cadence stops automatic retries on it
+ * (core/rpc/views/settings/fleet_session_events.go sessionEnrollDue) and
+ * the FleetSession snapshot reports it as degraded/not_provisioned
+ * (fleet-session-truth-01DOGF0A FR-4); no frontend code polls enroll.
  */
 export function isUserNotProvisionedError(err: unknown): boolean {
   const raw = toErrorString(err);
@@ -415,4 +417,27 @@ function extractAfter(s: string, prefix: string): string | null {
   const i = s.indexOf(prefix);
   if (i === -1) return null;
   return s.slice(i + prefix.length);
+}
+
+// ── Materialize: reused pre-fix chat run id (agentgraph-settings-linkage-01DOGF0D) ─
+
+/**
+ * The backend's ErrRunIDReused text (core/agentgraph/materialize.go). The
+ * backend refuses only TRUE reuse — a run started again after it had
+ * completed, or several starts under a pre-ULID "chat-<n>" id — never a
+ * resumed or overflow-redriven run. Matched on this stable fragment.
+ */
+const RUN_ID_REUSED_MARKER = 'run id was reused by several runs';
+
+/**
+ * materializeErrorMessage turns a Graph_MaterializeRun failure into the
+ * sentence the run views show (review L6): the reused-run-id refusal in
+ * plain words, anything else as-is.
+ */
+export function materializeErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (raw.includes(RUN_ID_REUSED_MARKER)) {
+    return 'This run graph cannot be shown: its run id was used by more than one run (this happens to turns recorded before run ids were made unique), so its steps cannot be separated from the other runs\'.';
+  }
+  return raw;
 }

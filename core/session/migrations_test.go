@@ -109,6 +109,15 @@ func (f *migFakeDB) Query(ctx context.Context, query string, args ...any) (migra
 	if strings.HasPrefix(q, "select distinct session_id from session_messages") {
 		return &migEmptyRows{}, nil
 	}
+	// Migration 0341 (chat-single-writer-01DOGF0G) has the same shape:
+	// one cross-session candidate query, then per-session work. No row
+	// store, so no candidates — the row-level contract is pinned against
+	// real upgraded snapshots by
+	// TestMigration0341_DedupesDoubledTurnsAgainstUpgradedDatabase in
+	// core/storage/sqlite.
+	if strings.HasPrefix(q, "select distinct a.session_id from session_messages a join session_messages b") {
+		return &migEmptyRows{}, nil
+	}
 	if strings.HasPrefix(q, "select count(*) from sqlite_master where type='table' and name=?") {
 		n := 0
 		if len(args) == 1 {
@@ -469,12 +478,13 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// the reservation in migrations_blocked_permission_requests.go /
 	// migrations_scheduled_chat_runs_trigger.go) +
 	// 0340 scheduled_chat_runs_created_by (model-scheduled-jobs-01PMSJ01
-	// WP09)) =
-	// 43 applied entries (2 chassis bootstrap + 41 sessions migrations).
-	if got := len(db.ledger); got != 43 {
-		t.Fatalf("ledger size = %d, want 43", got)
+	// WP09) + 0341 dedupe_user_turns (chat-single-writer-01DOGF0G WP05) +
+	// 0342 session_turn_runs (agentgraph-settings-linkage-01DOGF0D WP03)) =
+	// 45 applied entries (2 chassis bootstrap + 43 sessions migrations).
+	if got := len(db.ledger); got != 45 {
+		t.Fatalf("ledger size = %d, want 45", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342}
 
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {

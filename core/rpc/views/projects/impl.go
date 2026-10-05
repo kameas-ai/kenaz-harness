@@ -99,7 +99,12 @@ func (a *API) UpdateDescription(ctx context.Context, id, description string) err
 
 // Delete implements ProjectsAPI. When deleteSessions is true, every
 // session attached to the project is removed before the project row
-// itself; otherwise sessions become loose via the FK ON DELETE SET NULL.
+// itself (and, through session.Manager's delete observer, the artifacts
+// captured in them); otherwise sessions become loose via the FK ON DELETE
+// SET NULL. Either way, projects.Manager.Delete's observer permanently
+// deletes the project-scoped artifact units (artifacts-as-units-01DOGF0C,
+// spec FR-6) and nulls the project link on the rest — the confirm modal in
+// LeftRail.vue says so.
 func (a *API) Delete(ctx context.Context, id string, deleteSessions bool) error {
 	if deleteSessions {
 		records, err := a.sessions.ListByProject(ctx, id)

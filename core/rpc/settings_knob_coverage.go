@@ -115,9 +115,12 @@ func init() {
 	)
 	knobcoverage.Register[settings.Settings](
 		"MemoryEnabled",
-		"frontend/src/views/tools/KenazToolsPanel.vue reads it via "+
-			"client.settings.getMemory() (Settings_GetMemory binding) to "+
-			"gate visibility of the memory-tool toggles (v-if=\"memoryEnabled\").",
+		"frontend/src/views/memory/MemoryCaptureToggle.vue (Knowledge › "+
+			"Learned; moved from Tools by knowledge-home-01DOGF0E WP03) reads "+
+			"it via client.settings.getMemory() (Settings_GetMemory binding) "+
+			"to render the on/off switch state and the \"memory capture is "+
+			"off\" banner (v-if=\"enabled === false\"), and to decide "+
+			"whether a missing starter hook is a partial install.",
 	)
 
 	// ── Confirm-each / artifact-capture toggles ─────────────────────

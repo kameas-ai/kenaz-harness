@@ -38,16 +38,32 @@ function navigate(hash: string) {
 }
 
 const NAV_ACTIONS: PaletteAction[] = [
-  { id: 'nav.sessions', label: 'Go to Sessions', hint: 'Main session list', perform: () => navigate('#/sessions') },
+  // nav-ia-sweep-01DOGF0F WP03: relabelled, not removed — the palette has
+  // "New Session" but no "search sessions" action, so this is still the
+  // keyboard way back to the session surface. The old hint promised a "Main
+  // session list"; /sessions with no id is an empty state, the list is the rail.
+  {
+    id: 'nav.sessions',
+    label: 'Go to Sessions home',
+    hint: 'Pick a session in the rail or start a new one',
+    perform: () => navigate('#/sessions'),
+  },
   { id: 'nav.tools', label: 'Go to Tools', hint: 'MCP servers & tool bundles', perform: () => navigate('#/tools') },
   { id: 'nav.providers', label: 'Go to Providers', hint: 'AI provider configuration', perform: () => navigate('#/providers') },
-  { id: 'nav.contexts', label: 'Go to Contexts', hint: 'Session context files', perform: () => navigate('#/contexts') },
-  { id: 'nav.memory', label: 'Go to Memory', hint: 'Memory capture settings', perform: () => navigate('#/memory') },
+  // knowledge-home-01DOGF0E WP02: Contexts + Memory → one Knowledge home.
+  // The old nav.memory hint promised "Memory capture settings"; the view never
+  // showed the setting (it lived under Tools).
+  { id: 'nav.knowledge', label: 'Go to Knowledge', hint: 'Curated context files & learned memory', perform: () => navigate('#/knowledge/curated') },
+  { id: 'nav.knowledge.curated', label: 'Go to Knowledge › Curated', hint: 'Context files you write and attach to conversations', perform: () => navigate('#/knowledge/curated') },
+  { id: 'nav.knowledge.learned', label: 'Go to Knowledge › Learned', hint: 'Memory captured from conversations — on/off switch and saved chunks', perform: () => navigate('#/knowledge/learned') },
   { id: 'nav.workflows', label: 'Go to Workflows', hint: 'Scheduled workflows', perform: () => navigate('#/workflows') },
-  { id: 'nav.artifacts', label: 'Go to Artifacts', hint: 'Saved artifacts & outputs', perform: () => navigate('#/artifacts') },
-  // agentgraph-total-convergence-01PMGX01 WP16: back in the left rail as well
-  // (see LeftRail.vue). The palette entry stays — a rail entry and a Cmd+K
-  // action are not redundant, they serve different reach.
+  // artifacts-as-units-01DOGF0C WP06: Artifacts + Documents → one Library.
+  { id: 'nav.library', label: 'Go to Library', hint: 'Captured artifacts & authored documents', perform: () => navigate('#/library/captured') },
+  // agentgraph-total-convergence-01PMGX01 WP16 put Agent graphs back in the
+  // left rail; agentgraph-settings-linkage-01DOGF0D WP05 moved the library
+  // under Settings › Authoring (the rail entry is gone — each chat turn links
+  // to its own run graph instead). The palette entry stays, routing to the
+  // same /agentgraph library, now framed by the Settings hub.
   // served-mode-is-a-real-mode-01PMZ707 WP03: gated on !isServedMode() —
   // both routes render NotAvailableInServedMode in a served build (D-701;
   // Graph_*/CedarPolicy_*/Policy_* have no serve dispatch case), mirroring
@@ -55,7 +71,7 @@ const NAV_ACTIONS: PaletteAction[] = [
   {
     id: 'nav.agentgraph',
     label: 'Go to Agent graphs',
-    hint: 'Graphs the kernel runs, and the materialized graph of each conversation',
+    hint: 'Settings › Authoring — the graph library and editor',
     visible: () => !isServedMode(),
     perform: () => navigate('#/agentgraph'),
   },

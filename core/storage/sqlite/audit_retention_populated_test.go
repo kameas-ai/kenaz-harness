@@ -208,6 +208,16 @@ func TestAuditRetention_DeleteAfterWindow_AgainstPopulatedUpgradedDatabase(t *te
 			// empty session_id these synthetic rows use) — a normal
 			// side effect of appending, not of the sweep.
 			continue
+		case "artifacts", "artifact_versions", "units", "unit_versions":
+			// units/1104-artifacts-to-units (artifacts-as-units-01DOGF0C
+			// WP04) runs during this test's Open on the pre-1104 fixture:
+			// it copies the artifact rows into units/unit_versions and
+			// renames the legacy tables to *_legacy. A schema-evolution
+			// side effect of Open, not of the retention sweep — mirrors
+			// upgrade_path_test.go's artifactsToUnitsNote, and the content
+			// of all four is asserted by assertArtifactsMigratedToUnits and
+			// migration_1104_test.go.
+			continue
 		case "scheduled_chat_runs":
 			// model-scheduled-jobs-01PMSJ01 WP09's sessions/0340 migration
 			// ADD COLUMNs created_by + tool_allowlist onto this table,

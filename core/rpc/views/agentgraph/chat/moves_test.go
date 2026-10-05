@@ -224,7 +224,7 @@ func runFiveIterationTurn(t *testing.T) (*recordingBroker, *recordingHistoryWrit
 	pool := &scriptedPool{entries: []ToolEntry{{Server: "search", Name: "web"}}}
 	runner, broker, writer := buildMoveRunner(t, reg, pool)
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "find it"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("find it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -292,11 +292,10 @@ func TestMoves_FiveIterationTurnPersistsEveryMove(t *testing.T) {
 	}
 
 	// Every move shares the turn's span — the id of the user row the
-	// runner wrote at StartStream (recordingHistoryWriter returns
-	// "msg-1").
+	// caller persisted before StartStream (testTurn's testUserTurnID).
 	for i, e := range got {
-		if e.TurnSpanID != "msg-1" {
-			t.Errorf("move %d TurnSpanID = %q, want %q", i, e.TurnSpanID, "msg-1")
+		if e.TurnSpanID != testUserTurnID {
+			t.Errorf("move %d TurnSpanID = %q, want %q", i, e.TurnSpanID, testUserTurnID)
 		}
 	}
 
@@ -414,7 +413,7 @@ func TestMoves_ToolCallEntryRedactsArgumentValues(t *testing.T) {
 
 	pool := &scriptedPool{entries: []ToolEntry{{Server: "fs", Name: "write"}}}
 	runner, broker, writer := buildMoveRunner(t, reg, pool)
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "write the config"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("write the config")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -491,7 +490,7 @@ func TestMoves_OnlyTheChatBoundModelNodeBecomesAMove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "ask"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("ask")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -548,7 +547,7 @@ func TestMoves_RunThatDiesKeepsItsLastSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "find it"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("find it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -659,7 +658,7 @@ func TestMoves_PaymentRequiredRendersFriendlyNoNodeChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := runner.StartStream(context.Background(), "work-claude", "s", "", "hi"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "work-claude", "s", "", testTurn("hi")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -713,12 +712,12 @@ func (s *stubTurnSpan) callCount() int {
 	return s.calls
 }
 
-// TestMoves_EmptyUserMessageTurnResolvesItsSpan pins the third
-// turn-span source. StartStream is called with an empty userMessage on
-// two live paths — the keychain-rotation redrive and the multimodal
-// send, where the frontend already landed the user row — so the runner
-// has no id of its own to span from. Without the lookup those turns
-// would write no moves at all and silently regress to the pre-mission
+// TestMoves_EmptyUserMessageTurnResolvesItsSpan pins the fallback
+// turn-span source: a caller that could not name the persisted user row
+// (UserTurn.MessageID empty — e.g. an llm view History fake that carries
+// no ids). The runner never writes the user turn
+// (chat-single-writer-01DOGF0G), so without the lookup such a turn would
+// write no moves at all and silently regress to the pre-mission
 // single-row shape.
 //
 // MUTATION EVIDENCE (run and confirmed to fail): delete the
@@ -748,7 +747,7 @@ func TestMoves_EmptyUserMessageTurnResolvesItsSpan(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	// Empty userMessage: the redrive shape.
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", ""); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", UserTurn{}); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -769,11 +768,13 @@ func TestMoves_EmptyUserMessageTurnResolvesItsSpan(t *testing.T) {
 	}
 }
 
-// TestMoves_UserMessageTurnDoesNotLookUpItsSpan is the other half: when
-// StartStream wrote the user row itself it already HAS the id, and
-// reaching for the reader would be a wasted store read on the hot path
-// of every ordinary turn.
-func TestMoves_UserMessageTurnDoesNotLookUpItsSpan(t *testing.T) {
+// TestMoves_CallerSuppliedSpanSkipsTheLookup is the other half: when the
+// caller hands StartStream the persisted row's id (llm view StartStream
+// always does), the runner already HAS the span, and reaching for the
+// reader would be a wasted store read on the hot path of every ordinary
+// turn. (Before chat-single-writer-01DOGF0G the id came from the runner's
+// own append of the user text — the duplicate write behind dogfood F12.)
+func TestMoves_CallerSuppliedSpanSkipsTheLookup(t *testing.T) {
 	t.Parallel()
 	reg := &scriptedRegistry{}
 	reg.push(textTurn("answer"))
@@ -796,18 +797,22 @@ func TestMoves_UserMessageTurnDoesNotLookUpItsSpan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "a real question"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("a real question")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
 		t.Fatalf("run failed: %s", closed.Message)
 	}
 	if span.callCount() != 0 {
-		t.Errorf("span lookups = %d, want 0 — the runner already had the id", span.callCount())
+		t.Errorf("span lookups = %d, want 0 — the caller already supplied the id", span.callCount())
 	}
-	for i, e := range moveEntries(writer) {
-		if e.TurnSpanID != "msg-1" {
-			t.Errorf("move %d TurnSpanID = %q, want the id the runner's own write returned", i, e.TurnSpanID)
+	moves := moveEntries(writer)
+	if len(moves) == 0 {
+		t.Fatal("no moves persisted")
+	}
+	for i, e := range moves {
+		if e.TurnSpanID != testUserTurnID {
+			t.Errorf("move %d TurnSpanID = %q, want the caller's row %q", i, e.TurnSpanID, testUserTurnID)
 		}
 	}
 }
@@ -1363,7 +1368,7 @@ func TestMoves_ToolCallBoundaryCarriesTheArgsSummary(t *testing.T) {
 
 	pool := &scriptedPool{entries: []ToolEntry{{Server: "fs", Name: "write"}}}
 	runner, broker, writer := buildMoveRunner(t, reg, pool)
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "write it"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("write it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -1427,7 +1432,7 @@ func TestMoves_FailedToolIsErrorOnBoundaryAndRow(t *testing.T) {
 		failOn:  map[string]error{"sh__exec": fmt.Errorf("permission denied")},
 	}
 	runner, broker, writer := buildMoveRunner(t, reg, pool)
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "go"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("go")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	waitForClosed(t, broker)

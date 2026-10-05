@@ -8,6 +8,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -164,7 +167,11 @@ func TestCatalog_ListAfterPublish(t *testing.T) {
 	}
 }
 
-func TestCatalog_InstallAndInstalledItems(t *testing.T) {
+// TestCatalog_Install_RefusesEveryKind — install-framework-01DOGF0B WP02,
+// pin P-2 (backend half). Pre-fix, Install wrote installed/<kind>/... and
+// returned nil for every kind although nothing consumes that directory; this
+// test then failed on the nil error and on the written payload.
+func TestCatalog_Install_RefusesEveryKind(t *testing.T) {
 	fake := &fakeCatalogServer{}
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
@@ -175,34 +182,64 @@ func TestCatalog_InstallAndInstalledItems(t *testing.T) {
 		ExpiresAt:    time.Now().Add(time.Hour),
 	})
 	c := makeTestClient(t, srv.URL)
+	signer, _ := NewDeviceSigner(t.TempDir())
 
-	signerDataDir := t.TempDir()
-	signer, _ := NewDeviceSigner(signerDataDir)
-
-	payload := []byte(`workflow-content`)
-	item, err := c.Publish(context.Background(), signer,
-		CatalogKindWorkflow, "wf-install", "1.2.3", "desc", CatalogVisTeam, payload)
-	if err != nil {
-		t.Fatalf("Publish: %v", err)
+	for _, kind := range []CatalogItemKind{
+		CatalogKindWorkflow, CatalogKindAgentPack, CatalogKindBundle, CatalogKindSkill,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			item, err := c.Publish(context.Background(), signer,
+				kind, "refuse-"+string(kind), "1.2.3", "desc", CatalogVisTeam, []byte("content"))
+			if err != nil {
+				t.Fatalf("Publish: %v", err)
+			}
+			dataDir := t.TempDir()
+			err = c.Install(context.Background(), dataDir, "", item.ID, "1.2.3")
+			if !errors.Is(err, ErrCatalogKindNotInstallable) {
+				t.Fatalf("Install(%s) = %v, want ErrCatalogKindNotInstallable", kind, err)
+			}
+			if !strings.Contains(err.Error(), string(kind)) {
+				t.Errorf("refusal %q does not name the kind %q", err, kind)
+			}
+			if _, statErr := os.Stat(filepath.Join(dataDir, "installed")); !os.IsNotExist(statErr) {
+				t.Errorf("Install(%s) created installed/ (stat err %v); a refused install must write nothing", kind, statErr)
+			}
+			if got, _ := InstalledItems(dataDir); len(got) != 0 {
+				t.Errorf("InstalledItems after refused install = %v, want none", got)
+			}
+		})
 	}
+}
 
-	// Install with no pubkey (skip signature verification — per-device key
-	// lookup is not yet implemented server-side; tracked for follow-up).
-	installDir := t.TempDir()
-	if err := c.Install(context.Background(), installDir, "", item.ID, "1.2.3"); err != nil {
-		t.Fatalf("Install: %v", err)
+// seedInstalledResidue writes installed/ exactly as a pre-WP02 release's
+// Install did (payload + meta.json), so cleanup is tested against real
+// residue rather than something this release can no longer produce.
+func seedInstalledResidue(t *testing.T, dataDir string, kind CatalogItemKind, id, version string) {
+	t.Helper()
+	dir := installBasePath(dataDir, kind, id, version)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "payload"), []byte("opaque"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := json.MarshalIndent(map[string]string{
+		"catalog_id": id, "version": version, "kind": string(kind), "slug": id, "signature": "",
+	}, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), meta, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
 
-	// Verify InstalledItems reports the installed item.
-	installed, err := InstalledItems(installDir)
+func TestCatalog_InstalledItems_ReadsPriorReleaseResidue(t *testing.T) {
+	dataDir := t.TempDir()
+	seedInstalledResidue(t, dataDir, CatalogKindWorkflow, "wf-old", "1.2.3")
+	installed, err := InstalledItems(dataDir)
 	if err != nil {
 		t.Fatalf("InstalledItems: %v", err)
 	}
-	if len(installed) == 0 {
-		t.Error("expected installed item; got none")
-	}
-	if installed[0].ID != item.ID {
-		t.Errorf("installed item ID = %q, want %q", installed[0].ID, item.ID)
+	if len(installed) != 1 || installed[0].ID != "wf-old" || installed[0].Kind != CatalogKindWorkflow {
+		t.Errorf("InstalledItems = %+v, want the one seeded workflow", installed)
 	}
 }
 
@@ -249,12 +286,14 @@ func TestCatalog_Uninstall(t *testing.T) {
 	})
 	c := makeTestClient(t, srv.URL)
 
-	signer, _ := NewDeviceSigner(t.TempDir())
-	item, _ := c.Publish(context.Background(), signer,
-		CatalogKindWorkflow, "to-remove", "1.0.0", "desc", CatalogVisTeam, []byte("data"))
-
+	// Uninstall is the cleanup path for residue a pre-WP02 release's
+	// Install left behind (install-framework-01DOGF0B WP02).
+	item := CatalogItem{ID: "to-remove-id"}
 	dataDir := t.TempDir()
-	_ = c.Install(context.Background(), dataDir, "", item.ID, "1.0.0")
+	seedInstalledResidue(t, dataDir, CatalogKindWorkflow, item.ID, "1.0.0")
+	if got, _ := InstalledItems(dataDir); len(got) != 1 {
+		t.Fatalf("fixture: InstalledItems = %v, want the seeded item", got)
+	}
 
 	// Uninstall.
 	if err := c.Uninstall(dataDir, CatalogKindWorkflow, item.ID, "1.0.0"); err != nil {
@@ -377,5 +416,49 @@ func TestCatalog_PayloadTooLarge(t *testing.T) {
 		CatalogKindBundle, "big-bundle", "1.0.0", "desc", CatalogVisTeam, big)
 	if err != ErrCatalogPayloadTooLarge {
 		t.Errorf("expected ErrCatalogPayloadTooLarge, got %v", err)
+	}
+}
+
+// TestCatalog_Uninstall_RefusesTraversal — review F8. Uninstall is now the
+// promoted "Remove download" path; kind/catalogID/version arrive from the
+// frontend and feed filepath.Join → os.RemoveAll. Pre-fix, a version of
+// "/../../../../victim" removed <root>/victim, outside installed/ entirely.
+// Each input must be a single clean segment.
+func TestCatalog_Uninstall_RefusesTraversal(t *testing.T) {
+	var c *Client // Uninstall touches no client state
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	victim := filepath.Join(root, "victim")
+	if err := os.MkdirAll(victim, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "installed", "workflow"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ kind, id, ver string }{
+		// Joins to <root>/victim: the case that removed a real directory
+		// outside installed/ before the guard.
+		{"workflow", "x", "/../../../../victim"},
+		{"../../..", "victim", "1"},
+		{"workflow", "../../../victim", "1"},
+		{"workflow", `..\..\victim`, "1"},
+		{"..", "..", "x"},
+		{"", "a", "1"},
+		{"workflow", "", "1"},
+		{"workflow", "a", ""},
+		{"workflow", ".", "1"},
+		{"workflow/sub", "a", "1"},
+	}
+	for _, tc := range cases {
+		err := c.Uninstall(dataDir, CatalogItemKind(tc.kind), tc.id, tc.ver)
+		if !errors.Is(err, ErrCatalogInvalidPathSegment) {
+			t.Errorf("Uninstall(%q, %q, %q) = %v, want ErrCatalogInvalidPathSegment", tc.kind, tc.id, tc.ver, err)
+		}
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("victim directory outside installed/ was removed: %v", err)
+	}
+	if err := c.Uninstall("", CatalogKindWorkflow, "a", "1"); err == nil {
+		t.Error("Uninstall with empty dataDir must refuse (it would resolve against the working directory)")
 	}
 }

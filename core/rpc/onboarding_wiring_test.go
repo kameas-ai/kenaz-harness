@@ -284,7 +284,7 @@ func TestOnboardingPromptReachesGenerationRequest(t *testing.T) {
 	reg := &recordingRegistry{}
 	runner, broker := buildTestChatRunner(t, sessMgr, attMgr, reg)
 
-	subID, err := runner.StartStream(ctx, "test-profile", sessionID, "", "let's get started")
+	subID, err := runner.StartStream(ctx, "test-profile", sessionID, "", chat.UserTurn{Text: "let's get started"})
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestLegacyColumnOnlyDoesNotReachGenerationRequest(t *testing.T) {
 	reg := &recordingRegistry{}
 	runner, broker := buildTestChatRunner(t, sessMgr, attMgr, reg)
 
-	_, err = runner.StartStream(ctx, "test-profile", rec.ID, "", "let's get started")
+	_, err = runner.StartStream(ctx, "test-profile", rec.ID, "", chat.UserTurn{Text: "let's get started"})
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}

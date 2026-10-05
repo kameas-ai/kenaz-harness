@@ -17,7 +17,12 @@ type CatalogItemView struct {
 	Description string `json:"description"`
 	Visibility  string `json:"visibility"`
 	PublishedAt string `json:"published_at,omitempty"` // RFC3339
-	Installed   bool   `json:"installed"`
+	// Installed is per kind (install-framework-01DOGF0B WP01): for
+	// kind=skill it means the skill is in the skill store (live-registered);
+	// for every other kind it means a downloaded payload sits under
+	// <dataDir>/installed/ — residue nothing consumes, which the UI offers
+	// to remove but does not call "installed" (see docs/unwired-ledger.md).
+	Installed bool `json:"installed"`
 }
 
 // PublishInput is the form the frontend submits when publishing an item.
@@ -49,17 +54,19 @@ type CatalogAPI interface {
 	// List returns catalog items matching the filter (metadata only).
 	Catalog_List(ctx context.Context, filter CatalogFilter) ([]CatalogItemView, error)
 
-	// Install downloads the item and extracts it to
-	// <DataDir>/installed/<kind>/<id>@<version>/. Signature verification
-	// is SKIPPED today (fleet-enforcement-truth-01PMZ505 WP10, register
-	// C-2, 2026-08-19, owner alec) — no per-device catalog signing key
-	// source exists in or out of this repo. See
-	// core/rpc/views/catalog/impl.go's pubKeyBase64 doc and
-	// docs/unwired-ledger.md.
+	// Install refuses every kind with fleet.ErrCatalogKindNotInstallable,
+	// naming the kind and the working alternative, and writes nothing
+	// (install-framework-01DOGF0B WP02). It used to write an opaque
+	// payload under <DataDir>/installed/ that no runtime consumer reads —
+	// a badge-only install (docs/unwired-ledger.md). Each kind gets a
+	// consumed install through the provider framework (WP05–WP07).
+	// Signature verification (register C-2) is still unimplemented and
+	// moot here until a kind installs again.
 	Catalog_Install(ctx context.Context, catalogID, version string) error
 
-	// Uninstall removes the local install directory and unregisters
-	// the item.
+	// Uninstall removes the local installed/<kind>/<id>@<version>/
+	// directory — residue a pre-WP02 release's Install left. There is
+	// nothing to unregister: nothing ever registered it.
 	Catalog_Uninstall(ctx context.Context, kind, catalogID, version string) error
 
 	// Installed returns locally installed catalog items.

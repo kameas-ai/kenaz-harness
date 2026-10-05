@@ -27,6 +27,7 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -36,6 +37,7 @@ import (
 	"time"
 
 	advicelabels "github.com/kameas-ai/kenaz-harness/core/advice/labels"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
@@ -189,6 +191,80 @@ var expectedChangedTables = map[string][]string{
 	"v0.78.1": {"scheduled_chat_runs"},
 }
 
+// artifactsToUnitsNote documents the second per-tag declaration map below.
+// units/1104-artifacts-to-units (artifacts-as-units-01DOGF0C WP04) is
+// newer than every committed snapshot, and on every one of them it:
+//
+//   - copies each `artifacts` row into `units` (kind='artifact') and each
+//     `artifact_versions` row into `unit_versions` (plus a synthesized v1
+//     for version-less artifacts) — so `units` / `unit_versions` gain rows;
+//   - renames `artifacts` -> `artifacts_legacy` and `artifact_versions` ->
+//     `artifact_versions_legacy` — so the two legacy names disappear.
+//
+// Declaring these four tables waives the generic row-count/digest loop for
+// them, which is exactly the masking risk the scheduled_chat_runs comments
+// above warn about. assertArtifactsMigratedToUnits narrows that waiver back
+// down on every tag: the legacy tables' full row content (a name-independent
+// digest) must equal the pre-Open `artifacts` / `artifact_versions` content
+// under their new names; every non-artifact units / unit_versions row must be
+// byte-identical to the pre-Open dump; and the copy is checked for the SEED
+// artifact only (head + both versions) — so a migration that mis-copied some
+// other artifact into units would be caught by migration_1104_test.go's
+// seeded snapshots, not by this loop. That is the residual cost of the
+// waiver, stated so nobody reads this table as fully covered.
+//
+// Kept as its own map (merged in testUpgradeSnapshot) rather than spliced
+// into each expectedChangedTables entry so the one reason reads once. A
+// snapshot taken AFTER the release that ships 1104 already has the legacy
+// names in its dump and needs no entry — do not add one for it.
+const artifactsToUnitsNote = "units/1104-artifacts-to-units (artifacts-as-units-01DOGF0C WP04) " +
+	"copies artifacts/artifact_versions into units/unit_versions and renames the legacy tables."
+
+var artifactsToUnitsTables = []string{"artifacts", "artifact_versions", "units", "unit_versions"}
+
+var expectedChangedTablesArtifactsToUnits = map[string][]string{
+	"v0.63.0": artifactsToUnitsTables,
+	"v0.63.1": artifactsToUnitsTables,
+	"v0.63.2": artifactsToUnitsTables,
+	"v0.64.0": artifactsToUnitsTables,
+	"v0.64.1": artifactsToUnitsTables,
+	"v0.65.0": artifactsToUnitsTables,
+	"v0.65.1": artifactsToUnitsTables,
+	"v0.66.0": artifactsToUnitsTables,
+	"v0.67.0": artifactsToUnitsTables,
+	"v0.68.0": artifactsToUnitsTables,
+	"v0.69.0": artifactsToUnitsTables,
+	"v0.70.0": artifactsToUnitsTables,
+	"v0.71.0": artifactsToUnitsTables,
+	"v0.72.0": artifactsToUnitsTables,
+	"v0.73.0": artifactsToUnitsTables,
+	"v0.73.1": artifactsToUnitsTables,
+	"v0.73.2": artifactsToUnitsTables,
+	"v0.73.3": artifactsToUnitsTables,
+	"v0.74.0": artifactsToUnitsTables,
+	"v0.75.0": artifactsToUnitsTables,
+	"v0.75.1": artifactsToUnitsTables,
+	"v0.75.2": artifactsToUnitsTables,
+	"v0.76.0": artifactsToUnitsTables,
+	"v0.76.1": artifactsToUnitsTables,
+	"v0.77.0": artifactsToUnitsTables,
+	"v0.77.1": artifactsToUnitsTables,
+	"v0.78.0": artifactsToUnitsTables,
+	"v0.78.1": artifactsToUnitsTables,
+	"v0.79.0": artifactsToUnitsTables,
+	"v0.80.0": artifactsToUnitsTables,
+	"v0.80.1": artifactsToUnitsTables,
+	"v0.81.0": artifactsToUnitsTables,
+	"v0.82.0": artifactsToUnitsTables,
+	"v0.82.1": artifactsToUnitsTables,
+	"v0.83.0": artifactsToUnitsTables,
+	"v0.84.0": artifactsToUnitsTables,
+	"v0.85.0": artifactsToUnitsTables,
+	"v0.85.1": artifactsToUnitsTables,
+	"v0.85.2": artifactsToUnitsTables,
+	"v0.86.0": artifactsToUnitsTables,
+}
+
 // scheduledChatRunsTriggerKindNote documents WHY scheduled_chat_runs is
 // in expectedChangedTables for v0.72.0 onward (and, alongside
 // scheduledChatRunsProvenanceNote, for every earlier tag too):
@@ -275,6 +351,13 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// snapshot chain is where the constraint becomes decidable. See
 	// assertLedgerHashesUnchanged for the full reasoning.
 	assertLedgerHashesUnchanged(t, ctx, raw, tag)
+	// artifacts-as-units-01DOGF0C: the document rows sharing the units
+	// tables, captured BEFORE units/1104 copies artifacts in beside them.
+	preNonArtifactUnits := snapshotNonArtifactUnits(t, ctx, raw)
+	preLegacy := map[string]string{
+		"artifacts":         rowsDigest(t, ctx, raw, "artifacts"),
+		"artifact_versions": rowsDigest(t, ctx, raw, "artifact_versions"),
+	}
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -373,6 +456,7 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// per-table loop below. ----
 	assertAdviceLabelsTableMigrated(t, ctx, db)
 	assertUnitsTableSurvivesUntouched(t, ctx, db, tag)
+	assertArtifactsMigratedToUnits(t, ctx, db, rawPath, tag, preNonArtifactUnits, preLegacy)
 
 	// ---- automation-actually-runs-01PMZ404 UNIT-13 (owner ruling
 	// A-10): rerun_policy is refused on save but tolerated on load. A
@@ -455,6 +539,9 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// install) now appears as a 0->1 pre-vs-post change on replay.
 	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true, "tasks": true, "advice_labels": true, "advice_label_push_cursor": true}
 	for _, tbl := range expectedChangedTables[tag] {
+		changed[tbl] = true
+	}
+	for _, tbl := range expectedChangedTablesArtifactsToUnits[tag] { // see artifactsToUnitsNote
 		changed[tbl] = true
 	}
 	for table, before := range preOpen {
@@ -570,11 +657,20 @@ func assertSurfaceReads(t *testing.T, ctx context.Context, db storage.DB) {
 	if n := count("messages", "SELECT COUNT(*) FROM session_messages WHERE session_id='seed-session-1'"); n < 3 {
 		t.Errorf("session_messages for seed-session-1 = %d, want >= 3", n)
 	}
-	if n := count("artifacts", "SELECT COUNT(*) FROM artifacts WHERE id='seed-artifact-1'"); n != 1 {
-		t.Errorf("artifacts row for seed-artifact-1 = %d, want 1", n)
+	// units/1104 (artifacts-as-units-01DOGF0C) moved artifacts onto units
+	// and retained the legacy tables under *_legacy names. Both halves are
+	// read here; assertArtifactsMigratedToUnits checks content.
+	if n := count("artifacts_legacy", "SELECT COUNT(*) FROM artifacts_legacy WHERE id='seed-artifact-1'"); n != 1 {
+		t.Errorf("artifacts_legacy row for seed-artifact-1 = %d, want 1", n)
 	}
-	if n := count("artifact_versions", "SELECT COUNT(*) FROM artifact_versions WHERE artifact_id='seed-artifact-1'"); n != 2 {
-		t.Errorf("artifact_versions for seed-artifact-1 = %d, want 2 (the cascade canary)", n)
+	if n := count("artifact_versions_legacy", "SELECT COUNT(*) FROM artifact_versions_legacy WHERE artifact_id='seed-artifact-1'"); n != 2 {
+		t.Errorf("artifact_versions_legacy for seed-artifact-1 = %d, want 2 (the cascade canary)", n)
+	}
+	if n := count("artifact unit", "SELECT COUNT(*) FROM units WHERE id='seed-artifact-1' AND kind='artifact'"); n != 1 {
+		t.Errorf("units row for seed-artifact-1 (kind=artifact) = %d, want 1", n)
+	}
+	if n := count("artifact unit versions", "SELECT COUNT(*) FROM unit_versions WHERE unit_id='seed-artifact-1'"); n != 2 {
+		t.Errorf("unit_versions for seed-artifact-1 = %d, want 2 (both legacy versions copied, no synthesized v1)", n)
 	}
 	if n := count("branches", "SELECT COUNT(*) FROM branches WHERE id='seed-branch-1'"); n != 1 {
 		t.Errorf("branches row for seed-branch-1 = %d, want 1", n)
@@ -1053,4 +1149,165 @@ func assertUnitsTableSurvivesUntouched(t *testing.T, ctx context.Context, db sto
 	if seenAny && n < len(wantIDs) {
 		t.Errorf("%s: units row count = %d after Open, want at least %d (the two KindDoc seed rows)", tag, n, len(wantIDs))
 	}
+}
+
+// snapshotNonArtifactUnits renders every units / unit_versions row that
+// is NOT an artifact (and every unit_versions row whose parent is not an
+// artifact) as one ordered string per table. units/1104 inserts artifact
+// rows into these same tables; the rows already there — the v0.83.0+
+// KindDoc seed rows — must come out byte-identical (WP-PI AC-PI-3).
+func snapshotNonArtifactUnits(t *testing.T, ctx context.Context, raw *sql.DB) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	var exists int
+	if err := raw.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='units'").Scan(&exists); err != nil {
+		t.Fatalf("probe units table: %v", err)
+	}
+	if exists == 0 {
+		return out
+	}
+	queries := map[string]string{
+		"units": `SELECT id || '|' || kind || '|' || scope || '|' || scope_id || '|' || classification || '|' ||
+		                 version || '|' || load_policy || '|' || title || '|' || body || '|' || metadata || '|' ||
+		                 created_at || '|' || updated_at
+		            FROM units WHERE kind != 'artifact' ORDER BY id`,
+		"unit_versions": `SELECT uv.id || '|' || uv.unit_id || '|' || uv.version || '|' || uv.body || '|' ||
+		                         uv.metadata || '|' || uv.created_at
+		                    FROM unit_versions uv JOIN units u ON u.id = uv.unit_id
+		                   WHERE u.kind != 'artifact' ORDER BY uv.id`,
+	}
+	for table, q := range queries {
+		rows, err := raw.QueryContext(ctx, q)
+		if err != nil {
+			t.Fatalf("snapshot non-artifact %s: %v", table, err)
+		}
+		var b strings.Builder
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				_ = rows.Close()
+				t.Fatalf("scan non-artifact %s: %v", table, err)
+			}
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		_ = rows.Close()
+		out[table] = b.String()
+	}
+	return out
+}
+
+// assertArtifactsMigratedToUnits is the content-level replacement for the
+// generic digest check that artifactsToUnitsNote waives, run on EVERY
+// committed snapshot (artifacts-as-units-01DOGF0C WP04, pins P-1/P-3):
+//
+//   - 1104 is ledgered as applied;
+//   - the seed artifact reads back through the PRODUCTION store
+//     (artifacts.NewSQLStore, the units-backed store core/rpc wires) with
+//     every field equal to the snapshot's legacy row, and its two versions
+//     equal to the legacy version rows — no synthesized v1, because this
+//     artifact has real versions;
+//   - the legacy tables are present under *_legacy names with their rows;
+//   - every non-artifact units / unit_versions row is byte-identical to
+//     the pre-Open dump.
+func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storage.DB, rawPath, tag string, pre, preLegacy map[string]string) {
+	t.Helper()
+	r := db.Reader()
+	var applied int
+	if err := r.QueryRow(ctx,
+		"SELECT COUNT(*) FROM harness_migrations WHERE id = 'units/1104-artifacts-to-units' AND action = 'applied'").Scan(&applied); err != nil {
+		t.Fatalf("%s: ledger probe for 1104: %v", tag, err)
+	}
+	if applied != 1 {
+		t.Errorf("%s: units/1104-artifacts-to-units ledger rows = %d, want 1", tag, applied)
+	}
+
+	store := coreart.NewSQLStore(db)
+	a, err := store.Get(ctx, "seed-artifact-1")
+	if err != nil {
+		t.Fatalf("%s: production artifacts store cannot read the migrated seed artifact: %v", tag, err)
+	}
+	if a.Title != "Seed Artifact" || a.MimeType != "text/plain" || a.ContentHash != "seedhash1" || a.ByteSize != 42 ||
+		a.Source != coreart.SourceUserPin || a.ScopeKind != coreart.ScopeKindSession || a.SessionID != "seed-session-1" ||
+		a.ProjectID != nil || a.CreatedAt.UnixNano() != 1700000000400 {
+		t.Errorf("%s: migrated seed artifact = %+v, want the legacy row's values", tag, a)
+	}
+	vs, err := store.ListVersions(ctx, "seed-artifact-1")
+	if err != nil {
+		t.Fatalf("%s: ListVersions: %v", tag, err)
+	}
+	if len(vs) != 2 || vs[0].Version != 1 || vs[0].ContentHash != "seedhash1v1" || vs[0].ByteSize != 40 ||
+		vs[0].Summary == nil || *vs[0].Summary != "seed v1" || vs[0].Path == nil || *vs[0].Path != "/seed/v1" ||
+		vs[1].Version != 2 || vs[1].ContentHash != "seedhash1v2" || vs[1].CreatedAt.UnixNano() != 1700000000420 {
+		t.Errorf("%s: migrated versions = %+v, want the two legacy version rows", tag, vs)
+	}
+	if list, err := store.List(ctx, coreart.ArtifactFilter{SessionID: "seed-session-1"}); err != nil || len(list) != 1 {
+		t.Errorf("%s: List(session seed-session-1) = %d rows, %v; want 1", tag, len(list), err)
+	}
+
+	post := openRawSQLiteAt(t, rawPath)
+	defer func() { _ = post.Close() }()
+	// The legacy tables are the recovery copy: their full content must be
+	// the pre-Open tables' content under the new names (review F8 —
+	// replaces a count-only check).
+	for oldName, newName := range map[string]string{"artifacts": "artifacts_legacy", "artifact_versions": "artifact_versions_legacy"} {
+		if got := rowsDigest(t, ctx, post, newName); got != preLegacy[oldName] {
+			t.Errorf("%s: %s content differs from the pre-Open %s content — the retained copy was altered", tag, newName, oldName)
+		}
+	}
+	got := snapshotNonArtifactUnits(t, ctx, post)
+	for table, before := range pre {
+		if got[table] != before {
+			t.Errorf("%s: non-artifact %s rows changed across Open (a document row was altered):\nbefore:\n%s\nafter:\n%s",
+				tag, table, before, got[table])
+		}
+	}
+}
+
+// rowsDigest renders every row of table (all columns, ordered by rowid) as
+// text, independent of the table's NAME, so a renamed table can be compared
+// to its pre-rename self.
+func rowsDigest(t *testing.T, ctx context.Context, raw *sql.DB, table string) string {
+	t.Helper()
+	rows, err := raw.QueryContext(ctx, "SELECT * FROM "+table+" ORDER BY rowid")
+	if err != nil {
+		t.Fatalf("rowsDigest %s: %v", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatalf("rowsDigest %s columns: %v", table, err)
+	}
+	var b strings.Builder
+	b.WriteString(strings.Join(cols, ",") + "\n")
+	vals := make([]any, len(cols))
+	ptrs := make([]any, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	n := 0
+	for rows.Next() {
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatalf("rowsDigest %s scan: %v", table, err)
+		}
+		for i, v := range vals {
+			if i > 0 {
+				b.WriteByte('|')
+			}
+			switch x := v.(type) {
+			case nil:
+				b.WriteString("NULL")
+			case []byte:
+				b.WriteString(string(x))
+			default:
+				b.WriteString(fmt.Sprint(x))
+			}
+		}
+		b.WriteByte('\n')
+		n++
+	}
+	if n == 0 {
+		t.Fatalf("rowsDigest %s: no rows — every snapshot seeds seed-artifact-1, so an empty table means the comparison is vacuous", table)
+	}
+	return b.String()
 }

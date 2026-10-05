@@ -227,7 +227,7 @@ func TestChatRunner_BackendErrorPartialPersist_DoesNotDuplicateEarlierMoves(t *t
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := runner.StartStream(ctx, "profile-1", sessionID, "", "find it, then check again"); err != nil {
+	if _, err := runner.StartStream(ctx, "profile-1", sessionID, "", testTurn("find it, then check again")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)

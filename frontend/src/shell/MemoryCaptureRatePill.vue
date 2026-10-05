@@ -11,7 +11,7 @@
  * the LegendBar during inactivity).
  *
  * Polls Memory_CaptureRate every 5 s while mounted.
- * Click → navigates to /memory.
+ * Click → navigates to Knowledge › Learned (/knowledge/learned).
  */
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
@@ -85,7 +85,7 @@ onBeforeUnmount(() => {
 });
 
 function onClick() {
-  void router.push('/memory');
+  void router.push('/knowledge/learned');
 }
 </script>
 

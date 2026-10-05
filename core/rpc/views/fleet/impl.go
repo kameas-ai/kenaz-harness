@@ -56,6 +56,28 @@ var _ FleetAPI = (*Impl)(nil)
 // not wired (test chassis / no DataDir).
 var ErrUnitsUnavailable = errors.New("fleet: unit store unavailable")
 
+// ErrArtifactUnitNotShareable is returned by the Unit_* collaboration RPCs
+// for a kind='artifact' unit. Artifacts became units in
+// artifacts-as-units-01DOGF0C, as a DELEGATED exception: their rows are
+// owned by core/artifacts, are personal, and never leave the device
+// (spec FR-5). Promote-as-merge-request would egress an artifact's title and
+// metadata (message ids, content hash) to fleet, and the merge/enshrine
+// resolutions would rewrite or fork an artifact row behind its owner — so
+// all three refuse it. Sharing an artifact is a future feature with its own
+// consent design (spec §5).
+var ErrArtifactUnitNotShareable = errors.New("fleet: artifact units are local-only and cannot be shared, merged or enshrined")
+
+// refuseArtifactUnit returns ErrArtifactUnitNotShareable when id names a
+// kind='artifact' unit. Lookup errors are left to the caller's own path
+// (which reports a missing unit in its usual way).
+func (f *Impl) refuseArtifactUnit(ctx context.Context, id string) error {
+	u, err := f.Units.Get(ctx, id)
+	if err == nil && u.Kind == units.KindArtifact {
+		return fmt.Errorf("%w (unit %s)", ErrArtifactUnitNotShareable, id)
+	}
+	return nil
+}
+
 // ErrSyncerUnavailable is returned when a method needs the fleet syncer (e.g.
 // promote-as-MR) but it is not wired (fleet disabled).
 var ErrSyncerUnavailable = errors.New("fleet: sync engine unavailable")
@@ -143,6 +165,9 @@ func (f *Impl) Unit_PromoteAsMergeRequest(ctx context.Context, unitID, toClassif
 	default:
 		return MergeRequestResult{}, fmt.Errorf("invalid promote target %q; must be team or org", toClassification)
 	}
+	if err := f.refuseArtifactUnit(ctx, unitID); err != nil {
+		return MergeRequestResult{}, err
+	}
 	if f.Syncer == nil {
 		return MergeRequestResult{}, ErrSyncerUnavailable
 	}
@@ -191,6 +216,9 @@ func (f *Impl) Unit_ResolveMerge(ctx context.Context, unitID, resolvedBody strin
 	if f.Units == nil {
 		return ErrUnitsUnavailable
 	}
+	if err := f.refuseArtifactUnit(ctx, unitID); err != nil {
+		return err
+	}
 	if _, err := f.Units.ResolveMerge(ctx, unitID, resolvedBody, nil); err != nil {
 		return err
 	}
@@ -206,6 +234,9 @@ func (f *Impl) Unit_ResolveMerge(ctx context.Context, unitID, resolvedBody strin
 func (f *Impl) Unit_ResolveEnshrine(ctx context.Context, srcUnitID, enshrinedTitle, enshrinedBody, reason string) (string, error) {
 	if f.Units == nil {
 		return "", ErrUnitsUnavailable
+	}
+	if err := f.refuseArtifactUnit(ctx, srcUnitID); err != nil {
+		return "", err
 	}
 	newUnit, _, err := f.Units.ResolveEnshrine(ctx, srcUnitID, enshrinedTitle, enshrinedBody, reason)
 	if err != nil {

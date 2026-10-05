@@ -47,6 +47,11 @@ const (
 	// ProvenanceKenazBundle: Kenaz seeded the engine from the bytes shipped
 	// inside its own code-signed app bundle (digest pinning).
 	ProvenanceKenazBundle = "kenaz-bundle-digest"
+	// ProvenanceDeveloperBuild: a developer seeded an engine they built or
+	// fetched themselves (SeedDeveloperBuild). NOT a known installer:
+	// knownProvenance never returns true for it, so it is adoptable only
+	// where Layout.DeveloperBuilds is set — the dev engine root.
+	ProvenanceDeveloperBuild = "developer-local-build"
 )
 
 func knownProvenance(p string) bool {

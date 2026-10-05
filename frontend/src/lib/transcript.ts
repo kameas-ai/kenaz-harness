@@ -37,6 +37,30 @@
 
 import type { Message } from './types';
 
+/**
+ * The turn span id stamped on in-flight (and, until the next reload,
+ * just-committed) moves: `live:<stream sub id>`. The stream announces a
+ * move's position but not the id of the user message that opened the
+ * turn, so useSession keys live rows by the stream instead.
+ */
+export const LIVE_SPAN_PREFIX = 'live:';
+
+export function liveSpanId(subID: string): string {
+  return `${LIVE_SPAN_PREFIX}${subID}`;
+}
+
+/**
+ * The kernel run id behind a live span, or '' for a durable span.
+ * Since agentgraph-settings-linkage-01DOGF0D WP02 the chat stream's sub
+ * id IS the kernel run id, so a `live:<sub>` row needs no lookup to be
+ * linked to its run graph — which matters because those rows keep the
+ * live span until the transcript is reloaded (review H2).
+ */
+export function runIdFromLiveSpan(spanId: string | undefined): string {
+  if (!spanId || !spanId.startsWith(LIVE_SPAN_PREFIX)) return '';
+  return spanId.slice(LIVE_SPAN_PREFIX.length);
+}
+
 /** Lifecycle of an inline tool chip. */
 type ToolChipStatus = 'running' | 'ok' | 'error';
 

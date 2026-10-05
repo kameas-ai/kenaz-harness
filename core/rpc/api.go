@@ -304,7 +304,8 @@ type HarnessAPI interface {
 
 	// ScheduledChat exposes the scheduled-chat-runs CRUD + dispatch surface
 	// (mission scheduled-chat-runs-01KX5R8B, v0.10.0). The frontend's
-	// Settings → Scheduled Chats panel creates and manages prompt-template
+	// Workflows › Schedules tab (Settings → Scheduled Chats until
+	// nav-ia-sweep-01DOGF0F) creates and manages prompt-template
 	// jobs fired by the existing core/scheduler cron engine.
 	ScheduledChat() scheduledchatview.ScheduledChatAPI
 
@@ -2131,6 +2132,9 @@ func New(c *core.Core, opts ...Option) *API {
 	// SettingsAPI.fleetClient() is nil. NewClient returns a nopClient when
 	// HARNESS_FLEET_DISABLED=1, which preserves the OSS-first behaviour: the
 	// settings RPC code still short-circuits via the isNop check.
+	// fleet-session-truth-01DOGF0A FR-9: enroll reports the real build
+	// version (it sent a hard-coded "0.18.0" on every enroll).
+	settingsImpl.SetFleetClientVersion(buildLabel(c))
 	if fleetClient, ferr := fleet.NewClient(fleet.ClientOpts{DataDir: dataDir}); ferr == nil {
 		settingsImpl.SetFleetClient(fleetClient, dataDir)
 	} else {
@@ -2310,7 +2314,13 @@ func New(c *core.Core, opts ...Option) *API {
 	// SetSessionHookRunner's doc) — the adapter is built here, in core/rpc,
 	// and passed in as the session.SessionHookRunner interface.
 	if c != nil && a.hookRunner != nil {
-		c.SetSessionHookRunner(&hooks.SessionRunnerAdapter{Runner: a.hookRunner})
+		// v0.86.0 unwired sweep: decorated so session_start's
+		// additional_context is attached to the new session instead of
+		// discarded by Manager.Create (see hook_context_attacher.go).
+		c.SetSessionHookRunner(&sessionStartContextRunner{
+			SessionHookRunner: &hooks.SessionRunnerAdapter{Runner: a.hookRunner},
+			attach:            newHookContextAttacher(a.attachmentsMgr),
+		})
 	}
 	// subagent-control-and-background-tasks-01PMZB11 UNIT-4: late-bind
 	// the task registry's HookFirer now that the process-singleton
@@ -2512,8 +2522,19 @@ func New(c *core.Core, opts ...Option) *API {
 	// demand-driven probe, and the Settings RPC surface over them.
 	a.sidecarMgr = stack.sidecarMgr
 	a.sidecarProbe = stack.sidecarProbe
-	a.sidecarAPI = &sidecarview.Impl{Manager: stack.sidecarMgr, Release: mlsidecar.PinnedEngineRelease,
+	sidecarImpl := &sidecarview.Impl{Manager: stack.sidecarMgr, Release: mlsidecar.PinnedEngineRelease,
 		Lanes: stack.labelPusher.LaneStatus}
+	// v0.86.0 unwired sweep: Uninstall wipes the engine's label mirror,
+	// so it must also rewind the push cursor (LabelPusher.ResetCursor had
+	// no production caller).
+	// Enable/Update/Repair nudge the event-driven lane so a freshly
+	// healthy engine receives the backlog without waiting for the next
+	// label write.
+	if stack.labelPusher != nil {
+		sidecarImpl.ResetLabelCursor = stack.labelPusher.ResetCursor
+		sidecarImpl.NudgeLabels = stack.labelPusher.Nudge
+	}
+	a.sidecarAPI = sidecarImpl
 	// model-settings-reach-the-model-01PMZ101 WP07: same pattern as the
 	// compaction pair above, for the chat runner's auto-title caller.
 	a.autotitleLLM = stack.autotitleLLM
@@ -2567,6 +2588,10 @@ func New(c *core.Core, opts ...Option) *API {
 			// above the background_task_complete SetHookFirer block) —
 			// one Runner, fired from two independent sites.
 			HookRunner: a.hookRunner,
+			// v0.86.0 unwired sweep: subagent_start's
+			// additional_context becomes a system attachment on the
+			// child session before its first turn.
+			AttachHookContext: newHookContextAttacher(a.attachmentsMgr),
 			// Lazy, mirroring ChatRunDispatcherDeps.DefaultProfile
 			// (this file's scheduled-chat wiring, below): first
 			// personal-provider profile wins, re-read on every spawn
@@ -2794,10 +2819,20 @@ func New(c *core.Core, opts ...Option) *API {
 	// session id cannot inherit approvals the user threw away
 	// (confirm-each-enforcement-01PMAG05 review finding 7, wired by the
 	// 2026-08-13 adversarial review).
-	if a.confirmSessionGrants != nil {
-		grants := a.confirmSessionGrants
+	//
+	// v0.86.0 sweep review (L5): the same teardown forgets any hook
+	// additional_context still queued for the session in the chat runner.
+	// One hook, both duties — WithDeleteHookOpt replaces, not chains.
+	grants := a.confirmSessionGrants
+	chatRunnerForDelete := stack.chatRunner
+	if grants != nil || chatRunnerForDelete != nil {
 		a.sessionsAPI = sessions.WithDeleteHookOpt(a.sessionsAPI, func(sessionID string) {
-			grants.RevokeSession(sessionID)
+			if grants != nil {
+				grants.RevokeSession(sessionID)
+			}
+			if chatRunnerForDelete != nil {
+				chatRunnerForDelete.ForgetSession(sessionID)
+			}
 		})
 	}
 	// Wire export dependencies (Cedar gate) at boot time so the Cedar
@@ -3958,6 +3993,11 @@ func New(c *core.Core, opts ...Option) *API {
 		} else {
 			a.catalogAPI = catalogview.NewAPI(nil, nil, "").WithEmitter(flAudit)
 		}
+		// install-framework-01DOGF0B WP01: kind=skill installed state is
+		// read from the skill store (the consumer), not installed/.
+		if cv, ok := a.catalogAPI.(*catalogview.API); ok && skillStore != nil {
+			cv.WithSkillStore(skillStore)
+		}
 
 		// Sync (WP05) — wired with a nil Syncer when fleet is disabled.
 		// The Syncer is a lightweight object; we create it unconditionally but
@@ -4167,6 +4207,11 @@ func New(c *core.Core, opts ...Option) *API {
 			}
 			unitMapper := corefleet.NewUnitMapper(teamID)
 			unitSyncer := corefleet.NewUnitSyncer(flCl, a.unitsMgr, unitMapper, caps, flDataDir)
+			// fleet-session-truth-01DOGF0A FR-6: the poll reports into the
+			// shared lane board (FleetSession.sync.unitPoll).
+			if a.settingsImpl != nil {
+				unitSyncer.SetLanes(a.settingsImpl.FleetSyncLanes())
+			}
 			// Read-down-auto: pull org/team units into the local clone as read
 			// layers. Self-gates on sign-in + team-graph capability.
 			unitSyncer.StartPoller(context.Background())
@@ -4258,8 +4303,21 @@ func New(c *core.Core, opts ...Option) *API {
 			projectSyncer := corefleet.NewProjectSyncer(flCl, contextSyncAudit, nil)
 			handoffHandler := corefleet.NewHandoffHandler(flCl, contextSyncAudit, nil)
 
+			// fleet-session-truth-01DOGF0A FR-6 (dogfood F7): bounded,
+			// visible appends. One breaker per process, reporting into the
+			// shared lane board; reset when sync is toggled for a session and
+			// when a fleet session ends or begins.
+			var appendLanes *corefleet.SyncLanes
+			if a.settingsImpl != nil {
+				appendLanes = a.settingsImpl.FleetSyncLanes()
+			}
+			appendBreaker := corefleet.NewAppendBreaker(appendLanes)
+			if a.settingsImpl != nil {
+				a.settingsImpl.OnFleetSessionReset(appendBreaker.ResetAll)
+			}
+
 			a.contextSyncAPI = &contextsyncview.Impl{
-				Session:  &sessionSyncBackendAdapter{ss: sessionSyncer},
+				Session:  &sessionSyncBackendAdapter{ss: sessionSyncer, breaker: appendBreaker},
 				Project:  &projectSyncBackendAdapter{ps: projectSyncer},
 				Handoff:  &handoffBackendAdapter{hh: handoffHandler},
 				Recovery: &recoveryBackendAdapter{},
@@ -4284,15 +4342,17 @@ func New(c *core.Core, opts ...Option) *API {
 			if stack.historyAdapter != nil {
 				capturedSyncer := sessionSyncer
 				stack.historyAdapter.syncHook = func(ctx context.Context, sessionID string, _ uint64, payload []byte) {
-					if err := capturedSyncer.AppendEvent(ctx, sessionID, corefleet.SessionEventRecord{
-						Seq:   0, // seq 0 signals "append as new tail"; fleet assigns the monotonic seq
-						Bytes: payload,
-					}); err != nil && err != corefleet.ErrFleetDisabled {
-						logging.L().Warn("rpc.context_sync.append_event_failed",
-							"session_id", sessionID[:min(len(sessionID), 8)],
-							"err", err.Error(),
-						)
-					}
+					// The breaker bounds retries, opens the circuit on a
+					// permanent answer (404 missing remote context), logs once
+					// per transition and surfaces the failure in
+					// FleetSession.sync.contextSync — it used to be a WARN per
+					// message and nothing else (fleet-session-truth-01DOGF0A).
+					_ = appendBreaker.Do(ctx, sessionID, func(ctx context.Context) error {
+						return capturedSyncer.AppendEvent(ctx, sessionID, corefleet.SessionEventRecord{
+							Seq:   0, // seq 0 signals "append as new tail"; fleet assigns the monotonic seq
+							Bytes: payload,
+						})
+					})
 				}
 				logging.L().Info("rpc.context_sync.append_hook_wired")
 			}
@@ -5131,19 +5191,63 @@ func newArtifactsStack(c *core.Core, media coreatt.MediaStore) (coreart.Store, *
 	if s == nil {
 		return nil, nil
 	}
-	store := coreart.NewSQLStore(s,
+	// artifacts-as-units-01DOGF0C WP04: artifacts live in the units
+	// tables (kind='artifact') since migration units/1104 copied them out
+	// of the now-renamed artifacts_legacy table. The store switch, the
+	// refcount registration and the delete observers below are ONE change
+	// (spec §2.4/§2.6): switching the store without re-pointing the media
+	// refcount would let media GC see zero references and delete every
+	// artifact's bytes.
+	store := coreart.NewUnitsStore(s,
 		coreart.WithSessionProjectReader(&artifactSessionProjectReader{mgr: c.SessionManager()}),
 	)
 	// Register the artifacts refcount source on the SHARED MediaStore
 	// (the same instance the attachments manager already wired the
-	// AttachmentsRefcountSource into). This is the WP02 risk-note
-	// hookup: the on-disk file is only reclaimed when no attachments
-	// row AND no artifacts row references the hash.
+	// AttachmentsRefcountSource into): the on-disk file is only reclaimed
+	// when no attachment AND no artifact unit (head row or version row)
+	// references the hash.
 	media.RegisterRefcountSource(coreart.ArtifactsRefcountSource{Store: store})
+	// units.scope_id has no FK: session and project deletes reach
+	// artifact units only through these observers (spec FR-6). Every
+	// session delete path — the sessions view funnel, the branch-children
+	// cascade — goes through session.Manager.Delete.
+	if purger, ok := store.(coreart.ScopePurger); ok {
+		if sm := c.SessionManager(); sm != nil {
+			sm.AddDeleteObserver(func(ctx context.Context, sessionID string) error {
+				purgeArtifactsAfterDelete(ctx, "session", sessionID, purger.PurgeSession, media)
+				return nil
+			})
+		}
+		if pm := c.ProjectManager(); pm != nil {
+			pm.AddDeleteObserver(func(ctx context.Context, projectID string) error {
+				purgeArtifactsAfterDelete(ctx, "project", projectID, purger.PurgeProject, media)
+				return nil
+			})
+		}
+	}
 	mgr := coreart.NewManager(store, &mediaStorePutAdapter{inner: media},
 		coreart.WithSessionReader(&artifactSessionProjectReader{mgr: c.SessionManager()}),
 	)
 	return store, mgr
+}
+
+// purgeArtifactsAfterDelete runs an artifacts ScopePurger after the session
+// or project row is ALREADY gone, then releases the media the purged units
+// pinned. A failure is logged, not returned (review F10, decision record
+// D8): returning it would report "delete failed" for a session/project that
+// no longer exists and that the user cannot delete again, and there is no
+// retry path. The cost — orphaned artifact units whose scope id names a
+// deleted session/project, and their bytes — is recorded in
+// docs/unwired-ledger.md (2026-10-04, purge-retry) with an owner.
+func purgeArtifactsAfterDelete(ctx context.Context, kind, id string, purge func(context.Context, string) ([]string, error), media coreatt.MediaStore) {
+	hashes, err := purge(ctx, id)
+	if err != nil {
+		logging.L().Warn("rpc.artifacts.purge_failed", "scope", kind, "id", id, "err", err.Error())
+		return
+	}
+	if _, err := coreatt.ReleaseUnreferenced(ctx, media, hashes); err != nil {
+		logging.L().Warn("rpc.artifacts.media_release_failed", "scope", kind, "id", id, "err", err.Error())
+	}
 }
 
 // newArtifactsAPI returns the real Store + Manager-backed
@@ -7528,11 +7632,13 @@ func buildChatRunner(
 		historyAdapter.mgr.SetMoveFidelityDial(moveFidelityHistory)
 	}
 	historyWriter := &llmHistoryWriter{inner: historyAdapter}
-	// model-moves-transcript-01PMCH01 WP02: the turn-span lookup for
-	// StartStream's empty-userMessage paths (keychain redrive; the
-	// multimodal send, where the frontend already landed the user row).
-	// nil manager leaves it nil, which makes those turns write classic
-	// entries — see chat.TurnSpanReader.
+	// model-moves-transcript-01PMCH01 WP02: the turn-span lookup for a
+	// StartStream whose caller could not name the user row
+	// (chat-single-writer-01DOGF0G: the row is always the caller's — the
+	// runner never writes a user turn). nil manager leaves it nil, which
+	// makes those turns write classic entries — see chat.TurnSpanReader.
+	// historyWriter also announces each fresh user turn to fleet
+	// context-sync (chat.UserTurnAnnouncer, FR-1d).
 	var turnSpanReader chat.TurnSpanReader
 	if historyAdapter != nil && historyAdapter.mgr != nil {
 		turnSpanReader = chatTurnSpanReader{mgr: historyAdapter.mgr}
@@ -7635,6 +7741,16 @@ func buildChatRunner(
 	var streamCheckpoints chat.StreamCheckpointStore
 	if historyAdapter != nil && historyAdapter.mgr != nil {
 		streamCheckpoints = historyAdapter.mgr
+	}
+
+	// agentgraph-settings-linkage-01DOGF0D WP03: the durable turn -> run
+	// link (session_turn_runs, migration 0342). session.Manager's
+	// RecordTurnRun matches chat.TurnRunRecorder exactly. Nil leaves
+	// turns unlinkable — the transcript then shows the run affordance
+	// disabled with a reason rather than a link.
+	var turnRuns chat.TurnRunRecorder
+	if historyAdapter != nil && historyAdapter.mgr != nil {
+		turnRuns = historyAdapter.mgr
 	}
 
 	// Usage hook (token-cost-telemetry-01KQ8TD7 WP02 + backend-context-
@@ -7779,6 +7895,7 @@ func buildChatRunner(
 		// routing gate and the max-turns dial have already rewritten by
 		// the time the run starts.
 		RunSpecRecorder: graphMgr.TrackExternalRun,
+		TurnRuns:        turnRuns,
 		GraphLoader: func() (coreag.Graph, error) {
 			g, err := graphMgr.LoadGraphSpec("chat_default")
 			if err != nil {
@@ -8020,7 +8137,8 @@ const continuationPromptPrefix = "Your previous reply was cut off by a network e
 const continuationPromptTailLen = 200
 
 // buildContinuationPrompt builds the continuation prompt the resume
-// RPC hands to chat.ChatRunner.StartStream as the userMessage.
+// RPC persists as a user turn and hands to chat.ChatRunner.StartStream
+// (by reference — see buildResumeStarter).
 func buildContinuationPrompt(partial string) string {
 	tail := partial
 	if len(tail) > continuationPromptTailLen {
@@ -8044,9 +8162,11 @@ func buildContinuationPrompt(partial string) string {
 //     wiring uses the chassis-default profile id; the frontend can
 //     override via a future RPC arg).
 //  2. Synthesizes the continuation prompt via buildContinuationPrompt.
-//  3. Calls runner.StartStream with the synthesized prompt as the
-//     userMessage so the existing AskBus/HistoryReadNode pump delivers
-//     it on the first kernel fire.
+//  3. Persists the synthesized prompt as a user row (the starter is that
+//     row's single writer — the chat runner never writes a user turn,
+//     chat-single-writer-01DOGF0G) and calls runner.StartStream with a
+//     reference to it, so HistoryReadNode reads it and the AskBus
+//     pre-seed carries its text on the first kernel fire.
 //
 // long-turn-resilience-01KR3PRS WP03.
 func buildResumeStarter(runner *chat.ChatRunner, mgr *session.Manager, defaultProfileID, defaultModel string) sessions.ResumeStarter {
@@ -8065,22 +8185,39 @@ func buildResumeStarter(runner *chat.ChatRunner, mgr *session.Manager, defaultPr
 		if modelOverride == "" {
 			modelOverride = defaultModel
 		}
-		// StartStream persists the continuation prompt as a user turn
-		// before opening the kernel run. That's the wrong shape for a
-		// resume — we want the continuation row to be assistant-role
-		// and stamped with continuation_of. The chat runner will need
-		// a dedicated resume entrypoint to land the right shape; for
-		// now we emit a user-turn with the continuation prompt, which
-		// produces a fresh assistant turn that the frontend can wire
-		// into the partial bubble manually via the OriginalMessageID
-		// returned by the resume RPC.
+		// The continuation prompt lands as a user turn. That's the wrong
+		// shape for a resume — we want the continuation row to be
+		// assistant-role and stamped with continuation_of. The chat
+		// runner will need a dedicated resume entrypoint to land the
+		// right shape; for now we emit a user-turn with the continuation
+		// prompt, which produces a fresh assistant turn that the frontend
+		// can wire into the partial bubble manually via the
+		// OriginalMessageID returned by the resume RPC.
 		//
 		// TODO(long-turn-resilience-WP04): plumb a dedicated
 		// runner.StartResume(originalMessageID, prompt) entrypoint so
 		// the persisted assistant row carries continuation_of natively
 		// (via session.Manager.AppendContinuation) instead of relying
 		// on the frontend to stitch the bubbles.
-		return runner.StartStream(ctx, profileID, sessionID, modelOverride, prompt)
+		//
+		// SINGLE WRITER (chat-single-writer-01DOGF0G): before that
+		// mission the runner persisted this prompt from the string it was
+		// handed. It no longer writes user turns at all, so this starter —
+		// the only caller with no frontend append in front of it — writes
+		// the row itself and passes the runner a reference. Announce:
+		// true, because nothing else will report this turn to fleet sync.
+		stored, aerr := mgr.AppendMessage(ctx, sessionID, session.Message{
+			Role:    session.RoleUser,
+			Content: prompt,
+		})
+		if aerr != nil {
+			return "", fmt.Errorf("rpc: persist continuation prompt: %w", aerr)
+		}
+		return runner.StartStream(ctx, profileID, sessionID, modelOverride, chat.UserTurn{
+			MessageID: stored.ID,
+			Text:      prompt,
+			Announce:  true,
+		})
 	})
 }
 
@@ -9684,6 +9821,8 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 	out := make([]llm.SessionMessage, 0, len(stored))
 	for _, m := range stored {
 		out = append(out, llm.SessionMessage{
+			ID:            m.ID,
+			TurnSpanID:    m.TurnSpanID(),
 			Role:          string(m.Role),
 			Content:       m.Content,
 			ContentBlocks: m.ContentBlocks,
@@ -9757,17 +9896,44 @@ func (w *llmHistoryWriter) AppendEntry(ctx context.Context, sessionID string,
 		return "", err
 	}
 	// FR-003: stream event to fleet when session sync is enabled.
-	// The hook is stored on inner (sessionHistoryReader).
-	if hook := w.inner.syncHook; hook != nil {
-		payload, merr := json.Marshal(map[string]string{
-			"id":   stored.ID,
-			"role": entry.Role,
-		})
-		if merr == nil {
-			hook(ctx, sessionID, 0, payload)
-		}
-	}
+	w.emitSync(ctx, sessionID, stored.ID, entry.Role)
 	return stored.ID, nil
+}
+
+// AnnounceUserTurn satisfies chat.UserTurnAnnouncer: it reports an
+// EXISTING user row to fleet context-sync without writing anything
+// (chat-single-writer-01DOGF0G FR-1d).
+//
+// Why it exists: the chat runner used to re-append every user turn
+// through AppendEntry above, and that second write was the ONLY path by
+// which a user turn reached SessionSyncer.AppendEvent — the frontend's
+// Sessions_AppendMessage never touches syncHook. The runner no longer
+// writes the user turn (it was the duplicate behind dogfood F12), so it
+// announces the frontend's row here instead: same hook, same payload,
+// once per fresh turn.
+func (w *llmHistoryWriter) AnnounceUserTurn(ctx context.Context, sessionID, messageID string) {
+	if w == nil || w.inner == nil || messageID == "" {
+		return
+	}
+	w.emitSync(ctx, sessionID, messageID, string(session.RoleUser))
+}
+
+// emitSync fires the fleet session-sync hook for one persisted row. The
+// hook is stored on inner (sessionHistoryReader) so it survives
+// independently of who holds the writer. Only opaque ids cross this
+// boundary — never content (privacy invariant on syncHook).
+func (w *llmHistoryWriter) emitSync(ctx context.Context, sessionID, messageID, role string) {
+	hook := w.inner.syncHook
+	if hook == nil {
+		return
+	}
+	payload, merr := json.Marshal(map[string]string{
+		"id":   messageID,
+		"role": role,
+	})
+	if merr == nil {
+		hook(ctx, sessionID, 0, payload)
+	}
 }
 
 // moveToolCalls projects the seam's tool payload onto the store's

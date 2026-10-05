@@ -42,6 +42,29 @@ go test ./core/... -race -count=1 -short
 cd frontend && npm test
 ```
 
+## The ML engine (kenaz-ml) in dev
+
+`bash scripts/dev.sh` also tries to give the harness a real kenaz-ml engine.
+`scripts/dev-ml.sh` looks for a frozen engine onedir — `$KENAZ_ML_ONEDIR`, then
+`../kenaz-ml/dist/kameas-ml` (a sibling checkout you have run `make freeze`
+in), then the latest CI "Frozen bundle" artifact on kenaz-ml `main` via `gh`
+(macOS arm64 only), then with `KENAZ_ML_BUILD=1` it freezes one itself — and
+seeds it into the **dev** engine root `~/.kenaz/ml/dev` with
+`go run ./cmd/mlsidecar-devseed`. The harness's normal sidecar lifecycle then
+spawns it on `:7775` the first time an advisor asks, exactly as it would a
+released engine.
+
+The seed writes an install record with provenance `developer-local-build`,
+which only the dev engine root accepts (`mlsidecar.Layout.DeveloperBuilds`,
+set by the production wiring for `KENAZ_HARNESS_ENV=dev`). A prod or test
+root refuses it, so a developer build can never be adopted by a release
+build. The on-disk tree is still re-hashed before every spawn.
+
+Nothing in this step can stop the launch: every failure is a warning and the
+harness runs on its client-side heuristics (`advice.model_resolve rung=none`
+in the log). `KENAZ_ML_SEED=0` skips it; `go run ./cmd/mlsidecar-devseed
+--status` shows what the dev root currently holds.
+
 ## Fleet telemetry in dev
 
 When running `wails dev` with a Kameas account, the harness can export OTel

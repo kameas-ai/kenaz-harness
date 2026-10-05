@@ -233,8 +233,10 @@ type Settings struct {
 	// every engine, so before this field existed it shipped to every
 	// user with an arm nothing could reach.
 	//
-	// No UI dial yet — the Settings → Workflows panel is a tracked
-	// follow-up (docs/unwired-ledger.md, 2026-08-16). Settable today by
+	// No UI dial yet — a dial on the Workflows surface (Workflows ›
+	// Schedules / Library, which absorbed the retired Settings → Workflows
+	// panel in nav-ia-sweep-01DOGF0F) is a tracked follow-up
+	// (docs/unwired-ledger.md, 2026-08-16). Settable today by
 	// editing `cedarStrictWorkflowMode` in the harness settings file,
 	// and read live on every workflow run/save.
 	CedarStrictWorkflowMode bool `json:"cedarStrictWorkflowMode,omitempty"`
@@ -1673,6 +1675,12 @@ type SettingsAPI interface {
 	// HARNESS_FLEET_DISABLED=1.
 	FleetSignIn(ctx context.Context) (FleetIdentity, error)
 
+	// FleetSignInCancel cancels the in-flight sign-in flow (the UI's
+	// "Waiting for browser… Cancel"); the pending FleetSignIn returns
+	// context.Canceled. No-op when no flow is running.
+	// (fleet-session-truth-01DOGF0A FR-5)
+	FleetSignInCancel(ctx context.Context) error
+
 	// FleetSignOut clears persisted tokens and the identity cache.
 	// Returns fleet.ErrFleetDisabled when the kill switch is active.
 	FleetSignOut(ctx context.Context) error
@@ -1704,6 +1712,12 @@ type SettingsAPI interface {
 	// FleetProfile returns the active env profile for UI rendering.
 	// Does NOT expose ClientID, APIAudience, or any secret fields.
 	FleetProfile(ctx context.Context) (FleetProfileInfo, error)
+
+	// FleetSession returns the single fleet-session snapshot every surface
+	// reads (fleet-session-truth-01DOGF0A FR-1): state (signed_out /
+	// signing_in / signed_in / degraded / disabled), identity, claims,
+	// capabilities and sync-lane health. Network-free.
+	FleetSession(ctx context.Context) (FleetSessionView, error)
 
 	// ── Fleet capabilities (fleet-capability-surface-01NDFSEX09 WP11) ───────
 

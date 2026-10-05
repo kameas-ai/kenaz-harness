@@ -141,10 +141,45 @@ func (b *recordingBroker) snapshot() []recordedEvent {
 	return out
 }
 
-// recordingHistoryWriter captures append-message calls.
+// recordingHistoryWriter is deliberately in-memory: it pins the runner ->
+// HistoryWriter seam contract (what is written, in what order, with what
+// move metadata), not a storage round trip — the real-sqlite halves are
+// partial_persist_dedup_test.go, assistant_single_final_test.go and
+// core/rpc/chat_single_writer_test.go (WP-PI AC-PI-2, 2026-10-04).
+//
+// recordingHistoryWriter captures append-message calls, and — as the
+// production llmHistoryWriter does — implements UserTurnAnnouncer so a
+// test can see what the runner reported to fleet context-sync.
 type recordingHistoryWriter struct {
-	mu    sync.Mutex
-	calls []writerCall
+	mu        sync.Mutex
+	calls     []writerCall
+	announced []string // "<sessionID>/<messageID>" per AnnounceUserTurn
+}
+
+func (w *recordingHistoryWriter) AnnounceUserTurn(_ context.Context, sessionID, messageID string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.announced = append(w.announced, sessionID+"/"+messageID)
+}
+
+func (w *recordingHistoryWriter) announcements() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]string, len(w.announced))
+	copy(out, w.announced)
+	return out
+}
+
+// testUserTurnID is the id of the user row a test's caller has "already
+// persisted" before starting the stream — the shape every production
+// caller has (chat-single-writer-01DOGF0G: the runner never writes the
+// user turn, so its span always comes from the caller or the TurnSpan
+// lookup, never from its own append).
+const testUserTurnID = "user-turn-1"
+
+// testTurn is the fresh turn a production caller hands StartStream.
+func testTurn(text string) UserTurn {
+	return UserTurn{MessageID: testUserTurnID, Text: text, Announce: true}
 }
 
 type writerCall struct {
@@ -180,10 +215,18 @@ func TestChatRunner_New_RequiresKernel(t *testing.T) {
 	}
 }
 
-// TestChatRunner_StartStreamPersistsUserTurn asserts the user message
-// is appended to the session via the HistoryWriter before the kernel
-// run starts, so HistoryReadNode picks it up at run start.
-func TestChatRunner_StartStreamPersistsUserTurn(t *testing.T) {
+// TestChatRunner_StartStreamNeverWritesTheUserTurn is the unit-level pin
+// for chat-single-writer-01DOGF0G (dogfood F12). It replaces
+// TestChatRunner_StartStreamPersistsUserTurn, which asserted the opposite:
+// that the runner appended the user text it was handed. That append was
+// the SECOND writer — the chat surface had already persisted the same
+// turn via Sessions_AppendMessage — so every turn was stored twice and the
+// model read every user message twice. The end-to-end pin (append, then
+// StartStream, on real sqlite) is core/rpc/chat_single_writer_test.go.
+//
+// This asserts the runner's half of the contract: no user-role write, and
+// exactly one context-sync announcement naming the caller's row.
+func TestChatRunner_StartStreamNeverWritesTheUserTurn(t *testing.T) {
 	t.Parallel()
 	broker := &recordingBroker{}
 	writer := &recordingHistoryWriter{}
@@ -200,7 +243,7 @@ func TestChatRunner_StartStreamPersistsUserTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "what is 2+2?")
+	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("what is 2+2?"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -212,13 +255,15 @@ func TestChatRunner_StartStreamPersistsUserTurn(t *testing.T) {
 	_ = runner.StopStream(context.Background(), subID)
 
 	writer.mu.Lock()
-	defer writer.mu.Unlock()
-	if len(writer.calls) == 0 {
-		t.Fatalf("expected user-turn append, got 0 calls")
+	for _, c := range writer.calls {
+		if c.role == "user" {
+			t.Errorf("runner wrote a user row %+v — the caller already persisted this turn; a second write is the F12 duplicate", c)
+		}
 	}
-	c := writer.calls[0]
-	if c.sessionID != "session-1" || c.role != "user" || c.content != "what is 2+2?" {
-		t.Errorf("first append: %+v", c)
+	writer.mu.Unlock()
+	got := writer.announcements()
+	if len(got) != 1 || got[0] != "session-1/"+testUserTurnID {
+		t.Errorf("context-sync announcements = %v, want exactly [session-1/%s]", got, testUserTurnID)
 	}
 }
 
@@ -242,7 +287,7 @@ func TestChatRunner_TerminalEmitsClosedPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", "hello")
+	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -307,7 +352,7 @@ func TestChatRunner_StartStream_ArmsCompactionWatermark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", "hello")
+	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -473,7 +518,7 @@ func TestChatRunner_SessionFull_ArrivesOnStreamClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "model-1", "one more turn")
+	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "model-1", testTurn("one more turn"))
 	if err != nil {
 		t.Fatalf("StartStream returned an error; session-full now travels on the stream: %v", err)
 	}

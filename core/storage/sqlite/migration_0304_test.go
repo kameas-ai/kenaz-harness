@@ -56,6 +56,7 @@ func TestMigration0304_PreservesArtifactRows(t *testing.T) {
 	}
 
 	raw := openRaw(t, dir)
+	rewindArtifactsToUnits(t, ctx, raw)
 	if _, err := raw.ExecContext(ctx,
 		"DELETE FROM harness_migrations WHERE owning_mission='sessions' AND version = 304"); err != nil {
 		t.Fatalf("rewind 304: %v", err)
@@ -77,15 +78,15 @@ func TestMigration0304_PreservesArtifactRows(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close(context.Background()) })
 
 	var n int
-	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifacts WHERE id='art-0304'").Scan(&n); err != nil {
+	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifacts_legacy WHERE id='art-0304'").Scan(&n); err != nil {
 		t.Fatalf("count artifacts: %v", err)
 	}
 	if n != 1 {
-		t.Errorf("artifacts = %d after the 0304 rebuild, want 1", n)
+		t.Errorf("artifacts_legacy = %d after the 0304 rebuild + 1104 rename, want 1", n)
 	}
 
 	var title string
-	if err := db.Reader().QueryRow(ctx, "SELECT title FROM artifacts WHERE id='art-0304'").Scan(&title); err != nil {
+	if err := db.Reader().QueryRow(ctx, "SELECT title FROM units WHERE id='art-0304' AND kind='artifact'").Scan(&title); err != nil {
 		t.Fatalf("read restored artifact: %v", err)
 	}
 	if title != "pre-304 artifact" {

@@ -141,6 +141,47 @@ type fleetState struct {
 	// harness path and any build where SetAuditEmitter is never called
 	// (mirrors every other optional Set* field on this struct).
 	auditEmitter auditEmitter
+
+	// lanes is the shared background-sync status board FleetSession.sync
+	// reads (fleet-session-truth-01DOGF0A FR-6). Never nil after
+	// newFleetState.
+	lanes *fleet.SyncLanes
+
+	// sess records the fleet session's recent transitions — the last enroll
+	// outcome, backoff, sign-in in flight — that the FleetSession snapshot
+	// derives degraded / signed-out from (fleet-session-truth-01DOGF0A).
+	sess sessionTrack
+
+	// emitMu serialises snapshot publication so the dedupe key and the
+	// emitted order agree; lastEmitKey is the transition key of the last
+	// snapshot published (fleet-session-truth-01DOGF0A WP02).
+	emitMu      sync.Mutex
+	lastEmitKey string
+
+	// clientVersion is the harness build version enroll reports to Fleet
+	// (SetFleetClientVersion; "dev" when unset). It was a hard-coded
+	// "0.18.0" (fleet-session-truth-01DOGF0A FR-9 / P-11).
+	clientVersion string
+
+	// signIn is the in-flight sign-in flow (nil when none); signInFlow is
+	// the browser flow, fleet.DeviceCodeFlow unless a test injects a fake
+	// (fleet-session-truth-01DOGF0A WP07).
+	signIn     *signInCall
+	signInFlow func(context.Context, fleet.EnvProfile) (fleet.TokenSet, error)
+
+	// sessionResetHooks run when one fleet session ends and another may
+	// begin (sign-in success, sign-out): per-session state held outside this
+	// package — the context-sync append breaker — forgets the old session.
+	sessionResetHooks []func()
+
+	// lanesHooked / supervisorStarted make their one-time wiring idempotent.
+	lanesHooked       bool
+	supervisorStarted bool
+}
+
+// newFleetState returns a fleetState with its always-present members built.
+func newFleetState() *fleetState {
+	return &fleetState{lanes: fleet.NewSyncLanes()}
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -148,16 +189,45 @@ type fleetState struct {
 // called, fleet methods return fleet.ErrFleetDisabled.
 func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
 	a.fleet.client = c
 	a.fleet.dataDir = dataDir
-	// Wire the session-expired broker into the client if already set.
-	if a.fleet.lockdownBroker != nil && c != nil {
-		c.SetSessionBroker(a.fleet.lockdownBroker)
+	// Wire the session-expired broker into the client if already set. The
+	// tap folds the event into the session track and republishes the
+	// FleetSession snapshot (fleet-session-truth-01DOGF0A WP02).
+	if c != nil {
+		// Always tap: the session-expired event is consumed in-process even
+		// before a broker is wired.
+		c.SetSessionBroker(sessionExpiredTap{api: a, inner: a.fleet.lockdownBroker})
+		c.SetAuthOKHook(a.onFleetAuthOK)
 	}
+	// Lane-health changes republish the snapshot (registered once).
+	if !a.fleet.lanesHooked {
+		a.fleet.lanesHooked = true
+		a.fleet.lanes.OnChange(func() { a.publishFleetSession("sync_lane") })
+	}
+	a.startFleetBackgroundLocked()
+	// Backend-owned identity refresh cadence: replaces the per-component
+	// five-minute enroll poll the UI used to run (FR-2). Not under go test.
+	if !a.fleet.supervisorStarted && c != nil && !c.IsNop() && !testing.Testing() {
+		a.fleet.supervisorStarted = true
+		go a.runSessionSupervisor(context.Background())
+	}
+}
+
+// startFleetBackgroundLocked (re)creates whichever of the capability
+// poller, config poller and lockdown watcher are missing. Caller holds
+// a.fleet.mu. Called from SetFleetClient at boot and again after a
+// successful sign-in: StopFleetBackground (sign-out) nils all three, and
+// before fleet-session-truth-01DOGF0A nothing ever recreated them, so a
+// sign-out followed by a sign-in in the same process left capabilities
+// default-deny and the lockdown watcher dead until restart.
+func (a *API) startFleetBackgroundLocked() {
+	c := a.fleet.client
+	dataDir := a.fleet.dataDir
 	// Start the capability poller lazily. When c is a nop client the poller
 	// will degrade gracefully on every Refresh call.
 	//
@@ -198,6 +268,15 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	if a.fleet.poller == nil {
 		p := fleet.NewCapabilityPoller(c, dataDir)
 		a.fleet.poller = p
+		// One listener per poller: a capability arriving or leaving
+		// re-evaluates export (a tier change can move effective consent)
+		// and republishes the session snapshot so every gate re-renders in
+		// the same tick (FR-8). ReconcileTelemetry no-ops without a
+		// pipeline. Listeners run outside the poller's lock (WP02).
+		p.OnChange(func(fleet.Capabilities) {
+			a.ReconcileTelemetry(context.Background())
+			a.publishFleetSession("capabilities")
+		})
 		if !testing.Testing() {
 			p.Start(context.Background())
 		}
@@ -227,7 +306,7 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 // (fleet-emergency-lockdown-01NDFSEX12 WP02)
 func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -238,7 +317,7 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	}
 	// Wire the broker into the fleet client for session-expired events (FR-005).
 	if a.fleet.client != nil {
-		a.fleet.client.SetSessionBroker(sink)
+		a.fleet.client.SetSessionBroker(sessionExpiredTap{api: a, inner: sink})
 	}
 }
 
@@ -255,7 +334,7 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 // bundle applied afterward — even the very next poll — sees it.
 func (a *API) SetCedarEngine(engine *cedarpolicy.Engine) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -285,7 +364,7 @@ func (a *API) SetFleetOTLPPipeline(
 	consent *fleet.TelemetryConsent,
 ) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -311,20 +390,18 @@ func (a *API) SetFleetOTLPPipeline(
 		}
 	}
 	// A tier change can move EFFECTIVE consent (a downgrade fails closed,
-	// an upgrade un-clamps a stored level), so re-evaluate export whenever
-	// the capability snapshot changes.
-	if a.fleet.poller != nil {
-		a.fleet.poller.OnChange(func(fleet.Capabilities) {
-			a.ReconcileTelemetry(context.Background())
-		})
-	}
+	// an upgrade un-clamps a stored level), so export is re-evaluated
+	// whenever the capability snapshot changes — by the single listener
+	// startFleetBackgroundLocked registers on every poller it creates
+	// (fleet-session-truth-01DOGF0A WP02 moved it there so a poller
+	// recreated after sign-in carries it too).
 }
 
 // SetFleetTelemetryResourceFunc supplies a lazy accessor for the startup OTel
 // resource (service.name / service.version). See fleetState.resFunc.
 func (a *API) SetFleetTelemetryResourceFunc(fn func() *resource.Resource) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	a.fleet.resFunc = fn
@@ -381,6 +458,7 @@ func (a *API) FleetSessionEnded(ctx context.Context) {
 	a.fleet.mu.Lock()
 	a.fleet.enrolled = false
 	a.fleet.enrolledOrgID, a.fleet.enrolledNodeID, a.fleet.enrolledTier = "", "", ""
+	a.fleet.sess = sessionTrack{}
 	a.fleet.telemetryOptIns = nil
 	a.fleet.optInsFetchedAt = time.Time{}
 	pipeline := a.fleet.otlpPipeline
@@ -389,6 +467,7 @@ func (a *API) FleetSessionEnded(ctx context.Context) {
 		pipeline.SetTelemetryOptIns(nil)
 	}
 	a.ReconcileTelemetry(ctx) // not enrolled ⇒ DropAll + Deactivate
+	a.publishFleetSession("served_session_ended")
 }
 
 // SetFleetExportUnauthorizedHook wires the pipeline's 401 callback (served
@@ -529,7 +608,7 @@ type FleetTelemetryStatusView struct {
 // the "next tier change" half of the retry contract.
 func (a *API) SetTelemetryOptInPusher(p *fleet.TelemetryOptInPusher) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -591,7 +670,7 @@ func (a *API) retryPendingTelemetryOptInPush(ctx context.Context) {
 // mandated_skills section.
 func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Registry) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -612,7 +691,7 @@ func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Regist
 // applied:true for a section this device cannot apply" rule.
 func (a *API) SetMCPCatalog(cat *recipes.MergedCatalog) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -628,7 +707,7 @@ func (a *API) SetMCPCatalog(cat *recipes.MergedCatalog) {
 // emitted (the pre-WP05 state for every build that predates this wiring).
 func (a *API) SetAuditEmitter(em auditEmitter) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -648,7 +727,7 @@ func (a *API) SetAuditEmitter(em auditEmitter) {
 // every entry rather than applying nothing silently as a false "success".
 func (a *API) SetSyncKindRegistry(registry *fleet.KindRegistry) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -697,9 +776,86 @@ func (a *API) CapabilityPoller() *fleet.CapabilityPoller {
 	return a.fleetPoller()
 }
 
+// signInCall is one in-flight sign-in flow that concurrent callers join
+// (fleet-session-truth-01DOGF0A FR-5 / P-6).
+type signInCall struct {
+	done   chan struct{}
+	cancel context.CancelFunc
+	id     FleetIdentity
+	err    error
+}
+
 // FleetSignIn kicks off the PKCE loopback OAuth flow. On success it
 // calls FleetRefreshIdentity to populate the cached identity.
+//
+// Single-flight (FR-5): a second call while a flow is in flight JOINS it
+// instead of opening a second browser window — dogfood B3's redundant flow
+// came from a bogus "Sign in" offered while a session existed. The flow runs
+// on its own context so that FleetSignInCancel (the UI's "Cancel") is what
+// stops it, not whichever caller's context happens to end first; a joining
+// caller whose own context ends just stops waiting.
 func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
+	if a.fleet == nil {
+		return FleetIdentity{}, fleet.ErrFleetDisabled
+	}
+	a.fleet.mu.Lock()
+	if call := a.fleet.signIn; call != nil {
+		a.fleet.mu.Unlock()
+		logging.L().Info("fleet.rpc.sign_in.joined_in_flight")
+		select {
+		case <-call.done:
+			return call.id, call.err
+		case <-ctx.Done():
+			return FleetIdentity{}, ctx.Err()
+		}
+	}
+	flowCtx, cancel := context.WithCancel(context.Background())
+	call := &signInCall{done: make(chan struct{}), cancel: cancel}
+	a.fleet.signIn = call
+	a.fleet.sess.signingIn = true
+	a.fleet.sess.signInReason, a.fleet.sess.signInErr = "", ""
+	a.fleet.mu.Unlock()
+	a.publishFleetSession("sign_in_start")
+
+	id, err := a.runSignIn(flowCtx)
+	cancel()
+
+	a.fleet.mu.Lock()
+	a.fleet.signIn = nil
+	a.fleet.sess.signingIn = false
+	if err != nil {
+		reason := FleetReasonSignInFailed
+		if errors.Is(err, context.Canceled) {
+			reason = FleetReasonSignInCancelled
+		}
+		a.fleet.sess.signInReason, a.fleet.sess.signInErr = reason, err.Error()
+	}
+	a.fleet.mu.Unlock()
+	call.id, call.err = id, err
+	close(call.done)
+	a.publishFleetSession("sign_in_end")
+	return id, err
+}
+
+// FleetSignInCancel cancels the in-flight sign-in flow, if any, through
+// DeviceCodeFlow's ctx.Done() branch (FR-5). Idempotent; a no-op when no
+// flow is running. The pending FleetSignIn returns context.Canceled.
+func (a *API) FleetSignInCancel(_ context.Context) error {
+	if a == nil || a.fleet == nil {
+		return nil
+	}
+	a.fleet.mu.RLock()
+	call := a.fleet.signIn
+	a.fleet.mu.RUnlock()
+	if call != nil {
+		logging.L().Info("fleet.rpc.sign_in.cancel_requested")
+		call.cancel()
+	}
+	return nil
+}
+
+// runSignIn is one sign-in flow: browser PKCE flow, token save, enroll.
+func (a *API) runSignIn(ctx context.Context) (FleetIdentity, error) {
 	logging.L().Info("fleet.rpc.sign_in.start")
 	c := a.fleetClient()
 	if c == nil || fleet.Disabled() {
@@ -716,8 +872,19 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 		)
 		return FleetIdentity{}, fleet.ErrProfileNotConfigured
 	}
-	ts, err := fleet.DeviceCodeFlow(ctx, profile)
+	a.fleet.mu.RLock()
+	flow := a.fleet.signInFlow
+	a.fleet.mu.RUnlock()
+	if flow == nil {
+		flow = fleet.DeviceCodeFlow
+	}
+	ts, err := flow(ctx, profile)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			// The user pressed Cancel: an outcome, not a failure (P-5).
+			logging.L().Info("fleet.rpc.sign_in.cancelled")
+			return FleetIdentity{}, err
+		}
 		logging.L().Error("fleet.rpc.sign_in.device_code_flow_failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
@@ -726,11 +893,33 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 		return FleetIdentity{}, err
 	}
 	logging.L().Info("fleet.rpc.sign_in.tokens_saved")
+	// A fresh sign-in clears whatever ended or stalled the previous session
+	// (expiry, not-provisioned stop) and restarts the background workers a
+	// prior sign-out tore down (fleet-session-truth-01DOGF0A WP02).
+	a.fleet.mu.Lock()
+	a.fleet.sess.expired = false
+	a.fleet.sess.autoRetryStopped = false
+	a.startFleetBackgroundLocked()
+	a.fleet.mu.Unlock()
 	id, err := a.fleetEnroll(ctx)
 	if err != nil {
 		logging.L().Error("fleet.rpc.sign_in.enroll_failed", "err", err.Error())
 		return id, err
 	}
+	// The capability poller still holds the signed-out answer; fetch now so
+	// the snapshot (and every gate reading it) opens on the next push rather
+	// than at the poller's next tick, whichever surface the sign-in came
+	// from (fleet-session-truth-01DOGF0A FR-8 — a menu sign-in left the rail
+	// stale). Its OnChange republishes the session. Not under go test (the
+	// pollers' network work never runs there).
+	if p := a.fleetPoller(); p != nil && !testing.Testing() {
+		go func() {
+			rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = p.Refresh(rctx)
+		}()
+	}
+	a.runSessionResetHooks()
 	logging.L().Info("fleet.rpc.sign_in.success",
 		"org_id", id.OrgID,
 		"team_id", id.TeamID,
@@ -772,11 +961,16 @@ func (a *API) StopFleetBackground() {
 	a.fleet.enrolledOrgID = ""
 	a.fleet.enrolledNodeID = ""
 	a.fleet.enrolledTier = ""
+	// A stopped background is a session that no longer exists: forget its
+	// transitions and lane health so nothing from it is shown afterwards.
+	a.fleet.sess = sessionTrack{}
 	pipeline := a.fleet.otlpPipeline
 	tracker := a.fleet.usageTracker
 	mcpCatalog := a.fleet.mcpCatalog
 	syncKindRegistry := a.fleet.syncKindRegistry
 	a.fleet.mu.Unlock()
+	// Lane health is reset by FleetSignOut AFTER the tokens are cleared
+	// (review F8), not here.
 
 	// Clear the org-provisioned recipe overlay (fleet-org-config-
 	// inheritance-01NORGX01 WP02 / spec §5's "removing fleet cleanly
@@ -844,6 +1038,11 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 		logging.L().Warn("fleet.rpc.sign_out.clear_tokens_partial", "err", err.Error())
 		signOutErr = err // surface to caller; sign-out proceeds regardless
 	}
+	// Lane health is reset only now that the tokens are gone, so the
+	// reset's publish cannot emit a transient signed_in snapshot (review F8).
+	if a.fleet != nil {
+		a.fleet.lanes.Reset()
+	}
 	dataDir := a.fleetDataDir()
 	if dataDir != "" {
 		if err := os.Remove(fleet.IdentityFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
@@ -856,6 +1055,8 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 	} else {
 		logging.L().Info("fleet.rpc.sign_out.success")
 	}
+	a.runSessionResetHooks()
+	a.publishFleetSession("sign_out")
 	return signOutErr
 }
 
@@ -915,11 +1116,18 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		"platform", runtime.GOOS,
 		"fleet_base_url", c.Profile().FleetBaseURL,
 	)
-	id, err := c.RefreshIdentity(ctx, nodeID, runtime.GOOS, "0.18.0")
+	id, err := c.RefreshIdentity(ctx, nodeID, runtime.GOOS, a.fleetClientVersion())
+	// Fold the outcome into the session track BEFORE returning either way:
+	// a failed enroll while tokens are usable is "degraded", not "signed
+	// out" (fleet-session-truth-01DOGF0A FR-3), and the snapshot can only
+	// say so if the failure is recorded.
 	if err != nil {
+		a.recordEnrollOutcome(nil, err)
+		a.publishFleetSession("enroll_failed")
 		logging.L().Error("fleet.rpc.enroll.failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
+	a.recordEnrollOutcome(&id, nil)
 	logging.L().Info("fleet.rpc.enroll.success",
 		"org_id", id.OrgID,
 		"team_id", id.TeamID,
@@ -964,6 +1172,7 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	// (user.id = JWT sub, org.id = enroll org_id, machine.id = nodeID).
 	a.ReconcileTelemetry(ctx)
 
+	a.publishFleetSession("enroll_ok")
 	return fleetIdentityToView(id), nil
 }
 
@@ -1022,6 +1231,7 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 	}
 	a.fleet.mu.RLock()
 	pipeline := a.fleet.otlpPipeline
+	lanes := a.fleet.lanes
 	baseRes := a.fleet.telemetryRes
 	resFunc := a.fleet.resFunc
 	consent := a.fleet.consent
@@ -1041,12 +1251,20 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 	// deactivate is the single "export must be off" path. Open conversation
 	// segments are DROPPED, not ended: their totals were gathered under a
 	// session or a consent that no longer stands.
+	//
+	// fleet-session-truth-01DOGF0A FR-6/FR-7: every outcome is reported to
+	// the telemetry lane so it is visible in FleetSession.sync.telemetry,
+	// not only in the log. Deliberate states (consent none, signed out) are
+	// "off"; a missing org claim while signed in is "degraded".
 	deactivate := func(reason string) {
 		if pipeline.Active() {
 			logging.L().Info("fleet.otlp.reconcile.deactivating", "reason", reason)
 		}
 		tracker.DropAll()
 		pipeline.Deactivate(ctx)
+		if reason != telemetryReasonNoOrgClaim {
+			lanes.RecordOff(fleet.LaneTelemetry, reason)
+		}
 	}
 
 	// Consent gate: "none" (default) → no OTLP export (NFR-005 / FR-006).
@@ -1078,8 +1296,22 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 		return
 	}
 	if tokID.OrgID == "" {
-		logging.L().Warn("fleet.otlp.reconcile.no_resource_owner_claim")
-		deactivate("no_resource_owner_claim")
+		// The token predates the resource-owner scope (core/fleet env.go
+		// ZitadelResourceOwnerScope); refresh never adds it, only a fresh
+		// sign-in does. Surfaced as the session's needs_reauth state and
+		// this lane's named reason — so the log line is a one-time INFO at
+		// the transition, not a WARN every reconcile tick (dogfood B3a:
+		// 19:35, 19:39, 19:40:56, … forever).
+		prev := lanes.Snapshot(fleet.LaneTelemetry)
+		if prev.Status != fleet.LaneDegraded || prev.Reason != telemetryReasonNoOrgClaim {
+			logging.L().Info("fleet.otlp.reconcile.no_resource_owner_claim",
+				"surfaced_as", FleetReasonNeedsReauth)
+		} else {
+			logging.L().Debug("fleet.otlp.reconcile.no_resource_owner_claim")
+		}
+		deactivate(telemetryReasonNoOrgClaim)
+		lanes.RecordFailure(fleet.LaneTelemetry, telemetryReasonNoOrgClaim,
+			errors.New("telemetry export off: your token has no org claim — sign in again"), 0, time.Time{})
 		return
 	}
 	want := fleet.IdentityAttrs{UserID: tokID.Subject, OrgID: tokID.OrgID, MachineID: nodeID, Issuer: tokID.Issuer}
@@ -1096,6 +1328,7 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 	cfg, cfgErr := client.FleetConfig(ctx)
 	if cfgErr != nil {
 		logging.L().Warn("fleet.otlp.activate.api_host_unresolved", "err", cfgErr.Error())
+		lanes.RecordFailure(fleet.LaneTelemetry, "api_host_unresolved", cfgErr, 0, time.Time{})
 		return
 	}
 	otlpBase := fleet.OTLPBaseURL(cfg)
@@ -1106,6 +1339,7 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 
 	if pipeline.Active() {
 		if pipeline.ActiveIdentity() == want && pipeline.ActiveEndpoint() == otlpBase {
+			lanes.RecordSuccess(fleet.LaneTelemetry)
 			return // already exporting as the right account, to the right realm
 		}
 		// Account, org, issuer or endpoint changed: what was gathered belongs
@@ -1128,8 +1362,15 @@ func (a *API) ReconcileTelemetry(ctx context.Context) {
 
 	if err := pipeline.Activate(ctx, otlpBase, baseRes, want, fleet.DefaultBearerProvider(), tp); err != nil {
 		logging.L().Warn("fleet.otlp.activate.failed", "err", err.Error())
+		lanes.RecordFailure(fleet.LaneTelemetry, "activate_failed", err, 0, time.Time{})
+		return
 	}
+	lanes.RecordSuccess(fleet.LaneTelemetry)
 }
+
+// telemetryReasonNoOrgClaim is the telemetry lane's reason when the access
+// token lacks the Zitadel resource-owner claim (FR-7).
+const telemetryReasonNoOrgClaim = "no_resource_owner_claim"
 
 // fleetIdentityToView converts a fleet.Identity to the view type.
 func fleetIdentityToView(id fleet.Identity) FleetIdentity {

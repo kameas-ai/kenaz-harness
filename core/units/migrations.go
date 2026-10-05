@@ -302,6 +302,10 @@ func Migrations() []migrations.Migration {
 				return nil
 			},
 		},
+		// units/1104 — artifacts-as-units-01DOGF0C: copy artifacts onto
+		// kind='artifact' units, verify, rename the legacy tables. See
+		// migration_artifacts_to_units.go.
+		migration1104(),
 	}
 }
 

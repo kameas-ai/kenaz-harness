@@ -7,6 +7,7 @@ import (
 
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // API implements CatalogAPI backed by fleet.Client.
@@ -26,6 +27,18 @@ type API struct {
 	pubKeyBase64 string
 	// emitter is optional; nil emitter means audit events are silently dropped.
 	emitter auditEmitter
+	// skills is the consumer-side source of truth for kind=skill installed
+	// state (install-framework-01DOGF0B WP01). Skill installs never touch
+	// <dataDir>/installed/ — they go fleet.InstallSkill → slashcmd.LiveRegister
+	// → SkillStore — so the installed/ scan alone painted every installed
+	// skill as "Install". nil means skill items always report not-installed
+	// (fail toward offering Install, never toward a false "Installed").
+	skills skillLister
+}
+
+// skillLister is the slice of *slashcmd.SkillStore the catalog view reads.
+type skillLister interface {
+	List() ([]coreslashcmd.Skill, error)
 }
 
 // auditEmitter is the minimal interface the catalog RPC needs.
@@ -44,6 +57,13 @@ func NewAPI(client *corefleet.Client, signer *corefleet.DeviceSigner, dataDir st
 // WithEmitter sets the audit emitter.
 func (a *API) WithEmitter(em auditEmitter) *API {
 	a.emitter = em
+	return a
+}
+
+// WithSkillStore sets the skill store that kind=skill installed state is
+// read from (install-framework-01DOGF0B WP01).
+func (a *API) WithSkillStore(s skillLister) *API {
+	a.skills = s
 	return a
 }
 
@@ -98,21 +118,58 @@ func (a *API) Catalog_List(ctx context.Context, filter CatalogFilter) ([]Catalog
 		return nil, err
 	}
 
-	// Compute installed set for badge.
-	installedSet := map[string]bool{}
+	// Installed state per kind (install-framework-01DOGF0B WP01):
+	//   - skill: read from the consumer (the SkillStore LiveRegister writes),
+	//     never from installed/ — skill installs do not write there.
+	//   - every other kind: a payload under installed/ (download residue;
+	//     nothing consumes it — see docs/unwired-ledger.md, the
+	//     badge-only catalog install entry). The frontend labels it as a
+	//     download, not an install, and offers only removal.
+	residueSet := map[string]bool{}
 	if a.dataDir != "" {
 		if installed, err := corefleet.InstalledItems(a.dataDir); err == nil {
 			for _, it := range installed {
-				installedSet[it.ID+"@"+it.Version] = true
+				if it.Kind == corefleet.CatalogKindSkill {
+					continue
+				}
+				residueSet[it.ID+"@"+it.Version] = true
 			}
 		}
 	}
+	skillSet := a.installedSkillSet()
 
 	out := make([]CatalogItemView, len(items))
 	for i, it := range items {
-		out[i] = catalogItemToView(it, installedSet[it.ID+"@"+it.Version])
+		key := it.ID + "@" + it.Version
+		installed := residueSet[key]
+		if it.Kind == corefleet.CatalogKindSkill {
+			installed = skillSet[key]
+		}
+		out[i] = catalogItemToView(it, installed)
 	}
 	return out, nil
+}
+
+// installedSkillSet returns catalogID@version for every skill in the skill
+// store that came from the catalog. A store read error yields an empty set:
+// the badge then offers Install, and a re-install is idempotent (Save
+// overwrites by skill ID), whereas a false "Installed" would hide the action.
+func (a *API) installedSkillSet() map[string]bool {
+	out := map[string]bool{}
+	if a.skills == nil {
+		return out
+	}
+	skills, err := a.skills.List()
+	if err != nil {
+		return out
+	}
+	for _, sk := range skills {
+		if sk.CatalogID == "" {
+			continue
+		}
+		out[sk.CatalogID+"@"+sk.Version] = true
+	}
+	return out
 }
 
 // Catalog_Install implements CatalogAPI.

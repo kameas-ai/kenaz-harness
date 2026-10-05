@@ -24,8 +24,12 @@
  * WP07 additions (fleet-context-graph-sync-01NDFSEX17):
  *   - Sync status strip in the tree panel header (team cap, pull count,
  *     cursor). Hidden when fleet is not signed in / team cap absent.
- *   - "Share to team" affordance in the preview panel for files when the
- *     team-graph capability is active. Gated on `syncStatus.team_cap_enabled`.
+ *   - "Share to team" affordance in the preview panel for files. Usable
+ *     when the fleet-session store's `shared_team_graph` capability is on
+ *     (fleet-session-truth-01DOGF0A FR-8 — the D5 switch-over); otherwise
+ *     rendered disabled with `sharingDisabledReason`
+ *     (knowledge-home-01DOGF0E WP04 — it used to be hidden, contradicting
+ *     the "hidden vs broken" doctrine below).
  *   - First-publish confirm: "This entry will be visible to your org" so
  *     users don't accidentally publish secrets into a shared layer (NFR-006).
  *   - `publish` calls `client.contexts.publish` with a deterministic nodeID
@@ -70,6 +74,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { Plus, FileText } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useFleetSession } from '@/lib/fleetSession';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type {
@@ -85,6 +90,15 @@ import GlobalContextPanel from '@/components/settings/GlobalContextPanel.vue';
 import ContextRecent from './ContextRecent.vue';
 import ContextHealthCard from '@/components/context/ContextHealthCard.vue';
 
+const props = defineProps<{
+  /**
+   * Rendered inside KnowledgeView's Curated section (knowledge-home-01DOGF0E
+   * WP02): Knowledge owns the page header, so this view drops its own
+   * CanvasHead and shows the library location in its toolbar instead.
+   */
+  embedded?: boolean;
+}>();
+
 const servedMode = useServedMode();
 const client = useHarnessClient();
 
@@ -94,9 +108,29 @@ const rootPath = ref<string>('');
 const treeError = ref<string | null>(null);
 
 const selectedPath = ref<string | null>(null);
+
 const previewContent = ref<string>('');
 const previewLoading = ref(false);
 const previewError = ref<string | null>(null);
+
+/**
+ * selectedFolder — the folder row the user last clicked
+ * (knowledge-home-01DOGF0E WP05, FR-7). The owner's F10 case was "kameas-ai
+ * folder selected → no sharing affordance at all", because folder clicks
+ * only expanded the row. Folder and file selection are mutually exclusive:
+ * selecting a folder clears the previewed file (otherwise the preview would
+ * show one file while the sharing section talked about the folder — review
+ * F6), and "+ Folder" / import then target the selected folder.
+ */
+const selectedFolder = ref<string | null>(null);
+
+function selectFolder(path: string) {
+  selectedFolder.value = path;
+  selectedPath.value = null;
+  previewContent.value = '';
+  previewError.value = null;
+  previewLoading.value = false;
+}
 
 const showHidden = ref(false);
 const externalChangeToast = ref(false);
@@ -131,10 +165,88 @@ const publishError = ref<string | null>(null);
 /** Whether a publish call is in progress. */
 const publishLoading = ref(false);
 
-/** teamCapEnabled is true when fleet has the team-graph sharing cap. */
-const teamCapEnabled = computed(
-  () => syncStatus.value?.team_cap_enabled ?? false,
-);
+/**
+ * teamCapEnabled is true when fleet has the team-graph sharing cap.
+ *
+ * fleet-session-truth-01DOGF0A FR-8: read from the shared fleet-session
+ * capability set — the same one LeftRail's gates read — instead of this
+ * view's one-shot syncStatus() fetch, which only refreshed on mount. A
+ * capability arriving or leaving now re-renders this gate and the rail's in
+ * the same tick (dogfood F10a: the org-promote affordance stayed hidden
+ * behind a capability snapshot the rest of the app disagreed with).
+ * syncStatus still feeds the strip's cursor / pull count / errors.
+ */
+const fleetSessionStore = useFleetSession(client);
+const teamCapEnabled = computed(() => fleetSessionStore.capability('shared_team_graph'));
+
+/**
+ * sharingDisabledReason — why Share… / Promote are disabled, or null when
+ * they are usable (knowledge-home-01DOGF0E WP04, spec FR-6). Sharing
+ * controls are never hidden for capability reasons: a user who cannot see
+ * the control cannot learn the feature exists or what would enable it
+ * (dogfood F10b — "i see no way to promote my kameas-ai context").
+ *
+ * Source: the FleetSession store (fleet-session-truth-01DOGF0A) — the D5
+ * switch-over, completed at release assembly (adversarial-review F1: both
+ * branches had assumed the other would do it). The store's state splits
+ * signed-out / needs-reauth / degraded / capability-missing; the gate
+ * (`teamCapEnabled`) reads the same store.
+ */
+/**
+ * folderShareReason — the interim folder state for FR-7. Folder-level
+ * share/promote (a batch dialog over per-entry publish/promote) is an OPEN
+ * owner question (docs/missions/knowledge-home.md D4, asked 2026-10-04):
+ * deferred, NOT rejected. Until it is answered the folder pane says how
+ * sharing works today instead of showing nothing. When the owner answers,
+ * either build the dialog (FR-7) or reword this to the dated rejection copy.
+ */
+function folderShareReason(folderPath: string): string {
+  const name = folderPath.split('/').pop() || folderPath;
+  return `Sharing works per file today — select a file in “${name}” to share it. Sharing a whole folder is pending a product decision.`;
+}
+
+const sharingDisabledReason = computed<string | null>(() => {
+  if (teamCapEnabled.value) return null;
+  const snap = fleetSessionStore.session.value;
+  const st = snap?.state;
+  // needs-reauth is a degraded reason, not a state (the token lacks a
+  // required claim/scope until the user re-signs-in).
+  if (st === 'degraded' && snap?.reason === 'needs_reauth') {
+    return 'Sharing is paused — your sign-in needs an update. Use “Update sign-in” in the account menu, then sharing resumes.';
+  }
+  switch (st) {
+    case 'signed_out':
+      return 'Sharing is off — you are signed out of fleet. Sign in with a team-graph-enabled account to share.';
+    case 'degraded':
+      return 'Sharing is paused — the fleet connection is degraded right now. It retries automatically; sharing resumes when the connection recovers.';
+    case 'signing_in':
+      return 'Sharing will be available once sign-in completes.';
+    case 'signed_in':
+      // Signed in but the team-graph capability is off for this account.
+      return 'Sharing is off — this account does not have the team-graph capability. Ask an admin to enable team context sharing.';
+    case 'disabled':
+    default:
+      // Fleet disabled/not configured (local-only), or no snapshot yet.
+      return 'Sharing is off — fleet team sync is not set up on this device. Sharing needs a signed-in fleet connection with the team-graph capability.';
+  }
+});
+
+/** What the sharing controls act on: the last-clicked folder, else the selected file. */
+const shareTarget = computed<'folder' | 'file' | null>(() => {
+  if (selectedFolder.value !== null) return 'folder';
+  if (selectedPath.value) return 'file';
+  return null;
+});
+
+/** Everything that keeps Share… / Promote disabled, in one sentence group. */
+const shareBlockedReason = computed<string | null>(() => {
+  if (shareTarget.value === 'folder' && selectedFolder.value !== null) {
+    const folder = folderShareReason(selectedFolder.value);
+    return sharingDisabledReason.value ? `${folder} ${sharingDisabledReason.value}` : folder;
+  }
+  if (shareTarget.value === 'file') return sharingDisabledReason.value;
+  return null;
+});
 
 /**
  * publishFellBackToOrg is true when the most recent publish was requested
@@ -171,11 +283,13 @@ async function loadSyncStatus() {
 
 /**
  * openPublishConfirm — show the "visible to your org" confirm dialog.
- * Only called when teamCapEnabled and a file is selected. Resets the
+ * Guarded on teamCapEnabled (the button is disabled, not hidden, when the
+ * cap is off). Resets the
  * layer choice to "team" (the default, still-most-common intent) each
  * time the dialog opens.
  */
 function openPublishConfirm() {
+  if (!teamCapEnabled.value || shareTarget.value !== 'file') return;
   publishError.value = null;
   publishResult.value = null;
   publishLayer.value = 'team';
@@ -234,7 +348,7 @@ const promoteLoading = ref(false);
  * covers the fleet-off case rather than hiding the control outright.
  */
 async function onPromoteClick() {
-  if (!teamCapEnabled.value || !selectedPath.value) return;
+  if (!teamCapEnabled.value || shareTarget.value !== 'file' || !selectedPath.value) return;
   promoteLoading.value = true;
   promoteError.value = null;
   promoteResult.value = null;
@@ -267,6 +381,9 @@ async function onRenameNode({ path, newName }: { path: string; newName: string }
     if (selectedPath.value === path) {
       selectedPath.value = newPath;
     }
+    if (selectedFolder.value === path) {
+      selectedFolder.value = newPath;
+    }
     await loadTree();
   } catch (e) {
     treeError.value = e instanceof Error ? e.message : 'Rename failed.';
@@ -288,6 +405,9 @@ async function onDeleteNode(path: string) {
     if (selectedPath.value === path) {
       selectedPath.value = null;
       previewContent.value = '';
+    }
+    if (selectedFolder.value === path) {
+      selectedFolder.value = null;
     }
     await loadTree();
   } catch (e) {
@@ -414,6 +534,7 @@ async function loadRoot() {
 }
 
 async function selectFile(path: string) {
+  selectedFolder.value = null;
   selectedPath.value = path;
   previewContent.value = '';
   previewError.value = null;
@@ -459,7 +580,7 @@ function cancelCreateFolder() {
 // should be created in, derived from the current selection (folder → into
 // it; file → its parent; nothing selected → root). Mirrors importTargetPath.
 function folderParentPath(): string {
-  const sel = selectedPath.value;
+  const sel = selectedFolder.value ?? selectedPath.value;
   if (!sel) return '';
   const node = findNode(tree.value, sel);
   if (!node) return '';
@@ -506,7 +627,7 @@ function openImportDialog() {
  * boundary in confusing ways.
  */
 function importTargetPath(name: string): string {
-  const sel = selectedPath.value;
+  const sel = selectedFolder.value ?? selectedPath.value;
   if (!sel) return name;
   // If the selection is a file, drop its basename and use its
   // parent directory. If it's a folder, use it directly.
@@ -599,6 +720,7 @@ onBeforeUnmount(() => {
     class="h-full flex flex-col"
   >
     <CanvasHead
+      v-if="!props.embedded"
       number="07"
       section="CONTEXTS"
       title="Context library"
@@ -607,9 +729,29 @@ onBeforeUnmount(() => {
           ? `Markdown + text files in ${rootPath}. Drop a file in the folder or use the “+ Folder” affordance to organise.`
           : 'Markdown + text files attached to sessions, projects, or globally. Local-only — context files never leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active).'
       "
+    />
+    <!-- Library toolbar. Lived in CanvasHead's trailing slot until
+         knowledge-home-01DOGF0E WP02; a row of its own so the controls
+         survive when Knowledge mounts this view without its header. -->
+    <div
+      class="px-6 py-2 border-b border-border-muted flex flex-wrap items-center gap-3"
+      data-testid="context-toolbar"
     >
-      <template #trailing>
+      <span
+        v-if="props.embedded"
+        class="font-ui text-[11px] text-ink-muted flex-1 min-w-0 truncate"
+        data-testid="context-library-location"
+      >
+        <template v-if="rootPath">Markdown + text files in <span class="font-mono">{{ rootPath }}</span></template>
+        <template v-else>Markdown + text files, local to this device</template>
+      </span>
         <div class="flex items-center gap-3">
+          <!-- Context-health rollup (context-bootstrap-harness-integration
+               WP07b) as a one-line chip, expand on click (knowledge-home-
+               01DOGF0E WP06). Self-contained: loads health on mount. Not
+               gated by servedMode — the whole view is already inside the
+               v-else block above. -->
+          <ContextHealthCard />
           <label
             class="flex items-center gap-1.5 font-ui text-[11px] text-ink-muted cursor-pointer"
           >
@@ -640,8 +782,7 @@ onBeforeUnmount(() => {
             @change="onImportChange"
           />
         </div>
-      </template>
-    </CanvasHead>
+    </div>
 
     <!-- Global-scope attachments — moved here from Settings (every
          session inherits these as the prefix). -->
@@ -899,16 +1040,20 @@ onBeforeUnmount(() => {
           <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle flex-1">
             Library
           </span>
-          <!-- Publish affordance — only when team cap enabled and a file is
-               selected. Opens a dialog offering both "team" and the
-               explicit "org" choice (finding #97); label stays generic
-               since the destination is chosen in the dialog, not implied
-               by the button. -->
+          <!-- Publish affordance — visible whenever an entry is selected;
+               disabled with the reason below when fleet's team cap is off
+               (knowledge-home-01DOGF0E WP04, FR-6 — it used to be hidden,
+               which is how the owner concluded sharing did not exist).
+               Opens a dialog offering both "team" and the explicit "org"
+               choice (finding #97); label stays generic since the
+               destination is chosen in the dialog, not implied by the
+               button. -->
           <button
-            v-if="teamCapEnabled && selectedPath"
+            v-if="shareTarget"
             type="button"
-            class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50"
-            :disabled="publishLoading"
+            class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
+            :disabled="shareBlockedReason !== null || publishLoading"
+            :title="shareBlockedReason ?? undefined"
             data-testid="context-publish-btn"
             @click="openPublishConfirm"
           >
@@ -916,28 +1061,20 @@ onBeforeUnmount(() => {
             <span v-else>Share…</span>
           </button>
           <!-- Promote affordance (WP16) — visible whenever a file is
-               selected, disabled (with a reason below) when fleet's team
-               cap is off, rather than hidden. See spec §1.10. -->
-          <span v-if="selectedPath" class="flex items-center gap-1">
-            <button
-              type="button"
-              class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
-              :disabled="!teamCapEnabled || promoteLoading"
-              :title="!teamCapEnabled ? 'Fleet team sync is off' : undefined"
-              data-testid="context-promote-btn"
-              @click="onPromoteClick"
-            >
-              <span v-if="promoteLoading">Promoting…</span>
-              <span v-else>Promote to org</span>
-            </button>
-            <span
-              v-if="!teamCapEnabled"
-              class="font-ui text-[10px] text-ink-subtle"
-              data-testid="context-promote-disabled-reason"
-            >
-              (fleet off)
-            </span>
-          </span>
+               selected, disabled (with the shared reason below) when
+               fleet's team cap is off, rather than hidden. See spec §1.10. -->
+          <button
+            v-if="shareTarget"
+            type="button"
+            class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
+            :disabled="shareBlockedReason !== null || promoteLoading"
+            :title="shareBlockedReason ?? undefined"
+            data-testid="context-promote-btn"
+            @click="onPromoteClick"
+          >
+            <span v-if="promoteLoading">Promoting…</span>
+            <span v-else>Promote to org</span>
+          </button>
           <button
             type="button"
             class="text-[11px] text-ink-dim hover:text-accent flex items-center gap-1"
@@ -948,6 +1085,22 @@ onBeforeUnmount(() => {
             <span>Folder</span>
           </button>
         </header>
+        <!-- Why Share… / Promote are disabled, and what would enable them
+             (knowledge-home-01DOGF0E WP04, FR-6). One reason for both. -->
+        <p
+          v-if="shareBlockedReason"
+          class="px-3 py-1.5 border-b border-border-muted font-ui text-[10px] leading-snug text-ink-subtle"
+          :data-share-target="shareTarget"
+          data-testid="context-share-disabled-reason"
+        >
+          {{ shareBlockedReason }}
+          <a
+            v-if="sharingDisabledReason"
+            href="#/settings?tab=account"
+            class="text-accent hover:text-accent-muted underline"
+            data-testid="context-share-account-link"
+          >Settings › Account</a>
+        </p>
         <!-- WP11: text filter input for the context tree -->
         <div class="px-2 pt-2">
           <input
@@ -1060,6 +1213,7 @@ onBeforeUnmount(() => {
             :selected-path="selectedPath"
             :is-root="true"
             @select="selectFile"
+            @select-folder="selectFolder"
             @rename="onRenameNode"
             @delete="onDeleteNode"
           />
@@ -1075,13 +1229,9 @@ onBeforeUnmount(() => {
         :on-save="savePreview"
       />
 
-      <!-- right: health + recents -->
+      <!-- right: recents. Context health moved to a status chip in the
+           toolbar (knowledge-home-01DOGF0E WP06, dogfood F11). -->
       <div class="flex flex-col gap-3 border-l border-border-muted bg-surface-0 overflow-y-auto p-3">
-        <!-- Context-health rollup (context-bootstrap-harness-integration WP07b).
-             Self-contained: loads health on mount, degrades to empty state when
-             fleet is disabled. Not gated by servedMode — the whole view is
-             already inside the v-else block above. -->
-        <ContextHealthCard />
         <ContextRecent
           :paths="recent"
           :selected-path="selectedPath"

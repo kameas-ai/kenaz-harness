@@ -214,6 +214,13 @@ type Env struct {
 	SessionID string
 	// ProjectID is the optional project the session belongs to.
 	ProjectID string
+	// TurnSpanID is the id of the user message that opened the chat
+	// turn this run executes, when the run IS a chat turn
+	// (agentgraph-settings-linkage-01DOGF0D WP03). Recorded on the
+	// run_start event so the log is self-describing: a run can be traced
+	// back to its turn without the session_turn_runs side table. Empty
+	// for runs that are not chat turns.
+	TurnSpanID string
 
 	// Graph is the spec being executed. Read-only; nodes look up their
 	// peers (e.g. Loop bodies) by ID.
@@ -327,8 +334,12 @@ type Env struct {
 	ToolUsage ToolUsageObserver
 
 	// PendingContext receives additional system-context injected by hooks
-	// (e.g. additional_context from pre_tool_use). Nil drops the context
-	// (it is still logged but not forwarded to the next LLM turn).
+	// (additional_context from pre_tool_use / post_tool_use). Nil drops
+	// the context with an "agentgraph.hook_context.dropped" log line.
+	// Production: the chat runner sets its per-session queue on every
+	// chat run (core/rpc/views/agentgraph/chat/pending_context.go), and
+	// its LLMProviderAdapter drains it into the next model call's system
+	// prompt. Library-graph runs outside the chat runner leave it nil.
 	PendingContext PendingContextAppender
 
 	// Compactor is the optional compaction pipeline (Bundle D). The

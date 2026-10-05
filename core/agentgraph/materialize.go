@@ -76,6 +76,7 @@ package agentgraph
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -143,13 +144,67 @@ func MaterializeRun(source Graph, runID string, log EventLog, opts ...Materializ
 	for _, o := range opts {
 		o(m)
 	}
-	if err := log.Replay(runID, m.observe); err != nil {
+	// agentgraph-settings-linkage-01DOGF0D: refuse only TRUE run-id
+	// reuse. Two legitimate paths write a second run_start under one id
+	// — Kernel.Resume re-enters Run after an ask/approval pause, and the
+	// chat runner's overflow-recovery redrive re-runs the same env —
+	// and both are one run continuing, projected as one graph. Reuse is:
+	//   - a run_start that arrives AFTER a run_complete (a finished run
+	//     id started again — only a reused id can do that), or
+	//   - several run_starts under a pre-ULID chat id ("chat-<n>", the
+	//     per-process counter that restarted at 0 on every boot), where
+	//     a redrive and a cross-restart collision are indistinguishable.
+	runStarts := 0
+	startAfterComplete := false
+	sawComplete := false
+	observe := func(ev Event) error {
+		switch ev.Kind {
+		case EventRunStart:
+			runStarts++
+			if sawComplete {
+				startAfterComplete = true
+			}
+		case EventRunComplete:
+			sawComplete = true
+		}
+		return m.observe(ev)
+	}
+	if err := log.Replay(runID, observe); err != nil {
 		return Graph{}, fmt.Errorf("agentgraph: materialize: replay run %q: %w", runID, err)
+	}
+	if startAfterComplete || (runStarts > 1 && IsLegacyChatRunID(runID)) {
+		return Graph{}, fmt.Errorf("%w: run %q has %d run_start events", ErrRunIDReused, runID, runStarts)
 	}
 	if len(m.fires) == 0 {
 		return Graph{}, fmt.Errorf("agentgraph: materialize: run %q has no recorded node fires", runID)
 	}
 	return m.build(), nil
+}
+
+// ErrRunIDReused reports a run id that carries several distinct runs:
+// a run_start after the id's run had already completed, or several
+// run_starts under a pre-ULID "chat-<n>" id (a per-process counter
+// reused after every restart). A resumed or overflow-redriven run also
+// writes a second run_start, but before any run_complete and under a
+// ULID id, so it is NOT this — it materializes as one continuing run.
+// The events are kept (audit trail) but cannot be separated into turns.
+var ErrRunIDReused = errors.New("agentgraph: materialize: run id was reused by several runs; its events cannot be attributed to one turn")
+
+// IsLegacyChatRunID reports whether runID has the pre-ULID chat shape
+// "chat-<decimal>" — minted by a per-process counter before
+// agentgraph-settings-linkage-01DOGF0D WP02, and therefore possibly
+// shared by unrelated turns from different app sessions.
+func IsLegacyChatRunID(runID string) bool {
+	const prefix = "chat-"
+	if !strings.HasPrefix(runID, prefix) || len(runID) == len(prefix) {
+		return false
+	}
+	for _, r := range runID[len(prefix):] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // MaterializeOption tunes a projection.

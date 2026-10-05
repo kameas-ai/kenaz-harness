@@ -35,6 +35,9 @@ func materializeRPCGraph() coreag.Graph {
 // core/rpc/api.go wires to ChatRunner.RunSpecRecorder.
 func TestMaterializeRun_TracksExternalChatRun(t *testing.T) {
 	t.Parallel()
+	// Memory log on purpose (WP-PI AC-PI-2 of 01DOGF0D): one process,
+	// one run — the cross-restart run-id shape lives on the SQL log in
+	// chat/run_id_unique_test.go.
 	log := coreag.NewMemoryEventLog()
 	mgr, err := graphview.NewManager(graphview.WithEventLog(log))
 	if err != nil {
@@ -123,6 +126,11 @@ func TestMaterializeRun_NilManager(t *testing.T) {
 // marker is dropped AND if it is stamped on a faithful projection.
 func TestTrackExternalRun_EvictionIsMarkedDegraded(t *testing.T) {
 	t.Parallel()
+	// Memory log on purpose (agentgraph-settings-linkage-01DOGF0D WP-PI,
+	// AC-PI-2): eviction here happens inside ONE manager's bounded
+	// registry; nothing asserts run identity across a restart. The
+	// restart shape is pinned on the SQL log in
+	// materialize_spec_digest_test.go.
 	log := coreag.NewMemoryEventLog()
 	mgr, err := graphview.NewManager(graphview.WithEventLog(log))
 	if err != nil {

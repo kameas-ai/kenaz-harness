@@ -156,6 +156,7 @@ import type {
   PermissionRequest,
   PermissionMode,
   SessionUsage,
+  TurnRun,
   DriftReport,
   PolicyFileDetail,
   ParseResult,
@@ -178,6 +179,7 @@ import type {
   FallbackChainSummary,
   FleetIdentity,
   FleetProfileInfo,
+  FleetSessionView,
   CapabilitiesView,
   FleetConfigPullStatusView,
   FleetHealthView,
@@ -288,6 +290,8 @@ interface WailsBindingsLike {
   ): Promise<ResumeMessageResult>;
   /** Returns the cumulative token + cost aggregate (token-cost-telemetry WP03). */
   Sessions_GetUsage(id: string): Promise<SessionUsage>;
+  /** Turn -> run links (agentgraph-settings-linkage-01DOGF0D WP03). Desktop-only. */
+  Sessions_TurnRuns(sessionID: string): Promise<TurnRun[]>;
   Sessions_SaveAsArtifact(
     sessionID: string,
     messageID: string,
@@ -596,9 +600,11 @@ interface WailsBindingsLike {
   // fleet-auth-foundation-01NDFSEX08 WP05
   Settings_FleetSignIn(): Promise<FleetIdentity>;
   Settings_FleetSignOut(): Promise<void>;
-  Settings_FleetSignedIn(): Promise<boolean>;
+  Settings_FleetSignInCancel(): Promise<void>;
   Settings_FleetRefreshIdentity(): Promise<FleetIdentity>;
   Settings_FleetProfile(): Promise<FleetProfileInfo>;
+  // fleet-session-truth-01DOGF0A FR-1
+  Settings_FleetSession(): Promise<FleetSessionView>;
   // fleet-capability-surface-01NDFSEX09 WP11
   Settings_FleetCapabilities(): Promise<CapabilitiesView>;
   Settings_FleetRefreshCapabilities(): Promise<CapabilitiesView>;
@@ -982,9 +988,13 @@ interface WailsBindingsLike {
   Catalog_Publish(input: CatalogPublishInput): Promise<CatalogItemView>;
   /** List catalog items, optionally filtered by kind or visibility. */
   Catalog_List(filter: CatalogFilter): Promise<CatalogItemView[]>;
-  /** Download and install a catalog item into the local DataDir. */
+  /**
+   * Refuses every catalog kind (install-framework-01DOGF0B WP02): no kind has
+   * an install on this path that anything consumes. Skills install via
+   * Slash_SkillInstall. Writes nothing.
+   */
   Catalog_Install(catalogID: string, version: string): Promise<void>;
-  /** Remove an installed catalog item from the local DataDir. Idempotent. */
+  /** Remove a downloaded catalog payload (installed/ residue) from the local DataDir. Idempotent. */
   Catalog_Uninstall(kind: string, catalogID: string, version: string): Promise<void>;
   /** List all catalog items currently installed in the local DataDir. */
   Catalog_Installed(): Promise<CatalogItemView[]>;
@@ -1602,6 +1612,14 @@ export interface SessionsClient {
    * session (token-cost-telemetry-01KQ8TD7 WP03).
    */
   getUsage(id: string): Promise<SessionUsage>;
+  /**
+   * turnRuns returns the session's recorded chat turn -> agent-graph run
+   * links, oldest first (agentgraph-settings-linkage-01DOGF0D WP03). Turns
+   * that predate the mapping have no entry. Desktop-only: served mode
+   * rejects with ServedUnsupportedError (the run routes it feeds are
+   * Graph_* surfaces with no serve dispatch, D-701).
+   */
+  turnRuns(sessionId: string): Promise<TurnRun[]>;
   /**
    * saveAsArtifact pins a message (or a sub-range thereof) as a
    * `user_pin` artifact. `rangeStart` / `rangeEnd` are byte offsets
@@ -2496,10 +2514,14 @@ export interface SettingsClient {
    * returns the user's Identity. Returns an error when fleet is disabled.
    */
   fleetSignIn(): Promise<FleetIdentity>;
+  /**
+   * Cancel the in-flight sign-in flow (fleet-session-truth-01DOGF0A FR-5).
+   * The pending fleetSignIn() rejects with "context canceled". No-op when
+   * no flow is running.
+   */
+  fleetSignInCancel(): Promise<void>;
   /** Clear tokens and identity cache. */
   fleetSignOut(): Promise<void>;
-  /** True iff valid fleet tokens exist. */
-  fleetSignedIn(): Promise<boolean>;
   /** Re-call the fleet enroll endpoint and update the cached identity. */
   fleetRefreshIdentity(): Promise<FleetIdentity>;
   /**
@@ -2507,6 +2529,12 @@ export interface SettingsClient {
    * expose ClientID, APIAudience, or any secret fields.
    */
   fleetProfile(): Promise<FleetProfileInfo>;
+  /**
+   * The single fleet-session snapshot (fleet-session-truth-01DOGF0A FR-1).
+   * Components do not call this directly — they read `useFleetSession()`,
+   * which calls it once and then follows `fleet:session-changed`.
+   */
+  fleetSession(): Promise<FleetSessionView>;
 
   // ── fleet-capability-surface-01NDFSEX09 WP11 ────────────────────────────
   /** Return the in-memory fleet capability snapshot. */
@@ -3817,9 +3845,9 @@ export interface CatalogClient {
   publish(input: CatalogPublishInput): Promise<CatalogItemView>;
   /** List catalog items, optionally filtered. */
   list(filter?: CatalogFilter): Promise<CatalogItemView[]>;
-  /** Install a catalog item into the local DataDir. */
+  /** Refused server-side for every kind (install-framework-01DOGF0B WP02). */
   install(catalogID: string, version: string): Promise<void>;
-  /** Remove an installed catalog item. Idempotent. */
+  /** Remove a downloaded catalog payload (installed/ residue). Idempotent. */
   uninstall(kind: string, catalogID: string, version: string): Promise<void>;
   /**
    * List all catalog items currently installed locally.
@@ -4253,6 +4281,8 @@ export function createHarnessClient(): HarnessClient {
         b().Sessions_ResumeMessage(sessionId, messageId),
       getUsage: (id: string): Promise<SessionUsage> =>
         b().Sessions_GetUsage(id),
+      turnRuns: (sessionId: string): Promise<TurnRun[]> =>
+        b().Sessions_TurnRuns(sessionId),
       saveAsArtifact: (sessionId, messageId, title, rangeStart, rangeEnd) =>
         b().Sessions_SaveAsArtifact(
           sessionId,
@@ -4548,9 +4578,10 @@ export function createHarnessClient(): HarnessClient {
       // fleet-auth-foundation-01NDFSEX08 WP05
       fleetSignIn: () => b().Settings_FleetSignIn(),
       fleetSignOut: () => b().Settings_FleetSignOut(),
-      fleetSignedIn: () => b().Settings_FleetSignedIn(),
+      fleetSignInCancel: () => b().Settings_FleetSignInCancel(),
       fleetRefreshIdentity: () => b().Settings_FleetRefreshIdentity(),
       fleetProfile: () => b().Settings_FleetProfile(),
+      fleetSession: () => b().Settings_FleetSession(),
       // fleet-capability-surface-01NDFSEX09 WP11
       fleetCapabilities: () => b().Settings_FleetCapabilities(),
       fleetRefreshCapabilities: () => b().Settings_FleetRefreshCapabilities(),
@@ -5462,6 +5493,14 @@ export function createServedHarnessClient(opts?: {
         transport.call<PermissionRequest[]>('Permissions_ListPending'),
     },
 
+    // Settings_FleetSession — the only settings method core/serve answers
+    // (fleet-session-truth-01DOGF0A FR-1). Everything else under settings
+    // stays an honest ServedUnsupportedError.
+    settings: {
+      ...base.settings,
+      fleetSession: () => transport.call<FleetSessionView>('Settings_FleetSession'),
+    },
+
     // Fleet telemetry consent + status: the workbench is where everyday work
     // happens, so consent must be settable here or a workbench never reports.
     fleet: {
@@ -5484,6 +5523,26 @@ export function createServedHarnessClient(opts?: {
       // kill (served-mode-is-a-real-mode-01PMZ707 WP04).
       getFlags: () => transport.call<FeatureFlagInfo[]>('Config_GetFlags'),
     },
+  };
+}
+
+/**
+ * fakeFleetSession — the fake client's fleet-session snapshot: signed out,
+ * nothing granted. Exported so tests can start from a valid shape.
+ */
+export function fakeFleetSession(
+  overrides: Partial<FleetSessionView> = {},
+): FleetSessionView {
+  const lane = { status: 'unknown', consecutiveFailures: 0 };
+  return {
+    state: 'signed_out',
+    autoRetry: true,
+    tokensUsable: false,
+    claims: { hasSubject: false, hasOrgClaim: false },
+    capabilities: { tier: '', enabled: {}, fetchedAt: '', source: 'default-deny' },
+    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
+    updatedAt: '',
+    ...overrides,
   };
 }
 
@@ -5582,6 +5641,7 @@ export function createFakeHarnessClient(
         subscriptionId: `fake-resume-${Math.random().toString(36).slice(2, 8)}`,
         originalMessageId: messageId,
       }),
+      turnRuns: async () => [],
       getUsage: async () => ({
         promptTokens: 0,
         completionTokens: 0,
@@ -6046,13 +6106,14 @@ export function createFakeHarnessClient(
         userId: '', orgId: '', teamId: '',
       }),
       fleetSignOut: noop,
-      fleetSignedIn: async () => false,
+      fleetSignInCancel: noop,
       fleetRefreshIdentity: async () => ({
         userId: '', orgId: '', teamId: '',
       }),
       fleetProfile: async () => ({
         name: 'prod', badgeColor: '', fleetBaseUrl: '', configured: false,
       }),
+      fleetSession: async () => fakeFleetSession(),
       // fleet-capability-surface-01NDFSEX09 WP11
       fleetCapabilities: async () => ({
         tier: '', enabled: {}, fetchedAt: '', source: 'default-deny',

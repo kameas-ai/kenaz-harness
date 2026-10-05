@@ -65,6 +65,7 @@ const isBranch = computed(() => !!props.session.parentSessionId);
             ? 'bg-surface-3 text-ink font-medium'
             : 'text-ink-muted hover:bg-surface-2 hover:text-ink',
         ]"
+        :aria-current="isActive ? 'page' : undefined"
         :data-testid="`open-session-${session.id}`"
         @click="emit('open', session.id)"
       >

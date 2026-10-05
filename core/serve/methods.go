@@ -86,6 +86,7 @@ var (
 		"Sessions_SendMessageWithBlocks",
 		"Sessions_SetSystemPrompt",
 		"Sessions_SuggestTitle",
+		"Settings_FleetSession",
 		"ShellStatus",
 	}
 

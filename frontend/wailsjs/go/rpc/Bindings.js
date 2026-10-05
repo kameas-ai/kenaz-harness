@@ -1278,6 +1278,10 @@ export function Sessions_SuggestTitle(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_SuggestTitle'](arg1);
 }
 
+export function Sessions_TurnRuns(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_TurnRuns'](arg1);
+}
+
 export function SetContext(arg1) {
   return window['go']['rpc']['Bindings']['SetContext'](arg1);
 }
@@ -1314,6 +1318,10 @@ export function Settings_FleetRefreshIdentity() {
   return window['go']['rpc']['Bindings']['Settings_FleetRefreshIdentity']();
 }
 
+export function Settings_FleetSession() {
+  return window['go']['rpc']['Bindings']['Settings_FleetSession']();
+}
+
 export function Settings_FleetSetTelemetryOptIn(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Settings_FleetSetTelemetryOptIn'](arg1, arg2);
 }
@@ -1322,12 +1330,12 @@ export function Settings_FleetSignIn() {
   return window['go']['rpc']['Bindings']['Settings_FleetSignIn']();
 }
 
-export function Settings_FleetSignOut() {
-  return window['go']['rpc']['Bindings']['Settings_FleetSignOut']();
+export function Settings_FleetSignInCancel() {
+  return window['go']['rpc']['Bindings']['Settings_FleetSignInCancel']();
 }
 
-export function Settings_FleetSignedIn() {
-  return window['go']['rpc']['Bindings']['Settings_FleetSignedIn']();
+export function Settings_FleetSignOut() {
+  return window['go']['rpc']['Bindings']['Settings_FleetSignOut']();
 }
 
 export function Settings_FleetTelemetryOptIns() {

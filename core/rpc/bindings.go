@@ -330,6 +330,16 @@ func (b *Bindings) Sessions_GetUsage(id string) (sessions.SessionUsage, error) {
 	return b.api.Sessions().GetUsage(b.ctx(), id)
 }
 
+// Sessions_TurnRuns returns the session's recorded chat turn ->
+// agent-graph run mappings (agentgraph-settings-linkage-01DOGF0D WP03),
+// so the transcript can link each turn to /agentgraph/run/:runId/graph
+// and RunView. Desktop-only: every route it feeds is a Graph_* surface
+// with no serve dispatch (D-701), so the caller gates on !isServedMode().
+func (b *Bindings) Sessions_TurnRuns(sessionID string) ([]sessions.TurnRun, error) {
+	defer sentry.WrapBinding("Sessions_TurnRuns")()
+	return b.api.Sessions().TurnRuns(b.ctx(), sessionID)
+}
+
 // Sessions_ClearTitle resets the session's name to "" and auto_titled=0,
 // re-enabling future auto-title attempts
 // (session-auto-titling-01KQ8TDS WP04).
@@ -1715,16 +1725,25 @@ func (b *Bindings) Settings_FleetSignIn() (settings.FleetIdentity, error) {
 	return b.api.Settings().FleetSignIn(b.ctx())
 }
 
+// Settings_FleetSignInCancel cancels the in-flight sign-in flow
+// (fleet-session-truth-01DOGF0A FR-5). No-op when none is running.
+func (b *Bindings) Settings_FleetSignInCancel() error {
+	defer sentry.WrapBinding("Settings_FleetSignInCancel")()
+	return b.api.Settings().FleetSignInCancel(b.ctx())
+}
+
 // Settings_FleetSignOut clears tokens and identity cache.
 func (b *Bindings) Settings_FleetSignOut() error {
 	defer sentry.WrapBinding("Settings_FleetSignOut")()
 	return b.api.Settings().FleetSignOut(b.ctx())
 }
 
-// Settings_FleetSignedIn reports whether valid tokens exist.
-func (b *Bindings) Settings_FleetSignedIn() (bool, error) {
-	defer sentry.WrapBinding("Settings_FleetSignedIn")()
-	return b.api.Settings().FleetSignedIn(b.ctx())
+// Settings_FleetSession returns the single fleet-session snapshot every
+// surface reads (fleet-session-truth-01DOGF0A FR-1). The same shape is
+// pushed on fleet:session-changed.
+func (b *Bindings) Settings_FleetSession() (settings.FleetSessionView, error) {
+	defer sentry.WrapBinding("Settings_FleetSession")()
+	return b.api.Settings().FleetSession(b.ctx())
 }
 
 // Settings_FleetRefreshIdentity re-enrolls with fleet and updates the cache.
@@ -3603,8 +3622,10 @@ func (b *Bindings) Catalog_List(filter catalogview.CatalogFilter) ([]catalogview
 	return b.api.Catalog().Catalog_List(b.ctx(), filter)
 }
 
-// Catalog_Install downloads and installs the identified catalog item into the
-// local DataDir. Returns an error when signature verification fails.
+// Catalog_Install refuses every catalog kind with
+// fleet.ErrCatalogKindNotInstallable (install-framework-01DOGF0B WP02): no
+// kind has an install on this path that a runtime consumer reads. Skills
+// install via Slash_SkillInstall. Writes nothing.
 func (b *Bindings) Catalog_Install(catalogID, version string) error {
 	defer sentry.WrapBinding("Catalog_Install")()
 	return b.api.Catalog().Catalog_Install(b.ctx(), catalogID, version)

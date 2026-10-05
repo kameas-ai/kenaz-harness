@@ -277,12 +277,15 @@ func TestChatGraph_SingleTurnNoTool(t *testing.T) {
 		{Role: "user", Content: "say hi"},
 	})
 
-	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "say hi")
+	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("say hi"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
+	// Prefix only: a per-process memory kernel cannot show run-id reuse
+	// across restarts (01DOGF0D WP-PI AC-PI-2). Uniqueness across runner
+	// instances is pinned on the SQL log in run_id_unique_test.go.
 	if !strings.HasPrefix(subID, "chat-") {
-		t.Errorf("subID = %q, want chat-N prefix", subID)
+		t.Errorf("subID = %q, want chat-<ULID>", subID)
 	}
 
 	closed := waitForClosed(t, broker)
@@ -311,13 +314,19 @@ func TestChatGraph_SingleTurnNoTool(t *testing.T) {
 		t.Errorf("text deltas = %+v, want [hello , world]", texts)
 	}
 
-	// Assert assistant persistence (writer.calls[0] is the user-turn
-	// append done by StartStream; calls[len-1] is the SessionWriteNode
-	// assistant turn).
+	// Assert assistant persistence: calls[len-1] is the SessionWriteNode
+	// assistant turn. There is no user-turn call — the caller persisted
+	// the user row before StartStream and the runner never writes it
+	// (chat-single-writer-01DOGF0G; this test used to require one).
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
-	if len(writer.calls) < 2 {
-		t.Fatalf("len(writer.calls) = %d, want >=2 (user turn + assistant turn); calls=%+v", len(writer.calls), writer.calls)
+	if len(writer.calls) < 1 {
+		t.Fatalf("len(writer.calls) = %d, want >=1 (the assistant turn); calls=%+v", len(writer.calls), writer.calls)
+	}
+	for _, c := range writer.calls {
+		if c.role == "user" {
+			t.Errorf("runner wrote a user row %+v — the user turn has one writer, and it is not the runner", c)
+		}
 	}
 	assistantCall := writer.calls[len(writer.calls)-1]
 	if assistantCall.role != "assistant" {
@@ -366,7 +375,7 @@ func TestChatGraph_MultiTurnAgentLoop(t *testing.T) {
 	runner, broker, writer := buildIntegrationRunner(t, llm, tools, 25, []coreag.Message{
 		{Role: "user", Content: "search hello"},
 	})
-	_, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "search hello")
+	_, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("search hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -390,11 +399,15 @@ func TestChatGraph_MultiTurnAgentLoop(t *testing.T) {
 		t.Errorf("tool name = %q, want search__web", calls[0].Name)
 	}
 
-	// The final assistant turn ("found 42") should be persisted.
+	// The final assistant turn ("found 42") should be persisted. (This
+	// used to require >=2 calls, the first being the runner's own append
+	// of the user turn — the duplicate write chat-single-writer-01DOGF0G
+	// removed. The stub env.LLM/env.Tools bypass the move journal, so the
+	// final row is the only write here.)
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
-	if len(writer.calls) < 2 {
-		t.Fatalf("len(writer.calls) = %d, want >=2; calls=%+v", len(writer.calls), writer.calls)
+	if len(writer.calls) < 1 {
+		t.Fatalf("len(writer.calls) = %d, want >=1; calls=%+v", len(writer.calls), writer.calls)
 	}
 	assistantCall := writer.calls[len(writer.calls)-1]
 	if assistantCall.role != "assistant" {
@@ -436,7 +449,7 @@ func TestChatGraph_CapHitAtMaxAgentTurns(t *testing.T) {
 	runner, broker, _ := buildIntegrationRunner(t, llm, tools, 3, []coreag.Message{
 		{Role: "user", Content: "loop forever"},
 	})
-	_, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "loop forever")
+	_, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("loop forever"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -481,7 +494,7 @@ func TestChatGraph_StreamingOrder(t *testing.T) {
 	runner, broker, _ := buildIntegrationRunner(t, llm, newStubTools(), 25, []coreag.Message{
 		{Role: "user", Content: "stream please"},
 	})
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "stream please"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("stream please")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -526,7 +539,7 @@ func TestChatRunnerIntegration_ProviderError(t *testing.T) {
 	runner, broker, _ := buildIntegrationRunner(t, llm, newStubTools(), 25, []coreag.Message{
 		{Role: "user", Content: "fail me"},
 	})
-	_, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "fail me")
+	_, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("fail me"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -816,7 +829,7 @@ func TestChatRunnerIntegration_AutoTitle_HappyPath(t *testing.T) {
 	audit := &fakeAutoTitleAudit{}
 
 	runner, broker, _ := buildAutoTitleRunner(t, llm, mgr, gen, audit, nil)
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "what's a good way to learn rust?"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("what's a good way to learn rust?")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -873,7 +886,7 @@ func TestChatRunnerIntegration_AutoTitle_DialOff(t *testing.T) {
 	audit := &fakeAutoTitleAudit{}
 
 	runner, broker, _ := buildAutoTitleRunner(t, llm, mgr, gen, audit, func() bool { return false })
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "hi"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("hi")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	_ = waitForClosed(t, broker)
@@ -916,7 +929,7 @@ func TestChatRunnerIntegration_AutoTitle_GeneratorFailure(t *testing.T) {
 	audit := &fakeAutoTitleAudit{}
 
 	runner, broker, _ := buildAutoTitleRunner(t, llm, mgr, gen, audit, nil)
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "hi"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("hi")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	_ = waitForClosed(t, broker)
@@ -982,7 +995,7 @@ func TestChatRunnerIntegration_AutoTitle_ManualReTrigger(t *testing.T) {
 
 	runner, broker, _ := buildAutoTitleRunner(t, llm, mgr, gen, audit, nil)
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "first turn"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("first turn")); err != nil {
 		t.Fatalf("StartStream #1: %v", err)
 	}
 	_ = waitForClosed(t, broker)
@@ -998,7 +1011,7 @@ func TestChatRunnerIntegration_AutoTitle_ManualReTrigger(t *testing.T) {
 	// assertions are clean.)
 	mgr.reset()
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "second turn"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("second turn")); err != nil {
 		t.Fatalf("StartStream #2: %v", err)
 	}
 	_ = waitForClosed(t, broker)
@@ -1100,7 +1113,7 @@ func TestChatRunnerIntegration_KeyRotation_AuthFailureThenRedrive(t *testing.T) 
 		{Role: "user", Content: "hello"},
 	})
 
-	_, err := runner.StartStream(context.Background(), "prof-1", "session-1", "", "hello")
+	_, err := runner.StartStream(context.Background(), "prof-1", "session-1", "", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -1156,6 +1169,22 @@ func TestChatRunnerIntegration_KeyRotation_AuthFailureThenRedrive(t *testing.T) 
 	if !strings.Contains(assistantCall.content, "hello after rotation") {
 		t.Errorf("assistant content = %q, want to contain 'hello after rotation'", assistantCall.content)
 	}
+
+	// chat-single-writer-01DOGF0G: the redrive re-runs the SAME persisted
+	// turn. Across both runs nothing writes a user row, and fleet
+	// context-sync heard about the turn exactly once — from the original
+	// run, not again from the redrive.
+	for _, c := range writer.calls {
+		if c.role == "user" {
+			t.Errorf("a user row was written across start+redrive: %+v", c)
+		}
+	}
+	writer.mu.Unlock()
+	ann := writer.announcements()
+	writer.mu.Lock()
+	if len(ann) != 1 || ann[0] != "session-1/"+testUserTurnID {
+		t.Errorf("context-sync announcements across start+redrive = %v, want exactly [session-1/%s]", ann, testUserTurnID)
+	}
 }
 
 // TestChatRunnerIntegration_KeyRotation_FeatureFlagOff: when
@@ -1179,7 +1208,7 @@ func TestChatRunnerIntegration_KeyRotation_FeatureFlagOff(t *testing.T) {
 		{Role: "user", Content: "hello flag-off"},
 	})
 
-	_, err := runner.StartStream(context.Background(), "prof-2", "session-2", "", "hello flag-off")
+	_, err := runner.StartStream(context.Background(), "prof-2", "session-2", "", testTurn("hello flag-off"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -1230,7 +1259,7 @@ func TestChatRunnerIntegration_KeyRotation_RedriveDedupe(t *testing.T) {
 		{Role: "user", Content: "dedupe test"},
 	})
 
-	_, err := runner.StartStream(context.Background(), "prof-3", "session-3", "", "dedupe test")
+	_, err := runner.StartStream(context.Background(), "prof-3", "session-3", "", testTurn("dedupe test"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -1322,7 +1351,7 @@ func TestChatRunnerIntegration_KeyRotation_RedriveStartStreamFails_EmitsRetryAft
 		t.Fatalf("New: %v", err)
 	}
 
-	_, err = runner.StartStream(context.Background(), "prof-4", "session-4", "", "hello")
+	_, err = runner.StartStream(context.Background(), "prof-4", "session-4", "", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -1488,7 +1517,7 @@ func TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_FiresOnTerminal
 		{Role: "user", Content: "please check on this"},
 	})
 
-	_, err := runner.StartStream(context.Background(), "profile-1", "child-session-1", "", "please check on this")
+	_, err := runner.StartStream(context.Background(), "profile-1", "child-session-1", "", testTurn("please check on this"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -1535,7 +1564,7 @@ func TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_NoTerminalToken
 		{Role: "user", Content: "any progress?"},
 	})
 
-	_, err := runner.StartStream(context.Background(), "profile-1", "child-session-2", "", "any progress?")
+	_, err := runner.StartStream(context.Background(), "profile-1", "child-session-2", "", testTurn("any progress?"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -1578,7 +1607,7 @@ func TestChatRunnerIntegration_MergeSuggestion_OrdinarySession_NeverFires(t *tes
 		{Role: "user", Content: "wrap this up"},
 	})
 
-	_, err := runner.StartStream(context.Background(), "profile-1", "ordinary-session-1", "", "wrap this up")
+	_, err := runner.StartStream(context.Background(), "profile-1", "ordinary-session-1", "", testTurn("wrap this up"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}

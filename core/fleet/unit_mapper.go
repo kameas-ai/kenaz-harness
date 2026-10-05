@@ -6,7 +6,7 @@
 // that knows BOTH vocabularies, keeping core/units fleet-free
 // (DIRECTIVE_001) and the no-fleet-imports boundary intact:
 //
-//   core/units  →  (mapper, here in core/fleet)  →  context node/edge wire
+//	core/units  →  (mapper, here in core/fleet)  →  context node/edge wire
 //
 // Classification mapping (spec §2a / FR-001 / NFR-005):
 //
@@ -158,6 +158,15 @@ func (m *UnitMapper) PulledNodeToUnit(n ContextPulledNode) (units.Unit, bool, er
 	scope, scopeID, loadPolicy, cleanMeta, err := unfoldUnitMetadata(n.Metadata, n.Scope)
 	if err != nil {
 		return units.Unit{}, false, fmt.Errorf("fleet: PulledNodeToUnit: %w", err)
+	}
+	// Artifact units are LOCAL-ONLY in both directions (the delegated
+	// exception, core/units): egress is refused in views/fleet and by the
+	// personal classification; this closes INGRESS too — a team node
+	// claiming kind=artifact would otherwise land in the local Library and
+	// media refcounts (adversarial-review F3, 2026-10-05). Skipped, not an
+	// error: the pull continues past it.
+	if units.Kind(n.Kind) == units.KindArtifact {
+		return units.Unit{}, false, nil
 	}
 	u := units.Unit{
 		ID:             n.ID,

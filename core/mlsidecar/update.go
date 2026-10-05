@@ -42,8 +42,13 @@ func Update(ctx context.Context, layout Layout, registry channels.Registry, cred
 	}
 	out := UpdateResult{Install: res, Flipped: true}
 
-	token, ok, terr := ReadLocalToken(layout)
-	if terr != nil || !ok {
+	// ensureLocalToken, not ReadLocalToken: until the v0.86.0 unwired
+	// sweep no production code ever wrote the token (WriteLocalToken had
+	// zero non-test callers; every test wrote it by hand), so this branch
+	// was the ONLY one production took — the old engine was never asked
+	// to stop and the flip waited on its idle self-termination.
+	token, terr := ensureLocalToken(layout)
+	if terr != nil {
 		out.ShutdownErr = fmt.Errorf("mlsidecar: no local shutdown token available (terr=%v)", terr)
 		logging.L().Info("mlsidecar.update.no_token", "version", req.Version)
 		return out

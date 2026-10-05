@@ -501,6 +501,31 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package session\n\nconst zzGateProbeSQL = \"UPDATE session_messages SET model_tool_args = ?\"\n",
 		},
 		{
+			name: "single-move-writer/map-key-line-carrying-sql",
+			gate: "check-single-move-writer.sh",
+			// 2026-10-05 (release/v0.87.0) narrowed clause 2c to skip a
+			// map-key assignment naming a column as an EVENT-LOG payload
+			// key (agentgraph's startPayload["turn_span_id"] = env.TurnSpanID).
+			// The skip admits only a bare identifier/selector on the RHS;
+			// this pins that a line of the same opening shape whose RHS is
+			// SQL text is still caught, so the narrowing is not a bypass.
+			// The negative half (the event-key shape alone stays clean) is
+			// TestSingleMoveWriterGate_EventLogMapKeyIsNotSQL.
+			file:       "core/rpc/zz_gate_probe.go",
+			content:    "package rpc\n\nfunc zzGateProbe(m map[string]any) {\n\tm[\"turn_span_id\"] = \"UPDATE session_messages SET move_index = 1\"\n}\n",
+			wantOutput: "core/rpc/zz_gate_probe.go",
+		},
+		{
+			name: "single-move-writer/map-key-shape-in-a-raw-sql-string",
+			gate: "check-single-move-writer.sh",
+			// The same narrowing seen from inside a multi-line raw string:
+			// a line that LOOKS like the skipped map-key shape must not
+			// switch the clause off for the SQL lines around it.
+			file:       "core/rpc/zz_gate_probe.go",
+			content:    "package rpc\n\nconst zzGateProbeSQL = `\np[\"turn_span_id\"] = x\nUPDATE session_messages SET turn_span_id = ?\n`\n",
+			wantOutput: "core/rpc/zz_gate_probe.go",
+		},
+		{
 			name: "cedar-gate-arguments/allowall-as-call-argument",
 			gate: "check-cedar-gate-arguments.sh",
 			// The A1 shape: a gate handed cedar.AllowAll{} at the point
@@ -1254,6 +1279,32 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"}\n",
 		},
 		{
+			// v0.86.0 unwired sweep (2026-10-04): the derivation now also
+			// scans exported *Env structs. agentgraph.Env.PendingContext
+			// (PendingContextAppender) had zero non-test implementers for
+			// its whole life while this gate stayed green, because "Env"
+			// is not a Config/Options/Deps suffix. The plant is an
+			// unsatisfiable interface reachable ONLY through an *Env
+			// struct's field — no seams.go entry, no *Deps struct — so
+			// it fires only if the *Env widening is live.
+			name:       "seam-implementers/derived-env-field-unsatisfiable",
+			wantOutput: "ZzGateProbeEnvSeam",
+			gate:       "check-seam-implementers.sh",
+			file:       "core/rpc/zz_gate_probe_env_seam.go",
+			content: "package rpc\n\n" +
+				"// Planted by gates_can_fail_test.go's *Env-widening proof and removed\n" +
+				"// after the test runs. No type anywhere can satisfy ZzGateProbeEnvSeam.\n" +
+				"type zzGateProbeEnvParam struct{}\n\n" +
+				"type ZzGateProbeEnvSeam interface {\n" +
+				"\tZzGateProbeEnvMethod(zzGateProbeEnvParam) error\n" +
+				"}\n\n" +
+				"// ZzGateProbeRunEnv mirrors agentgraph.Env's shape: an *Env struct\n" +
+				"// carrying an optional collaborator interface field.\n" +
+				"type ZzGateProbeRunEnv struct {\n" +
+				"\tSeam ZzGateProbeEnvSeam\n" +
+				"}\n",
+		},
+		{
 			// automation-actually-runs-01PMZ404 UNIT-17, G-2. Plants a
 			// seventh InputKind constant with no matching v-if/v-else-if
 			// arm in WorkflowsView.vue — the exact shape that shipped
@@ -1944,8 +1995,8 @@ func TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires(t *
 	// this test" rather than silently planting nothing -- which is exactly
 	// the difference between this and finding #67's silent version.
 	// If you append to passthroughTopics, update the entry named here.
-	const closeTarget = "\ttopicFleetSessionExpired,\n}\n"
-	const closeMutated = "\ttopicFleetSessionExpired,\n\t}\n)\n"
+	const closeTarget = "\ttopicFleetSessionChanged,\n}\n"
+	const closeMutated = "\ttopicFleetSessionChanged,\n\t}\n)\n"
 	cleanupClose := plantReplace(t, wsstreamPath, closeTarget, closeMutated)
 	defer cleanupClose()
 
@@ -2190,6 +2241,37 @@ func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
 	if !strings.Contains(out, "NewLocalRetentionScheduler(") {
 		t.Fatalf("gate failed, but its output does not mention the expected defect "+
 			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestSingleMoveWriterGate_EventLogMapKeyIsNotSQL is the negative half of
+// the 2026-10-05 clause-2c narrowing: a map-key assignment naming the
+// column as an event-log payload key — the exact shape of agentgraph's
+// run_start payload in core/agentgraph/kernel.go — must NOT trip the
+// gate. Its positive half (the same opening shape carrying SQL still
+// fires) is single-move-writer/map-key-line-carrying-sql above.
+func TestSingleMoveWriterGate_EventLogMapKeyIsNotSQL(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "rpc", "zz_gate_probe.go")
+	if _, err := os.Stat(probe); err == nil {
+		t.Fatalf("%s already exists — refusing to overwrite it", probe)
+	}
+	content := "package rpc\n\nfunc zzGateProbe(p map[string]any, env struct{ TurnSpanID string }) {\n" +
+		"\tp[\"turn_span_id\"] = env.TurnSpanID\n" +
+		"\tp[\"move_index\"] = env.TurnSpanID // mirrors the column\n" +
+		"}\n"
+	if err := os.WriteFile(probe, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing probe: %v", err)
+	}
+	defer func() {
+		if err := os.Remove(probe); err != nil {
+			t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", probe, err)
+		}
+	}()
+
+	code, out := runGate(t, "check-single-move-writer.sh", root)
+	if code != 0 {
+		t.Fatalf("check-single-move-writer.sh fired on an event-log map key (not SQL):\n%s", out)
 	}
 }
 

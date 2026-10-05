@@ -95,7 +95,7 @@
 # CLASS: gated -- the affordance carries !isServedMode() (or, for
 # PermissionDialsPanel's pair, WP05's equivalent explicit-failure-state
 # pattern, noted per-entry). WP04's + WP07's own output.
-# 27 entries.
+# 28 entries.
 
 # Caller(s) ChatInput.vue carry the WP04 served-mode gate.
 "Attachments_AddMedia"
@@ -171,6 +171,15 @@
 # explicit-failure-state treatment at ChatInput.vue:351-370 — catch
 # ServedUnsupportedError, hide the paperclip. Gated, not panelled.
 "Settings_GetMultimodalInput"
+
+# agentgraph-settings-linkage-01DOGF0D WP03/WP04, 2026-10-04. The turn ->
+# run mapping exists only to link transcript turns to
+# /agentgraph/run/:runId[/graph], which are Graph_* surfaces with no serve
+# dispatch (D-701). Its only caller (SessionsView.vue's turn-run fetch for
+# MessageList's TurnRunLinks strip) is gated on !isServedMode(), so a
+# served build neither calls it nor renders a link that would dead-end.
+# Ports together with Graph_MaterializeRun if Graph_* is ever served.
+"Sessions_TurnRuns"
 
 # CLASS: boundary-panelled -- the only caller (or callers, ALL of them)
 # is/are inside a view that renders NotAvailableInServedMode. Grown by
@@ -322,13 +331,18 @@
 # NotAvailableInServedMode.
 "Hooks_DryRun"
 
-# Caller(s) HooksSettingsView.vue, KenazToolsPanel.vue only reachable from a
-# view that renders NotAvailableInServedMode.
+# Caller(s) HooksSettingsView.vue, MemoryCaptureToggle.vue only reachable
+# from a view that renders NotAvailableInServedMode.
 "Hooks_InstallStarterMemory"
+
+# Caller(s) MemoryCaptureToggle.vue (inside MemoryView.vue, Knowledge ›
+# Learned) only reachable from a view that renders NotAvailableInServedMode.
+# Moved from KenazToolsPanel.vue by knowledge-home-01DOGF0E WP03.
+"Hooks_RemoveStarterMemory"
+"Settings_SetMemory"
 
 # Caller(s) KenazToolsPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
-"Hooks_RemoveStarterMemory"
 "Settings_GetBash"
 "Settings_GetFSReadEnabled"
 "Settings_GetFSWriteEnabled"
@@ -339,7 +353,6 @@
 "Settings_SetBash"
 "Settings_SetFSReadEnabled"
 "Settings_SetFSWriteEnabled"
-"Settings_SetMemory"
 "Settings_SetSaveArtifactEnabled"
 "Settings_SetTodoEnabled"
 "Settings_SetWebFetchEnabled"
@@ -426,10 +439,10 @@
 "Projects_SetAutonomy"
 
 # Called through scheduledChatClient.ts, a separate bridge module (not part of
-# HarnessClient/harnessClient.ts). All UI callers are
-# views/settings/scheduledchat/* (nested under SettingsView.vue) and
-# views/workflows/* (RunsHistoryTab.vue, ScheduledInbox.vue, WorkflowsView.vue
-# itself), both boundary-panelled.
+# HarnessClient/harnessClient.ts). All UI callers are views/workflows/*
+# (scheduledchat/* via SchedulesTab.vue, RunsHistoryTab.vue,
+# ScheduledInbox.vue, WorkflowsView.vue itself), boundary-panelled by
+# WorkflowsView. (Moved out of Settings by nav-ia-sweep-01DOGF0F, 2026-10-04.)
 "ScheduledChat_Create"
 "ScheduledChat_Delete"
 "ScheduledChat_Get"
@@ -518,9 +531,10 @@
 # HarnessClient/harnessClient.ts). All UI callers are views/workflows/*
 # (WorkflowsView.vue itself, CatalogView.vue, CatalogPreviewDrawer.vue,
 # RunsHistoryTab.vue, ScheduledInbox.vue, WorkflowEditor.vue,
-# SimpleTemplateEditor.vue) and components/workflows/WorkflowGraphEditor.vue
-# plus views/settings/WorkflowsSettingsPanel.vue (nested under SettingsView.vue)
-# -- all boundary-panelled.
+# SimpleTemplateEditor.vue, WorkflowSchedulesSection.vue) and
+# components/workflows/WorkflowGraphEditor.vue -- all boundary-panelled.
+# (views/settings/WorkflowsSettingsPanel.vue was deleted by
+# nav-ia-sweep-01DOGF0F, 2026-10-04.)
 "Workflows_CancelRun"
 "Workflows_CatalogGet"
 "Workflows_CatalogInstall"
@@ -879,8 +893,9 @@
 "Settings_FleetRefreshCapabilities"
 "Settings_FleetRefreshIdentity"
 "Settings_FleetSignIn"
+# 2026-10-04 fleet-session-truth-01DOGF0A review F1 — desktop-only-by-nature: the served session is owned by the host auth broker, so there is no served sign-in flow to cancel; the UserMenu Cancel renders only !isServedMode() and AccountPanel lives under SettingsView, which is boundary-panelled (NotAvailableInServedMode) in served mode. Owner: alec. (Settings_FleetSignedIn removed from this list the same day: binding deleted, Settings_FleetSession is the live substitute.)
+"Settings_FleetSignInCancel"
 "Settings_FleetSignOut"
-"Settings_FleetSignedIn"
 "Settings_Get"
 "Settings_GetAutoResumeOnKeyRotation"
 "Settings_GetMemory"

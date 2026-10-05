@@ -60,13 +60,12 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 		if ts.RefreshToken != "" {
 			newTS, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
 			if refreshErr != nil {
-				// Proactive refresh failed → emit session-expired event and bail.
-				c.emitSessionExpired("proactive refresh failed: " + refreshErr.Error())
-				return nil, ErrTokenExpired
+				return nil, c.refreshFailed("proactive refresh failed", refreshErr)
 			}
 			if saveErr := SaveTokens(newTS); saveErr != nil {
 				return nil, saveErr
 			}
+			c.notifyAuthOK()
 			ts = newTS
 		} else {
 			// Expired with no refresh token → session is dead.
@@ -109,8 +108,8 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 			req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
 
 			resp, err := c.httpClient.Do(req)
-			cancel()
 			if err != nil {
+				cancel()
 				lastErr = err
 				continue // retry on transport error
 			}
@@ -119,6 +118,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 				// Drain and close body before refreshing.
 				_, _ = io.Copy(io.Discard, resp.Body)
 				_ = resp.Body.Close()
+				cancel()
 				lastResp = resp
 				goto doRefresh
 			}
@@ -126,12 +126,28 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 			if resp.StatusCode >= 500 {
 				_, _ = io.Copy(io.Discard, resp.Body)
 				_ = resp.Body.Close()
+				cancel()
 				lastResp = resp
 				lastErr = fmt.Errorf("fleet: server error %d", resp.StatusCode)
 				continue // backoff retry
 			}
 
 			// Success or a non-retryable error (4xx other than 401).
+			//
+			// The per-call context must outlive this function: Do returns
+			// once the response HEADERS arrive, and the caller reads the body
+			// afterwards. This used to call cancel() right after Do, so any
+			// body still in flight was read under a cancelled context and
+			// failed with "context canceled" — intermittently, depending on
+			// whether the transport had already buffered it. That is the
+			// fleet.unit.poll.pull_failed "context canceled" of dogfood
+			// 2026-10-04 B3b (the poll succeeding on the next tick reset the
+			// counter, which is why it read as noise). The context is now
+			// released when the caller closes the body.
+			resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+			// The server accepted the token (anything but 401): the session
+			// is alive, whatever an earlier refresh hiccup suggested.
+			c.notifyAuthOK()
 			return resp, nil
 		}
 
@@ -164,17 +180,72 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 		}
 		newTS, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
 		if refreshErr != nil {
-			c.emitSessionExpired("refresh token exchange failed: " + refreshErr.Error())
-			return nil, ErrTokenExpired
+			return nil, c.refreshFailed("refresh token exchange failed", refreshErr)
 		}
 		if saveErr := SaveTokens(newTS); saveErr != nil {
 			return nil, saveErr
 		}
+		c.notifyAuthOK()
 		ts = newTS
 		// Continue outer loop with new token.
 	}
 
 	return nil, errors.New("fleet: unexpected retry exhaustion")
+}
+
+// refreshFailed maps a RefreshTokenSet failure (fleet-session-truth-01DOGF0A
+// review F2). Only a DEFINITE rejection — RefreshTokenSet wraps
+// ErrTokenExpired around a non-200 from the token endpoint — means the
+// session is dead and fires fleet:session:expired. A transport failure
+// (laptop waking from sleep, VPN down, DNS) proves nothing about the
+// session: it used to fire the same event, which the session snapshot then
+// held as signed_out/session_expired while the tokens were still good.
+// Transport failures now return a retryable ErrFleetUnreachable instead.
+func (c *Client) refreshFailed(where string, err error) error {
+	if errors.Is(err, ErrTokenExpired) {
+		c.emitSessionExpired(where + ": " + err.Error())
+		return ErrTokenExpired
+	}
+	if errors.Is(err, context.Canceled) {
+		// The caller cancelled mid-refresh: preserve Canceled so callers
+		// (the append breaker's not-a-failure rule) see a cancellation,
+		// not a transport failure (delta review #3).
+		return fmt.Errorf("fleet: token refresh (%s) cancelled: %w", where, err)
+	}
+	return fmt.Errorf("%w (token refresh, %s): %v", ErrFleetUnreachable, where, err)
+}
+
+// SetAuthOKHook registers fn to run whenever fleet accepts this client's
+// token (a non-401 response, or a refreshed token saved). The settings view
+// uses it to clear a stale "session expired" (review F2 belt-and-braces).
+// fn must be cheap; it runs on the request goroutine.
+func (c *Client) SetAuthOKHook(fn func()) {
+	if c == nil || c.isNop {
+		return
+	}
+	c.authOK.Store(&fn)
+}
+
+func (c *Client) notifyAuthOK() {
+	if c == nil {
+		return
+	}
+	if p := c.authOK.Load(); p != nil && *p != nil {
+		(*p)()
+	}
+}
+
+// cancelOnClose releases a request's per-call context when the response
+// body is closed (see the B3b note in do).
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 // emitSessionExpired publishes a TopicFleetSessionExpired event to the broker,

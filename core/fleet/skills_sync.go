@@ -139,6 +139,41 @@ func InstallSkill(
 	return nil
 }
 
+// ResolveSkillStoreID maps a caller-supplied identifier to the SkillStore ID.
+//
+// A catalog-installed skill is stored under the ID carried in its payload —
+// for SkillPublish that is the command name, not the catalog_id — while the
+// Marketplace only knows the catalog_id. Resolution order (review F3):
+//  1. a stored skill whose CatalogID matches id (and whose Version matches
+//     version, when version is non-empty);
+//  2. any stored skill whose CatalogID matches id;
+//  3. id itself, as an exact store ID;
+//
+// otherwise id unchanged (the caller's not-found error then names what was
+// asked for). CatalogID is matched first so a catalog_id that happens to
+// equal another skill's store ID resolves to the catalog skill, never
+// cross-deletes the other one. install-framework-01DOGF0B WP01.
+func ResolveSkillStoreID(store *slashcmd.SkillStore, id, version string) string {
+	if store == nil || id == "" {
+		return id
+	}
+	if skills, err := store.List(); err == nil {
+		if version != "" {
+			for _, sk := range skills {
+				if sk.CatalogID == id && sk.Version == version {
+					return sk.ID
+				}
+			}
+		}
+		for _, sk := range skills {
+			if sk.CatalogID == id {
+				return sk.ID
+			}
+		}
+	}
+	return id
+}
+
 // UninstallSkill removes the skill from the SkillStore and live-unregisters
 // it from the Registry. Returns ErrSkillNotFound when the skill is not
 // installed (idempotent from the caller's perspective).
@@ -147,6 +182,7 @@ func UninstallSkill(
 	registry *slashcmd.Registry,
 	skillID string,
 ) error {
+	skillID = ResolveSkillStoreID(store, skillID, "")
 	if err := slashcmd.LiveUnregister(store, registry, skillID); err != nil {
 		return fmt.Errorf("fleet/skills: uninstall: %w", err)
 	}

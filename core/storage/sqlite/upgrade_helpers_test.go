@@ -67,6 +67,9 @@ func columnExists(t *testing.T, db *sql.DB, table, column string) bool {
 // as it existed at a specific migration boundary).
 func rewindLateSessionsSchema(t *testing.T, ctx context.Context, raw *sql.DB) {
 	t.Helper()
+	// 0332 rebuilds `artifacts`; on a HEAD database that table is
+	// artifacts_legacy until 1104 is rewound too.
+	rewindArtifactsToUnits(t, ctx, raw)
 	stmts := []string{
 		"DELETE FROM harness_migrations WHERE owning_mission='sessions' AND version >= 332",
 		"ALTER TABLE session_messages DROP COLUMN kind",
@@ -78,6 +81,38 @@ func rewindLateSessionsSchema(t *testing.T, ctx context.Context, raw *sql.DB) {
 	for _, stmt := range stmts {
 		if _, err := raw.ExecContext(ctx, stmt); err != nil {
 			t.Fatalf("rewind %q: %v", stmt, err)
+		}
+	}
+}
+
+// rewindArtifactsToUnits undoes units/1104-artifacts-to-units on a
+// database already migrated through HEAD (artifacts-as-units-01DOGF0C
+// WP04): the legacy tables get their pre-1104 names back, the units the
+// migration copied out of them are removed, and 1104's ledger row is
+// deleted so the next Open re-runs it.
+//
+// Tests that rewind an OLDER artifacts migration (0304, 0327, 0332) need
+// this first: on a HEAD-migrated database `artifacts` is
+// `artifacts_legacy`, a shape no pre-1104 migration can run against —
+// and no real install can be in (1104 always applies after every
+// sessions migration, decision record D5). After the rewind, the reopen
+// replays the old migration AND 1104, so these tests now also exercise
+// the full pipeline: old rebuild, then the copy onto units.
+func rewindArtifactsToUnits(t *testing.T, ctx context.Context, raw *sql.DB) {
+	t.Helper()
+	stmts := []string{
+		"DELETE FROM harness_migrations WHERE id = 'units/1104-artifacts-to-units'",
+		"ALTER TABLE artifacts_legacy RENAME TO artifacts",
+		"ALTER TABLE artifact_versions_legacy RENAME TO artifact_versions",
+		"DELETE FROM unit_versions WHERE unit_id IN (SELECT id FROM units WHERE kind = 'artifact')",
+		"DELETE FROM units WHERE kind = 'artifact'",
+		"DROP INDEX IF EXISTS idx_units_meta_content_hash",
+		"DROP INDEX IF EXISTS idx_unit_versions_meta_content_hash",
+		"DROP INDEX IF EXISTS idx_units_meta_session",
+	}
+	for _, stmt := range stmts {
+		if _, err := raw.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("rewind 1104 %q: %v", stmt, err)
 		}
 	}
 }

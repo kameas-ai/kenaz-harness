@@ -271,7 +271,7 @@ func (es *EventStream) postChunk(ctx context.Context, events []wireEvent) error 
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("fleet: context append status %d", resp.StatusCode)
+		return &AppendStatusError{Status: resp.StatusCode}
 	}
 	logging.L().Info("fleet.context_sync.appended",
 		"stream_id", shortID(es.streamID),

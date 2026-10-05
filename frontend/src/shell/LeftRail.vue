@@ -2,20 +2,19 @@
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import RailEntry from './RailEntry.vue';
+import { SETTINGS_HUB_PREFIXES } from './railMatch';
 import SessionTreeRow from './SessionTreeRow.vue';
 import {
   Archive,
-  BookOpen,
   Plus,
   MessageSquare,
   Package,
   Wrench,
   FileText,
   Settings,
-  Brain,
+  BookOpen,
   GitBranch,
   Globe,
-  Route,
   Trash2,
   X,
   ChevronDown,
@@ -86,7 +85,10 @@ const newProjectDraft = ref('');
 const renamingProjectId = ref<string | null>(null);
 const renameProjectDraft = ref('');
 const projectMenu = ref<{ id: string; x: number; y: number } | null>(null);
-const deleteModal = ref<{ project: Project; cascade: boolean } | null>(null);
+// artifactCount: project-scoped artifacts that the delete will remove
+// permanently (artifacts-as-units-01DOGF0C: project delete purges them —
+// spec FR-6). null while counting / when the count could not be read.
+const deleteModal = ref<{ project: Project; cascade: boolean; artifactCount: number | null } | null>(null);
 
 const collapsed = ref<Set<string>>(new Set());
 let focusedProjectRenameId: string | null = null;
@@ -460,7 +462,18 @@ async function commitProjectRename(id: string) {
 
 function startProjectDelete(p: Project) {
   closeProjectMenu();
-  deleteModal.value = { project: p, cascade: false };
+  deleteModal.value = { project: p, cascade: false, artifactCount: null };
+  void client.artifacts
+    .list({ projectId: p.id, scopeKind: 'project' })
+    .then((rows) => {
+      if (deleteModal.value?.project.id === p.id) {
+        deleteModal.value.artifactCount = (rows ?? []).length;
+      }
+    })
+    .catch(() => {
+      // Count unavailable (served mode / stub): the copy below still says
+      // project artifacts are deleted, just without a number.
+    });
 }
 
 function cancelProjectDelete() {
@@ -987,6 +1000,14 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
           Sessions in this project become global unless you opt to delete
           them as well.
         </p>
+        <p class="mt-2 font-ui text-xs text-signal-danger" data-testid="delete-project-artifacts-warning">
+          <template v-if="deleteModal.artifactCount !== null">
+            {{ deleteModal.artifactCount }} artifact{{ deleteModal.artifactCount === 1 ? '' : 's' }}
+            promoted to this project will be permanently deleted.
+          </template>
+          <template v-else>Artifacts promoted to this project will be permanently deleted.</template>
+          Deleting the sessions too also deletes the artifacts captured in them.
+        </p>
         <label class="mt-3 flex items-center gap-2 font-ui text-xs text-ink">
           <input
             v-model="deleteModal.cascade"
@@ -1021,31 +1042,47 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     <!-- primary-surfaces nav -->
     <nav class="px-2 py-2 border-t border-border-muted" aria-label="Surfaces">
       <ul class="space-y-1">
-        <li><RailEntry :icon="MessageSquare" label="Sessions" to="/sessions" /></li>
-        <li><RailEntry :icon="Wrench" label="Tools" to="/tools" /></li>
-        <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" /></li>
-        <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
-        <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
-        <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" /></li>
-        <li><RailEntry :icon="BookOpen" label="Documents" to="/documents" /></li>
-        <!-- agentgraph-total-convergence-01PMGX01 WP16: Agent graphs RESTORED to
-             top-level nav, reversing nav-settings-ia-cleanup WP03's demotion.
-             WP03 demoted it because the surface had nothing real in it: a
-             library of hand-authored templates and an editor whose palette
-             offered kinds that crashed at run time. Since then every run
-             materializes as a graph (WP12) and the routed topology is the
-             production chat path, so this is now where you go to see what the
-             agent actually did. A substrate nobody can reach is a substrate
-             that rots — 19 of 34 kinds went unexercised while this was
-             palette-only. The nav.agentgraph command-palette action stays.
-             served-mode-is-a-real-mode-01PMZ707 WP03: gated on !served —
-             Graph_* has no serve dispatch case (D-701), so this entry would
-             route into GraphsView.vue's own NotAvailableInServedMode panel
-             in a served build. Hiding the rail entry is the honest answer,
-             matching the Sites/Marketplace treatment below. -->
-        <li v-if="!served" data-testid="nav-agentgraph">
-          <RailEntry :icon="Route" label="Agent graphs" to="/agentgraph" />
+        <!-- nav-ia-sweep-01DOGF0F WP03 (F4): no "Sessions" entry. The session
+             list above IS the sessions home; /sessions with no id is only an
+             empty state whose New-session button duplicated the rail's. The
+             routes (/, /sessions, /sessions/:id) are untouched. -->
+        <li><RailEntry :icon="Wrench" label="Tools" to="/tools" match-prefix="/tools" /></li>
+        <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" match-prefix="/workflows" /></li>
+        <!-- knowledge-home-01DOGF0E WP02: one Knowledge entry replaces the
+             separate Contexts and Memory entries (Curated / Learned sections
+             inside; stores unchanged). match-prefix keeps it active on
+             either section. /contexts and /memory redirect into it. -->
+        <li data-testid="nav-knowledge">
+          <RailEntry :icon="BookOpen" label="Knowledge" to="/knowledge/curated" match-prefix="/knowledge" />
         </li>
+        <!-- artifacts-as-units-01DOGF0C WP06: one Library entry replaces the
+             separate Artifacts and Documents entries (Captured / Authored
+             views inside). match-prefix keeps it active on either view. -->
+        <li data-testid="nav-library">
+          <RailEntry :icon="Archive" label="Library" to="/library/captured" match-prefix="/library" />
+        </li>
+        <!-- No "Agent graphs" entry — agentgraph-settings-linkage-01DOGF0D.
+             History, so the next IA pass neither re-demotes nor re-promotes
+             it without reading why:
+             - nav-settings-ia-cleanup WP03 demoted it to palette-only; 19 of
+               34 node kinds then rotted unexercised ("a substrate nobody can
+               reach is a substrate that rots").
+             - agentgraph-total-convergence-01PMGX01 WP16 restored it here as
+               "where you go to see what the agent actually did", since every
+               run materializes as a graph (WP12). But nothing linked a chat
+               turn to its run, so in practice this entry was a library +
+               editor — half the promise.
+             - agentgraph-settings-linkage-01DOGF0D split the two halves.
+               OBSERVABILITY moved to where runs happen: every chat turn links
+               to its run graph and run details (TurnRunLinks, WP04; pinned in
+               MessageList.runLinks.test.ts and SessionsView.turnRuns.test.ts).
+               AUTHORING (library + editor) moved under Settings › Authoring
+               (WP05, SettingsTabs.vue), which lights the Settings entry below
+               on every /agentgraph* route (SETTINGS_HUB_PREFIXES).
+             The /agentgraph* routes and the nav.agentgraph palette action
+             stay. Both new homes keep the served-mode gate this entry had
+             (served-mode-is-a-real-mode-01PMZ707 WP03): Graph_* has no serve
+             dispatch case (D-701). -->
         <!-- nav-settings-ia-cleanup WP04: Audit log demoted from top-level nav.
              Viewer is accessible via Settings → Security → Audit Log. /audit route
              and the command palette entry (nav.audit) remain intact. -->
@@ -1059,15 +1096,25 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
           v-if="!served && signedIn && capability('sites_hosting')"
           data-testid="nav-sites"
         >
-          <RailEntry :icon="Globe" label="Sites" to="/sites" />
+          <RailEntry :icon="Globe" label="Sites" to="/sites" match-prefix="/sites" />
         </li>
         <li
           v-if="!served && signedIn"
           data-testid="nav-marketplace"
         >
-          <RailEntry :icon="Package" label="Marketplace" to="/marketplace" />
+          <RailEntry :icon="Package" label="Marketplace" to="/marketplace" match-prefix="/marketplace" />
         </li>
-        <li><RailEntry :icon="Settings" label="Settings" to="/settings" /></li>
+        <!-- nav-ia-sweep-01DOGF0F WP02: every route SettingsShell renders
+             (SettingsTabs' own entries) lights the Settings entry, not just
+             the bare /settings path. -->
+        <li>
+          <RailEntry
+            :icon="Settings"
+            label="Settings"
+            to="/settings"
+            :match-prefix="SETTINGS_HUB_PREFIXES"
+          />
+        </li>
       </ul>
     </nav>
   </div>

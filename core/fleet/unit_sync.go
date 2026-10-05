@@ -90,6 +90,18 @@ type UnitSyncer struct {
 
 	stopCh chan struct{}
 	once   sync.Once
+
+	// lanes receives the read-down poll's health (fleet-session-truth-
+	// 01DOGF0A FR-6). Set via SetLanes before StartPoller; nil = unreported.
+	lanes *SyncLanes
+}
+
+// SetLanes wires the shared lane board the poll reports into. Call before
+// StartPoller.
+func (s *UnitSyncer) SetLanes(l *SyncLanes) {
+	s.mu.Lock()
+	s.lanes = l
+	s.mu.Unlock()
 }
 
 // NewUnitSyncer constructs a UnitSyncer. The syncer does not poll until
@@ -484,6 +496,17 @@ const (
 	unitPollBackoff1     = 300 * time.Second
 	unitPollBackoff2     = 1800 * time.Second
 	unitPollMaxErrors    = 2
+
+	// unitPollWarnThreshold is the consecutive-failure count at which a
+	// failing poll becomes a WARN and a degraded unit-poll lane
+	// (fleet-session-truth-01DOGF0A, dogfood B3b). Below it a failure is
+	// Debug: the counter is reset by the next SUCCESSFUL PullDown (any nil
+	// return — including the no-op returns for signed-out / unentitled /
+	// 403), so isolated failures between successes are transient by
+	// construction. Three in a row is also where the poll has already
+	// backed off to unitPollBackoff1 — i.e. read-down has been failing for
+	// several minutes, which is when "not syncing" stops being noise.
+	unitPollWarnThreshold = 3
 )
 
 // StartPoller begins a background read-down-auto loop that periodically
@@ -517,12 +540,13 @@ func (s *UnitSyncer) pollLoop(ctx context.Context) {
 		case <-s.stopCh:
 			return
 		case <-timer.C:
-			if _, err := s.PullDown(ctx); err != nil {
+			_, err := s.PullDown(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					// Shutdown, not a failure.
+					return
+				}
 				consecutiveErrors++
-				logging.L().Warn("fleet.unit.poll.pull_failed",
-					"err", err.Error(),
-					"consecutive", consecutiveErrors,
-				)
 			} else {
 				consecutiveErrors = 0
 			}
@@ -535,9 +559,42 @@ func (s *UnitSyncer) pollLoop(ctx context.Context) {
 			default:
 				interval = unitPollBaseInterval
 			}
+			s.reportPoll(err, consecutiveErrors, time.Now().Add(interval))
 			timer.Reset(interval)
 		}
 	}
+}
+
+// reportPoll logs and reports one poll outcome. Split out of pollLoop so
+// the threshold is testable without a ticker.
+func (s *UnitSyncer) reportPoll(err error, consecutive int, nextRetry time.Time) {
+	s.mu.RLock()
+	lanes := s.lanes
+	s.mu.RUnlock()
+	if err == nil {
+		lanes.RecordSuccess(LaneUnitPoll)
+		return
+	}
+	if consecutive < unitPollWarnThreshold {
+		logging.L().Debug("fleet.unit.poll.pull_failed",
+			"err", err.Error(), "consecutive", consecutive)
+		return
+	}
+	if consecutive == unitPollWarnThreshold {
+		// Once per threshold crossing (review F8); the lane carries the
+		// running count from here on.
+		logging.L().Warn("fleet.unit.poll.pull_failed",
+			"err", err.Error(), "consecutive", consecutive)
+	} else {
+		logging.L().Debug("fleet.unit.poll.pull_failed",
+			"err", err.Error(), "consecutive", consecutive)
+	}
+	reason := "server_error"
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrFleetUnreachable) {
+		reason = "network"
+	}
+	lanes.RecordFailure(LaneUnitPoll, reason, err, consecutive, nextRetry)
 }
 
 // ── Snapshot / status ────────────────────────────────────────────────────────

@@ -166,7 +166,7 @@ afterEach(() => {
 });
 
 describe('KenazToolsPanel — recipes section', () => {
-  it('renders the existing Memory row plus a row per enabled recipe (catalog rows hidden)', async () => {
+  it('renders the Memory-moved pointer plus a row per enabled recipe (catalog rows hidden)', async () => {
     // The panel intentionally only surfaces installed (enabled) recipes;
     // catalog browsing lives in the Add MCP Server modal. So a clean-
     // install (enabled=false) row should NOT render in the main list.
@@ -184,7 +184,7 @@ describe('KenazToolsPanel — recipes section', () => {
     const w = await mountPanel(setup);
     await flushPromises();
 
-    expect(w.text()).toContain('Long-term memory');
+    expect(w.find('[data-testid=memory-moved-pointer]').exists()).toBe(true);
     expect(w.text()).toContain('Connected MCP recipes');
     // Disabled catalog row is hidden from the main panel.
     expect(w.find('[data-testid=recipe-row-brave-search]').exists()).toBe(false);

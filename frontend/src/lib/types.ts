@@ -82,6 +82,23 @@ export interface Session {
  * SessionUsage — per-session cumulative token + cost aggregate.
  * Mirrors core/rpc/views/sessions.SessionUsage (token-cost-telemetry WP03).
  */
+/**
+ * One chat turn -> agent-graph run link (agentgraph-settings-linkage-
+ * 01DOGF0D WP03, `Sessions_TurnRuns`). The transcript keys a turn by
+ * `turnSpanId` (the same id every move of the turn carries) and links to
+ * `/agentgraph/run/:runId/graph` and `/agentgraph/run/:runId`. A turn with
+ * no TurnRun predates the mapping and must not be linked.
+ */
+export interface TurnRun {
+  runId: string;
+  turnSpanId: string;
+  graphId: string;
+  /** Which version of `graphId` ran ("sha256:<hex>"). */
+  specDigest: string;
+  /** RFC3339Nano. */
+  createdAt: string;
+}
+
 export interface SessionUsage {
   /** Sum of all input tokens for the session. */
   promptTokens: number;
@@ -2624,11 +2641,12 @@ export interface HealthEntry {
 export type ArtifactSource = 'code_block' | 'tool_output' | 'user_pin' | 'model_output';
 
 /**
- * ArtifactScope — promotion tier. v1 carries `session` (default at
- * capture time) and `project` (after promotion). A future `global`
- * tier is reserved by the spec but not wired in v1.
+ * ArtifactScope — promotion tier: `session` (default at capture time),
+ * `project` (after promotion) and `global` (valid since
+ * unified-context-artifacts-01NCTXU01; artifacts are units since
+ * artifacts-as-units-01DOGF0C, and the store returns global rows).
  */
-export type ArtifactScope = 'session' | 'project';
+export type ArtifactScope = 'session' | 'project' | 'global';
 
 /**
  * ArtifactSourceRef — provenance back to the originating message /
@@ -4599,6 +4617,78 @@ export interface CapabilitiesView {
   fetchedAt: string;
   /** "fleet" | "cache" | "default-deny" */
   source: string;
+}
+
+/**
+ * FleetSessionState — the fleet session's one answer to "am I signed in"
+ * (fleet-session-truth-01DOGF0A FR-1). `degraded` = tokens are usable but the
+ * last identity refresh failed; it is NOT signed out (FR-3).
+ */
+export type FleetSessionState =
+  | 'signed_out'
+  | 'signing_in'
+  | 'signed_in'
+  | 'degraded'
+  | 'disabled';
+
+/** One session's context-sync breaker state. Mirrors settings.FleetSyncSessionView. */
+export interface FleetSyncSessionView {
+  sessionId: string;
+  reason?: string;
+  lastError?: string;
+  consecutiveFailures: number;
+  open: boolean;
+  nextRetryAt?: string;
+  dropped: number;
+}
+
+/** One background lane's health. Mirrors settings.FleetSyncLaneView. */
+export interface FleetSyncLaneView {
+  /** 'unknown' | 'ok' | 'degraded' | 'off' */
+  status: string;
+  reason?: string;
+  lastError?: string;
+  consecutiveFailures: number;
+  lastSuccessAt?: string;
+  nextRetryAt?: string;
+  sessions?: FleetSyncSessionView[];
+}
+
+/** Mirrors settings.FleetSyncView. */
+export interface FleetSyncView {
+  contextSync: FleetSyncLaneView;
+  unitPoll: FleetSyncLaneView;
+  telemetry: FleetSyncLaneView;
+}
+
+/**
+ * FleetSessionView — the single fleet-session snapshot every surface reads.
+ * Returned by Settings_FleetSession and pushed on `fleet:session-changed`.
+ * Mirrors core/rpc/views/settings.FleetSessionView.
+ */
+export interface FleetSessionView {
+  state: FleetSessionState;
+  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled */
+  reason?: string;
+  /** Raw error text behind `reason` (humanize before showing). */
+  message?: string;
+  /** False once automatic identity refresh has stopped (not provisioned). */
+  autoRetry: boolean;
+  nextRetryAt?: string;
+  lastAttemptAt?: string;
+  identity?: FleetIdentity;
+  /** 'enroll' | 'cache' */
+  identitySource?: string;
+  /** 'enroll' | 'token_claim' */
+  emailSource?: string;
+  nameSource?: string;
+  /** Stored tokens still authenticate (signing_in + true = a re-auth). */
+  tokensUsable: boolean;
+  claims: { hasSubject: boolean; hasOrgClaim: boolean };
+  capabilities: CapabilitiesView;
+  profile?: FleetProfileInfo;
+  sync: FleetSyncView;
+  updatedAt: string;
 }
 
 /**

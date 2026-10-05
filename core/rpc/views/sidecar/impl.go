@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
 )
 
@@ -37,6 +38,32 @@ type Impl struct {
 	// (LabelPusher.LaneStatus). nil (nil-core chassis, capture without a
 	// push source) means no lanes to report.
 	Lanes func() map[string]mlsidecar.LanePause
+	// ResetLabelCursor forgets the label push lane's ack cursor
+	// (LabelPusher.ResetCursor) — the mirror-loss recovery path. A
+	// successful Uninstall deletes the engine's state, including its
+	// retained-label mirror, but the harness-side cursor survives; without
+	// this reset a later Enable starts an engine with an EMPTY mirror while
+	// the cursor says everything was already delivered, so the
+	// "rebuildable mirror" guarantee (labelpush.go) never held in
+	// production (v0.86.0 unwired sweep: ResetCursor had zero non-test
+	// callers). nil (no push source) skips it.
+	ResetLabelCursor func(ctx context.Context) error
+	// NudgeLabels starts a label push drain (LabelPusher.Nudge). Called
+	// whenever Enable/Update/Repair leaves the engine healthy: the push
+	// lane is event-driven (it drains on the next label WRITE), so
+	// without this, rows captured while the engine was absent — and the
+	// full re-push a ResetLabelCursor queued — waited for some unrelated
+	// future recommendation before reaching a freshly started engine.
+	// nil skips it.
+	NudgeLabels func()
+}
+
+// nudgeIfHealthy kicks the label push lane once an action has left the
+// engine healthy.
+func (s *Impl) nudgeIfHealthy(st mlsidecar.Status) {
+	if st.State == mlsidecar.StateHealthy && s.NudgeLabels != nil {
+		s.NudgeLabels()
+	}
 }
 
 var _ SidecarAPI = (*Impl)(nil)
@@ -145,6 +172,7 @@ func (s *Impl) Enable(ctx context.Context) (StatusView, error) {
 		return s.statusNoErr(ctx), fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	st := s.Manager.InstallAndActivate(ctx, rel.InstallRequest())
+	s.nudgeIfHealthy(st)
 	return s.compose(ctx, st, st.State == mlsidecar.StateHealthy), nil
 }
 
@@ -165,6 +193,7 @@ func (s *Impl) Update(ctx context.Context) (StatusView, error) {
 		return s.statusNoErr(ctx), fmt.Errorf("no newer engine than %s is pinned by this build", rec.Version)
 	}
 	_, st := s.Manager.UpdateAndActivate(ctx, rel.InstallRequest())
+	s.nudgeIfHealthy(st)
 	return s.compose(ctx, st, st.State == mlsidecar.StateHealthy), nil
 }
 
@@ -177,6 +206,7 @@ func (s *Impl) Repair(ctx context.Context) (StatusView, error) {
 		return s.statusNoErr(ctx), ErrNotInstalled
 	}
 	st := s.Manager.Reconcile(ctx)
+	s.nudgeIfHealthy(st)
 	return s.compose(ctx, st, st.State == mlsidecar.StateHealthy), nil
 }
 
@@ -187,6 +217,15 @@ func (s *Impl) Uninstall(ctx context.Context) (StatusView, error) {
 	}
 	if err := s.Manager.Uninstall(ctx); err != nil {
 		return s.statusNoErr(ctx), fmt.Errorf("uninstall: %w", err)
+	}
+	// The engine's mirror is gone; make the next install re-receive every
+	// label from the harness DB (the source of truth). Idempotent on the
+	// engine side, so resetting after a partial-root uninstall costs only
+	// traffic. Not a reason to fail the uninstall, which already happened.
+	if s.ResetLabelCursor != nil {
+		if err := s.ResetLabelCursor(ctx); err != nil {
+			logging.L().Warn("sidecar.uninstall.label_cursor_reset_failed", "err", err.Error())
+		}
 	}
 	return s.compose(ctx, s.Manager.Status(), false), nil
 }

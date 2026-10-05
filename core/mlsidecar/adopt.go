@@ -203,7 +203,7 @@ func VerifyInstalled(l Layout, label string, tv *TreeVerifier) (InstallRecord, e
 	if rec.Version != label {
 		return rec, fmt.Errorf("install.json describes %q, current is %q", rec.Version, label)
 	}
-	if !knownProvenance(rec.Provenance) {
+	if !l.acceptsProvenance(rec.Provenance) {
 		return rec, fmt.Errorf("install.json provenance %q is not a known installer (verified=%v)", rec.Provenance, rec.Verified)
 	}
 	if err := VerifyFileSHA256(pathUnderVersionsDir(l, label), rec.EngineSHA256); err != nil {

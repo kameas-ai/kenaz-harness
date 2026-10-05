@@ -21,6 +21,7 @@ import CanvasHead from '@/shell/CanvasHead.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import SessionHeader from '@/components/chat/SessionHeader.vue';
+import { describeSyncReason, fleetSessionSyncFailure } from '@/lib/fleetSession';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ComposerError from '@/components/chat/ComposerError.vue';
 import ReasoningControl from '@/components/chat/ReasoningControl.vue';
@@ -1477,6 +1478,45 @@ async function loadInitialScrollPosition() {
 }
 watch(sessionId, () => { void loadInitialScrollPosition(); }, { immediate: true });
 
+// agentgraph-settings-linkage-01DOGF0D WP04 (FR-3 / FR-5): the turn ->
+// run links that let every chat turn open the graph of what the agent
+// actually did (/agentgraph/run/:runId/graph) and its RunView. Keyed by
+// turn span id, from Sessions_TurnRuns (migration sessions/0342).
+//
+// Refetched on session switch AND whenever the stream subscription
+// changes: the backend records a turn's run before StartStream returns,
+// so the fetch that follows a new sub id already carries the live turn,
+// and the fetch after the stream closes settles the completed one.
+//
+// Served builds never fetch and pass `undefined` — Graph_* has no serve
+// dispatch (D-701), so a link would dead-end; MessageList then renders no
+// strip at all. A failed fetch also yields `undefined` (no strip) rather
+// than an empty map, which would wrongly mark every turn "not recorded".
+const turnRunsBySpan = ref<ReadonlyMap<string, string> | undefined>(undefined);
+async function loadTurnRuns() {
+  const id = sessionId.value;
+  if (servedMode || !id) {
+    turnRunsBySpan.value = undefined;
+    return;
+  }
+  try {
+    const runs = await client.sessions.turnRuns(id);
+    if (sessionId.value !== id) return; // switched away mid-fetch
+    const bySpan = new Map<string, string>();
+    for (const r of runs) {
+      if (r.turnSpanId) bySpan.set(r.turnSpanId, r.runId);
+    }
+    turnRunsBySpan.value = bySpan;
+  } catch {
+    if (sessionId.value === id) turnRunsBySpan.value = undefined;
+  }
+}
+watch(
+  [sessionId, () => session.streamSubscriptionId.value],
+  () => { void loadTurnRuns(); },
+  { immediate: true },
+);
+
 function onMessageListScrollPosition(pos: number) {
   const id = sessionId.value;
   if (!id) return;
@@ -1550,6 +1590,25 @@ onMounted(() => {
 });
 
 const isSyncEnabled = computed(() => syncStatus.value?.enabled ?? false);
+
+/**
+ * fleet-session-truth-01DOGF0A FR-6 (dogfood F7): this session's context-sync
+ * appends are failing — the toolbar says "Synced to fleet" while nothing is
+ * syncing. Read from the shared fleet-session store (the backend's append
+ * breaker reports per-session state into it); null when syncing fine.
+ */
+const syncFailure = computed(() => fleetSessionSyncFailure(sessionId.value));
+const syncFailureText = computed(() =>
+  syncFailure.value ? `Not syncing — ${describeSyncReason(syncFailure.value.reason)}` : '',
+);
+const syncFailureTitle = computed(() => {
+  const f = syncFailure.value;
+  if (!f) return '';
+  const parts = [f.lastError ?? ''];
+  if (f.open) parts.push('Automatic retries stopped; toggle sync off and on to retry.');
+  if (f.dropped > 0) parts.push(`${f.dropped} message(s) were not synced.`);
+  return parts.filter(Boolean).join(' ');
+});
 
 async function onToggleSync() {
   const id = sessionId.value;
@@ -1659,6 +1718,16 @@ async function onShared() {
           />
           {{ isSyncEnabled ? 'Synced to fleet' : 'Sync to fleet' }}
         </button>
+        <!-- Context-sync failure badge (fleet-session-truth-01DOGF0A FR-6) -->
+        <span
+          v-if="syncFailure"
+          class="rounded px-2 py-0.5 font-ui text-[11px] text-signal-warn border border-signal-warn/40 bg-surface-2"
+          role="status"
+          :title="syncFailureTitle"
+          data-testid="session-sync-degraded"
+        >
+          {{ syncFailureText }}
+        </span>
         <!-- Share button (only shown when session is loaded) -->
         <button
           type="button"
@@ -2056,6 +2125,7 @@ async function onShared() {
                 :archive-days="compactionArchiveDays"
                 :show-token-meter="showPerMessageTokenMeter"
                 :initial-scroll-position="messageListInitialScrollPosition"
+                :turn-runs="turnRunsBySpan"
                 @new-session="onNudgeNewSession"
                 @remember="onRemember"
                 @save-artifact="onSaveArtifactFromMessage"
@@ -2083,6 +2153,7 @@ async function onShared() {
             :archive-days="compactionArchiveDays"
             :show-token-meter="showPerMessageTokenMeter"
             :initial-scroll-position="messageListInitialScrollPosition"
+            :turn-runs="turnRunsBySpan"
             @new-session="onNudgeNewSession"
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"

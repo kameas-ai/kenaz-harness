@@ -89,6 +89,28 @@ type Manager struct {
 	idGen IDGen
 
 	mu sync.Mutex // serialize id assignment on Create
+
+	// deleteObservers run after Delete removes the project row
+	// (artifacts-as-units-01DOGF0C WP03, spec FR-6): dependants that
+	// reference a project id without a foreign key (core/units scope_id)
+	// clean themselves up here.
+	deleteObserversMu sync.Mutex
+	deleteObservers   []DeleteObserver
+}
+
+// DeleteObserver is called after a project row has been deleted. A
+// returned error is surfaced from Manager.Delete.
+type DeleteObserver func(ctx context.Context, projectID string) error
+
+// AddDeleteObserver registers fn to run after every successful Delete.
+// Append-only, safe for concurrent use. A nil fn is ignored.
+func (m *Manager) AddDeleteObserver(fn DeleteObserver) {
+	if m == nil || fn == nil {
+		return
+	}
+	m.deleteObserversMu.Lock()
+	m.deleteObservers = append(m.deleteObservers, fn)
+	m.deleteObserversMu.Unlock()
 }
 
 // ManagerOption configures a Manager at construction time.
@@ -191,7 +213,22 @@ func (m *Manager) UpdateDescription(ctx context.Context, id, description string)
 // FK is ON DELETE SET NULL so leftover sessions become loose, but the
 // view-level surface coordinates the cascade explicitly.
 func (m *Manager) Delete(ctx context.Context, id string) error {
-	return m.store.Delete(ctx, id)
+	if err := m.store.Delete(ctx, id); err != nil {
+		return err
+	}
+	m.deleteObserversMu.Lock()
+	observers := append([]DeleteObserver(nil), m.deleteObservers...)
+	m.deleteObserversMu.Unlock()
+	var errs []error
+	for _, fn := range observers {
+		if err := fn(ctx, id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("projects: %s deleted, but dependant cleanup failed: %w", id, errors.Join(errs...))
+	}
+	return nil
 }
 
 // SetAutonomyProfile persists the per-project autonomy.Layer

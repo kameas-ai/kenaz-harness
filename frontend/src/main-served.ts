@@ -20,6 +20,7 @@ import { installHarnessClient } from '@/lib/harnessClientContext';
 import { createServedHarnessClient } from '@/lib/harnessClient';
 import { bootFeatureFlags } from '@/lib/featureFlags';
 import { logEvent } from '@/lib/eventLog';
+import { redirectLegacySettingsTab } from '@/lib/legacyRoutes';
 
 // Exported so `__tests__/entrypoint.routes.test.ts` can diff this table against
 // main.ts's, with the desktop-only surfaces named explicitly. Nothing else
@@ -51,20 +52,36 @@ export const routes: RouteRecordRaw[] = [
     name: 'audit',
     component: () => import('@/views/audit/AuditView.vue'),
   },
+  // knowledge-home-01DOGF0E WP02 (FR-1, FR-2): Contexts and Memory are one
+  // Knowledge surface with Curated and Learned sections; the stores stay
+  // separate. The old paths redirect into the matching section, keeping the
+  // query string (MemoryView reads ?scopeKind=/?scopeId=, MemoryBadge pushes
+  // ?project=), so bookmarks, palette history and a persisted lastRoute of
+  // either old path still land in the right place.
+  { path: '/knowledge', redirect: (to) => ({ path: '/knowledge/curated', query: to.query }) },
   {
-    path: '/contexts',
-    name: 'contexts',
-    component: () => import('@/views/contexts/ContextsView.vue'),
+    path: '/knowledge/:section(curated|learned)',
+    name: 'knowledge',
+    component: () => import('@/views/knowledge/KnowledgeView.vue'),
   },
+  { path: '/contexts', redirect: (to) => ({ path: '/knowledge/curated', query: to.query }) },
   {
     path: '/projects/:id',
     name: 'project',
     component: () => import('@/views/projects/ProjectLandingPage.vue'),
   },
+  // `/memory/<chunk id>` (an old CrossReferenceLink target that never had a
+  // route) lands in Learned with the chunk targeted via ?chunk=<id>.
   {
-    path: '/memory',
-    name: 'memory',
-    component: () => import('@/views/memory/MemoryView.vue'),
+    path: '/memory/:pathMatch(.*)*',
+    redirect: (to) => {
+      const seg = to.params.pathMatch;
+      const chunk = Array.isArray(seg) ? seg[0] : seg;
+      return {
+        path: '/knowledge/learned',
+        query: chunk ? { ...to.query, chunk } : to.query,
+      };
+    },
   },
   {
     path: '/workflows',
@@ -75,26 +92,33 @@ export const routes: RouteRecordRaw[] = [
     path: '/settings',
     name: 'settings',
     component: () => import('@/views/settings/SettingsView.vue'),
+    // nav-ia-sweep-01DOGF0F WP05: ?tab=scheduledchats|tasks|workflows moved
+    // to the Workflows surface; old links redirect (lib/legacyRoutes.ts).
+    beforeEnter: redirectLegacySettingsTab,
   },
   {
     path: '/permissions/:family?',
     name: 'permissions',
     component: () => import('@/views/permissions/PermissionsView.vue'),
   },
+  // artifacts-as-units-01DOGF0C WP06 (FR-7): Artifacts and Documents are one
+  // Library surface with Captured and Authored views. The old paths redirect
+  // into the matching view, keeping the query string (DocumentsView reads
+  // ?session=), so bookmarks, palette history and a persisted lastRoute of
+  // either old path still land in the right place.
+  { path: '/library', redirect: (to) => ({ path: '/library/captured', query: to.query }) },
   {
-    path: '/artifacts',
-    name: 'artifacts',
-    component: () => import('@/views/artifacts/ArtifactsView.vue'),
+    path: '/library/:view(captured|authored)',
+    name: 'library',
+    component: () => import('@/views/library/LibraryView.vue'),
   },
+  { path: '/artifacts', redirect: (to) => ({ path: '/library/captured', query: to.query }) },
+  { path: '/documents', redirect: (to) => ({ path: '/library/authored', query: to.query }) },
   {
-    path: '/documents',
-    name: 'documents',
-    component: () => import('@/views/documents/DocumentsView.vue'),
-  },
-  {
-    // FR-002 (01NKNOW01): Corpora surface retired; redirect to Contexts.
+    // FR-002 (01NKNOW01): Corpora surface retired; redirect to Contexts,
+    // which knowledge-home-01DOGF0E made Knowledge › Curated.
     path: '/corpora/:pathMatch(.*)*',
-    redirect: '/contexts',
+    redirect: '/knowledge/curated',
   },
   {
     path: '/agentgraph',

@@ -58,6 +58,7 @@ func TestMigration0327_PreservesArtifactVersionRows(t *testing.T) {
 	// not idempotent against a schema that already has that column and
 	// fails with "duplicate column name" — confirmed by running this
 	// exact mistake first.
+	rewindArtifactsToUnits(t, ctx, raw)
 	if _, err := raw.ExecContext(ctx,
 		"DELETE FROM harness_migrations WHERE owning_mission='sessions' AND version = 327"); err != nil {
 		t.Fatalf("rewind 327: %v", err)
@@ -89,10 +90,10 @@ func TestMigration0327_PreservesArtifactVersionRows(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close(context.Background()) })
 
 	var artifacts, versions int
-	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifacts WHERE id='art-0327'").Scan(&artifacts); err != nil {
+	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifacts_legacy WHERE id='art-0327'").Scan(&artifacts); err != nil {
 		t.Fatalf("count artifacts: %v", err)
 	}
-	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifact_versions WHERE artifact_id='art-0327'").Scan(&versions); err != nil {
+	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifact_versions_legacy WHERE artifact_id='art-0327'").Scan(&versions); err != nil {
 		t.Fatalf("count artifact_versions: %v", err)
 	}
 	if artifacts != 1 {
@@ -108,7 +109,7 @@ func TestMigration0327_PreservesArtifactVersionRows(t *testing.T) {
 	var byteSize, createdAt int64
 	if err := db.Reader().QueryRow(ctx,
 		`SELECT content_hash, summary, path, byte_size, created_at
-         FROM artifact_versions WHERE artifact_id='art-0327' AND version=2`).
+         FROM artifact_versions_legacy WHERE artifact_id='art-0327' AND version=2`).
 		Scan(&hash, &summary, &path, &byteSize, &createdAt); err != nil {
 		t.Fatalf("read restored version row: %v (0 rows if the cascade fired)", err)
 	}

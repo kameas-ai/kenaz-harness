@@ -47,13 +47,26 @@ var (
 	ErrStateMismatch = errors.New("fleet: OAuth2 state mismatch")
 
 	// ErrAuthTimeout is returned when the loopback callback listener does
-	// not receive a request within the 60-second window.
-	ErrAuthTimeout = errors.New("fleet: OAuth2 auth flow timed out (60s)")
+	// not receive a request within SignInFlowTimeout. The message is derived
+	// from the constant so the two can never disagree again.
+	ErrAuthTimeout = errors.New("fleet: OAuth2 auth flow timed out (" + SignInFlowTimeout.String() + ")")
 
 	// ErrAuthFailed is returned when the authorization server returns an
 	// error response instead of a code.
 	ErrAuthFailed = errors.New("fleet: OAuth2 authorization failed")
 )
+
+// SignInFlowTimeout bounds how long the PKCE loopback flow waits for the
+// browser callback (fleet-session-truth-01DOGF0A FR-5). It was 60 seconds —
+// shorter than a human finishing an IdP login with MFA, and the dogfood B3
+// "OAuth2 auth flow timed out (60s)" ERROR. Owner range 5–15 minutes; 10 is
+// the recommendation. The flow is cancellable (Settings_FleetSignInCancel),
+// so a long window does not trap the user.
+const SignInFlowTimeout = 10 * time.Minute
+
+// openBrowserFn is the browser launcher, a seam so tests never open a real
+// browser.
+var openBrowserFn = openBrowser
 
 // generatePKCEVerifier generates a cryptographically random PKCE code
 // verifier (43-128 chars from the unreserved charset).
@@ -96,7 +109,8 @@ func openBrowser(rawURL string) error {
 //  1. Generates a PKCE verifier + challenge + state.
 //  2. Listens on an ephemeral loopback port for the callback.
 //  3. Opens the system browser to the authorization URL.
-//  4. Waits up to 60s for the callback.
+//  4. Waits up to SignInFlowTimeout for the callback, or until ctx is
+//     cancelled (Settings_FleetSignInCancel) — then returns ctx.Err().
 //  5. Exchanges the code for a TokenSet.
 func DeviceCodeFlow(ctx context.Context, profile EnvProfile) (TokenSet, error) {
 	logging.L().Info("fleet.auth.device_code_flow.start",
@@ -191,12 +205,12 @@ func DeviceCodeFlow(ctx context.Context, profile EnvProfile) (TokenSet, error) {
 	defer func() { _ = srv.Close() }()
 
 	// Open browser.
-	if err := openBrowser(authURL); err != nil {
+	if err := openBrowserFn(authURL); err != nil {
 		return TokenSet{}, fmt.Errorf("fleet: open browser: %w", err)
 	}
 
 	// Wait for callback or timeout.
-	timer := time.NewTimer(60 * time.Second)
+	timer := time.NewTimer(SignInFlowTimeout)
 	defer timer.Stop()
 
 	var cbResult callbackResult
@@ -297,8 +311,17 @@ func RefreshTokenSet(ctx context.Context, profile EnvProfile, refreshToken strin
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized {
+		// OAuth2 rejects a dead refresh token with 400 invalid_grant (or
+		// 401 invalid_client): a DEFINITE rejection — the session is over.
 		return TokenSet{}, fmt.Errorf("%w: status %d during refresh: %s", ErrTokenExpired, resp.StatusCode, body)
+	}
+	if resp.StatusCode != http.StatusOK {
+		// IdP 5xx / 429 / anything else says nothing about the refresh
+		// token's validity: transient, NOT ErrTokenExpired, so the session
+		// is not shown as expired over an IdP hiccup
+		// (fleet-session-truth-01DOGF0A delta review #4).
+		return TokenSet{}, fmt.Errorf("fleet: token endpoint status %d during refresh: %s", resp.StatusCode, body)
 	}
 	return parseTokenResponse(body)
 }
