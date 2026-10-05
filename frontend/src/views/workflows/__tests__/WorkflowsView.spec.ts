@@ -240,7 +240,9 @@ describe('WorkflowsView', () => {
       calls += 1;
       // First List returns the builtin; second List (post-delete)
       // returns an empty catalog so the UI flips to the empty state.
-      return Promise.resolve(calls === 1 ? [summary] : []);
+      // nav-ia-sweep-01DOGF0F WP04: Delete is offered for user-source
+      // workflows only (builtins are not in the store; deleting one 404s).
+      return Promise.resolve(calls === 1 ? [{ ...summary, source: 'user' }] : []);
     });
     const remove = vi.fn(() => Promise.resolve());
     const wrapper = mount(WorkflowsView, {
@@ -249,6 +251,11 @@ describe('WorkflowsView', () => {
     await flushPromises();
 
     await wrapper.find('[data-testid="workflows-delete-button"]').trigger('click');
+    await flushPromises();
+    // nav-ia-sweep-01DOGF0F WP04: Delete now asks first (merged from the
+    // retired Settings › Workflows panel) — nothing is removed until confirm.
+    expect(remove).not.toHaveBeenCalled();
+    await wrapper.find('[data-testid="workflows-delete-confirm"]').trigger('click');
     await flushPromises();
 
     expect(remove).toHaveBeenCalledWith('plan_implement_review');

@@ -8,6 +8,7 @@ import { installHarnessClient } from '@/lib/harnessClientContext';
 import { createHarnessClient } from '@/lib/harnessClient';
 import { bootFeatureFlags } from '@/lib/featureFlags';
 import { logEvent } from '@/lib/eventLog';
+import { redirectLegacySettingsTab } from '@/lib/legacyRoutes';
 import type { SentryTier } from '@/sentry';
 
 // Desktop route table — 20 wired routes as of entry-points-and-crash-
@@ -70,6 +71,9 @@ export const routes: RouteRecordRaw[] = [
     path: '/settings',
     name: 'settings',
     component: () => import('@/views/settings/SettingsView.vue'),
+    // nav-ia-sweep-01DOGF0F WP05: ?tab=scheduledchats|tasks|workflows moved
+    // to the Workflows surface; old links redirect (lib/legacyRoutes.ts).
+    beforeEnter: redirectLegacySettingsTab,
   },
   {
     path: '/permissions/:family?',

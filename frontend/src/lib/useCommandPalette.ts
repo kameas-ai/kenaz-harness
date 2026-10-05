@@ -38,7 +38,16 @@ function navigate(hash: string) {
 }
 
 const NAV_ACTIONS: PaletteAction[] = [
-  { id: 'nav.sessions', label: 'Go to Sessions', hint: 'Main session list', perform: () => navigate('#/sessions') },
+  // nav-ia-sweep-01DOGF0F WP03: relabelled, not removed — the palette has
+  // "New Session" but no "search sessions" action, so this is still the
+  // keyboard way back to the session surface. The old hint promised a "Main
+  // session list"; /sessions with no id is an empty state, the list is the rail.
+  {
+    id: 'nav.sessions',
+    label: 'Go to Sessions home',
+    hint: 'Pick a session in the rail or start a new one',
+    perform: () => navigate('#/sessions'),
+  },
   { id: 'nav.tools', label: 'Go to Tools', hint: 'MCP servers & tool bundles', perform: () => navigate('#/tools') },
   { id: 'nav.providers', label: 'Go to Providers', hint: 'AI provider configuration', perform: () => navigate('#/providers') },
   { id: 'nav.contexts', label: 'Go to Contexts', hint: 'Session context files', perform: () => navigate('#/contexts') },

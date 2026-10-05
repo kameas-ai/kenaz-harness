@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * TasksPanel — Settings → Tasks
+ * TasksPanel — Workflows › Tasks (moved from Settings › Runtime by
+ * nav-ia-sweep-01DOGF0F WP04)
  *
  * Lists all background tasks (running and completed) with kind, owner
  * session, status, age, and action buttons (View output, Abort).
@@ -22,8 +23,8 @@
  */
 
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import type { TaskRow } from '../../lib/types';
-import { useHarnessClient } from '../../lib/useHarnessAPI';
+import type { TaskRow } from '@/lib/types';
+import { useHarnessClient } from '@/lib/useHarnessAPI';
 
 const client = useHarnessClient();
 

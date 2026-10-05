@@ -1,42 +1,54 @@
 /**
- * SettingsView.tasks.spec.ts — the Tasks sub-tab mounts and shows real
- * task data (subagent-control-and-background-tasks-01PMZB11 UNIT-11,
- * AC-12 second half).
+ * WorkflowsView.tasks.spec.ts — the Tasks tab mounts and shows real task
+ * data. Moved from SettingsView.tasks.spec.ts by nav-ia-sweep-01DOGF0F WP05
+ * when Tasks left Settings › Runtime for Workflows › Tasks
+ * (subagent-control-and-background-tasks-01PMZB11 UNIT-11, AC-12 second half).
  *
- * Goes through the real parent (SettingsView, reached via ?tab=tasks
- * exactly as SettingsTabs.vue's nav entry does) rather than mounting
- * TasksPanel directly — mirrors SettingsView.branchAdvisor.spec.ts's
- * rationale: a regression that un-mounts the panel again fails here even
- * if the component-level spec stays green.
+ * Goes through the real parent (WorkflowsView, reached via ?tab=tasks —
+ * exactly what the chat header's background-task chip and the legacy
+ * /settings?tab=tasks redirect produce) rather than mounting TasksPanel
+ * directly: a regression that un-mounts the panel again fails here even if
+ * the component-level spec stays green.
  *
  * FALSIFICATION (tasks.md UNIT-11 AC-12): "revert UNIT-3's BackgroundSpawn
  * assignment [in core/rpc/builtins_wiring.go]. The panel must render
  * empty and the test must fail." That revert makes
  * core/rpc/background_task_wiring_test.go's
- * TestBashBackgroundMode_ProductionWiring_RegistersATaskRow fail — Go's
- * Tasks_List-backing Registry.List() goes empty for a real background
- * task (pinned there, re-verified by hand for this unit — see the
- * mission report). This file pins the matching frontend half of the same
- * chain: an empty Tasks_List response renders ONLY the empty state, never
- * a stale/fixture row — so the two tests compose into the full backend
- * -to-UI proof without needing a second Wails-booted integration harness.
+ * TestBashBackgroundMode_ProductionWiring_RegistersATaskRow fail. This file
+ * pins the matching frontend half: an empty Tasks_List response renders ONLY
+ * the empty state, never a stale/fixture row.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-
-vi.mock('vue-router', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('vue-router')>();
-  return {
-    ...actual,
-    useRoute: () => ({ query: { tab: 'tasks' }, path: '/settings' }),
-    useRouter: () => undefined,
-  };
-});
-
-import SettingsView from '@/views/settings/SettingsView.vue';
+import { createMemoryHistory, createRouter } from 'vue-router';
+import { defineComponent, h } from 'vue';
+import WorkflowsView from '@/views/workflows/WorkflowsView.vue';
+import { createFakeWorkflowsClient } from '@/lib/workflowsClient';
+import { createFakeScheduledChatClient } from '@/lib/scheduledChatClient';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { Settings, TaskRow } from '@/lib/types';
+
+vi.mock('@/shell/CanvasHead.vue', () => ({ default: { template: '<div />' } }));
+vi.mock('@/views/marketplace/PublishDialog.vue', () => ({ default: { template: '<div />' } }));
+
+async function mountTasksTab(client: ReturnType<typeof createFakeHarnessClient>) {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/workflows', component: defineComponent({ render: () => h('div') }) }],
+  });
+  await router.push('/workflows?tab=tasks');
+  await router.isReady();
+  const w = mount(WorkflowsView, {
+    props: {
+      client: createFakeWorkflowsClient({ list: async () => [] }),
+      chatClient: createFakeScheduledChatClient(),
+    },
+    global: { plugins: [router], provide: { [HarnessClientKey as symbol]: client } },
+  });
+  await flushPromises();
+  return w;
+}
 
 const liveTask: TaskRow = {
   id: 'task-live-9f3a',
@@ -86,26 +98,20 @@ function provide(tasksListResult: TaskRow[] = []) {
   return { client, list };
 }
 
-describe('SettingsView — Tasks sub-tab (UNIT-11, AC-12)', () => {
-  it('mounts TasksPanel through the real ?tab=tasks click path and shows the rail sub-title', async () => {
+describe('WorkflowsView — Tasks tab (UNIT-11, AC-12; moved from Settings)', () => {
+  it('mounts TasksPanel through the real ?tab=tasks deep link', async () => {
     const { client } = provide();
-    const w = mount(SettingsView, {
-      global: { provide: { [HarnessClientKey as symbol]: client } },
-    });
-    await flushPromises();
+    const w = await mountTasksTab(client);
 
-    expect(w.find('[data-testid="settings-tasks-pane"]').exists()).toBe(true);
+    expect(w.find('[data-testid="workflows-tasks-tab"]').exists()).toBe(true);
     expect(w.find('[data-testid="tasks-panel"]').exists()).toBe(true);
-    // Sanity: a different sub-tab's pane is NOT also rendered.
-    expect(w.find('[data-testid="settings-scheduledchats-pane"]').exists()).toBe(false);
+    // Sanity: a different tab's content is NOT also rendered.
+    expect(w.find('[data-testid="workflows-schedules-tab"]').exists()).toBe(false);
   });
 
   it('renders a row for a live background task', async () => {
     const { client } = provide([liveTask]);
-    const w = mount(SettingsView, {
-      global: { provide: { [HarnessClientKey as symbol]: client } },
-    });
-    await flushPromises();
+    const w = await mountTasksTab(client);
 
     const row = w.find(`[data-testid="task-row-${liveTask.id}"]`);
     expect(row.exists()).toBe(true);
@@ -114,10 +120,7 @@ describe('SettingsView — Tasks sub-tab (UNIT-11, AC-12)', () => {
 
   it('renders EMPTY when Tasks_List returns zero rows — the BackgroundSpawn-reverted shape', async () => {
     const { client } = provide([]);
-    const w = mount(SettingsView, {
-      global: { provide: { [HarnessClientKey as symbol]: client } },
-    });
-    await flushPromises();
+    const w = await mountTasksTab(client);
 
     expect(w.find('[data-testid="task-list"]').exists()).toBe(false);
     expect(w.find('[data-testid="tasks-empty"]').exists()).toBe(true);
@@ -125,10 +128,7 @@ describe('SettingsView — Tasks sub-tab (UNIT-11, AC-12)', () => {
 
   it('clicking "View output" swaps the pane to TaskOutputViewer for that task, and Back returns to the list', async () => {
     const { client } = provide([liveTask]);
-    const w = mount(SettingsView, {
-      global: { provide: { [HarnessClientKey as symbol]: client } },
-    });
-    await flushPromises();
+    const w = await mountTasksTab(client);
 
     await w.find('[data-testid="task-view-btn"]').trigger('click');
     await flushPromises();

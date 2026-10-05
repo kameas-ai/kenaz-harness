@@ -20,6 +20,7 @@ import { installHarnessClient } from '@/lib/harnessClientContext';
 import { createServedHarnessClient } from '@/lib/harnessClient';
 import { bootFeatureFlags } from '@/lib/featureFlags';
 import { logEvent } from '@/lib/eventLog';
+import { redirectLegacySettingsTab } from '@/lib/legacyRoutes';
 
 // Exported so `__tests__/entrypoint.routes.test.ts` can diff this table against
 // main.ts's, with the desktop-only surfaces named explicitly. Nothing else
@@ -75,6 +76,9 @@ export const routes: RouteRecordRaw[] = [
     path: '/settings',
     name: 'settings',
     component: () => import('@/views/settings/SettingsView.vue'),
+    // nav-ia-sweep-01DOGF0F WP05: ?tab=scheduledchats|tasks|workflows moved
+    // to the Workflows surface; old links redirect (lib/legacyRoutes.ts).
+    beforeEnter: redirectLegacySettingsTab,
   },
   {
     path: '/permissions/:family?',

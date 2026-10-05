@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * ScheduledChatsPanel — Settings → Scheduled Chats tab.
+ * ScheduledChatsPanel — Workflows › Schedules (moved from Settings ›
+ * Runtime › Scheduled Chats by nav-ia-sweep-01DOGF0F WP04).
  *
  * Mission: scheduled-chat-runs-01KX5R8B (WP05).
  *

@@ -292,7 +292,7 @@ onUnmounted(() => {
     >
       <p class="font-ui text-sm text-ink mb-1">No scheduled workflows.</p>
       <p class="font-ui text-sm text-ink-muted">
-        Open Settings → Workflows to add a cron schedule to any workflow.
+        Add a cron schedule to any workflow on the Schedules tab.
       </p>
     </div>
 
@@ -496,7 +496,7 @@ onUnmounted(() => {
         >
           <p class="font-ui text-sm text-ink mb-1">No scheduled chat runs.</p>
           <p class="font-ui text-sm text-ink-muted">
-            Open Settings → Scheduled Chats to create a cron-fired prompt.
+            Create a cron-fired prompt on the Schedules tab.
           </p>
         </div>
 

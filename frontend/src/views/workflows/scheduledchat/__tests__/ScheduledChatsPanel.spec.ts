@@ -1,12 +1,13 @@
 /**
  * ScheduledChatsPanel.spec.ts
  *
- * Vitest unit tests for Settings → Scheduled Chats panel.
+ * Vitest unit tests for the Scheduled Chats panel (Workflows › Schedules;
+ * Settings › Runtime before nav-ia-sweep-01DOGF0F).
  * scheduled-chat-runs-01KX5R8B (WP05).
  */
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
+import ScheduledChatsPanel from '@/views/workflows/scheduledchat/ScheduledChatsPanel.vue';
 import {
   createFakeScheduledChatClient,
   type ScheduledChatEntry,

@@ -233,8 +233,10 @@ type Settings struct {
 	// every engine, so before this field existed it shipped to every
 	// user with an arm nothing could reach.
 	//
-	// No UI dial yet — the Settings → Workflows panel is a tracked
-	// follow-up (docs/unwired-ledger.md, 2026-08-16). Settable today by
+	// No UI dial yet — a dial on the Workflows surface (Workflows ›
+	// Schedules / Library, which absorbed the retired Settings → Workflows
+	// panel in nav-ia-sweep-01DOGF0F) is a tracked follow-up
+	// (docs/unwired-ledger.md, 2026-08-16). Settable today by
 	// editing `cedarStrictWorkflowMode` in the harness settings file,
 	// and read live on every workflow run/save.
 	CedarStrictWorkflowMode bool `json:"cedarStrictWorkflowMode,omitempty"`

@@ -26,8 +26,6 @@ import {
   Activity,
   AlertTriangle,
   Archive,
-  CalendarClock,
-  CheckSquare,
   CircleUser,
   Code,
   Command,
@@ -95,7 +93,6 @@ const groups: ReadonlyArray<TabGroup> = [
     tabs: [
       { to: '/settings?tab=compaction', label: 'Compaction', query: 'compaction', icon: Archive },
       { to: '/settings?tab=slashcmds', label: 'Slash Commands', query: 'slashcmds', icon: Command },
-      { to: '/settings?tab=workflows', label: 'Workflows', query: 'workflows', icon: GitBranch },
       { to: '/settings?tab=hooks', label: 'Hooks', query: 'hooks', icon: Webhook },
       // engineer-truth-pass-01PMTP01 WP03 (finding B2b) — the panel existed
       // and had zero mount sites; this is the real click path FR-004 requires.
@@ -104,30 +101,10 @@ const groups: ReadonlyArray<TabGroup> = [
       { to: '/settings?tab=recommendations', label: 'Recommendations', query: 'recommendations', icon: Server },
     ],
   },
-  {
-    label: 'Runtime',
-    tabs: [
-      {
-        to: '/settings?tab=scheduledchats',
-        label: 'Scheduled Chats',
-        query: 'scheduledchats',
-        icon: CalendarClock,
-      },
-      // The 'Tasks' entry was removed 2026-08-14 because the
-      // background-task subsystem had no producer (see
-      // docs/unwired-ledger.md). Restored by
-      // subagent-control-and-background-tasks-01PMZB11 UNIT-11: UNIT-3
-      // gave bash.Options.BackgroundSpawn a real caller and attached
-      // real output capture (core/rpc/background_task_wiring_test.go),
-      // so the panel behind this link is no longer permanently empty.
-      {
-        to: '/settings?tab=tasks',
-        label: 'Tasks',
-        query: 'tasks',
-        icon: CheckSquare,
-      },
-    ],
-  },
+  // nav-ia-sweep-01DOGF0F WP05: the Runtime group (Scheduled Chats, Tasks)
+  // and Authoring › Workflows moved to the Workflows surface (Schedules /
+  // Tasks / Library tabs). Their old ?tab= URLs redirect — see
+  // lib/legacyRoutes.ts.
   {
     label: 'Integrations',
     tabs: [

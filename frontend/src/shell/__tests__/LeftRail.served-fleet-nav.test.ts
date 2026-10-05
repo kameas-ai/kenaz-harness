@@ -103,7 +103,9 @@ describe('LeftRail — fleet nav in served mode', () => {
     // assertions above would pass for the wrong reason.
     initFeatureFlags(makeAppInfo({ sites_hosting: true }));
     const w = await mountRail();
-    expect(w.text()).toContain('Sessions');
+    // (Was 'Sessions' — that rail entry was removed by nav-ia-sweep-01DOGF0F
+    // WP03; Tools is an ungated served-capable surface.)
+    expect(w.text()).toContain('Tools');
   });
 
   // served-mode-is-a-real-mode-01PMZ707 WP03 (AC-709). Graph_* has no
