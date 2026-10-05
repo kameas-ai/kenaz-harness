@@ -11,7 +11,9 @@
  *   P-1  tokens valid + enroll fails → identity + degraded + Retry, no "Sign in"
  *   P-3  not-provisioned (auto-retry stopped) → a fleet:session-changed from
  *        elsewhere updates the popover without remount
- *   P-4  sign-in via UserMenu → LeftRail Marketplace entry appears
+ *   P-4  sign-in via UserMenu → LeftRail Sites entry appears (was the
+ *        Marketplace entry, removed by install-framework-01DOGF0B WP09; Sites
+ *        is the remaining rail entry behind the same signed-in gate)
  *   P-9  enroll with empty email → header + avatar fall back, never blank
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -122,9 +124,9 @@ function makeRouter() {
         component: defineComponent({ render: () => h('div', 'sessions') }),
       },
       {
-        path: '/marketplace',
-        name: 'marketplace',
-        component: defineComponent({ render: () => h('div', 'marketplace') }),
+        path: '/sites',
+        name: 'sites',
+        component: defineComponent({ render: () => h('div', 'sites') }),
       },
     ],
   });
@@ -304,7 +306,7 @@ describe('UserMenu', () => {
 
   // ── P-4 ─────────────────────────────────────────────────────────────────
 
-  it('P-4: sign in via UserMenu → LeftRail Marketplace entry appears', async () => {
+  it('P-4: sign in via UserMenu → LeftRail Sites entry appears', async () => {
     const { client } = buildClient(signedOut());
     const router = makeRouter();
     await router.push('/sessions');
@@ -316,14 +318,14 @@ describe('UserMenu', () => {
       global: { plugins: [router], provide: { [HarnessClientKey as symbol]: client } },
     });
     await flushPromises();
-    expect(wrapper.find('[data-testid=nav-marketplace]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid=nav-sites]').exists()).toBe(false);
 
     await wrapper.find('[data-testid="user-menu-trigger"]').trigger('click');
     await flushPromises();
     await wrapper.find('[data-testid="menu-sign-in"]').trigger('click');
     await flushPromises();
     await nextTick();
-    expect(wrapper.find('[data-testid=nav-marketplace]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid=nav-sites]').exists()).toBe(true);
   });
 
   // ── P-9 (render half) ───────────────────────────────────────────────────

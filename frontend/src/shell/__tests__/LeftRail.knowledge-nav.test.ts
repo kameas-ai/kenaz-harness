@@ -47,7 +47,8 @@ describe('LeftRail — Knowledge entry (P-1)', () => {
       .find('nav[aria-label="Surfaces"]')
       .findAll('a[aria-label]')
       .map((a) => a.attributes('aria-label'));
-    expect(labels.slice(0, 4)).toEqual(['Tools', 'Workflows', 'Knowledge', 'Library']);
+    // 'Tools' became 'Capabilities' (install-framework-01DOGF0B WP09).
+    expect(labels.slice(0, 4)).toEqual(['Capabilities', 'Workflows', 'Knowledge', 'Library']);
     expect(labels).not.toContain('Contexts');
     expect(labels).not.toContain('Memory');
     w.unmount();

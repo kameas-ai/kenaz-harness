@@ -100,7 +100,7 @@ import (
 //
 // Actionable errors (FR-004 / WP03):
 //   - When the server name is not found in the pool, the caller sees
-//     "MCP server <name> is not installed — install it from Tools"
+//     "MCP server <name> is not installed — install it from Capabilities"
 //     rather than the internal "stdio: unknown server" message.
 //   - All other errors propagate unchanged.
 type wfMCPCallerAdapter struct {
@@ -120,7 +120,7 @@ type wfMCPCallerAdapter struct {
 
 func (a *wfMCPCallerAdapter) Call(ctx context.Context, server, tool string, args map[string]any) (string, error) {
 	if a.pool == nil {
-		return "", fmt.Errorf("MCP server %q is not available — MCP is disabled. Enable it in Settings → Tools", server)
+		return "", fmt.Errorf("MCP server %q is not available — MCP is disabled. Enable it in Capabilities", server)
 	}
 	if err := a.gate.authorize(ctx, toolloop.SessionIDFromContext(ctx), server, tool); err != nil {
 		return "", err
@@ -156,7 +156,7 @@ func translateMCPError(server string, err error) error {
 	if strings.Contains(low, "unknown server") ||
 		strings.Contains(low, "not in pool") ||
 		strings.Contains(low, "server not found") {
-		return fmt.Errorf("MCP server %q is not installed or not authorized — install it from Tools", server)
+		return fmt.Errorf("MCP server %q is not installed or not authorized — install it from Capabilities", server)
 	}
 	return err
 }

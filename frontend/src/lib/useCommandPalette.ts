@@ -48,7 +48,15 @@ const NAV_ACTIONS: PaletteAction[] = [
     hint: 'Pick a session in the rail or start a new one',
     perform: () => navigate('#/sessions'),
   },
-  { id: 'nav.tools', label: 'Go to Tools', hint: 'MCP servers & tool bundles', perform: () => navigate('#/tools') },
+  // install-framework-01DOGF0B Phase 4 WP09: Tools + Marketplace are one
+  // Capabilities surface (route /tools). The id stays nav.tools so palette
+  // history keeps resolving; nav.marketplace is gone (/marketplace redirects).
+  {
+    id: 'nav.tools',
+    label: 'Go to Capabilities',
+    hint: 'Add capability — tools, MCP servers, skills, workflows & the fleet catalog',
+    perform: () => navigate('#/tools'),
+  },
   { id: 'nav.providers', label: 'Go to Providers', hint: 'AI provider configuration', perform: () => navigate('#/providers') },
   // knowledge-home-01DOGF0E WP02: Contexts + Memory → one Knowledge home.
   // The old nav.memory hint promised "Memory capture settings"; the view never
@@ -67,7 +75,7 @@ const NAV_ACTIONS: PaletteAction[] = [
   // served-mode-is-a-real-mode-01PMZ707 WP03: gated on !isServedMode() —
   // both routes render NotAvailableInServedMode in a served build (D-701;
   // Graph_*/CedarPolicy_*/Policy_* have no serve dispatch case), mirroring
-  // the nav.sites/nav.marketplace predicate below.
+  // the nav.sites predicate below.
   {
     id: 'nav.agentgraph',
     label: 'Go to Agent graphs',
@@ -94,25 +102,20 @@ const NAV_ACTIONS: PaletteAction[] = [
     visible: () => !isServedMode(),
     perform: () => navigate('#/policy'),
   },
-  // Fleet surfaces. Both routes exist only in the desktop bundle
-  // (docs/served-mode-boundary.md) and both are entitlement-gated, so these
-  // carry the same predicate as their LeftRail entries. Before
+  // Fleet surface. The route exists only in the desktop bundle
+  // (docs/served-mode-boundary.md) and is entitlement-gated, so this carries
+  // the same predicate as its LeftRail entry. Before
   // docs/dead-code-audit-2026-08-16.md finding A4 was fixed the gate was
-  // permanently false and these two views had no reachable entry point at all
-  // — no rail item, no palette action, no router.push anywhere in the tree.
+  // permanently false and the view had no reachable entry point at all — no
+  // rail item, no palette action, no router.push anywhere in the tree. (The
+  // Marketplace, its sibling here, folded into Capabilities —
+  // install-framework-01DOGF0B Phase 4.)
   {
     id: 'nav.sites',
     label: 'Go to Sites',
     hint: 'Fleet-hosted static sites',
     visible: () => !isServedMode() && signedIn.value && capability('sites_hosting'),
     perform: () => navigate('#/sites'),
-  },
-  {
-    id: 'nav.marketplace',
-    label: 'Go to Marketplace',
-    hint: 'Team catalog of shared bundles, workflows & skills',
-    visible: () => !isServedMode() && signedIn.value,
-    perform: () => navigate('#/marketplace'),
   },
 ];
 

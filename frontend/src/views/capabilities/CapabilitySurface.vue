@@ -8,20 +8,34 @@
  *
  * WP04 renders the MCP-recipe provider and replaces Tools › Registry (the
  * retired RegistryTab.vue browse list) and KenazToolsPanel.vue; WP05 adds
- * the skill and workflow providers and replaces Workflows › Catalog. Rail
- * entries are untouched until Phase 4 — the surface mounts inside the
- * Tools view.
+ * the skill and workflow providers and replaces Workflows › Catalog.
+ * Phase 4 WP08 folds in the retired Marketplace: the fleet-catalog rows no
+ * provider lists yet (bundle / agent_pack — Phase 3 has not shipped, so
+ * they stay disabled-with-reason), installed/ residue downloads, the
+ * catalog listing facts and Withdraw (catalogBrowse.ts,
+ * CatalogListingDetail.vue). The surface mounts in the Capabilities view
+ * (views/tools/ToolsView.vue, route /tools).
  *
  * Sources a provider could not list arrive as `unavailable` rows with a
  * reason and are rendered as rows, never as a hidden tab (P-5).
  */
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useEventStream } from '@/lib/useEventStream';
 import { categoryIconFor, categoryLabel } from '@/lib/recipeCategories';
 import { Search, Zap, Plus } from '@/shell/icons';
 import AddMCPServerModal from '@/views/tools/AddMCPServerModal.vue';
+import { signedIn } from '@/lib/featureFlags';
+import CatalogListingDetail from './CatalogListingDetail.vue';
+import {
+  CATALOG_ONLY_KINDS,
+  catalogOnlyKind,
+  catalogRows,
+  catalogSource,
+  VISIBILITY_LABELS,
+  reasonElId,
+} from './catalogBrowse';
 import { BUILTIN_TOOLS, type BuiltinTool } from './plugins/builtinTools';
 import {
   ENTRY_POINTS,
@@ -38,6 +52,7 @@ import type {
   CapabilityKind,
   CapabilitySource,
   CapabilityUnavailable,
+  CatalogItemView,
 } from '@/lib/types';
 
 const client = useHarnessClient();
@@ -55,7 +70,9 @@ type SourceFilter = 'all' | CapabilitySource;
 
 type Row =
   | { type: 'builtin'; key: string; tool: BuiltinTool }
-  | { type: 'item'; key: string; item: CapabilityItem };
+  | { type: 'item'; key: string; item: CapabilityItem }
+  // A fleet-catalog row no provider lists (WP08 — the Marketplace fold-in).
+  | { type: 'catalog'; key: string; entry: CatalogItemView; residue: boolean };
 
 // ── listing ──────────────────────────────────────────────────────────
 const items = ref<CapabilityItem[]>([]);
@@ -77,8 +94,60 @@ async function load() {
   }
 }
 
+// ── fleet catalog browse (Phase 4 WP08 — folded in from MarketplaceView) ──
+// Catalog_List is the only listing of bundle / agent_pack catalog items and
+// of installed/ residue; it also carries the listing facts (visibility,
+// published date) Withdraw needs for skill and workflow catalog rows.
+// Desktop-only (no Catalog_* serve dispatch) — this surface renders only
+// outside served mode (ToolsView's boundary panel).
+const catalogEntries = ref<CatalogItemView[]>([]);
+const catalogError = ref<string | null>(null);
+
+async function loadCatalog() {
+  catalogError.value = null;
+  if (!signedIn.value) {
+    catalogEntries.value = [];
+    return;
+  }
+  try {
+    catalogEntries.value = (await client.catalog.list({})) ?? [];
+  } catch (e) {
+    catalogEntries.value = [];
+    catalogError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+watch(signedIn, () => void loadCatalog());
+
+// The provider-less kinds' signed-out / error rows (P-5: a reason row,
+// never a hidden kind).
+const catalogUnavailable = computed<CapabilityUnavailable[]>(() => {
+  if (!signedIn.value) {
+    return CATALOG_ONLY_KINDS.map((k) => ({ kind: k.kind, source: '' as const, reason: 'signed_out' }));
+  }
+  if (catalogError.value) {
+    return CATALOG_ONLY_KINDS.map((k) => ({
+      kind: k.kind,
+      source: '' as const,
+      reason: 'error',
+      message: catalogError.value ?? undefined,
+    }));
+  }
+  return [];
+});
+
+/** The catalog listing a provider row also is (skill / workflow catalog items). */
+function listingFor(it: CapabilityItem): CatalogItemView | null {
+  let best: CatalogItemView | null = null;
+  for (const e of catalogEntries.value) {
+    if (e.kind !== it.kind || e.id !== it.id) continue;
+    if (e.version === it.version) return e;
+    best = best ?? e;
+  }
+  return best;
+}
+
 // One event for every provider (FR-3): any install / uninstall — from
-// this surface, a per-kind flow, the Marketplace, or a fleet sync pull —
+// this surface, a per-kind flow, or a fleet sync pull —
 // repaints the list from the consumers.
 useEventStream<CapabilityEvent>('capability:installed', () => void load());
 useEventStream<CapabilityEvent>('capability:uninstalled', () => void load());
@@ -124,6 +193,7 @@ async function toggleBuiltin(tool: BuiltinTool, event: Event) {
 
 onMounted(() => {
   void load();
+  void loadCatalog();
   void refreshBuiltins();
 });
 
@@ -134,7 +204,9 @@ const query = ref('');
 function kindFromQuery(): KindFilter {
   const raw = route?.query?.kind;
   const v = Array.isArray(raw) ? raw[0] : raw;
-  if (v === 'builtin' || KIND_PLUGINS.some((p) => p.kind === v)) return v as KindFilter;
+  if (v === 'builtin' || KIND_PLUGINS.some((p) => p.kind === v) || catalogOnlyKind(String(v))) {
+    return v as KindFilter;
+  }
   return 'all';
 }
 const kindFilter = ref<KindFilter>(kindFromQuery());
@@ -145,6 +217,7 @@ const kindChips = computed(() => [
   { id: 'all' as KindFilter, label: 'All' },
   { id: 'builtin' as KindFilter, label: 'Built-in tools' },
   ...KIND_PLUGINS.map((p) => ({ id: p.kind as KindFilter, label: p.label })),
+  ...CATALOG_ONLY_KINDS.map((k) => ({ id: k.kind as KindFilter, label: k.label })),
 ]);
 const sourceChips: { id: SourceFilter; label: string }[] = [
   { id: 'all', label: 'Any source' },
@@ -179,11 +252,20 @@ const rows = computed<Row[]>(() => {
       return a.name.localeCompare(b.name);
     });
   for (const it of visible) out.push({ type: 'item', key: `${it.kind}:${it.id}`, item: it });
+  if (categoryFilter.value === null) {
+    for (const r of catalogRows(catalogEntries.value)) {
+      const e = r.entry;
+      if (kindFilter.value !== 'all' && kindFilter.value !== e.kind) continue;
+      if (sourceFilter.value !== 'all' && sourceFilter.value !== catalogSource(e.visibility)) continue;
+      if (q && !matchesQuery([e.slug, e.description, e.kind], q)) continue;
+      out.push({ type: 'catalog', key: r.key, entry: e, residue: r.residue });
+    }
+  }
   return out;
 });
 
 const visibleUnavailable = computed(() =>
-  unavailable.value.filter(
+  [...unavailable.value, ...catalogUnavailable.value].filter(
     (u) =>
       (kindFilter.value === 'all' || kindFilter.value === u.kind) &&
       (sourceFilter.value === 'all' || !u.source || sourceFilter.value === u.source),
@@ -209,7 +291,9 @@ const selected = computed<Row | null>(() => {
   if (inRows) return inRows;
   // A selected row filtered out of the list keeps its detail open.
   const it = items.value.find((i) => `${i.kind}:${i.id}` === selectedKey.value);
-  return it ? { type: 'item', key: selectedKey.value, item: it } : null;
+  if (it) return { type: 'item', key: selectedKey.value, item: it };
+  const c = catalogRows(catalogEntries.value).find((r) => r.key === selectedKey.value);
+  return c ? { type: 'catalog', key: c.key, entry: c.entry, residue: c.residue } : null;
 });
 const detailRef = ref<{ beginInstall?: () => void } | null>(null);
 
@@ -279,6 +363,63 @@ async function genericRemove(row: Row & { type: 'item' }) {
   }
 }
 
+// ── catalog-only rows (WP08) ──────────────────────────────────────────
+// Install on a bundle / agent_pack row is rendered DISABLED with the
+// reason as visible text (WP02 posture). This guard keeps a stray call
+// (keyboard, test, a force-enabled button) from reaching Catalog_Install,
+// which refuses the kind anyway: it shows the reason and calls nothing.
+function refuseCatalogInstall(row: Row & { type: 'catalog' }) {
+  setRowError(row.key, catalogOnlyKind(row.entry.kind)?.reason ?? 'This item cannot be installed here.');
+}
+
+async function removeDownload(entry: CatalogItemView, key: string) {
+  setRowError(key, null);
+  busy.value = { ...busy.value, [key]: true };
+  try {
+    await client.catalog.uninstall(entry.kind, entry.id, entry.version);
+    await loadCatalog();
+  } catch (e) {
+    setRowError(key, `Remove download failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    busy.value = { ...busy.value, [key]: false };
+  }
+}
+
+// ── withdraw (fleet-enforcement-truth-01PMZ505 WP11, from MarketplaceView) ──
+// Removes the item from the org catalog listing for everyone — distinct
+// from Remove / Remove download (this device only). Confirm-guarded with
+// its own copy (AC-021); the server's answer, including a 403 ("not the
+// owner or an admin", never a tier message), is shown as-is.
+const pendingWithdraw = ref<CatalogItemView | null>(null);
+const withdrawBusy = ref(false);
+const withdrawError = ref('');
+
+function promptWithdraw(entry: CatalogItemView) {
+  pendingWithdraw.value = entry;
+  withdrawError.value = '';
+}
+
+function cancelWithdraw() {
+  pendingWithdraw.value = null;
+  withdrawError.value = '';
+}
+
+async function confirmWithdraw() {
+  const entry = pendingWithdraw.value;
+  if (!entry) return;
+  withdrawBusy.value = true;
+  withdrawError.value = '';
+  try {
+    await client.catalog.unpublish(entry.id);
+    pendingWithdraw.value = null;
+    await Promise.all([loadCatalog(), load()]);
+  } catch (e) {
+    withdrawError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    withdrawBusy.value = false;
+  }
+}
+
 // ── "Add your own" entry points ─────────────────────────────────────
 const entryOpen = ref<EntryPoint['id'] | null>(null);
 const existingIds = computed(() =>
@@ -294,20 +435,40 @@ function stateLabel(it: CapabilityItem): string {
   return it.state.installed ? 'Installed' : 'Not installed';
 }
 
-function kindNoun(kind: CapabilityKind): string {
-  return pluginFor(kind)?.noun ?? kind;
+function kindNoun(kind: CapabilityKind | string): string {
+  return pluginFor(kind as CapabilityKind)?.noun ?? catalogOnlyKind(kind)?.noun ?? kind;
 }
 
 function gotoLearned() {
   void router.push('/knowledge/learned');
 }
+
+// The page's primary action, "Add capability" (decision record §3; the
+// button lives in ToolsView's header): clear every filter and put the
+// cursor in search, so the whole browse — every kind, every source — is
+// one keystroke away.
+const searchEl = ref<HTMLInputElement | null>(null);
+function focusBrowse() {
+  query.value = '';
+  kindFilter.value = 'all';
+  sourceFilter.value = 'all';
+  categoryFilter.value = null;
+  void nextTick(() => {
+    searchEl.value?.scrollIntoView?.({ block: 'nearest' });
+    searchEl.value?.focus();
+  });
+}
+defineExpose({ focusBrowse });
 </script>
 
 <template>
   <section class="px-6 py-4 space-y-3" data-testid="capability-surface">
     <header class="flex flex-wrap items-center justify-between gap-2">
+      <!-- The page's "Add capability" action lives in ToolsView's header
+           (WP09); this heading names the list, which holds installed and
+           available capabilities alike. -->
       <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
-        Add capability
+        All capabilities
       </h2>
       <div class="flex flex-wrap items-center gap-2" data-testid="capability-entry-points">
         <span class="font-ui text-[11px] text-ink-muted">Add your own:</span>
@@ -332,10 +493,11 @@ function gotoLearned() {
         aria-hidden="true"
       />
       <input
+        ref="searchEl"
         v-model="query"
         type="search"
         aria-label="Search capabilities"
-        placeholder="Search tools, MCP servers, skills, workflows…"
+        placeholder="Search tools, MCP servers, skills, workflows, bundles…"
         class="w-full rounded-sm border border-border-muted bg-surface-1 py-2 pl-8 pr-3 font-ui text-[12px] text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
         data-testid="capability-search"
       />
@@ -401,7 +563,7 @@ function gotoLearned() {
           role="note"
           :data-testid="`capability-unavailable-${u.kind}-${u.source || 'all'}`"
         >
-          <span class="text-ink">{{ pluginFor(u.kind)?.label ?? u.kind }}</span>
+          <span class="text-ink">{{ pluginFor(u.kind)?.label ?? catalogOnlyKind(u.kind)?.label ?? u.kind }}</span>
           <span v-if="u.source"> · {{ SOURCE_LABELS[u.source as CapabilitySource] ?? u.source }}</span>
           — {{ unavailableText(u.reason, u.message) }}
         </div>
@@ -452,7 +614,7 @@ function gotoLearned() {
 
             <!-- Provider item -->
             <li
-              v-else
+              v-else-if="row.type === 'item'"
               :class="['grid items-start gap-3 px-4 py-3', selectedKey === row.key ? 'bg-surface-2' : '']"
               style="grid-template-columns: 1.25rem 1fr auto"
               :data-testid="`capability-row-${row.item.kind}-${row.item.id}`"
@@ -505,6 +667,72 @@ function gotoLearned() {
                   @click="update(row)"
                 >
                   Update
+                </button>
+              </div>
+            </li>
+
+            <!-- Fleet-catalog row no provider lists (WP08, from the retired Marketplace). -->
+            <li
+              v-else-if="row.type === 'catalog'"
+              :class="['grid items-start gap-3 px-4 py-3', selectedKey === row.key ? 'bg-surface-2' : '']"
+              style="grid-template-columns: 1.25rem 1fr auto"
+              :data-testid="`capability-catalog-row-${row.entry.kind}-${row.entry.slug}`"
+            >
+              <component :is="categoryIconFor('')" class="mt-0.5 h-4 w-4 text-ink-subtle" aria-hidden="true" />
+              <button type="button" class="min-w-0 text-left" @click="select(row)">
+                <div class="flex flex-wrap items-center gap-2 font-ui text-[13px] text-ink">
+                  <span>{{ row.entry.slug }}</span>
+                  <span class="text-[10px] uppercase tracking-[0.14em] text-ink-dim">{{ kindNoun(row.entry.kind) }}</span>
+                  <span class="text-[10px] uppercase tracking-[0.14em] text-ink-dim">{{ VISIBILITY_LABELS[row.entry.visibility] ?? SOURCE_LABELS[catalogSource(row.entry.visibility)] }}</span>
+                  <span
+                    v-if="row.residue"
+                    class="text-[10px] uppercase tracking-[0.14em] text-ink-muted"
+                    title="An earlier version downloaded this item, but nothing on this device uses it."
+                    :data-testid="`capability-catalog-downloaded-${row.entry.kind}-${row.entry.slug}`"
+                  >Downloaded — not active</span>
+                  <span v-else class="text-[10px] uppercase tracking-[0.14em] text-ink-subtle">Not installable yet</span>
+                </div>
+                <p class="mt-1 max-w-prose text-[11px] text-ink-muted line-clamp-2">{{ row.entry.description || 'No description.' }}</p>
+                <!-- Disabled-with-reason (WP02 posture): visible text, not a tooltip only. -->
+                <p
+                  v-if="!row.residue && catalogOnlyKind(row.entry.kind)"
+                  :id="reasonElId(row.entry)"
+                  class="mt-1 max-w-prose text-[11px] text-ink-subtle"
+                  :data-testid="`capability-catalog-unsupported-${row.entry.kind}-${row.entry.slug}`"
+                >
+                  {{ catalogOnlyKind(row.entry.kind)?.reason }}
+                </p>
+                <div
+                  v-if="rowError[row.key]"
+                  class="mt-1 text-[11px] text-signal-danger"
+                  role="alert"
+                  :data-testid="`capability-catalog-error-${row.entry.kind}-${row.entry.slug}`"
+                >
+                  {{ rowError[row.key] }}
+                </div>
+              </button>
+              <div class="flex items-center gap-1">
+                <button
+                  v-if="row.residue"
+                  type="button"
+                  class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
+                  :disabled="busy[row.key]"
+                  :data-testid="`capability-catalog-remove-download-${row.entry.kind}-${row.entry.slug}`"
+                  @click="removeDownload(row.entry, row.key)"
+                >
+                  {{ busy[row.key] ? 'Removing…' : 'Remove download' }}
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[12px] text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled
+                  :title="catalogOnlyKind(row.entry.kind)?.reason"
+                  :aria-describedby="reasonElId(row.entry)"
+                  :data-testid="`capability-catalog-install-${row.entry.kind}-${row.entry.slug}`"
+                  @click="refuseCatalogInstall(row)"
+                >
+                  Install
                 </button>
               </div>
             </li>
@@ -589,6 +817,16 @@ function gotoLearned() {
             </p>
           </div>
         </template>
+        <CatalogListingDetail
+          v-else-if="selected.type === 'catalog'"
+          :key="selected.key"
+          :entry="selected.entry"
+          mode="entry"
+          :residue="selected.residue"
+          :busy="busy[selected.key]"
+          @withdraw="promptWithdraw"
+          @remove-download="(e) => removeDownload(e, selected!.key)"
+        />
         <template v-else>
           <component
             :is="pluginFor(selected.item.kind)!.detail"
@@ -634,6 +872,15 @@ function gotoLearned() {
               </div>
             </template>
           </div>
+          <!-- A skill / workflow row that is also a fleet catalog listing:
+               its listing facts and Withdraw (WP08, from the Marketplace). -->
+          <CatalogListingDetail
+            v-if="listingFor(selected.item)"
+            class="mt-3"
+            :entry="listingFor(selected.item)!"
+            mode="listing"
+            @withdraw="promptWithdraw"
+          />
         </template>
       </aside>
     </div>
@@ -646,5 +893,49 @@ function gotoLearned() {
       @installed="onEntryDone"
       @close="entryOpen = null"
     />
+
+    <!-- Withdraw confirm (fleet-enforcement-truth-01PMZ505 WP11; moved from MarketplaceView). -->
+    <div
+      v-if="pendingWithdraw !== null"
+      class="fixed inset-0 z-50 flex items-center justify-center"
+      role="dialog"
+      aria-modal="true"
+      data-testid="withdraw-confirm-modal"
+    >
+      <div class="absolute inset-0 bg-modal-overlay" @click="cancelWithdraw" />
+      <div class="relative z-10 w-[440px] max-w-[90vw] rounded-md border border-border-muted bg-surface-0 p-5 shadow-lg">
+        <h2 class="font-ui text-base font-semibold text-ink">
+          Withdraw "{{ pendingWithdraw.slug }}"?
+        </h2>
+        <p class="mt-2 font-ui text-xs text-ink-muted" data-testid="withdraw-confirm-copy">
+          This removes the item from the org catalog listing entirely —
+          other members will no longer be able to find or install it. This is
+          different from Uninstall, which only removes your own local copy
+          and leaves the org listing untouched.
+        </p>
+        <div v-if="withdrawError" class="mt-2 font-ui text-xs text-signal-danger" role="alert" data-testid="withdraw-error">
+          {{ withdrawError }}
+        </div>
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            class="px-3 py-1.5 font-ui text-xs text-ink-dim hover:text-ink"
+            data-testid="withdraw-cancel"
+            @click="cancelWithdraw"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="rounded-sm border border-signal-danger px-3 py-1.5 font-ui text-xs text-signal-danger hover:bg-surface-2 disabled:opacity-50"
+            :disabled="withdrawBusy"
+            data-testid="withdraw-confirm"
+            @click="confirmWithdraw"
+          >
+            {{ withdrawBusy ? 'Withdrawing…' : 'Withdraw' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>

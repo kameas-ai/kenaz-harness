@@ -439,11 +439,14 @@ Templates installed by v0.87.0 and earlier (Workflows › Catalog) have no
 record, so they read "installed" forever and are never offered an update —
 the conservative choice: without a recorded version, "outdated" would be a
 guess, and an update overwrites user edits. **Disposition: acceptance note,
-not a backfill WP** — the workaround is to Remove the template in Tools ›
-Add capability and Install it again, which records provenance; a backfill
-would have to guess an installed version from YAML the user may have
-edited. Owner: alec / install-framework-01DOGF0B Phase 3, which revisits it
-with the Marketplace fold-in (release notes carry the workaround).
+not a backfill WP** — the workaround is to Remove the template in
+Capabilities (Workflows) and Install it again, which records provenance; a
+backfill would have to guess an installed version from YAML the user may
+have edited. Owner: alec / install-framework-01DOGF0B Phase 3 (release
+notes carry the workaround). *Annotated 2026-10-05:* the Marketplace
+fold-in this entry used to wait on happened in Phase 4, pulled forward by
+owner ruling ahead of Phase 3; it did not touch provenance, so the entry
+stays with Phase 3.
 
 ### 2026-10-05 (install-framework-01DOGF0B review L3) · `slashcmd.Registry` has no mutex
 
@@ -454,6 +457,35 @@ mandated-skill applier, with no lock. Not changed in this review (a
 drive-by lock on a hot dispatch path wants its own race test).
 Owner: Phase 3 (install-framework-01DOGF0B). Blocker: a `-race` test
 driving concurrent install + dispatch, written with the lock.
+
+### 2026-10-05 (install-framework-01DOGF0B Phase 4) · deleting MarketplaceView left `Catalog_Install` and `Slashcmd_SkillInstall` with zero frontend callers
+
+**Class:** Wails binding ↔ `harnessClient.ts` ↔ `.vue` caller (pass 2),
+created by this change, not found by a sweep. MarketplaceView was the only
+`.vue` caller of `client.catalog.install` (→ `Catalog_Install`) and
+`client.slashcmd.skillInstall` (→ `Slashcmd_SkillInstall`). Its fold-in
+calls neither: a catalog skill installs through `Capability_Install`, and
+bundle / agent_pack Install is disabled-with-reason (a click shows the
+reason and calls nothing). Both bindings now sit in the i15 allowlist's
+`unrouted` class as "no caller anywhere".
+
+**Disposition: dated-justified, not deleted (2026-10-05).**
+- `Catalog_Install` / `catalog.install` — the backend refusal
+  (`ErrCatalogKindNotInstallable`) is WP02's defence in depth behind the
+  disabled button, and `CapabilitySurface.catalog.test.ts` M4/M4a use the
+  client method as the spy proving the UI never calls it. Blocker: the
+  Phase 3 bundle / agent_pack providers, which replace this path; the
+  commit that registers the last of them deletes the binding, the client
+  method and the refusal together (see the badge-only entry below). Owner:
+  alec / install-framework-01DOGF0B Phase 3.
+- `Slashcmd_SkillInstall` / `slashcmd.skillInstall` — framework-routed
+  (decision record §2.1), so it cannot install around the pipeline; it is
+  simply unused by the UI now. Removing a bound method is a codegen change
+  (`frontend/wailsjs`), out of scope for the frontend-only Phase 4. Blocker:
+  a decision whether per-kind install bindings outlive their last UI
+  caller (Capability_Install covers every zero-input kind). Owner: alec /
+  install-framework-01DOGF0B Phase 3 (which retires the other per-kind
+  browse surfaces and owns the same question for `Bundle_Install`).
 
 ### 2026-10-04 (install-framework-01DOGF0B WP01/WP02) · Marketplace "Install" for workflow / agent_pack / bundle was badge-only — nothing consumes `installed/`; the skill badge lied the other way
 
@@ -507,7 +539,11 @@ why `installed/` never reaches it:
   "Remove download" action — `Client.Uninstall` and `InstalledItems` stay
   as the cleanup path. Pins: `TestCatalog_Install_RefusesEveryKind`,
   `TestCatalogInstall_RefusesUnconsumedKinds`, `MarketplaceView.spec.ts`
-  4 (P-2), 2 and 5 — each fails against the pre-fix code.
+  4 (P-2), 2 and 5 — each fails against the pre-fix code. *(Phase 4,
+  2026-10-05: MarketplaceView was deleted; these pins moved, not died, to
+  `views/capabilities/__tests__/CapabilitySurface.catalog.test.ts` M4, M2
+  and M5 — workflow left the disabled set when its provider shipped in
+  WP05.)*
 
 **Still standing (dated-justified, 2026-10-04).** `Client.Install`'s
 `dataDir` and `pubKeyBase64` parameters are unread, kept so the per-kind
@@ -523,8 +559,9 @@ Two residue gaps the Phase-0 cleanup path does not reach (dated
 deletes both lines when its offer-to-finish-or-remove flow reads
 `installed/` directly):
 - **Withdrawn-item residue is unreachable.** "Remove download" lives on
-  the item's Marketplace card, which comes from `Catalog_List` (the live
-  fleet listing). Once a publisher withdraws the item, the card is gone
+  the item's Marketplace card (since Phase 4: its catalog row in the
+  Capabilities surface — still built from `Catalog_List`, so the gap
+  stands), which comes from `Catalog_List` (the live fleet listing). Once a publisher withdraws the item, the card is gone
   and its `installed/` payload has no removal surface — the one RPC that
   would list it, `Catalog_Installed`, has no `.vue` caller.
 - **`installed/skill/` residue has no removal surface.** WP01 made the
@@ -552,9 +589,11 @@ bundle (WP06 — `Bundle.Install` from a `kenaz.yaml` directory, listed by
 `Bundle_List`), agent_pack (WP07 — written to `<dataDir>/agents` + loader
 reload, **or** the kind dropped from the catalog with the reason recorded
 here), plus WP08 offering to finish or remove existing `installed/`
-residue. When the last kind lands, `ErrCatalogKindNotInstallable`, the
-`INSTALL_UNSUPPORTED_REASON` map in `MarketplaceView.vue`, and this entry
-are deleted together.
+residue. When the last kind lands, `ErrCatalogKindNotInstallable`,
+`CATALOG_ONLY_KINDS` in `frontend/src/views/capabilities/catalogBrowse.ts`
+(the Marketplace's `INSTALL_UNSUPPORTED_REASON` map, moved there when the
+Marketplace folded into Capabilities in Phase 4), and this entry are
+deleted together.
 
 **Gate question — could a gate see "install writes a directory nothing
 reads"?** Not with the existing gates, and not cheaply as a new one. Every
@@ -607,6 +646,29 @@ then its workflow refusal copy still names Workflows › Catalog, which WP05
 retired (`?tab=catalog` now redirects to `/tools?kind=workflow`, so the
 copy's pointer still lands; the wording is Phase 3's to change — the WP02
 copy is frozen for this phase). Owner: alec / install-framework-01DOGF0B.
+
+**Progress (Phase 4 rail consolidation, executed EARLY — 2026-10-05).** By
+owner ruling (2026-10-05, the third time the owner asked), the spec's
+Phase 4 ran before Phase 3: ONE rail entry, **Capabilities** (route
+`/tools`, page action "Add capability"), replaces Tools + Marketplace —
+decision record §3, except that the route stays `/tools` (match-prefix
+unchanged) and `/marketplace` redirects there in both route tables;
+`/bundles` is untouched because the Bundles fold-in is Phase 3.
+`MarketplaceView.vue` is deleted; what only it showed now lives in the
+Capabilities surface (`views/capabilities/catalogBrowse.ts`,
+`CatalogListingDetail.vue`): bundle / agent_pack catalog rows with Install
+**disabled-with-reason exactly as WP02 left them** (bundles → Settings ›
+Integrations › Bundles; agent packs → not installable yet), `installed/`
+residue as "Downloaded — not active" + Remove download, the listing facts
+and Withdraw. The workflow refusal copy above is fixed (Go now says
+"Capabilities (Workflows)"; the UI never shows a disabled workflow row —
+workflows install through their provider). **Still standing, with their
+owners: Phase 3** — the `bundle` (WP06) and `agent_pack` (WP07) providers
+and their coverage-allowlist lines, the Bundles browse fold-in (and the
+`/bundles` redirect the decision record names), the tasks.md WP08
+offer-to-finish-or-remove flow for `installed/` (FR-7) and the two residue
+gaps above. Owner: alec / install-framework-01DOGF0B Phase 3; agent_pack's
+payload format blocker: fleet team.
 ### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored
 
 Every chat turn now links to its run graph (WP04), so materialization
@@ -1078,7 +1140,7 @@ retention backend) already resolved more completely than the spec's own
 | §1.6 lockdown reason dropped (WP08) | store + return the reason | **Not wired — fixed this pass.** `lockdownActive` was a bare `atomic.Bool`; both write paths (`Watcher.run`, `BootstrapLockdownStatus`) parsed the reason off the wire and only logged it. | `core/fleet/lockdown.go` (new `lockdownReason atomic.Value` + `setLockdownState` single write path), `core/rpc/views/settings/fleet.go`'s `FleetLockdownStatus`. Mutation-proven: `TestBootstrapLockdownStatus` now asserts `LockdownReason()=="bootstrap-test"` after the BOOT path (no broker replay) — reverting the fix fails it. No frontend change needed: `LockdownStatusView.Reason`/`types.ts`'s `reason` field already existed on the wire type. |
 | §1.7 site env vars unsettable (WP09) | `Sites_EnvSet`/`Sites_EnvList` RPC + binding + surface | **Not wired — backend built this pass.** `SitesAPI.Sites_EnvSet`/`Sites_EnvList`, `FleetSitesClient` interface extended, `Bindings.Sites_{EnvSet,EnvList}` added. **Frontend NOT wired.** | `core/rpc/views/sites/{api,impl}.go`, `core/rpc/bindings.go`; `TestSitesEnvList_NeverReturnsAValue` mutation-proven at the JSON-wire level (a planted `Value` field is caught). No MCP tool added (spec explicitly forbids it in the same WP). |
 | §1.8 four orphans (`Client.SignOut`, `Client.Unpublish`, `SyncKind.HasScope`+friends, `applyRetentionConfig`) | delete/wire/justify per-symbol | `Client.SignOut` **deleted** this pass (D-5 — zero callers, rival to `settings.API.FleetSignOut` which additionally calls `StopFleetBackground` first). `Client.Unpublish` **wired** this pass (WP11, below). `SyncKind.HasScope`+seven siblings — **RULED (register F-2): justified, not deleted** — `fleet-org-config-inheritance-01NORGX01`'s `meta.json`/`spec.md` already carry owner `alec` + blocker "kenaz-fleet org endpoints not yet available" + date 2026-08-19; this entry cross-references it rather than duplicating. `applyRetentionConfig` **deleted** (see §1.3 row). | `core/fleet/client.go` (deletion), `core/fleet/catalog.go`+`impl.go` (WP11 wiring, below). |
-| §1.9 catalog/skill signature verification skipped (WP10, register C-2) | honesty change: comments stop reading as settled, docstrings corrected, Marketplace says installs are unverified, `WithPubKey` kept | **Not wired — fully built this pass.** Five edits: (1) `api.go`'s `PubKeyBase64: ""` comment; (2) `catalog/impl.go`'s `pubKeyBase64` doc; (3) both `harnessClient.ts` "Downloads, verifies, and live-registers" docstrings + `catalog/api.go`'s `Catalog_Install` doc; (4) `MarketplaceView.vue` gained a persistent plain-text notice (`data-testid="marketplace-unverified-notice"`) — not a modal, not a tooltip; (5) `verifyCatalogSignature`'s skip now logs at warn. `WithPubKey` untouched (kept per C-2). | Frontend test suite RAN clean post-edit (`vitest run`, 261 files / 2445 tests pass); `vue-tsc --noEmit` clean. |
+| §1.9 catalog/skill signature verification skipped (WP10, register C-2) | honesty change: comments stop reading as settled, docstrings corrected, Marketplace says installs are unverified, `WithPubKey` kept | **Not wired — fully built this pass.** Five edits: (1) `api.go`'s `PubKeyBase64: ""` comment; (2) `catalog/impl.go`'s `pubKeyBase64` doc; (3) both `harnessClient.ts` "Downloads, verifies, and live-registers" docstrings + `catalog/api.go`'s `Catalog_Install` doc; (4) `MarketplaceView.vue` gained a persistent plain-text notice (`data-testid="marketplace-unverified-notice"`) — not a modal, not a tooltip (MarketplaceView deleted in install-framework Phase 4; the notice lives in the skill / workflow detail plugins of the Capabilities surface, the only fleet-catalog install paths left); (5) `verifyCatalogSignature`'s skip now logs at warn. `WithPubKey` untouched (kept per C-2). | Frontend test suite RAN clean post-edit (`vitest run`, 261 files / 2445 tests pass); `vue-tsc --noEmit` clean. |
 | §1.16 / task #43 `core/fleet.VerifySignature` zero callers | verify `01PMZ909` UNIT-1 rewrote the i10 allowlist entry; only touch it if that mission slipped | **Verified: `01PMZ909` UNIT-1 already landed it.** `scripts/ci/allowlists/i10-unwired-gates.txt`'s entry now reads "UPDATED 2026-08-21 by bundle-download-and-verify-01PMZ909 UNIT-1/UNIT-9... Standing verdict SUPERSEDED", exactly per that mission's own §9.2 commitment (C-14). Not touched here — touching it would have been the rival-infrastructure failure mode AC-029 warns against. | Read-verified (`grep` on the allowlist file). |
 | §7 G-1/G-2 (nil-optional-dep + uncalled-wiring-setter gates, WP10) | new gate(s), planted-violation proofs | **Already built, by a different mission, in a coordinated form.** `check-nil-optional-deps.sh` (I18, built collaboratively per its own header: "THREE MISSIONS SPECCED THIS GATE; NONE BUILT IT... this tool takes the doc-phrase design") subsumes both G-1 (nil optional dep on a Config/Options struct) and G-2 (an uncalled `Set*`/`With*` method) — its clause-3 fix is literally "a Set*-named method whose body assigns the field from its own parameter... with NO call site anywhere" (`gates_can_fail_test.go`'s `setter-defined-but-never-called-still-fires`), which is G-2 verbatim. `check-config-nil-coverage.sh` (built by `trust-surfaces-that-fire-01PMZ202` WP26) covers the sibling "declared, read, never assigned" shape with two planted-violation proofs of its own. This mission's own I13-widening design (`check-cedar-gate-arguments.sh`) was **not** the one that shipped — per CLAUDE.md's coordination rule, whoever lands first owns the gate. Building a second gate for the same class here would be rival infrastructure. | Verified only (read both scripts' headers + `gates_can_fail_test.go`'s planted cases; did not re-run the full gate suite in this pass — see "What was RUN" below for what was). |
 | §1.11/§1.12 Accent inert-and-pushed; sync push-path trace (WP12) | remove `Accent` from the wire; honest row copy; consumer-map enumeration test (G-5) | **Not wired — fully built this pass.** `Accent` removed from `uiThemePayload` (collect + apply); `SyncPanel.vue` rewritten for all four non-`installed_mcp` rows (`model_prefs` now names its real four fields, `ui_theme` claims only color, `provider_profiles`/`mcp_recipes` state "not yet syncing"). | `core/rpc/sync_categories.go` + three test files; AC-024 assertions added to `SyncPanel.spec.ts` (mutation-proven: reverting the `model_prefs` description to "Default model, provider allowlist..." fails the new test). **G-5 enumeration test (AC-022) NOT built** — see "Not done" below. |
@@ -1143,7 +1205,9 @@ pattern (`window['go']['rpc']['Bindings']['MethodName'](args)`), plus
 three small UI affordances (a chain-break-recovery input in
 `CompliancePanel.vue`, an env-var form in a Sites settings surface, an
 "Withdraw" action in `MarketplaceView.vue` distinct from "Uninstall" per
-AC-021). Owner: alec. This is the single largest remaining gap between
+AC-021 — *since wired, and moved with the rest of the catalog browse to
+the Capabilities surface when MarketplaceView was deleted,
+install-framework-01DOGF0B Phase 4, 2026-10-05*). Owner: alec. This is the single largest remaining gap between
 this pass and full AC-008/AC-012/AC-020/AC-021 satisfaction — the backend
 halves of all four ACs are proven; only the last-mile frontend wire is
 missing, which is the cheapest-win class CLAUDE.md's disposition rubric

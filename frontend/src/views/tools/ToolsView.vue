@@ -1,13 +1,19 @@
 <script setup lang="ts">
 /**
- * ToolsView — the Tools route (NN/SECTION pattern).
+ * ToolsView — the Capabilities route, /tools (NN/SECTION pattern).
  *
- * Top: the one "Add capability" surface (install-framework-01DOGF0B WP04,
- * views/capabilities/CapabilitySurface.vue) — built-in tool toggles and
- * every MCP recipe in one list + detail, replacing KenazToolsPanel and the
- * Add-MCP-Server Registry tab. Below it: every MCP server registered with
- * the harness, with its per-server tool policy. The rail entry stays
- * "Tools" until Phase 4 (WP09) renames it.
+ * install-framework-01DOGF0B Phase 4 WP09 (decision record §3, executed
+ * early by owner ruling 2026-10-05): the rail's one "Capabilities" entry
+ * replaces Tools + Marketplace and lands here; the page's primary action is
+ * "Add capability". The route and file keep the tools name so every deep
+ * link (/tools?kind=…, the Workflows ?tab=catalog redirect, /marketplace)
+ * keeps resolving.
+ *
+ * Top: the one capability surface (views/capabilities/CapabilitySurface.vue)
+ * — built-in tool toggles, MCP servers, skills, workflows, and the fleet
+ * catalog's bundles / agent packs (listed, not installable yet: Phase 3 has
+ * not shipped) in one list + detail. Below it: every MCP server registered
+ * with the harness, with its per-server tool policy.
  */
 import { onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
@@ -19,6 +25,13 @@ import type { MCPServer, MCPToolPolicy, MCPToolPolicyRule } from '@/lib/types';
 
 const servedMode = useServedMode();
 const client = useHarnessClient();
+
+// The page's primary action (decision record §3): open the surface's
+// browse — filters cleared, search focused.
+const surfaceRef = ref<{ focusBrowse?: () => void } | null>(null);
+function addCapability() {
+  surfaceRef.value?.focusBrowse?.();
+}
 
 const servers = ref<readonly MCPServer[]>([]);
 const loading = ref(false);
@@ -115,18 +128,36 @@ onMounted(() => {
 <template>
   <NotAvailableInServedMode
     v-if="servedMode"
-    feature="Tools"
-      reason="The tool catalogue and enable/disable RPCs are not wired into the in-workbench build yet. Tools still run during a turn; you just cannot inspect or toggle them from here."
+    feature="Capabilities"
+    reason="The capability list and its install / enable RPCs are not wired into the in-workbench build yet. Tools, skills and workflows you already installed still run during a turn; you just cannot inspect, add or toggle them from here."
   />
   <div v-else>
+    <!--
+      Subtitle reworded in WP09 (v0.88.0 adversarial review): the old copy
+      said "built-in tools and MCP servers in one list" while skills and
+      workflows were listed too, and claimed tool invocations never leave
+      the device — false for a remote (HTTP) MCP server, and the fleet
+      catalog is fetched from your org.
+    -->
     <CanvasHead
       number="02"
-      section="TOOLS"
-      title="Tools"
-      subtitle="Add capability: built-in tools and MCP servers in one list. Below it, every MCP server registered with the harness and its policy. All tool calls flow through the local mcp-client; tool invocations do not leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active)."
-    />
+      section="CAPABILITIES"
+      title="Capabilities"
+      subtitle="Built-in tools, MCP servers, skills and workflows in one list, with your org's fleet catalog when you are signed in. Below it, every MCP server registered with the harness and its tool policy. Every MCP tool call goes through the harness's MCP client and its policy layer; a call to a remote MCP server leaves this device."
+    >
+      <template #trailing>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow"
+          data-testid="capabilities-add"
+          @click="addCapability"
+        >
+          Add capability
+        </button>
+      </template>
+    </CanvasHead>
 
-    <CapabilitySurface />
+    <CapabilitySurface ref="surfaceRef" />
 
     <div class="px-6 pt-2 pb-1">
       <h2

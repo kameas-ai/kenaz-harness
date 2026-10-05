@@ -8,8 +8,7 @@ import {
   Archive,
   Plus,
   MessageSquare,
-  Package,
-  Wrench,
+  Blocks,
   FileText,
   Settings,
   BookOpen,
@@ -1046,7 +1045,16 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
              list above IS the sessions home; /sessions with no id is only an
              empty state whose New-session button duplicated the rail's. The
              routes (/, /sessions, /sessions/:id) are untouched. -->
-        <li><RailEntry :icon="Wrench" label="Tools" to="/tools" match-prefix="/tools" /></li>
+        <!-- install-framework-01DOGF0B Phase 4 WP09 (decision record §3,
+             executed early by owner ruling 2026-10-05): ONE entry replaces
+             Tools + Marketplace. Labelled "Capabilities" — a noun, because
+             the page manages what is installed as well as adding more (its
+             primary action is "Add capability"). The route stays /tools;
+             /marketplace redirects here (main.ts, main-served.ts). Icon:
+             Blocks, not Wrench — skills, workflows and bundles are not tools. -->
+        <li data-testid="nav-capabilities">
+          <RailEntry :icon="Blocks" label="Capabilities" to="/tools" match-prefix="/tools" />
+        </li>
         <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" match-prefix="/workflows" /></li>
         <!-- knowledge-home-01DOGF0E WP02: one Knowledge entry replaces the
              separate Contexts and Memory entries (Curated / Learned sections
@@ -1086,23 +1094,19 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <!-- nav-settings-ia-cleanup WP04: Audit log demoted from top-level nav.
              Viewer is accessible via Settings → Security → Audit Log. /audit route
              and the command palette entry (nav.audit) remain intact. -->
-        <!-- Sites + Marketplace are desktop-only. Neither route is registered
-             in main-served.ts, and the served RPC allowlist
-             (core/serve/methods.go) carries no Sites_* or Catalog_* method, so
-             in a browser build these entries would navigate into the
-             not-found route at best. See docs/served-mode-boundary.md.
-             (docs/dead-code-audit-2026-08-16.md findings A4 + B4) -->
+        <!-- Sites is desktop-only. Its route is not registered in
+             main-served.ts, and the served RPC allowlist
+             (core/serve/methods.go) carries no Sites_* method, so in a
+             browser build this entry would navigate into the not-found route
+             at best. See docs/served-mode-boundary.md.
+             (docs/dead-code-audit-2026-08-16.md findings A4 + B4)
+             No Marketplace entry: install-framework-01DOGF0B Phase 4 folded
+             the fleet-catalog browse into Capabilities (above). -->
         <li
           v-if="!served && signedIn && capability('sites_hosting')"
           data-testid="nav-sites"
         >
           <RailEntry :icon="Globe" label="Sites" to="/sites" match-prefix="/sites" />
-        </li>
-        <li
-          v-if="!served && signedIn"
-          data-testid="nav-marketplace"
-        >
-          <RailEntry :icon="Package" label="Marketplace" to="/marketplace" match-prefix="/marketplace" />
         </li>
         <!-- nav-ia-sweep-01DOGF0F WP02: every route SettingsShell renders
              (SettingsTabs' own entries) lights the Settings entry, not just

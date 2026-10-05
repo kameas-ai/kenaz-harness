@@ -3885,7 +3885,8 @@ export interface CatalogClient {
    * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
    * UNIT-14 WP19, C2V-24, 2026-08-21): zero `.vue` callers today —
    * `list()` rows already carry an `installed` flag
-   * (MarketplaceView.vue reads `item.installed` directly), which is
+   * (the Capabilities surface's catalog browse — views/capabilities/
+   * catalogBrowse.ts — reads `item.installed` directly), which is
    * the live path. The Go implementation is correct and unused, not
    * broken.
    */

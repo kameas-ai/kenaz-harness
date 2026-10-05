@@ -6,7 +6,7 @@ package rpc
 // Tests covered:
 //   1. wfMCPCallerAdapter happy path — args marshalled, response unwrapped.
 //   2. wfMCPCallerAdapter actionable error — "unknown server" → user-facing
-//      "MCP server X is not installed — install it from Tools".
+//      "MCP server X is not installed — install it from Capabilities".
 //   3. wfMCPCallerAdapter nil pool — returns non-nil error (not a panic).
 //   4. translateMCPError — known patterns all produce the actionable string.
 

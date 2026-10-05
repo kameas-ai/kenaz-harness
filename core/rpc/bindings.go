@@ -41,6 +41,7 @@ import (
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
+	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
@@ -54,15 +55,14 @@ import (
 	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/policy"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
-	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
 	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
 	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
-	sidecarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sidecar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/shell"
+	sidecarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sidecar"
 	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	slashview "github.com/kameas-ai/kenaz-harness/core/rpc/views/slashcmd"
 	storageview "github.com/kameas-ai/kenaz-harness/core/rpc/views/storage"
@@ -2313,7 +2313,7 @@ func (b *Bindings) Bash_Exec(sessionID, command string) (BashExecResult, error) 
 	}
 	tool, ok := holder.Builtins().Lookup("kenaz__bash")
 	if !ok {
-		return BashExecResult{}, errors.New("rpc: kenaz__bash tool not registered (toggle on in Settings → Tools)")
+		return BashExecResult{}, errors.New("rpc: kenaz__bash tool not registered (toggle on in Capabilities)")
 	}
 	args, err := json.Marshal(struct {
 		Command string `json:"command"`

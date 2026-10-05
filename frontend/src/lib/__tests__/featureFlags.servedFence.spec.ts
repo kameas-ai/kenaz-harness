@@ -14,6 +14,9 @@
  *
  *   - Sites / Marketplace  — routes absent from main-served.ts, plus an
  *                            explicit `!served` guard on the rail entries.
+ *                            (Marketplace since folded into Capabilities,
+ *                            whose ToolsView renders NotAvailableInServedMode
+ *                            — install-framework-01DOGF0B Phase 4.)
  *   - WorkflowsView        — renders NotAvailableInServedMode over its whole
  *                            template.
  *   - SettingsView         — same, and it owns both SyncPanel and
@@ -93,7 +96,8 @@ describe('capability gates — served-mode fence', () => {
     );
     servedFlag.value = true;
 
-    // signedIn is what WorkflowsView, BundlesView and MarketplaceView gate on.
+    // signedIn is what WorkflowsView, BundlesView and the Capabilities
+    // surface's fleet-catalog browse gate on.
     expect(flags.signedIn.value).toBe(false);
     // capability() is what SyncPanel, SlashCommandsView, CedarEditor and the
     // Sites rail entry gate on.

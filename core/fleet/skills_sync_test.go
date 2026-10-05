@@ -427,7 +427,8 @@ func TestApplyMandatedSkills_ShadowedIsSilent(t *testing.T) {
 }
 
 // TestUninstallSkill_ByCatalogID — install-framework-01DOGF0B WP01. The
-// Marketplace knows only the catalog_id; the store keys on the payload's
+// catalog browse (then the Marketplace, now the Capabilities surface) knows
+// only the catalog_id; the store keys on the payload's
 // skill ID. Pre-fix, UninstallSkill(catalogID) returned ErrSkillNotFound for
 // every SkillPublish'd skill, so the Uninstall button the registry-backed
 // badge shows would always fail.
@@ -468,7 +469,7 @@ func TestUninstallSkill_ByCatalogID(t *testing.T) {
 
 // TestResolveSkillStoreID_CatalogIDWinsOverCollidingStoreID — review F3.
 // Skill A is stored under ID "shared"; skill B came from the catalog with
-// catalog_id "shared" but is stored under "b-local". The Marketplace sends
+// catalog_id "shared" but is stored under "b-local". The catalog browse sends
 // "shared" meaning B. Exact-store-ID-first resolution deleted A instead.
 func TestResolveSkillStoreID_CatalogIDWinsOverCollidingStoreID(t *testing.T) {
 	t.Parallel()

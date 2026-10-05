@@ -5,7 +5,7 @@
  * Capability_Install → the install framework: its payload is fetched once,
  * checked by the single signature verifier, and live-registered with the
  * slash registry (no restart). Installed state is the slash registry's, so
- * the badge here and in the Marketplace agree by construction (P-1/P-3).
+ * the badge here and Catalog_List's skill flag agree by construction (P-1/P-3).
  *
  * Removal is the surface's generic Remove (Capability_Uninstall); an
  * org-required skill is read-only there.

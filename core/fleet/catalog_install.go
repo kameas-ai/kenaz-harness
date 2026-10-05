@@ -35,18 +35,19 @@ import (
 var ErrCatalogKindNotInstallable = errors.New("fleet/catalog: installing this kind from the org catalog isn't supported yet")
 
 // catalogInstallRefusal returns the named refusal for kind — the single
-// source of the per-kind reason on the Go side (MarketplaceView.vue carries
-// the matching UI copy).
+// source of the per-kind reason on the Go side (the Capabilities surface's
+// frontend/src/views/capabilities/catalogBrowse.ts carries the matching UI
+// copy for the provider-less kinds).
 func catalogInstallRefusal(kind CatalogItemKind) error {
 	switch kind {
 	case CatalogKindWorkflow:
-		return fmt.Errorf("%w: workflow — nothing on this device would load the download; install the workflow from Tools › Add capability (Workflows), which installs org-catalog workflows and shipped templates through the install framework", ErrCatalogKindNotInstallable)
+		return fmt.Errorf("%w: workflow — nothing on this device would load the download; install the workflow from Capabilities (Workflows), which installs org-catalog workflows and shipped templates through the install framework", ErrCatalogKindNotInstallable)
 	case CatalogKindAgentPack:
 		return fmt.Errorf("%w: agent_pack — nothing on this device would load the download; add agent profiles to the agents folder in your profile directory instead", ErrCatalogKindNotInstallable)
 	case CatalogKindBundle:
 		return fmt.Errorf("%w: bundle — nothing on this device would load the download; install a bundle from Settings › Integrations › Bundles instead", ErrCatalogKindNotInstallable)
 	case CatalogKindSkill:
-		return fmt.Errorf("%w: skill — this path would not register it; install it from the skills surface (Tools › Add capability, Skills) instead", ErrCatalogKindNotInstallable)
+		return fmt.Errorf("%w: skill — this path would not register it; install it from Capabilities (Skills) instead", ErrCatalogKindNotInstallable)
 	default:
 		return fmt.Errorf("%w: unknown kind %q", ErrCatalogKindNotInstallable, kind)
 	}
@@ -105,7 +106,7 @@ func cleanPathSegment(s string) bool {
 
 // Uninstall removes the namespaced install directory (FR-006) — since
 // install-framework-01DOGF0B WP02, residue an earlier release's Install
-// left behind ("Remove download" in the Marketplace). kind, catalogID and
+// left behind ("Remove download" in the Capabilities surface). kind, catalogID and
 // version come from the frontend and are joined into a RemoveAll path, so
 // each must be a single clean path segment (review F8); dataDir must be
 // set, or the path would resolve against the process working directory.

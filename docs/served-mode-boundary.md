@@ -49,7 +49,10 @@ their real content when `useServedMode()` is true:
 
 - `views/settings/SettingsView.vue`
 - `views/artifacts/ArtifactsView.vue`
-- `views/tools/ToolsView.vue`
+- `views/tools/ToolsView.vue` (the Capabilities route, `/tools`; since
+  install-framework-01DOGF0B Phase 4 it also holds the fleet-catalog
+  browse that was `MarketplaceView.vue`, so `Catalog_List` /
+  `Catalog_Uninstall` / `Catalog_Unpublish` are panelled here)
 - `views/contexts/ContextsView.vue`
 - `views/memory/MemoryView.vue`
 - `views/workflows/WorkflowsView.vue`
@@ -91,16 +94,25 @@ mechanism table below.
 
 ### Mechanism 2: the unrouted path
 
-Two views are excluded a step earlier — their **routes are absent from
-`main-served.ts`**, so they never mount and never need the boundary panel:
+One view is excluded a step earlier — its **route is absent from
+`main-served.ts`**, so it never mounts and never needs the boundary panel:
 
 - `views/sites/SitesView.vue` (`/sites`)
-- `views/marketplace/MarketplaceView.vue` (`/marketplace`)
+
+There used to be two. `views/marketplace/MarketplaceView.vue`
+(`/marketplace`) was deleted by install-framework-01DOGF0B Phase 4
+(2026-10-05): its fleet-catalog browse folded into the Capabilities
+surface (`views/capabilities/CapabilitySurface.vue`, mounted by
+`views/tools/ToolsView.vue` — a mechanism-1 view that renders
+`NotAvailableInServedMode`). `/marketplace` is now a redirect to `/tools`
+in **both** route tables, so a served-mode bookmark lands on that boundary
+panel instead of not-found. The `Catalog_*` reasoning below is unchanged —
+it now holds through the panel rather than through an absent route.
 
 This was settled on 2026-08-16 rather than left as drift. The reason is
 mechanical: the served RPC surface is the explicit allowlist in
 `core/serve/methods.go`, and it carries no `Sites_*` and no `Catalog_*`
-method. Every call either view makes would come back "unknown method", so
+method. Every call either view made would come back "unknown method", so
 routing them in served mode would render a chrome over a dead backend —
 strictly worse than not offering them. Registering the routes is therefore
 blocked on a served-mode fleet RPC surface, which is a mission, not a
@@ -108,19 +120,24 @@ wiring fix.
 
 Consequences, all three of which must move together:
 
-- `shell/LeftRail.vue` gates both nav entries on `!isServedMode()` in
-  addition to their capability predicates. Before the fleet capability
+- `shell/LeftRail.vue` gates the Sites nav entry on `!isServedMode()` in
+  addition to its capability predicate (the Marketplace entry, gated the
+  same way, was removed in install-framework Phase 4; the one
+  "Capabilities" entry that replaced Tools + Marketplace is ungated and
+  lands on ToolsView's boundary panel in served mode). Before the fleet capability
   gate was wired (see `docs/dead-code-audit-2026-08-16.md` finding A4)
   the entries never rendered anywhere, which is why this gap was
   invisible.
 - `lib/useCommandPalette.ts` carries the same predicate on `nav.sites`
-  and `nav.marketplace` via `PaletteAction.visible`.
+  via `PaletteAction.visible` (`nav.marketplace` was removed with the
+  rail entry).
 - `main-served.ts` has a `/:pathMatch(.*)*` → `NotFoundView` catch-all
   (audit finding B4), so a bookmarked or hand-typed `#/sites` lands on a
   page that explains itself instead of a blank `<router-view>`.
 
 `src/__tests__/entrypoint.routes.test.ts` diffs the two route tables and
-fails if they differ by anything other than the two paths named above, so
+fails if they differ by anything other than the path named above (and
+pins that `/marketplace` redirects to `/tools`, query kept, in both), so
 the next route added to one entry point forces a decision about the other.
 
 ### Mechanism 3: the per-affordance gate

@@ -51,7 +51,7 @@ vi.mock('@/shell/CanvasHead.vue', () => ({
 // WorkflowsView tests don't provide a HarnessClient injection, so stub
 // PublishDialog here to avoid "called outside of a HarnessClient provider"
 // errors in tests that focus on the workflow-run functionality.
-vi.mock('@/views/marketplace/PublishDialog.vue', () => ({
+vi.mock('@/views/catalog/PublishDialog.vue', () => ({
   default: { template: '<div />' },
 }));
 
