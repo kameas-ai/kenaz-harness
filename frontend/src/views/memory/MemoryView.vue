@@ -49,6 +49,7 @@ import type {
   ScoredChunk,
 } from '@/lib/types';
 import MemoryHealthPanel from './MemoryHealthPanel.vue';
+import MemoryCaptureToggle from './MemoryCaptureToggle.vue';
 import PrunePreviewModal from './PrunePreviewModal.vue';
 import ProvenanceDrawer from './ProvenanceDrawer.vue';
 import type { ChunkProvenance } from '@/lib/types';
@@ -597,6 +598,10 @@ defineExpose({ refresh });
       title="Long-term memory"
       subtitle="Every snippet you have asked the harness to remember. These are pulled into future conversations across all sessions."
     />
+
+    <!-- knowledge-home-01DOGF0E WP03 (FR-4, FR-5): the on/off switch lives
+         here now (moved from Tools), and says plainly when capture is off. -->
+    <MemoryCaptureToggle />
 
     <!-- §2.4 — Main tab bar: Chunks / Health / Retrieval -->
     <div

@@ -55,7 +55,7 @@ const NAV_ACTIONS: PaletteAction[] = [
   // showed the setting (it lived under Tools).
   { id: 'nav.knowledge', label: 'Go to Knowledge', hint: 'Curated context files & learned memory', perform: () => navigate('#/knowledge/curated') },
   { id: 'nav.knowledge.curated', label: 'Go to Knowledge › Curated', hint: 'Context files you write and attach to conversations', perform: () => navigate('#/knowledge/curated') },
-  { id: 'nav.knowledge.learned', label: 'Go to Knowledge › Learned', hint: 'Memory captured from your conversations', perform: () => navigate('#/knowledge/learned') },
+  { id: 'nav.knowledge.learned', label: 'Go to Knowledge › Learned', hint: 'Memory captured from conversations — on/off switch and saved chunks', perform: () => navigate('#/knowledge/learned') },
   { id: 'nav.workflows', label: 'Go to Workflows', hint: 'Scheduled workflows', perform: () => navigate('#/workflows') },
   // artifacts-as-units-01DOGF0C WP06: Artifacts + Documents → one Library.
   { id: 'nav.library', label: 'Go to Library', hint: 'Captured artifacts & authored documents', perform: () => navigate('#/library/captured') },

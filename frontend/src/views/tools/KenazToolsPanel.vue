@@ -1,16 +1,16 @@
 <script setup lang="ts">
 /**
  * KenazToolsPanel — built-in toggleable tools shipped with the
- * harness. v1 hosts the Memory tool; the WP06 extension below it
- * adds the shipped MCP recipes catalog (Brave Search, etc.) with
- * toggle / key-prompt-modal / status pill UX.
+ * harness, plus (WP06) the shipped MCP recipes catalog (Brave Search,
+ * etc.) with toggle / key-prompt-modal / status pill UX.
  *
- * Memory toggle wires through Settings.SetMemory + Hooks.Install/Remove
- * StarterMemory so flipping it on auto-installs the memory.persist /
- * memory.retrieve hooks and unhides the Memory tab.
- *
- * Recipes section lives below the Memory row. The Memory row is
- * intentionally untouched — privacy CI invariant + WP06 constraint.
+ * The long-term memory switch moved to Knowledge › Learned
+ * (knowledge-home-01DOGF0E WP03, views/memory/MemoryCaptureToggle.vue —
+ * same setMemory + starter-hook install/remove calls). This panel keeps
+ * only a one-line pointer to it, with no control, for one release
+ * (docs/missions/knowledge-home.md D3; delete in the first release after
+ * v0.87.x). The old comment here claimed turning memory on "unhides the
+ * Memory tab" — the rail entry was never conditional.
  */
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -32,44 +32,9 @@ import type {
 const client = useHarnessClient();
 const router = useRouter();
 
-// ── Memory tool (unchanged) ────────────────────────────────────────────
-const memoryEnabled = ref(false);
-const memoryError = ref<string | null>(null);
-const memoryBusy = ref(false);
-
-async function refreshMemory() {
-  try {
-    memoryEnabled.value = await client.settings.getMemory();
-  } catch {
-    memoryEnabled.value = false;
-  }
-}
-
-async function toggleMemory(event: Event) {
-  if (memoryBusy.value) return;
-  const next = (event.target as HTMLInputElement).checked;
-  memoryBusy.value = true;
-  memoryError.value = null;
-  const previous = memoryEnabled.value;
-  memoryEnabled.value = next;
-  try {
-    await client.settings.setMemory(next);
-    if (next) {
-      await client.hooks.installStarterMemory();
-    } else {
-      await client.hooks.removeStarterMemory();
-    }
-  } catch (e) {
-    memoryEnabled.value = previous;
-    memoryError.value =
-      e instanceof Error ? e.message : 'Failed to toggle memory.';
-  } finally {
-    memoryBusy.value = false;
-  }
-}
-
+// ── Memory — moved to Knowledge › Learned (one-release pointer) ────────
 function gotoMemory() {
-  void router.push('/memory');
+  void router.push('/knowledge/learned');
 }
 
 // ── Web search built-in (core/tools/websearch) ─────────────────────────
@@ -296,7 +261,6 @@ async function toggleSaveArtifact(event: Event) {
 }
 
 onMounted(() => {
-  void refreshMemory();
   void refreshWebSearch();
   void refreshWebFetch();
   void refreshBash();
@@ -1028,62 +992,23 @@ watch(
         </div>
       </label>
 
-      <!-- Memory tool row -->
-      <label
-        class="px-4 py-3 grid gap-3 items-start cursor-pointer"
-        style="grid-template-columns: 1fr auto"
+      <!-- Memory moved to Knowledge › Learned (knowledge-home-01DOGF0E WP03).
+           A pointer, not a control — there is exactly one memory switch.
+           Delete in the first release after v0.87.x (decision record D3). -->
+      <div
+        class="px-4 py-3 flex flex-wrap items-center gap-2 font-ui text-[12px] text-ink-muted"
+        data-testid="memory-moved-pointer"
       >
-        <div>
-          <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
-            <span>Long-term memory</span>
-            <span
-              v-if="memoryEnabled"
-              class="text-[10px] uppercase tracking-[0.16em] text-signal-ok"
-            >
-              on
-            </span>
-          </div>
-          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
-            Cross-session memory. Pin messages with 📌 to embed them; the
-            harness retrieves relevant memories before each model call. When
-            enabled, the memory.retrieve / memory.persist hooks install
-            automatically and the Memory tab unhides. Requires an OpenAI
-            provider for embeddings. Data lives at
-            <span class="font-mono">&lt;DataDir&gt;/memory.gob</span>.
-          </p>
-          <div v-if="memoryEnabled" class="mt-2">
-            <button
-              type="button"
-              class="px-2 py-0.5 rounded-sm border border-border-muted text-ink text-[10px] uppercase tracking-[0.16em] hover:bg-surface-2"
-              data-testid="memory-view-link"
-              @click="gotoMemory"
-            >
-              View saved memories →
-            </button>
-          </div>
-          <div
-            v-if="memoryError"
-            class="mt-2 text-[11px] text-signal-danger"
-            role="alert"
-          >
-            {{ memoryError }}
-          </div>
-        </div>
-        <div
-          class="inline-flex items-center select-none"
-          :class="memoryBusy ? 'opacity-60 cursor-wait' : ''"
+        <span>Long-term memory moved to Knowledge › Learned.</span>
+        <button
+          type="button"
+          class="px-2 py-0.5 rounded-sm border border-border-muted text-ink text-[10px] uppercase tracking-[0.16em] hover:bg-surface-2"
+          data-testid="memory-view-link"
+          @click="gotoMemory"
         >
-          <input
-            type="checkbox"
-            class="accent-accent w-4 h-4"
-            :checked="memoryEnabled"
-            :disabled="memoryBusy"
-            aria-label="Enable memory tool"
-            data-testid="memory-toggle"
-            @change="toggleMemory"
-          />
-        </div>
-      </label>
+          Open Learned →
+        </button>
+      </div>
     </div>
 
     <!-- Connected MCP recipes header + Add CTA -->
