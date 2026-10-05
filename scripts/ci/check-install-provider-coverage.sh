@@ -64,9 +64,12 @@ if [[ "$catalog_count" -lt 4 ]]; then
   exit 1
 fi
 
-# Production registrations: non-test .go files under core/rpc/.
-registered=$(grep -rhoE '\.Register\(install\.Kind[A-Za-z0-9]+' "$WIRING_DIR" --include='*.go' --exclude='*_test.go' \
-  | sed -E 's/.*install\.(Kind[A-Za-z0-9]+)/\1/' | sort -u || true)
+# Production registrations: non-test .go files under core/rpc/. A line
+# whose text before the call contains "//" is a comment, not a
+# registration (review M2) — a commented registration must neither satisfy
+# nor trip the pairing.
+registered=$(grep -rhE '^[^/]*\.Register\(install\.Kind[A-Za-z0-9]+' "$WIRING_DIR" --include='*.go' --exclude='*_test.go' \
+  | grep -oE 'install\.Kind[A-Za-z0-9]+' | sed -E 's/install\.//' | sort -u || true)
 
 # Allowlist: "<value>  # <YYYY-MM-DD> blocker: ... owner: ..."
 allow_values=$(grep -vE '^[[:space:]]*(#|$)' "$ALLOW_FILE" | awk '{print $1}' || true)
@@ -88,7 +91,10 @@ while IFS= read -r line; do
   value="${line##* }"
   short="${name#Kind}"
   if printf '%s\n' "$registered" | grep -qx "$name"; then
-    if ! grep -rqE "func TestInstallProvider_${short}_ConsumerSeesInstall\(" core --include='*_test.go'; then
+    # Anchored at column 0 (review M2): a commented-out or indented
+    # mention is not a test function, so it cannot satisfy FR-1's
+    # "each provider has an integration test".
+    if ! grep -rqE "^func TestInstallProvider_${short}_ConsumerSeesInstall\(" core --include='*_test.go'; then
       violation "install.${name} (\"${value}\") is registered in ${WIRING_DIR}/ but has no consumer test — add func TestInstallProvider_${short}_ConsumerSeesInstall asserting the runtime consumer lists the capability after install (FR-1)."
     fi
     if printf '%s\n' "$allow_values" | grep -qx "$value"; then

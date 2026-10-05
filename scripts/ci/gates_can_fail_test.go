@@ -1923,6 +1923,45 @@ func plantReplace(t *testing.T, full, target, mutated string) func() {
 	}
 }
 
+// TestInstallProviderCoverageGate_CommentedConsumerTestDoesNotCount — the
+// 4th planted proof for check-install-provider-coverage.sh (review M2,
+// install-framework-01DOGF0B). The reviewer's degenerate probe: a kind
+// registered (here with a nil provider) and taken off the allowlist, whose
+// only "consumer test" is a commented-out function. The unanchored grep
+// accepted the comment and reported clean. With the allowlist line removed
+// the only remaining violation is the missing consumer test, so the
+// expected message discriminates the fix from any incidental failure.
+func TestInstallProviderCoverageGate_CommentedConsumerTestDoesNotCount(t *testing.T) {
+	root := repoRoot(t)
+	allow := filepath.Join(root, "scripts", "ci", "allowlists", "install-provider-coverage.txt")
+	orig, err := os.ReadFile(allow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line string
+	for _, l := range strings.Split(string(orig), "\n") {
+		if strings.HasPrefix(l, "agent_pack ") {
+			line = l + "\n"
+		}
+	}
+	if line == "" {
+		t.Fatal("agent_pack is no longer allowlisted — move this probe to a still-allowlisted kind")
+	}
+	defer plantReplace(t, allow, line, "")()
+	defer plant(t, filepath.Join(root, "core", "rpc", "zz_gate_probe_install.go"),
+		"package rpc\n\nfunc zzGateProbeInstall(fw interface{ Register(any, any) error }) {\n\t_ = fw.Register(install.KindAgentPack, nil)\n}\n", "")()
+	defer plant(t, filepath.Join(root, "core", "rpc", "zz_gate_probe_install_test.go"),
+		"package rpc\n\n// func TestInstallProvider_AgentPack_ConsumerSeesInstall(t *testing.T) {}\n", "")()
+
+	code, out := runGate(t, "check-install-provider-coverage.sh", root)
+	if code == 0 {
+		t.Fatalf("gate passed with a nil-provider registration whose only consumer test is commented out:\n%s", out)
+	}
+	if !strings.Contains(out, "install.KindAgentPack (\"agent_pack\") is registered") || !strings.Contains(out, "has no consumer test") {
+		t.Fatalf("gate failed, but not on the missing consumer test:\n%s", out)
+	}
+}
+
 // TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires is the
 // REVERSE-direction planted-violation proof for
 // check-served-mode-topic-forwarding.sh's pass 2 (#69): a topic present
