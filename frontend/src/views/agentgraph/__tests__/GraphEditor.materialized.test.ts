@@ -155,6 +155,9 @@ describe('GraphEditor — materialized run', () => {
     const badge = wrapper.find('[data-testid="editor-materialized-degraded"]');
     expect(badge.exists()).toBe(true);
     expect(badge.text()).toContain('topology shown may differ');
+    // agentgraph-settings-linkage-01DOGF0D WP04 (FR-3): the provenance
+    // tier in plain words, not only the technical caveat.
+    expect(badge.text()).toContain('Reconstructed from the library graph');
   });
 
   it('does not badge a faithful projection', async () => {

@@ -82,6 +82,23 @@ export interface Session {
  * SessionUsage — per-session cumulative token + cost aggregate.
  * Mirrors core/rpc/views/sessions.SessionUsage (token-cost-telemetry WP03).
  */
+/**
+ * One chat turn -> agent-graph run link (agentgraph-settings-linkage-
+ * 01DOGF0D WP03, `Sessions_TurnRuns`). The transcript keys a turn by
+ * `turnSpanId` (the same id every move of the turn carries) and links to
+ * `/agentgraph/run/:runId/graph` and `/agentgraph/run/:runId`. A turn with
+ * no TurnRun predates the mapping and must not be linked.
+ */
+export interface TurnRun {
+  runId: string;
+  turnSpanId: string;
+  graphId: string;
+  /** Which version of `graphId` ran ("sha256:<hex>"). */
+  specDigest: string;
+  /** RFC3339Nano. */
+  createdAt: string;
+}
+
 export interface SessionUsage {
   /** Sum of all input tokens for the session. */
   promptTokens: number;
