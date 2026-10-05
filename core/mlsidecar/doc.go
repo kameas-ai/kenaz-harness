@@ -77,7 +77,16 @@
 // lease/ created first), startup health polling, the read-only Observe
 // (observe.go), the demand-driven DemandProbe (demand.go — lazy start on
 // first advisor demand, zero cost when never enabled), the engine pin
-// (release.go — PinnedEngineRelease is honestly unavailable until the
-// release channel publishes the engine) and the real engine's
-// lease/shutdown.token name.
+// (release.go) and the real engine's lease/shutdown.token name.
+//
+// # Engine publication (engine-publication-01ENPUB01)
+//
+// The pin is build-time: pinned_release_gen.go, written by
+// `go run ./cmd/kenaz-ml-sign pin-gen` (pin.go validates + renders it);
+// its zero value keeps PinnedEngineRelease honestly unavailable. The
+// signature it names is made by cmd/kenaz-ml-sign over EngineManifest's
+// SigningPayload, and verified against the trust store, which boot
+// seeds with the compiled-in release key (release_key.go,
+// release_signing_key.pub — a placeholder until the owner swaps in the
+// real public key) without ever overriding operator/fleet anchors.
 package mlsidecar

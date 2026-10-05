@@ -12,8 +12,8 @@ import (
 )
 
 // EngineArtifactName is the manifest artifact name this package always
-// uses for the single engine zip (design §6.2: "fetch the engine via
-// core/bundle A-1 channels").
+// uses for the single engine artifact — the notarized .dmg in production
+// (design §6.2: "fetch the engine via core/bundle A-1 channels").
 const EngineArtifactName = "kameas-ml-engine"
 
 // ErrDigestMismatch is returned by VerifyFileSHA256 (and, wrapped, by
@@ -24,9 +24,12 @@ const EngineArtifactName = "kameas-ml-engine"
 var ErrDigestMismatch = errors.New("mlsidecar: artifact sha256 mismatch")
 
 // EngineManifest builds the one-artifact bundle manifest describing the
-// engine zip at artifactPath (bundle-relative, e.g. "kameas-ml.zip")
+// engine artifact at artifactPath (channel-relative bare filename, e.g.
+// "kenaz-ml-1.2.0-darwin-arm64.dmg")
 // with the expected sha256 digest ("sha256:<hex>", core/bundle/
-// integrity's format) and an optional detached signature ref.
+// integrity's format) and an optional detached signature ref. Its
+// SigningPayload() is THE signed byte string: cmd/kenaz-ml-sign signs
+// exactly this at publish time (engine-publication-01ENPUB01 WP-H1).
 //
 // Reusing core/bundle/manifest.Manifest here — rather than inventing an
 // mlsidecar-local descriptor — is what lets VerifyEngineArtifact hand
@@ -94,9 +97,10 @@ func (v Verifier) VerifyEngineArtifact(ctx context.Context, m *manifest.Manifest
 // and core/bundle's CAS use. install.go calls this once, right after
 // unpacking, to record the digest of the ACTUAL EXECUTABLE this client
 // will later re-verify at adoption time (adopt.go's EvaluateAdoption) —
-// deliberately distinct from the engine ZIP's own ContentHash (verified
-// by VerifyEngineArtifact BEFORE unpacking): the zip is discarded after
-// unpacking, so it is not what a later adoption attempt could re-hash.
+// deliberately distinct from the downloaded artifact's own ContentHash
+// (verified by VerifyEngineArtifact BEFORE mounting/unpacking): the
+// .dmg/.zip is discarded after unpacking, so it is not what a later
+// adoption attempt could re-hash.
 func HashFileSHA256(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

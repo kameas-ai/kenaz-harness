@@ -339,6 +339,9 @@ func TestEngineRelease_SizeMBRoundsUp(t *testing.T) {
 }
 
 func TestPinnedEngineRelease_IsHonestlyUnavailableUntilPublished(t *testing.T) {
+	// Pin the ZERO-value semantics explicitly, independent of whatever
+	// pinned_release_gen.go a release build checks in.
+	defer SetPinnedReleaseForTesting(EngineRelease{})()
 	if _, err := PinnedEngineRelease(context.Background()); !errors.Is(err, ErrNoPublishedRelease) {
 		t.Fatalf("PinnedEngineRelease err = %v, want ErrNoPublishedRelease", err)
 	}

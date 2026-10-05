@@ -356,6 +356,82 @@ jobs:
           jq --arg v "$NUMERIC" '.info.productVersion = $v' wails.json > "$tmp" && mv "$tmp" wails.json
           echo "wails.json info.productVersion → $NUMERIC"
 
+      # ── Kameas ML engine pin (engine-publication-01ENPUB01 WP-H3) ──────────
+      # DATED NOTE (2026-10-04, owner: release-infra): DISABLED until the
+      # external prerequisites land (mission spec §External):
+      #   1. kameas-infra extends gh-deploy-<env> OIDC trust to kenaz-ml, so
+      #      its publish job (WP-M2) can upload kenaz-ml/<ver>/ to
+      #      kameas-ai-<env>-releases-use2.
+      #   2. The owner runs `go run ./cmd/kenaz-ml-sign keygen --out-dir <dir>`,
+      #      sets KENAZ_ML_RELEASE_SIGNING_KEY (the .key file's contents) on
+      #      kenaz-ml, and commits the .pub file's contents into
+      #      core/mlsidecar/release_signing_key.pub (the baked trust anchor,
+      #      WP-H2). An env-specific key can instead be passed by adding
+      #        -X github.com/kameas-ai/kenaz-harness/core/mlsidecar.releaseSigningPubKeyHex=${{ vars.KENAZ_ML_RELEASE_PUBKEY }}
+      #      to the -ldflags of BOTH wails build steps below.
+      #   3. A first signed engine is published (its index.json exists).
+      # Enabling it also needs `resolve-env` added to this job's `needs:`
+      # (for cdn_base) and a KENAZ_ML_ENGINE_VERSION repo variable naming
+      # the engine release this harness build pins. pin-gen validates every
+      # field and fails the build on a bad pin; until this step runs, the
+      # checked-in zero-value pin keeps Settings honestly reporting the
+      # engine as not published. index.json is WP-M2's output, published at
+      # kenaz-ml/index.json (ALL releases, newest first), per-release shape:
+      #   {"version","released_at","darwin_arm64":{"url","sha256","size_bytes","sig_url","key_id"}}
+      # The artifact filename is deterministic (kenaz-ml-<ver>-darwin-arm64.dmg),
+      # so the pin derives it rather than parsing URLs.
+      #
+      # - name: pin kenaz-ml engine release
+      #   # macOS only: the engine is darwin-arm64-only (PlatformSupport), and
+      #   # the shasum/xxd key_id assert below is not portable to Windows.
+      #   if: runner.os == 'macOS' && vars.KENAZ_ML_ENGINE_VERSION != ''
+      #   shell: bash
+      #   run: |
+      #     set -euo pipefail
+      #     ENGINE_VERSION="${{ vars.KENAZ_ML_ENGINE_VERSION }}"
+      #     CDN_BASE="${{ needs.resolve-env.outputs.cdn_base }}"
+      #     CHANNEL_URL="${CDN_BASE}/kenaz-ml/${ENGINE_VERSION}"
+      #     ARTIFACT="kenaz-ml-${ENGINE_VERSION}-darwin-arm64.dmg"
+      #     curl -fsSL "${CDN_BASE}/kenaz-ml/index.json" -o "$RUNNER_TEMP/kenaz-ml-index.json"
+      #     REL="$(jq -c --arg v "$ENGINE_VERSION" '.releases[] | select(.version == $v)' "$RUNNER_TEMP/kenaz-ml-index.json")"
+      #     test -n "$REL" || { echo "::error::version $ENGINE_VERSION not in kenaz-ml/index.json"; exit 1; }
+      #     # The pin DERIVES the filename; the index's url must agree, or
+      #     # the harness would fetch a path the publisher never wrote.
+      #     PUBLISHED="$(basename "$(jq -r .darwin_arm64.url <<<"$REL")")"
+      #     if [ "$PUBLISHED" != "$ARTIFACT" ]; then
+      #       echo "::error::kenaz-ml index url basename '$PUBLISHED' != derived artifact '$ARTIFACT' — publisher/pin naming drift"
+      #       exit 1
+      #     fi
+      #     INDEX_KEY_ID="$(jq -r .darwin_arm64.key_id <<<"$REL")"
+      #     go run ./cmd/kenaz-ml-sign pin-gen \
+      #       --version       "$ENGINE_VERSION" \
+      #       --channel-url   "${CHANNEL_URL}" \
+      #       --artifact-path "$ARTIFACT" \
+      #       --sha256        "$(jq -r .darwin_arm64.sha256     <<<"$REL")" \
+      #       --size          "$(jq -r .darwin_arm64.size_bytes <<<"$REL")" \
+      #       --key-id        "$INDEX_KEY_ID"
+      #     # Belt and braces: the published signature must verify under the
+      #     # baked key before this build ships a pin that relies on it —
+      #     # when the key is baked via the FILE. The documented alternative
+      #     # (-ldflags releaseSigningPubKeyHex, env-specific key) has no file
+      #     # to verify against here; say so loudly and skip, don't fail.
+      #     KEY_FILE=core/mlsidecar/release_signing_key.pub
+      #     if grep -qvE '^[[:space:]]*(#|$)' "$KEY_FILE"; then
+      #       BAKED_KEY_ID="$(grep -vE '^[[:space:]]*(#|$)' "$KEY_FILE" | tr -d '[:space:]' | xxd -r -p | shasum -a 256 | cut -d' ' -f1)"
+      #       if [ "$INDEX_KEY_ID" != "$BAKED_KEY_ID" ]; then
+      #         echo "::error::index key_id $INDEX_KEY_ID != baked release key $BAKED_KEY_ID — this build could not verify the engine"
+      #         exit 1
+      #       fi
+      #       curl -fsSL "${CHANNEL_URL}/${ARTIFACT}.sig" -o "$RUNNER_TEMP/kenaz-ml.sig"
+      #       go run ./cmd/kenaz-ml-sign verify \
+      #         --pubkey "$KEY_FILE" --sig "$RUNNER_TEMP/kenaz-ml.sig" \
+      #         --version "$ENGINE_VERSION" \
+      #         --artifact-path "$ARTIFACT" \
+      #         --sha256 "$(jq -r .darwin_arm64.sha256 <<<"$REL")"
+      #     else
+      #       echo "::notice::$KEY_FILE holds no key line — the env-key (-ldflags releaseSigningPubKeyHex) route is in use; skipping the file-based signature verify and key_id assert"
+      #     fi
+
       - name: wails build
         shell: bash
         run: |
