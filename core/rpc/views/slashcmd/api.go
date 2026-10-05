@@ -145,9 +145,14 @@ type SlashAPI interface {
 	// SkillPublish signs and publishes a user command as a fleet skill
 	// with the given visibility scope. Requires fleet + capability.
 	SkillPublish(ctx context.Context, name, projectID, visibility string) error
-	// SkillInstall downloads, verifies, and live-registers a skill from
-	// the catalog. No restart required (FR-202).
-	SkillInstall(ctx context.Context, catalogID, version string) error
+	// SkillInstallPayload live-registers an already-fetched, already-
+	// verified skill catalog payload (FR-202, no restart) and records the
+	// fleet.skill_installed audit event. Only the install framework's
+	// skill provider calls it (install-framework-01DOGF0B WP05): the
+	// fetch happens in the provider's Verify step and the signature check
+	// in the framework's single verifier, so this method never sees
+	// unverified bytes it did not get from that pipeline.
+	SkillInstallPayload(ctx context.Context, catalogID, version string, payload []byte) error
 	// SkillUninstall removes and live-unregisters a skill by its store ID.
 	// For catalog skills the ID is the catalogID; for mandated skills it
 	// is the slug assigned by the fleet admin.

@@ -99,6 +99,28 @@ describe('ToolsView (FR-001b numbered-section header)', () => {
     expect(w.text()).toContain('read, write');
   });
 
+  // install-framework-01DOGF0B WP04, P-6 (mcp flows): per-server policy is
+  // one of FR-4's per-kind flows; it is reachable from the same view the
+  // "Add capability" surface mounts in, directly beneath it.
+  it('mounts the Add-capability surface above the per-server policy table (P-6)', async () => {
+    const seed: MCPServer[] = [
+      { id: 'fs', name: 'filesystem', state: 'ready', version: '0.1.0', transport: 'stdio', capabilities: [] },
+    ];
+    const { client } = provide(seed);
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const surface = w.find('[data-testid=capability-surface]');
+    const policy = w.find('[data-testid=tool-policy-select-filesystem]');
+    expect(surface.exists()).toBe(true);
+    expect(policy.exists()).toBe(true);
+    // Order: the surface first, the policy table after it.
+    expect(
+      surface.element.compareDocumentPosition(policy.element) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('uses only design tokens — no raw hex/rgba', async () => {
     const { client } = provide();
     const w = mount(ToolsView, {

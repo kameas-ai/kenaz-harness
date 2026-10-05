@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -49,6 +50,16 @@ type Config struct {
 	// regen this mission's sandbox explicitly may not run — tracked as a
 	// follow-up, not resolved here.
 	RecipeRegistry RecipeRegistry
+	// Provenance, when non-nil, records every template install (source
+	// "builtin", the shipped version) so List can report
+	// "installed_outdated" when the binary ships a newer version
+	// (install-framework-01DOGF0B WP05 review H4). nil: installs are not
+	// recorded and no update is ever offered.
+	Provenance corewf.ProvenanceStore
+	// Builtins are the shipped templates. rpc.New passes the list the
+	// workflows view also lists; tests pass a fixture whose version is
+	// bumped between two catalogs. nil → corewf.LoadBuiltins.
+	Builtins []corewf.Workflow
 }
 
 // ErrStoreUnavailable is returned by Install when no Store is wired.
@@ -73,7 +84,10 @@ type concreteCatalog struct {
 // that fails individual YAML parsing degrades gracefully to an
 // incomplete list rather than crashing the chassis.
 func New(cfg Config) Catalog {
-	builtins, _ := corewf.LoadBuiltins()
+	builtins := cfg.Builtins
+	if builtins == nil {
+		builtins, _ = corewf.LoadBuiltins()
+	}
 	c := &concreteCatalog{
 		cfg:  cfg,
 		byID: make(map[string]corewf.Workflow, len(builtins)),
@@ -103,7 +117,7 @@ func (c *concreteCatalog) List(ctx context.Context) ([]Entry, error) {
 	for _, w := range c.byID {
 		e := c.projectEntry(w)
 		if installed[w.ID] {
-			e.InstallStatus = "installed"
+			e.InstallStatus = c.installedStatus(w)
 		}
 		out = append(out, e)
 	}
@@ -130,7 +144,7 @@ func (c *concreteCatalog) Get(ctx context.Context, id string) (WorkflowDoc, erro
 	// Check install status.
 	if c.cfg.Store != nil {
 		if _, err := c.cfg.Store.Load(ctx, id); err == nil {
-			e.InstallStatus = "installed"
+			e.InstallStatus = c.installedStatus(w)
 		}
 	}
 
@@ -150,9 +164,26 @@ func (c *concreteCatalog) Install(ctx context.Context, id string) (InstalledRef,
 		return InstalledRef{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 
+	// created-vs-updated, so a failed provenance write can only remove a
+	// row this call created (never the user's existing copy).
+	_, lerr := c.cfg.Store.Load(ctx, w.ID)
+	created := errors.Is(lerr, corewf.ErrWorkflowNotFound)
 	saved, err := c.cfg.Store.Save(ctx, w)
 	if err != nil {
 		return InstalledRef{}, fmt.Errorf("catalog: install %s: %w", id, err)
+	}
+	if c.cfg.Provenance != nil {
+		if err := c.cfg.Provenance.Put(corewf.InstallProvenance{
+			WorkflowID: saved.ID,
+			Source:     corewf.ProvenanceBuiltin,
+			Slug:       w.ID,
+			Version:    corewf.BuiltinVersionTag(w),
+		}); err != nil {
+			if created {
+				_ = c.cfg.Store.Delete(ctx, saved.ID)
+			}
+			return InstalledRef{}, fmt.Errorf("catalog: install %s: record provenance: %w", id, err)
+		}
 	}
 
 	ref := InstalledRef{
@@ -170,6 +201,25 @@ func (c *concreteCatalog) Install(ctx context.Context, id string) (InstalledRef,
 	}
 
 	return ref, nil
+}
+
+// installedStatus is "installed_outdated" when the persisted copy was
+// installed from an older shipped version than w (recorded provenance),
+// else "installed". A copy with no provenance record (installed before
+// provenance existed, or saved by hand) is "installed": there is no
+// recorded version to compare.
+func (c *concreteCatalog) installedStatus(w corewf.Workflow) string {
+	if c.cfg.Provenance == nil {
+		return "installed"
+	}
+	p, ok, err := c.cfg.Provenance.Get(w.ID)
+	if err != nil || !ok || p.Source != corewf.ProvenanceBuiltin {
+		return "installed"
+	}
+	if p.Version != corewf.BuiltinVersionTag(w) {
+		return "installed_outdated"
+	}
+	return "installed"
 }
 
 // projectEntry builds the Entry for w with credential / grant analysis.

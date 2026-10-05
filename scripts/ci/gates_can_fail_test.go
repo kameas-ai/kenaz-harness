@@ -173,6 +173,11 @@ var cwdSensitiveGates = []string{
 	// os.Getwd() if `git rev-parse --show-toplevel` fails — the same
 	// class every other entry here was added to catch.
 	"check-advice-kinds.sh",
+
+	// check-install-provider-coverage.sh (install-framework-01DOGF0B
+	// WP03): scans core/install, core/fleet and core/rpc by repo-relative
+	// path; sources lib/ci-gate.sh so the verdict is cwd-independent.
+	"check-install-provider-coverage.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -1741,6 +1746,38 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"# planted probe for TestGates_PlantedViolationFires.\n" +
 				"grep -oE '^\\tcase \"[a-z]+\":' somefile.go\n",
 		},
+		// install-framework-01DOGF0B WP03: check-install-provider-coverage.sh.
+		// The badge-only catalog install's gate question (WP02 ledger entry)
+		// becomes symbol-gateable once the provider contract exists; these
+		// three plants prove each direction of the pairing can fail.
+		{
+			// A new install kind nobody registered or allowlisted — the
+			// surface could advertise it with no install path.
+			name:       "install-provider-coverage/unregistered-kind",
+			gate:       "check-install-provider-coverage.sh",
+			file:       "core/install/provider.go",
+			append:     "\nconst KindZzGateProbe Kind = \"zz_gate_probe\"\n",
+			wantOutput: "install.KindZzGateProbe (\"zz_gate_probe\") has no registered provider",
+		},
+		{
+			// A provider registered with no consumer test — FR-1's "each
+			// provider has an integration test asserting the consumer sees
+			// the capability" would be a claim nothing checks.
+			name:       "install-provider-coverage/registered-without-consumer-test",
+			gate:       "check-install-provider-coverage.sh",
+			file:       "core/rpc/zz_gate_probe_install.go",
+			content:    "package rpc\n\nfunc zzGateProbeInstall(fw interface{ Register(any, any) error }) {\n\t_ = fw.Register(install.KindAgentPack, nil)\n}\n",
+			wantOutput: "has no consumer test",
+		},
+		{
+			// A fleet catalog kind with no install kind — the Marketplace
+			// could list it and nothing could install it.
+			name:       "install-provider-coverage/catalog-kind-without-install-kind",
+			gate:       "check-install-provider-coverage.sh",
+			file:       "core/fleet/catalog.go",
+			append:     "\nconst CatalogKindZzGateProbe CatalogItemKind = \"zz_gate_probe\"\n",
+			wantOutput: "CatalogItemKind \"zz_gate_probe\" has no install.Kind",
+		},
 	}
 
 	for _, tc := range cases {
@@ -1886,6 +1923,45 @@ func plantReplace(t *testing.T, full, target, mutated string) func() {
 	}
 }
 
+// TestInstallProviderCoverageGate_CommentedConsumerTestDoesNotCount — the
+// 4th planted proof for check-install-provider-coverage.sh (review M2,
+// install-framework-01DOGF0B). The reviewer's degenerate probe: a kind
+// registered (here with a nil provider) and taken off the allowlist, whose
+// only "consumer test" is a commented-out function. The unanchored grep
+// accepted the comment and reported clean. With the allowlist line removed
+// the only remaining violation is the missing consumer test, so the
+// expected message discriminates the fix from any incidental failure.
+func TestInstallProviderCoverageGate_CommentedConsumerTestDoesNotCount(t *testing.T) {
+	root := repoRoot(t)
+	allow := filepath.Join(root, "scripts", "ci", "allowlists", "install-provider-coverage.txt")
+	orig, err := os.ReadFile(allow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line string
+	for _, l := range strings.Split(string(orig), "\n") {
+		if strings.HasPrefix(l, "agent_pack ") {
+			line = l + "\n"
+		}
+	}
+	if line == "" {
+		t.Fatal("agent_pack is no longer allowlisted — move this probe to a still-allowlisted kind")
+	}
+	defer plantReplace(t, allow, line, "")()
+	defer plant(t, filepath.Join(root, "core", "rpc", "zz_gate_probe_install.go"),
+		"package rpc\n\nfunc zzGateProbeInstall(fw interface{ Register(any, any) error }) {\n\t_ = fw.Register(install.KindAgentPack, nil)\n}\n", "")()
+	defer plant(t, filepath.Join(root, "core", "rpc", "zz_gate_probe_install_test.go"),
+		"package rpc\n\n// func TestInstallProvider_AgentPack_ConsumerSeesInstall(t *testing.T) {}\n", "")()
+
+	code, out := runGate(t, "check-install-provider-coverage.sh", root)
+	if code == 0 {
+		t.Fatalf("gate passed with a nil-provider registration whose only consumer test is commented out:\n%s", out)
+	}
+	if !strings.Contains(out, "install.KindAgentPack (\"agent_pack\") is registered") || !strings.Contains(out, "has no consumer test") {
+		t.Fatalf("gate failed, but not on the missing consumer test:\n%s", out)
+	}
+}
+
 // TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires is the
 // REVERSE-direction planted-violation proof for
 // check-served-mode-topic-forwarding.sh's pass 2 (#69): a topic present
@@ -1994,9 +2070,10 @@ func TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires(t *
 	// that plantReplace fails LOUDLY with "the anchor may have moved; update
 	// this test" rather than silently planting nothing -- which is exactly
 	// the difference between this and finding #67's silent version.
-	// If you append to passthroughTopics, update the entry named here.
-	const closeTarget = "\ttopicFleetSessionChanged,\n}\n"
-	const closeMutated = "\ttopicFleetSessionChanged,\n\t}\n)\n"
+	// If you append to passthroughTopics, update the entry named here
+	// (install-framework-01DOGF0B WP04 appended the two capability topics).
+	const closeTarget = "\tinstall.TopicCapabilityUninstalled,\n}\n"
+	const closeMutated = "\tinstall.TopicCapabilityUninstalled,\n\t}\n)\n"
 	cleanupClose := plantReplace(t, wsstreamPath, closeTarget, closeMutated)
 	defer cleanupClose()
 

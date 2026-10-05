@@ -1,0 +1,15 @@
+# install-provider-coverage — install.Kind values with no registered provider.
+#
+# Enforced by scripts/ci/check-install-provider-coverage.sh
+# (install-framework-01DOGF0B WP03). Every install.Kind
+# (core/install/provider.go) must have a production
+# `Register(install.Kind<Name>, ...)` under core/rpc/ plus a
+# TestInstallProvider_<Name>_ConsumerSeesInstall consumer test — or a line
+# here. Format: `<kind>  # YYYY-MM-DD blocker: <what> owner: <who>`.
+# Allowlists shrink monotonically: the commit that registers a kind's
+# provider deletes its line (the gate fails if a registered kind is still
+# listed). Until a kind leaves this file, the Marketplace keeps that kind's
+# Install disabled-with-reason (WP02's fleet.ErrCatalogKindNotInstallable).
+
+bundle      # 2026-10-05 blocker: the FR-2 bundle payload format (a kenaz.yaml archive) must be accepted by the fleet team before a bundle provider can consume it (install-framework-01DOGF0B WP06) owner: alec / fleet team
+agent_pack  # 2026-10-05 blocker: the agent_pack disposition — loader-dir provider or drop the kind — per the decision record's criteria (install-framework-01DOGF0B WP07) owner: alec / install-framework-01DOGF0B

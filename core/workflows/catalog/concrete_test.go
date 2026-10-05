@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 	"github.com/kameas-ai/kenaz-harness/core/workflows/catalog"
 	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
-	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 )
 
 // --- fakes ---
@@ -235,3 +235,44 @@ func TestList_InstallStatusReflectsStore(t *testing.T) {
 
 // keep errors import used.
 var _ = errors.New
+
+// failingProvenance accepts reads and refuses every write.
+type failingProvenance struct{}
+
+func (failingProvenance) Get(string) (corewf.InstallProvenance, bool, error) {
+	return corewf.InstallProvenance{}, false, nil
+}
+func (failingProvenance) Put(corewf.InstallProvenance) error { return errors.New("disk full") }
+func (failingProvenance) Remove(string) error                { return nil }
+
+// Re-review low 1: when the provenance write fails after Save, the row this
+// install CREATED is removed (no installed-with-no-record template), and a
+// row that already existed is left alone.
+func TestInstall_ProvenanceWriteFailureRemovesOnlyACreatedRow(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	cat := catalog.New(catalog.Config{Store: store, Provenance: failingProvenance{}})
+	entries, _ := cat.List(ctx)
+	if len(entries) < 2 {
+		t.Fatal("need two builtins")
+	}
+	fresh, existing := entries[0].ID, entries[1].ID
+
+	if _, err := cat.Install(ctx, fresh); err == nil {
+		t.Fatal("install succeeded despite the provenance write failing")
+	}
+	if _, err := store.Load(ctx, fresh); !errors.Is(err, corewf.ErrWorkflowNotFound) {
+		t.Fatalf("a created row was stranded without a provenance record: %v", err)
+	}
+
+	userCopy := corewf.Workflow{ID: existing, Name: "user copy", Version: 1}
+	if _, err := store.Save(ctx, userCopy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.Install(ctx, existing); err == nil {
+		t.Fatal("install succeeded despite the provenance write failing")
+	}
+	if _, err := store.Load(ctx, existing); err != nil {
+		t.Fatalf("an existing row was deleted by a failed install: %v", err)
+	}
+}

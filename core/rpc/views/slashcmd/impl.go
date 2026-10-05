@@ -31,8 +31,6 @@ type SkillDeps struct {
 	// tier changes propagate within one poll interval without restart.
 	// When nil, DefaultDenyCapabilities is used (all capability checks fail).
 	GetCaps func() *corefleet.Capabilities
-	// PubKeyBase64 is the fleet signing public key for install verification.
-	PubKeyBase64 string
 	// Emitter is the optional audit emitter for skill sync events
 	// (fleet-skills-sync-01NDFSEX18 WP07, FR-501).
 	// Nil means audit events are silently dropped.
@@ -326,20 +324,26 @@ func (a *API) SkillPublish(ctx context.Context, name, projectID, visibility stri
 	return err
 }
 
-// SkillInstall downloads, verifies, and live-registers a skill from the catalog.
-func (a *API) SkillInstall(ctx context.Context, catalogID, version string) error {
-	if a.skillDeps.FleetClient == nil {
-		return corefleet.ErrFleetDisabled
+// Lookup reports whether the slash registry dispatches name — the consumer
+// check the install framework's skill provider reads
+// (install-framework-01DOGF0B WP05). Nil-safe.
+func (a *API) Lookup(name string) (coreslashcmd.Command, bool) {
+	if a == nil || a.registry == nil {
+		return nil, false
 	}
+	return a.registry.Lookup(name)
+}
+
+// SkillInstallPayload implements SlashAPI (install-framework-01DOGF0B WP05):
+// persist + live-register a verified skill payload, then audit.
+func (a *API) SkillInstallPayload(ctx context.Context, catalogID, version string, payload []byte) error {
 	if a.skillDeps.SkillStore == nil {
 		return fmt.Errorf("slashcmd view: skill store not wired")
 	}
 	if a.registry == nil {
 		return fmt.Errorf("slashcmd view: registry not wired")
 	}
-	err := corefleet.InstallSkill(ctx, a.skillDeps.FleetClient,
-		a.skillDeps.SkillStore, a.registry,
-		a.skillDeps.PubKeyBase64, catalogID, version)
+	err := corefleet.InstallSkillPayload(a.skillDeps.SkillStore, a.registry, catalogID, version, payload)
 	if err == nil && a.skillDeps.Emitter != nil {
 		// FR-501: fleet.skill_installed audit event.
 		// Fetch the trigger from the store so the audit entry records it.

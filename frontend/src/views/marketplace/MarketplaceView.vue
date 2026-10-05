@@ -95,7 +95,7 @@ const filtered = computed<CatalogItemView[]>(() => {
 // kind's entry when its provider ships a consumed install (WP05–WP07).
 const INSTALL_UNSUPPORTED_REASON: Record<string, string> = {
   workflow:
-    "Installing workflows from the org catalog isn't supported yet — nothing on this device would load the download. Install a workflow from Workflows › Catalog instead.",
+    "Installing workflows from the Marketplace isn't supported yet — nothing on this device would load the download. Install it from Tools › Add capability (Workflows) instead, which installs org-catalog workflows and shipped templates.",
   agent_pack:
     "Installing agent packs from the org catalog isn't supported yet — nothing on this device would load the download. Add agent profiles to the agents folder in your profile directory instead.",
   bundle:

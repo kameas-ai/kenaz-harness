@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
@@ -83,49 +85,71 @@ func PublishSkill(
 
 // ── WP04: Install / Uninstall (pull-down) ───────────────────────────────────
 
-// InstallSkill downloads a skill catalog item from fleet, verifies its
-// signature, persists it to the SkillStore, and live-registers it in the
-// Registry.
-//
-// Returns ErrTriggerShadowed (wrapped) when the skill's trigger conflicts
-// with a higher-priority command — the skill is persisted but not dispatched
-// until the conflict resolves.
-func InstallSkill(
-	ctx context.Context,
-	client *Client,
-	store *slashcmd.SkillStore,
-	registry *slashcmd.Registry,
-	pubKeyBase64 string,
-	catalogID, version string,
-) error {
-	if client == nil || client.isNop {
-		return ErrFleetDisabled
-	}
+// ErrCatalogPayloadMalformed is returned when a fetched catalog payload is
+// not the format its kind requires (install-framework-01DOGF0B FR-2:
+// "Unknown/opaque payload → install fails with a named error, never a
+// silent success").
+var ErrCatalogPayloadMalformed = errors.New("fleet/catalog: payload is not in the format its kind requires")
 
-	// Fetch the signed payload via the existing catalog install path.
-	// We use the low-level fetch so we can decode the skill JSON; the
-	// Install method would just write the bytes to disk which we don't want.
+// FetchCatalogItem fetches the full signed item — payload and detached
+// signature — for catalogID@version (GET /api/v1/catalog/{id}@{ver}). It
+// installs nothing: install-framework-01DOGF0B's providers fetch here in
+// Provider.Verify, the framework verifies the bytes once
+// (CatalogSignatureVerdict), and Provider.Install consumes the same bytes.
+func FetchCatalogItem(ctx context.Context, client *Client, catalogID, version string) (CatalogItem, error) {
+	if client == nil || client.isNop {
+		return CatalogItem{}, ErrFleetDisabled
+	}
 	path := fmt.Sprintf("/api/v1/catalog/%s@%s", catalogID, version)
 	resp, err := client.Get(ctx, path)
 	if err != nil {
-		return fmt.Errorf("fleet/skills: install fetch: %w", err)
+		return CatalogItem{}, fmt.Errorf("fleet/catalog: fetch: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return CatalogItem{}, fmt.Errorf("fleet/catalog: fetch %s@%s: status %d: %s", catalogID, version, resp.StatusCode, body)
+	}
 	var item CatalogItem
 	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
-		return fmt.Errorf("fleet/skills: install decode: %w", err)
+		return CatalogItem{}, fmt.Errorf("fleet/catalog: fetch decode: %w", err)
 	}
+	return item, nil
+}
 
-	// Verify signature.
-	if err := verifyCatalogSignature(pubKeyBase64, item.PayloadBytes, item.Signature); err != nil {
-		return fmt.Errorf("fleet/skills: install verify: %w", err)
+// CatalogSignatureVerdict is the fleet half of install-framework-01DOGF0B's
+// single SignatureVerifier hook — the one place register C-2's per-device
+// catalog key lands, for every install kind. With no key configured it
+// reports verified=false and the C-2 reason (the install proceeds,
+// recorded as unverified — unchanged behaviour, now visible on the
+// capability:installed event); with a key, a mismatch is an error and the
+// install is refused.
+func CatalogSignatureVerdict(pubKeyBase64 string, payload []byte, sigBase64 string) (verified bool, reason string, err error) {
+	if pubKeyBase64 == "" {
+		return false, "not signature-verified: no per-device catalog signing key source exists yet (register C-2)", verifyCatalogSignature("", payload, sigBase64)
 	}
+	if err := verifyCatalogSignature(pubKeyBase64, payload, sigBase64); err != nil {
+		return false, "", err
+	}
+	return true, "", nil
+}
 
-	// Decode the skill from the opaque payload.
+// InstallSkillPayload decodes a skill catalog payload (slashcmd.Skill JSON),
+// stamps its catalog provenance, persists it to the SkillStore and
+// live-registers it in the Registry — the consumer. The payload must
+// already be verified (the install framework's Verify step).
+//
+// Returns ErrCatalogPayloadMalformed when the payload is not a skill, and
+// ErrTriggerShadowed (wrapped) when the skill's trigger conflicts with a
+// higher-priority command — the skill is persisted but not dispatched
+// until the conflict resolves.
+func InstallSkillPayload(store *slashcmd.SkillStore, registry *slashcmd.Registry, catalogID, version string, payload []byte) error {
 	var skill slashcmd.Skill
-	if err := json.Unmarshal(item.PayloadBytes, &skill); err != nil {
-		return fmt.Errorf("fleet/skills: install unmarshal skill: %w", err)
+	if err := json.Unmarshal(payload, &skill); err != nil {
+		return fmt.Errorf("%w: skill %s@%s: %v", ErrCatalogPayloadMalformed, catalogID, version, err)
+	}
+	if skill.ID == "" {
+		return fmt.Errorf("%w: skill %s@%s has no id", ErrCatalogPayloadMalformed, catalogID, version)
 	}
 	// Stamp provenance.
 	skill.CatalogID = catalogID

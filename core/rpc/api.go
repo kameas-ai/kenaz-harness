@@ -68,6 +68,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
+	"github.com/kameas-ai/kenaz-harness/core/install"
 	"github.com/kameas-ai/kenaz-harness/core/keyring"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
@@ -103,6 +104,7 @@ import (
 	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
+	capabilitiesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/capabilities"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
@@ -373,6 +375,12 @@ type HarnessAPI interface {
 	// Catalog exposes the fleet catalog publish/list/install/uninstall surface
 	// (fleet-share-and-sync-01NDFSEX14 WP02). Backed by core/fleet/catalog.go.
 	Catalog() catalogview.CatalogAPI
+
+	// Capabilities exposes the one install framework's surface
+	// (install-framework-01DOGF0B): the Capability_* bindings and, via
+	// Framework(), the pipeline every per-kind install binding routes
+	// through.
+	Capabilities() *capabilitiesview.API
 
 	// Sync exposes the per-category settings sync surface
 	// (fleet-share-and-sync-01NDFSEX14 WP05). Backed by core/fleet/sync.go.
@@ -894,6 +902,11 @@ type API struct {
 	// catalogAPI is the fleet catalog publish/list/install/uninstall surface
 	// (fleet-share-and-sync-01NDFSEX14 WP02).
 	catalogAPI catalogview.CatalogAPI
+
+	// installFw is the one install framework (install-framework-01DOGF0B
+	// WP03/WP04); capabilitiesAPI is its Capability_* surface.
+	installFw       *install.Framework
+	capabilitiesAPI *capabilitiesview.API
 
 	// syncAPI is the per-category settings sync surface
 	// (fleet-share-and-sync-01NDFSEX14 WP05).
@@ -2931,6 +2944,19 @@ func New(c *core.Core, opts ...Option) *API {
 	// when the TODO was written. views/tools/impl.go:401,649,669,
 	// device_auth.go:179, oauth.go:109,132,179 have never fired.
 	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens, mcpUserRecipeSource(a.mcpUserStore), a.cedarGate(), &searchAuditEmitter{impl: a.auditImpl})
+	// install-framework-01DOGF0B WP04: the one install framework, built as
+	// soon as its first provider's consumer (the tools view) exists so every
+	// later consumer of an install path — the bindings, the fleet MCP sync
+	// applier below — can route through it. capability:installed /
+	// capability:uninstalled go out on the same broker every other desktop
+	// topic uses. Skill and workflow providers register later in New(),
+	// in the fleet block, once their consumers and the fleet client exist
+	// (WP05). The signature verifier reads the catalog key per call.
+	a.installFw = install.New(chatBrokerAdapter{broker: a.broker}, installSignatureVerifier(a.catalogPubKey))
+	a.capabilitiesAPI = capabilitiesview.New(a.installFw)
+	if err := a.installFw.Register(install.KindMCPRecipe, capabilitiesview.NewMCPProvider(a.toolsAPI)); err != nil {
+		logging.L().Error("install.register.failed", "kind", string(install.KindMCPRecipe), "err", err)
+	}
 	// Register the fsrequest built-in after toolsAPI is wired so the
 	// tool's delegate can be the real (non-stub) implementation. The
 	// tool is registered unconditionally; the EnabledFilter gates
@@ -3281,10 +3307,20 @@ func New(c *core.Core, opts ...Option) *API {
 		// re-reads recipes.enabled.json per call (dataDir=="" degrades to
 		// Has()==false, matching the prior always-missing behaviour on the
 		// test-chassis / disabled path).
+		// install-framework-01DOGF0B WP05 review H1/H2/H4: one install
+		// provenance store shared by the catalog (records template installs
+		// and their shipped version → installed_outdated) and the workflows
+		// view (InstallDocument's collision refusal, Delete's cleanup).
+		wfProvenance := corewf.NewFileProvenanceStore(dataDir)
 		wfCatalog := wfcatalogpkg.New(wfcatalogpkg.Config{
 			Store:          wfStore,
 			Scheduler:      sched,
 			RecipeRegistry: &wfRecipeRegistryAdapter{dataDir: dataDir},
+			Provenance:     wfProvenance,
+			// The same template list the workflows view lists, so the
+			// catalog's "installed_outdated" compares against exactly what
+			// this binary ships.
+			Builtins: catalog,
 		})
 		// WP01 (workflows-finalization-01NWFX01): wire a concrete MCPCaller
 		// and LLMStreamer into the workflow engine so mcp_call and model_turn
@@ -3414,6 +3450,7 @@ func New(c *core.Core, opts ...Option) *API {
 			Store:           wfStore,
 			Scheduler:       sched,
 			WorkflowCatalog: wfCatalog,
+			Provenance:      wfProvenance,
 			Cedar:           a.cedarGate(),
 			CedarModeFn:     workflowCedarModeFn(settingsImpl),
 			// audit-that-tells-the-truth-01PMZA10 UNIT-5: this field
@@ -4022,7 +4059,11 @@ func New(c *core.Core, opts ...Option) *API {
 		// set would ship unredacted secret env values off the device (see
 		// sync_mcp_registry.go and the redaction guard at
 		// core/fleet/sync_mcp.go:137).
-		mcpRegistry := newToolsMCPRegistry(a.toolsAPI)
+		// install-framework-01DOGF0B WP04: recipes a fleet sync pull applies
+		// install through the framework like a user install (same consumer
+		// check, same capability:installed event) — this is the one
+		// production caller of ToolsAPI.InstallRecipe outside the bindings.
+		mcpRegistry := newToolsMCPRegistry(frameworkRoutedTools{ToolsAPI: a.toolsAPI, fw: a.installFw})
 		mcpSyncCat := corefleet.NewMCPSyncCategory(mcpRegistry, mcpRegistry, func() map[string]bool {
 			// Resolved per Collect, not once at boot: a.mcpUserStore accepts
 			// recipe imports at runtime, and a boot-time snapshot shipped the
@@ -4265,13 +4306,35 @@ func New(c *core.Core, opts ...Option) *API {
 				// source exists in or out of this repo. See
 				// docs/unwired-ledger.md's catalog/skill pubkey entry
 				// and core/rpc/views/catalog/impl.go's pubKeyBase64 doc.
-				PubKeyBase64: "",
-				Emitter:      flAudit, // FR-501: wire audit for skill_published/installed/uninstalled
+				// The install-verification key now lives in ONE place:
+				// installSignatureVerifier (install_wiring.go), which reads
+				// catalogview.API.PubKey per call (install-framework-01DOGF0B
+				// WP05) — the former PubKeyBase64: "" placeholder here.
+				Emitter: flAudit, // FR-501: wire audit for skill_published/installed/uninstalled
 			})
 			logging.L().Info("rpc.slashcmd.skill_deps_wired",
 				"fleet_client_nil", flCl == nil,
 				"signer_nil", catalogSigner == nil,
 			)
+			// install-framework-01DOGF0B WP05: fleet catalog skills install
+			// through the framework — Verify fetches the signed payload, the
+			// single verifier checks it, the slashcmd view LiveRegisters the
+			// same bytes; installed state is the skill store + slash
+			// registry. Slashcmd_SkillInstall / _SkillUninstall route here.
+			if err := a.installFw.Register(install.KindSkill,
+				capabilitiesview.NewSkillProvider(fleetCatalogSeam{client: flCl}, skillStore, slashAPI, slashAPI)); err != nil {
+				logging.L().Error("install.register.failed", "kind", string(install.KindSkill), "err", err)
+			}
+		}
+
+		// install-framework-01DOGF0B WP05: workflows install through the
+		// framework — shipped templates via the wfcatalog Store.Save + cron
+		// path (Workflows_CatalogInstall routes here), fleet workflow
+		// payloads via WorkflowsAPI.InstallDocument. Installed state is
+		// Workflows_List's persisted (user) rows.
+		if err := a.installFw.Register(install.KindWorkflow,
+			capabilitiesview.NewWorkflowProvider(a.Workflows(), fleetCatalogSeam{client: flCl})); err != nil {
+			logging.L().Error("install.register.failed", "kind", string(install.KindWorkflow), "err", err)
 		}
 
 		// fleet-context-sync-01NDFSEX15 WP06: wire the E2E-encrypted
@@ -11605,6 +11668,25 @@ func (a *API) Fleet() fleetview.FleetAPI { return a.fleetAPI }
 // Catalog implements HarnessAPI. Returns the fleet catalog publish/list/install surface.
 // (fleet-share-and-sync-01NDFSEX14 WP02)
 func (a *API) Catalog() catalogview.CatalogAPI { return a.catalogAPI }
+
+// catalogPubKey is the catalog signing key the install framework's single
+// verifier reads per call (empty today — register C-2).
+func (a *API) catalogPubKey() string {
+	if cv, ok := a.catalogAPI.(*catalogview.API); ok {
+		return cv.PubKey()
+	}
+	return ""
+}
+
+// Capabilities implements HarnessAPI (install-framework-01DOGF0B). Never
+// nil: a chassis that never constructed the framework gets a surface whose
+// calls report capabilitiesview.ErrUnavailable.
+func (a *API) Capabilities() *capabilitiesview.API {
+	if a.capabilitiesAPI == nil {
+		return capabilitiesview.New(nil)
+	}
+	return a.capabilitiesAPI
+}
 
 // Sync implements HarnessAPI. Returns the per-category settings sync surface.
 // (fleet-share-and-sync-01NDFSEX14 WP05)

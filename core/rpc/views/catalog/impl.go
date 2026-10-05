@@ -29,8 +29,8 @@ type API struct {
 	emitter auditEmitter
 	// skills is the consumer-side source of truth for kind=skill installed
 	// state (install-framework-01DOGF0B WP01). Skill installs never touch
-	// <dataDir>/installed/ — they go fleet.InstallSkill → slashcmd.LiveRegister
-	// → SkillStore — so the installed/ scan alone painted every installed
+	// <dataDir>/installed/ — they go through the install framework
+	// (fleet.InstallSkillPayload → slashcmd.LiveRegister → SkillStore) — so the installed/ scan alone painted every installed
 	// skill as "Install". nil means skill items always report not-installed
 	// (fail toward offering Install, never toward a false "Installed").
 	skills skillLister
@@ -71,6 +71,17 @@ func (a *API) WithSkillStore(s skillLister) *API {
 func (a *API) WithPubKey(pubKeyBase64 string) *API {
 	a.pubKeyBase64 = pubKeyBase64
 	return a
+}
+
+// PubKey returns the catalog signing public key — the one key source the
+// install framework's single SignatureVerifier reads for every fleet-backed
+// kind (install-framework-01DOGF0B WP05). Empty today: register C-2, see
+// pubKeyBase64's doc above.
+func (a *API) PubKey() string {
+	if a == nil {
+		return ""
+	}
+	return a.pubKeyBase64
 }
 
 // Catalog_Publish implements CatalogAPI.

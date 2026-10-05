@@ -401,6 +401,60 @@ after a ledger rewind is a no-op once the tables are gone
 re-application against a database with NO artifacts table of either
 generation.
 
+### 2026-10-05 (install-framework-01DOGF0B review L2) · install consent is UI-enforced only; fleet workflows install unverified until C-2
+
+**Class:** a control that reads as enforced but is enforced only in one
+caller (consent); a verification step that reports, not refuses (C-2).
+
+**(a) Consent (pre-existing, owner: Phase 3 / install-framework-01DOGF0B).**
+`install.RequirementConsent` (an MCP recipe's `Warning`) is declared by the
+MCP provider and routes the "Add capability" row to the key-prompt modal,
+whose acknowledgement checkbox is the only thing that enforces it.
+`install.Framework` deliberately enforces only input-bearing requirements
+(key / config / directory); a direct `Tools_InstallRecipe` or
+`Capability_Install` call installs a warning-bearing recipe without any
+acknowledgement — exactly as `Tools_InstallRecipe` did before the
+framework. Blocker: an acknowledgement token on the install request (a
+binding-signature change) belongs with Phase 3's surface consolidation.
+
+**(b) Fleet workflows join skills' unverified posture (owner: register
+C-2 / the FR-2 fleet payload brief).** Since WP05, org-catalog workflow
+payloads install through `WorkflowsAPI.InstallDocument`, verified by the
+same single `installSignatureVerifier` as skills. With no per-device
+catalog key (C-2) the verifier reports `verified=false` with the C-2
+reason and the install proceeds — recorded on the `capability:installed`
+event and stated in the workflow detail pane, not refused. A workflow can
+carry shell steps and a cron schedule, so this posture is a larger trust
+surface than a text skill; the collision refusal (review H1/H2 — a payload
+can never overwrite a template, a user workflow or another item's
+workflow) bounds it to new ids. Clears when C-2's key source lands in the
+verifier.
+
+### 2026-10-05 (install-framework-01DOGF0B re-review low 3) · templates installed before install provenance are never offered an update
+
+**Class:** a dial with no producer for a subset of rows.
+`installed_outdated` is computed from the install provenance record
+(`core/workflows/provenance.go`, the shipped `v<N>` recorded at install).
+Templates installed by v0.87.0 and earlier (Workflows › Catalog) have no
+record, so they read "installed" forever and are never offered an update —
+the conservative choice: without a recorded version, "outdated" would be a
+guess, and an update overwrites user edits. **Disposition: acceptance note,
+not a backfill WP** — the workaround is to Remove the template in Tools ›
+Add capability and Install it again, which records provenance; a backfill
+would have to guess an installed version from YAML the user may have
+edited. Owner: alec / install-framework-01DOGF0B Phase 3, which revisits it
+with the Marketplace fold-in (release notes carry the workaround).
+
+### 2026-10-05 (install-framework-01DOGF0B review L3) · `slashcmd.Registry` has no mutex
+
+**Class:** latent data race on a live map. `Registry.commands` is read by
+dispatch (`Lookup`/`List`) and mutated by `LiveRegister` /
+`LiveUnregister` / `RenameLocalTrigger` from RPC goroutines and the fleet
+mandated-skill applier, with no lock. Not changed in this review (a
+drive-by lock on a hot dispatch path wants its own race test).
+Owner: Phase 3 (install-framework-01DOGF0B). Blocker: a `-race` test
+driving concurrent install + dispatch, written with the lock.
+
 ### 2026-10-04 (install-framework-01DOGF0B WP01/WP02) · Marketplace "Install" for workflow / agent_pack / bundle was badge-only — nothing consumes `installed/`; the skill badge lied the other way
 
 **Class:** registered/advertised capability with no consumer.
@@ -517,6 +571,43 @@ is computed from its consumer" is a registration↔consumer pair the
 pass-2 tripwire pattern can enforce. WP03 owns adding that gate, with a
 planted-violation proof in `scripts/ci/gates_can_fail_test.go`.
 ### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored — CLOSED 2026-10-05
+
+
+**Gate added (WP03, 2026-10-05).** `scripts/ci/check-install-provider-coverage.sh`
+(wired into `pr.yml`) pairs, in both directions: every `core/fleet`
+`CatalogItemKind` value ↔ an `install.Kind` (`core/install/provider.go`);
+every `install.Kind` ↔ a production `Register(install.Kind<Name>, …)` under
+`core/rpc/` **plus** a `TestInstallProvider_<Name>_ConsumerSeesInstall`
+consumer test — or a dated line in
+`scripts/ci/allowlists/install-provider-coverage.txt` naming the blocker and
+owner; and every allowlist line ↔ a real, still-unregistered kind (the
+allowlist shrinks as providers land). "InstalledState is computed from its
+consumer" is not grep-checkable, so it is enforced at runtime instead:
+`install.Framework.Install` re-reads `Provider.InstalledState` after every
+install and fails with `install.ErrNotConsumed` when the consumer does not
+list the capability (`TestInstall_BadgeOnly_RefusedWithErrNotConsumed`,
+`core/install/framework_test.go`). Planted proofs:
+`install-provider-coverage/{unregistered-kind,registered-without-consumer-test,catalog-kind-without-install-kind}`.
+
+**Progress (WP04/WP05, 2026-10-05).** `mcp_recipe`, `skill` and `workflow`
+have registered providers with consumer tests and left the coverage
+allowlist: MCP recipes adapt the existing recipe install (consumer: the
+supervisor's persisted enabled list); skills fetch in `Verify`, are checked
+by the single `SignatureVerifier`, and `LiveRegister` the same bytes
+(consumer: skill store + slash registry); workflows install shipped
+templates through wfcatalog `Store.Save` + cron and fleet workflow payloads
+through `WorkflowsAPI.InstallDocument` (consumer: `Workflows_List`). Every
+per-kind install binding (`Tools_InstallRecipe`, `Tools_UninstallRecipe`,
+`Slashcmd_SkillInstall`, `Slashcmd_SkillUninstall`,
+`Workflows_CatalogInstall`) routes through the framework. Still standing:
+`bundle` (WP06) and `agent_pack` (WP07) stay allowlisted, and
+`Catalog_Install` + the Marketplace keep refusing workflow / agent_pack /
+bundle — the Marketplace is folded into the surface in Phase 3, and until
+then its workflow refusal copy still names Workflows › Catalog, which WP05
+retired (`?tab=catalog` now redirects to `/tools?kind=workflow`, so the
+copy's pointer still lands; the wording is Phase 3's to change — the WP02
+copy is frozen for this phase). Owner: alec / install-framework-01DOGF0B.
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored
 
 Every chat turn now links to its run graph (WP04), so materialization
 quality on *old* runs is user-visible. The resolved spec a run executed

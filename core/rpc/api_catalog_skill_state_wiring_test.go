@@ -6,8 +6,9 @@ package rpc
 // of the catalog view calls WithSkillStore itself, so deleting the three
 // wiring lines in api.go left every suite green while the live badge
 // regressed to "Install". This test boots a real chassis, installs a skill
-// through the production slashcmd path (Slash().SkillInstall →
-// fleet.InstallSkill → LiveRegister → SkillStore), and asserts
+// through the production path (Slashcmd_SkillInstall → install framework →
+// fleet.FetchCatalogItem / CatalogSignatureVerdict / InstallSkillPayload →
+// LiveRegister → SkillStore), and asserts
 // Catalog().Catalog_List reports it installed — with no test-side
 // WithSkillStore call anywhere.
 
@@ -21,6 +22,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/install"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
@@ -76,8 +78,30 @@ func TestChassis_CatalogList_SkillInstalledStateIsWiredToSkillStore(t *testing.T
 	t.Cleanup(api.Shutdown)
 
 	ctx := context.Background()
-	if err := api.Slash().SkillInstall(ctx, catID, ver); err != nil {
-		t.Fatalf("Slash().SkillInstall: %v", err)
+	// install-framework-01DOGF0B WP05: the production skill install is the
+	// Slashcmd_SkillInstall binding, which routes through the install
+	// framework (fetch in Verify → single verifier → LiveRegister).
+	b := NewBindings(api)
+	sub, cancelSub := api.EventBus().Subscribe(4, install.TopicCapabilityInstalled)
+	defer cancelSub()
+	if err := b.Slashcmd_SkillInstall(catID, ver); err != nil {
+		t.Fatalf("Slashcmd_SkillInstall: %v", err)
+	}
+	select {
+	case ev := <-sub:
+		got, ok := ev.Payload.(install.Event)
+		if !ok || got.Kind != install.KindSkill || got.ID != catID || got.Verified {
+			t.Fatalf("capability:installed payload = %#v, want an unverified (register C-2) skill install of %s", ev.Payload, catID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no capability:installed on the event bus — the skill binding bypassed the install framework")
+	}
+	cl, err := b.Capability_List(install.Filter{Kind: install.KindSkill})
+	if err != nil {
+		t.Fatalf("Capability_List: %v", err)
+	}
+	if len(cl.Items) != 1 || cl.Items[0].ID != catID || !cl.Items[0].State.Installed {
+		t.Fatalf("Capability_List(skill) = %+v, want %s installed (consumer: slash registry)", cl.Items, catID)
 	}
 	views, err := api.Catalog().Catalog_List(ctx, catalogview.CatalogFilter{})
 	if err != nil {

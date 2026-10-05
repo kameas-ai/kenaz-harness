@@ -1,16 +1,17 @@
 <script setup lang="ts">
 /**
- * ToolsView — connected MCP servers list (NN/SECTION pattern).
+ * ToolsView — the Tools route (NN/SECTION pattern).
  *
- * Renders every MCP server registered with the harness alongside
- * its transport, advertised capabilities, and current state. The
- * mcp-client implementation hasn't landed yet, so the list is empty
- * by construction — the view is structured so it lights up the
- * moment a server registers via a bundle.
+ * Top: the one "Add capability" surface (install-framework-01DOGF0B WP04,
+ * views/capabilities/CapabilitySurface.vue) — built-in tool toggles and
+ * every MCP recipe in one list + detail, replacing KenazToolsPanel and the
+ * Add-MCP-Server Registry tab. Below it: every MCP server registered with
+ * the harness, with its per-server tool policy. The rail entry stays
+ * "Tools" until Phase 4 (WP09) renames it.
  */
 import { onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
-import KenazToolsPanel from './KenazToolsPanel.vue';
+import CapabilitySurface from '@/views/capabilities/CapabilitySurface.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
@@ -122,10 +123,10 @@ onMounted(() => {
       number="02"
       section="TOOLS"
       title="Tools"
-      subtitle="Built-in Kenaz tools toggle on top; below them, every MCP server registered with the harness. All tool calls flow through the local mcp-client; tool invocations do not leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active)."
+      subtitle="Add capability: built-in tools and MCP servers in one list. Below it, every MCP server registered with the harness and its policy. All tool calls flow through the local mcp-client; tool invocations do not leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active)."
     />
 
-    <KenazToolsPanel />
+    <CapabilitySurface />
 
     <div class="px-6 pt-2 pb-1">
       <h2
@@ -160,9 +161,10 @@ onMounted(() => {
     >
       <div class="text-ink">No MCP servers configured</div>
       <p class="mt-2 max-w-prose text-ink-muted">
-        Add an MCP server by installing a bundle that registers one. The
-        harness's local mcp-client routes every call through the policy
-        layer so capability advertisements stay enforceable.
+        Install one from the list above, or add your own with Paste MCP
+        config / Custom MCP server. The harness's local mcp-client routes
+        every call through the policy layer so capability advertisements
+        stay enforceable.
       </p>
       <a
         href="https://github.com/sigil-tech/kenaz-harness/blob/main/docs/mcp.md"

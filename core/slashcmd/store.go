@@ -313,7 +313,42 @@ func BootLoad(store *SkillStore, registry *Registry) (int, error) {
 //
 // ErrTriggerShadowed is informational: the skill was saved successfully;
 // it just won't be dispatched until the conflict is resolved.
+//
+// A skill already in the store under the same ID (install-framework-01DOGF0B
+// WP05, review H3):
+//   - an org-mandated skill is replaceable only by the org (another
+//     mandated push); anything else is ErrSkillOrgManaged — the store and
+//     the mandated dispatch are untouched;
+//   - the same catalog item (prev.CatalogID == skill.CatalogID) — an
+//     update or re-install — replaces that skill's OWN registration and
+//     keeps the user's local trigger alias;
+//   - any other skill sharing the ID (a different catalog item, a local
+//     skill) is ErrSkillIDCollision — nothing written, nothing inherited.
+//
+// "Own" is never decided by the payload-controlled ID alone.
 func LiveRegister(store *SkillStore, registry *Registry, skill Skill) error {
+	if prev, err := store.Get(skill.ID); err == nil {
+		incomingMandated := skill.Source == SkillSourceMandated
+		prevMandated := prev.Source == SkillSourceMandated || prev.OrgManaged
+		switch {
+		case prevMandated && !incomingMandated:
+			return fmt.Errorf("%w: %q is required by your org", ErrSkillOrgManaged, skill.ID)
+		case incomingMandated:
+			// The org's authority: a mandated push replaces whatever held
+			// the ID; the alias carries over only between mandated copies.
+			registry.unregisterSkill(prev.EffectiveTrigger(), prev)
+			if prevMandated && skill.LocalTrigger == "" {
+				skill.LocalTrigger = prev.LocalTrigger
+			}
+		case prev.CatalogID != "" && prev.CatalogID == skill.CatalogID:
+			registry.unregisterSkill(prev.EffectiveTrigger(), prev)
+			if skill.LocalTrigger == "" {
+				skill.LocalTrigger = prev.LocalTrigger
+			}
+		default:
+			return fmt.Errorf("%w: %q is already installed from %s", ErrSkillIDCollision, skill.ID, skillOrigin(prev))
+		}
+	}
 	if err := store.Save(skill); err != nil {
 		return err
 	}
@@ -323,6 +358,21 @@ func LiveRegister(store *SkillStore, registry *Registry, skill Skill) error {
 		return fmt.Errorf("%w: %q is already registered", ErrTriggerShadowed, skill.EffectiveTrigger())
 	}
 	return nil
+}
+
+// ErrSkillOrgManaged: a catalog install tried to replace an org-mandated
+// skill (review H3). The mandated skill stays stored and dispatched.
+var ErrSkillOrgManaged = errors.New("slashcmd: skill is org-managed and cannot be replaced by a catalog install")
+
+// ErrSkillIDCollision: a skill tried to take the ID of a different skill
+// (another catalog item, or a local one). Nothing is written.
+var ErrSkillIDCollision = errors.New("slashcmd: skill id already belongs to a different skill")
+
+func skillOrigin(sk Skill) string {
+	if sk.CatalogID != "" {
+		return fmt.Sprintf("catalog item %q", sk.CatalogID)
+	}
+	return "a local skill"
 }
 
 // LiveUnregister removes a skill from disk and unregisters it from the
@@ -335,7 +385,9 @@ func LiveUnregister(store *SkillStore, registry *Registry, id string) error {
 	if err := store.Delete(id); err != nil {
 		return err
 	}
-	registry.Unregister(sk.EffectiveTrigger())
+	// Only this skill's own registration: a shadowed skill's trigger is
+	// held by the command that shadows it (review L3).
+	registry.unregisterSkill(sk.EffectiveTrigger(), sk)
 	return nil
 }
 
@@ -359,17 +411,20 @@ func RenameLocalTrigger(store *SkillStore, registry *Registry, id, newTrigger st
 		return err
 	}
 
-	// Unregister the old effective trigger.
-	oldTrigger := sk.EffectiveTrigger()
-	registry.Unregister(oldTrigger)
+	// Unregister the old effective trigger — only if this skill holds it
+	// (a shadowed skill's trigger belongs to the command shadowing it;
+	// review L3).
+	prev := sk
+	oldTrigger := prev.EffectiveTrigger()
+	registry.unregisterSkill(oldTrigger, prev)
 
 	// Apply the rename.
 	sk.LocalTrigger = newTrigger
 	if err := store.Save(sk); err != nil {
-		// Best-effort re-register on save failure so the registry stays consistent.
+		// Best-effort re-register of the unchanged skill so the registry
+		// stays consistent.
 		if oldTrigger != "" {
-			cmd := skillCommand{skill: sk}
-			_ = registry.RegisterSkill(cmd)
+			_ = registry.RegisterSkill(skillCommand{skill: prev})
 		}
 		return fmt.Errorf("slashcmd: RenameLocalTrigger: save: %w", err)
 	}
