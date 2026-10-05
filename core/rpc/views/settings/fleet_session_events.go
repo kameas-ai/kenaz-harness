@@ -190,3 +190,30 @@ func (a *API) runSessionResetHooks() {
 		fn()
 	}
 }
+
+// SetFleetClientVersion records the build version enroll sends to Fleet
+// (fleet-session-truth-01DOGF0A FR-9). Called from rpc.New with the
+// ldflags-stamped version; local builds report "dev".
+func (a *API) SetFleetClientVersion(v string) {
+	if a == nil {
+		return
+	}
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	a.fleet.clientVersion = v
+	a.fleet.mu.Unlock()
+}
+
+func (a *API) fleetClientVersion() string {
+	if a == nil || a.fleet == nil {
+		return "dev"
+	}
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	if a.fleet.clientVersion == "" {
+		return "dev"
+	}
+	return a.fleet.clientVersion
+}

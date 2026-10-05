@@ -395,4 +395,16 @@ describe('UserMenu', () => {
     expect(client.settings.fleetSignInCancel).toHaveBeenCalledOnce();
     expect(wrapper.find('[data-testid="menu-sign-in"]').exists()).toBe(true);
   });
+
+  // ── WP08: roles ──────────────────────────────────────────────────────────
+
+  it('FR-9: roles from the enroll payload render in the identity header', async () => {
+    const { client } = buildClient(
+      signedIn({ identity: { ...aliceIdentity, roles: ['org_owner', 'policy_admin'] } }),
+    );
+    const wrapper = mountUserMenu(client);
+    await flushPromises();
+    await openPopover(wrapper);
+    expect(wrapper.find('[data-testid="user-menu-roles"]').text()).toBe('Org owner, Policy admin');
+  });
 });

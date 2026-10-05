@@ -158,6 +158,11 @@ type fleetState struct {
 	emitMu      sync.Mutex
 	lastEmitKey string
 
+	// clientVersion is the harness build version enroll reports to Fleet
+	// (SetFleetClientVersion; "dev" when unset). It was a hard-coded
+	// "0.18.0" (fleet-session-truth-01DOGF0A FR-9 / P-11).
+	clientVersion string
+
 	// signIn is the in-flight sign-in flow (nil when none); signInFlow is
 	// the browser flow, fleet.DeviceCodeFlow unless a test injects a fake
 	// (fleet-session-truth-01DOGF0A WP07).
@@ -1103,7 +1108,7 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		"platform", runtime.GOOS,
 		"fleet_base_url", c.Profile().FleetBaseURL,
 	)
-	id, err := c.RefreshIdentity(ctx, nodeID, runtime.GOOS, "0.18.0")
+	id, err := c.RefreshIdentity(ctx, nodeID, runtime.GOOS, a.fleetClientVersion())
 	// Fold the outcome into the session track BEFORE returning either way:
 	// a failed enroll while tokens are usable is "degraded", not "signed
 	// out" (fleet-session-truth-01DOGF0A FR-3), and the snapshot can only

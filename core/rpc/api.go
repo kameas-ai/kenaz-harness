@@ -2131,6 +2131,9 @@ func New(c *core.Core, opts ...Option) *API {
 	// SettingsAPI.fleetClient() is nil. NewClient returns a nopClient when
 	// HARNESS_FLEET_DISABLED=1, which preserves the OSS-first behaviour: the
 	// settings RPC code still short-circuits via the isNop check.
+	// fleet-session-truth-01DOGF0A FR-9: enroll reports the real build
+	// version (it sent a hard-coded "0.18.0" on every enroll).
+	settingsImpl.SetFleetClientVersion(buildLabel(c))
 	if fleetClient, ferr := fleet.NewClient(fleet.ClientOpts{DataDir: dataDir}); ferr == nil {
 		settingsImpl.SetFleetClient(fleetClient, dataDir)
 	} else {

@@ -25,7 +25,12 @@ import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { refreshFeatureFlags } from '@/lib/featureFlags';
-import { describeFleetReason, isSignInCancelled, useFleetSession } from '@/lib/fleetSession';
+import {
+  describeFleetReason,
+  formatRoles,
+  isSignInCancelled,
+  useFleetSession,
+} from '@/lib/fleetSession';
 import { isServedMode } from '@/lib/useServedMode';
 
 const client = useHarnessClient();
@@ -77,6 +82,8 @@ const orgDisplay = computed(() => {
   return id.orgName && id.orgName !== emailDisplay.value ? id.orgName : '';
 });
 const tierLabel = computed(() => fleet.identity.value?.tier || '');
+/** Roles from the enroll payload (FR-9 / F8b). */
+const rolesLabel = computed(() => formatRoles(fleet.identity.value?.roles));
 
 const degradedReason = computed(() =>
   isDegraded.value ? describeFleetReason(fleet.session.value?.reason) : '',
@@ -231,6 +238,7 @@ async function handleSignOut() {
             <div class="user-menu-email">{{ emailDisplay }}</div>
             <div v-if="orgDisplay" class="user-menu-sub">{{ orgDisplay }}</div>
             <div v-if="tierLabel" class="user-menu-sub user-menu-tier">{{ tierLabel }}</div>
+            <div v-if="rolesLabel" class="user-menu-sub" data-testid="user-menu-roles">{{ rolesLabel }}</div>
           </div>
           <div
             v-if="isDegraded"

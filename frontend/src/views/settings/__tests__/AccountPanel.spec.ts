@@ -307,4 +307,18 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
     expect(client.settings.fleetSignIn).toHaveBeenCalledOnce();
     expect(wrapper.find('[data-testid="reauth-btn"]').exists()).toBe(false);
   });
+
+  it('FR-9: roles and name render in the Account body', async () => {
+    const client = buildClient(
+      session('signed_in', prodProfile, {
+        identity: { ...mockIdentity, displayName: 'Alice Cooper', roles: ['org_owner'] },
+      }),
+    );
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="identity-roles"]').text()).toBe('Org owner');
+    expect(wrapper.find('[data-testid="identity-name"]').text()).toBe('Alice Cooper');
+  });
 });

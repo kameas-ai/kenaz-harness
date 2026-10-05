@@ -328,6 +328,23 @@ export function describeFleetReason(reason: string | undefined): string {
   }
 }
 
+/**
+ * formatRoles renders FleetIdentity.roles for the identity header and the
+ * Account panel (FR-9 / dogfood F8b — the payload carried roles and no
+ * surface showed them): "org_owner" → "Org owner", joined with ", ".
+ */
+export function formatRoles(roles: string[] | undefined | null): string {
+  if (!roles || roles.length === 0) return '';
+  return roles
+    .map((r) => r.trim())
+    .filter(Boolean)
+    .map((r) => {
+      const words = r.replace(/[_-]+/g, ' ').trim();
+      return words.charAt(0).toUpperCase() + words.slice(1);
+    })
+    .join(', ');
+}
+
 /** Short copy for a sync lane's reason code (FR-6). */
 export function describeSyncReason(reason: string | undefined): string {
   switch (reason) {

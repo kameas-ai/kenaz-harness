@@ -278,3 +278,29 @@ func TestDeviceCodeFlow_Cancel_ReturnsCanceled_OneBrowserOpen(t *testing.T) {
 		t.Fatalf("browser opened %d times, want 1", n)
 	}
 }
+
+// ── FR-9: role / roles ───────────────────────────────────────────────────────
+
+func TestMergeRoles(t *testing.T) {
+	cases := []struct {
+		role  string
+		roles []string
+		want  []string
+	}{
+		{"", nil, nil},
+		{"org_owner", nil, []string{"org_owner"}},
+		{"", []string{"member", "policy_admin"}, []string{"member", "policy_admin"}},
+		{"member", []string{"member", " policy_admin ", ""}, []string{"member", "policy_admin"}},
+	}
+	for _, c := range cases {
+		got := mergeRoles(c.role, c.roles)
+		if len(got) != len(c.want) {
+			t.Fatalf("mergeRoles(%q,%v) = %v, want %v", c.role, c.roles, got, c.want)
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Fatalf("mergeRoles(%q,%v) = %v, want %v", c.role, c.roles, got, c.want)
+			}
+		}
+	}
+}

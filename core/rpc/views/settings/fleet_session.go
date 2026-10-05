@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // ── FleetSession: the single fleet-session source of truth ─────────────────
@@ -274,12 +275,46 @@ func (a *API) fleetSessionSnapshot() FleetSessionView {
 		view := fleetIdentityToView(*id)
 		v.Identity = &view
 	}
+	applyClaimFallbacks(&v, ts.Claims)
 
 	if poller != nil {
 		v.Capabilities = capabilitiesToView(poller.Current())
 	}
 	v.Sync = syncViewFromLanes(lanes)
 	return v
+}
+
+// applyClaimFallbacks fills identity.email / displayName from the access
+// token's standard OIDC claims when enroll omitted them (FR-9 / P-9: enroll
+// returned email:"" for an Enterprise user and the popover rendered a blank
+// header and avatar). The source is labelled on the snapshot and in debug
+// logs so a claim-derived value is never mistaken for an enroll fact. With
+// neither, the UI falls back to the org name (lib/fleetSession.ts).
+func applyClaimFallbacks(v *FleetSessionView, c fleet.TokenClaims) {
+	if v.Identity == nil {
+		if c.Email == "" && c.Name == "" {
+			return
+		}
+		// Signed in with no enrolled identity yet (e.g. not provisioned):
+		// the token still says who this is.
+		v.Identity = &FleetIdentity{}
+	}
+	switch {
+	case v.Identity.Email != "":
+		v.EmailSource = "enroll"
+	case c.Email != "":
+		v.Identity.Email = c.Email
+		v.EmailSource = "token_claim"
+		logging.L().Debug("fleet.session.identity.email_from_token_claim")
+	}
+	switch {
+	case v.Identity.DisplayName != "":
+		v.NameSource = "enroll"
+	case c.Name != "":
+		v.Identity.DisplayName = c.Name
+		v.NameSource = "token_claim"
+		logging.L().Debug("fleet.session.identity.name_from_token_claim")
+	}
 }
 
 func emptySyncView() FleetSyncView {

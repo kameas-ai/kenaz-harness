@@ -27,7 +27,12 @@ import { computed, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { refreshFeatureFlags } from '@/lib/featureFlags';
 import { isUserNotProvisionedError } from '@/lib/errors';
-import { describeFleetReason, isSignInCancelled, useFleetSession } from '@/lib/fleetSession';
+import {
+  describeFleetReason,
+  formatRoles,
+  isSignInCancelled,
+  useFleetSession,
+} from '@/lib/fleetSession';
 
 const client = useHarnessClient();
 const fleet = useFleetSession(client);
@@ -54,6 +59,10 @@ const profile = computed(() => fleet.session.value?.profile ?? null);
 const badgeColor = computed(() => profile.value?.badgeColor ?? '');
 const envName = computed(() => (profile.value?.name ?? '').toUpperCase());
 const tierLabel = computed(() => identity.value?.tier ?? '');
+/** Roles from the enroll payload (FR-9 / F8b). */
+const rolesLabel = computed(() => formatRoles(identity.value?.roles));
+/** Primary name line: display name, else nothing (email has its own row). */
+const nameLabel = computed(() => identity.value?.displayName?.trim() ?? '');
 
 /** Not-provisioned, from the session (mount) or from the last action. */
 const signupRequired = computed(
@@ -323,6 +332,10 @@ async function refreshIdentity() {
     </ul>
 
     <div class="identity-card" data-testid="identity-card">
+      <div v-if="nameLabel" class="identity-row">
+        <span class="identity-label">Name</span>
+        <span class="identity-value" data-testid="identity-name">{{ nameLabel }}</span>
+      </div>
       <div v-if="identity?.email" class="identity-row">
         <span class="identity-label">Email</span>
         <span class="identity-value" data-testid="identity-email">
@@ -346,6 +359,10 @@ async function refreshIdentity() {
         <span class="identity-value" data-testid="identity-team">
           {{ identity.teamName }}
         </span>
+      </div>
+      <div v-if="rolesLabel" class="identity-row">
+        <span class="identity-label">Role</span>
+        <span class="identity-value" data-testid="identity-roles">{{ rolesLabel }}</span>
       </div>
     </div>
 

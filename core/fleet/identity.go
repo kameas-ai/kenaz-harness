@@ -107,6 +107,10 @@ type enrollResponse struct {
 	OrgName  string `json:"org_name"`
 	TeamName string `json:"team_name"`
 	Role     string `json:"role"`
+	// Roles is the plural form the fleet brief asks for
+	// (kitty-specs/fleet-session-truth-01DOGF0A/research/fleet-brief.md);
+	// both are accepted while fleet migrates, merged and de-duplicated.
+	Roles []string `json:"roles,omitempty"`
 	// org_settings is opaque for now.
 	OrgSettings json.RawMessage `json:"org_settings,omitempty"`
 
@@ -321,13 +325,27 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		Tier:        er.Tier,
 		FetchedAt:   time.Now(),
 	}
-	if er.Role != "" {
-		id.Roles = []string{er.Role}
-	}
+	id.Roles = mergeRoles(er.Role, er.Roles)
 
 	// Cache to disk.
 	if c.dataDir != "" {
 		_ = SaveIdentity(c.dataDir, id)
 	}
 	return id, nil
+}
+
+// mergeRoles combines the singular `role` and plural `roles` enroll fields,
+// in order, without empties or duplicates. nil when there are none.
+func mergeRoles(role string, roles []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range append([]string{role}, roles...) {
+		r = strings.TrimSpace(r)
+		if r == "" || seen[r] {
+			continue
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+	return out
 }
