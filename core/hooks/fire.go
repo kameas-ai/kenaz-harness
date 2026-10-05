@@ -87,9 +87,13 @@ type SetupEvent struct {
 	CWD       string `json:"cwd,omitempty"`
 }
 
-// SubagentStartEvent fires when a branch node is about to spawn a child
-// session. The hook's AdditionalContext is prepended to the child's
-// system context.
+// SubagentStartEvent fires when a spawned sub-agent run is about to take
+// its first turn (core/rpc/subagent_run_spawner.go, after the child
+// session exists and before StartStream). The hook's AdditionalContext is
+// attached to the child session as a system attachment, so it is part of
+// the child's system prompt from its first turn. The hook's decision is
+// not honoured — the fork has already happened; gate dispatch with the
+// tool.subagent.dispatch Cedar action instead.
 type SubagentStartEvent struct {
 	ParentSessionID string `json:"parent_session_id"`
 	BranchID        string `json:"branch_id"`

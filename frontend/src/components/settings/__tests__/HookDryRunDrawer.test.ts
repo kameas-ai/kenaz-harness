@@ -38,7 +38,7 @@ const FAKE_HOOK: Hook = {
   command: 'echo {}',
 };
 
-function mountDrawer(dryRunResult: DryRunResult) {
+function mountDrawer(dryRunResult: DryRunResult, hook: Hook = FAKE_HOOK) {
   const client = createFakeHarnessClient({
     hooks: {
       list: async () => [FAKE_HOOK],
@@ -53,7 +53,7 @@ function mountDrawer(dryRunResult: DryRunResult) {
     },
   });
   mount(HookDryRunDrawer, {
-    props: { hook: FAKE_HOOK, open: true },
+    props: { hook, open: true },
     attachTo: document.body,
     global: {
       provide: { [HarnessClientKey as symbol]: client },
@@ -131,5 +131,39 @@ describe('HookDryRunDrawer — AC-052 permissionDecision + watchPaths', () => {
     const body = mountDrawer(result);
     await fire(body);
     expect(body.find('[data-testid="hook-dry-run-watch-paths"]').exists()).toBe(false);
+  });
+});
+
+// v0.86.0 unwired sweep (2026-10-04): the label used to say "injected" for
+// every event, while additional_context reached the model for none of
+// them. It now reaches the model for five events; the label must not
+// claim delivery for the rest.
+describe('HookDryRunDrawer — additional_context delivery label', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  const withContext: DryRunResult = {
+    output: { decision: 'approve', additionalContext: 'repo is read-only' },
+    merged: { blocked: false, permissionDenied: false, permissionAllowed: false, additionalContext: 'repo is read-only' },
+    exitCode: 0,
+    latencyMs: 3,
+  };
+
+  it('says "injected" for an event that delivers it (pre_tool_use)', async () => {
+    const body = mountDrawer(withContext, { ...FAKE_HOOK, event: 'pre_tool_use' as Hook['event'] });
+    await fire(body);
+    const el = body.find('[data-testid="hook-dry-run-additional-context"]');
+    expect(el.attributes('data-delivered')).toBe('true');
+    expect(el.text()).toContain('Additional context injected');
+  });
+
+  it('does not claim delivery for an event that drops it (pre_send)', async () => {
+    const body = mountDrawer(withContext);
+    await fire(body);
+    const el = body.find('[data-testid="hook-dry-run-additional-context"]');
+    expect(el.attributes('data-delivered')).toBe('false');
+    expect(el.text()).not.toContain('injected');
+    expect(el.text()).toContain('not delivered for this event');
   });
 });

@@ -208,6 +208,13 @@ type LLMProviderAdapter struct {
 	// model. See buildAttachmentsBlock.
 	attachments AttachmentsResolver
 
+	// pending is the runner's hook additional_context queue (v0.86.0
+	// unwired sweep). Generate drains this session's entries into the
+	// system prompt — the read half of env.PendingContext, which
+	// pre_tool_use / post_tool_use hooks write through. nil disables the
+	// layer. See pending_context.go.
+	pending *pendingContextQueue
+
 	// knobsDefault resolves the session-level RequestKnobs override
 	// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10). nil
 	// disables the layer — every request's Knobs stays nil, matching
@@ -294,6 +301,22 @@ func (a *LLMProviderAdapter) WithEnvContext(now func() time.Time, workspaceDir, 
 func (a *LLMProviderAdapter) WithAttachments(resolver AttachmentsResolver) *LLMProviderAdapter {
 	a.attachments = resolver
 	return a
+}
+
+// withPendingContext pins the runner's hook-context queue onto the
+// adapter. nil disables the layer.
+func (a *LLMProviderAdapter) withPendingContext(q *pendingContextQueue) *LLMProviderAdapter {
+	a.pending = q
+	return a
+}
+
+// buildPendingContextBlock drains the hook additional_context queued for
+// this session since its last model call ("" when nothing is queued).
+func (a *LLMProviderAdapter) buildPendingContextBlock() string {
+	if a == nil || a.pending == nil {
+		return ""
+	}
+	return a.pending.drain(a.sessionID)
 }
 
 // WithKnobsDefault pins the session-knobs resolver onto the adapter
@@ -675,7 +698,10 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		// gap rather than a half-wire.
 		// Recap sits before the user's custom instructions so a user
 		// instruction about verbosity still wins the last word.
-		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildAttachmentsBlock(ctx), a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), a.buildUserInstructionsBlock()),
+		// The hook-context layer sits right after attachments: it is
+		// session context, not an instruction, so the user's own custom
+		// instructions keep the last word.
+		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildAttachmentsBlock(ctx), a.buildPendingContextBlock(), a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), a.buildUserInstructionsBlock()),
 		Messages: llmMsgs,
 		Tools:    a.tools,
 	}

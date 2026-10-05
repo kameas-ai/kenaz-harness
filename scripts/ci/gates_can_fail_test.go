@@ -1193,6 +1193,32 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"}\n",
 		},
 		{
+			// v0.86.0 unwired sweep (2026-10-04): the derivation now also
+			// scans exported *Env structs. agentgraph.Env.PendingContext
+			// (PendingContextAppender) had zero non-test implementers for
+			// its whole life while this gate stayed green, because "Env"
+			// is not a Config/Options/Deps suffix. The plant is an
+			// unsatisfiable interface reachable ONLY through an *Env
+			// struct's field — no seams.go entry, no *Deps struct — so
+			// it fires only if the *Env widening is live.
+			name:       "seam-implementers/derived-env-field-unsatisfiable",
+			wantOutput: "ZzGateProbeEnvSeam",
+			gate:       "check-seam-implementers.sh",
+			file:       "core/rpc/zz_gate_probe_env_seam.go",
+			content: "package rpc\n\n" +
+				"// Planted by gates_can_fail_test.go's *Env-widening proof and removed\n" +
+				"// after the test runs. No type anywhere can satisfy ZzGateProbeEnvSeam.\n" +
+				"type zzGateProbeEnvParam struct{}\n\n" +
+				"type ZzGateProbeEnvSeam interface {\n" +
+				"\tZzGateProbeEnvMethod(zzGateProbeEnvParam) error\n" +
+				"}\n\n" +
+				"// ZzGateProbeRunEnv mirrors agentgraph.Env's shape: an *Env struct\n" +
+				"// carrying an optional collaborator interface field.\n" +
+				"type ZzGateProbeRunEnv struct {\n" +
+				"\tSeam ZzGateProbeEnvSeam\n" +
+				"}\n",
+		},
+		{
 			// automation-actually-runs-01PMZ404 UNIT-17, G-2. Plants a
 			// seventh InputKind constant with no matching v-if/v-else-if
 			// arm in WorkflowsView.vue — the exact shape that shipped

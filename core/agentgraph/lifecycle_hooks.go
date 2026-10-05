@@ -64,7 +64,9 @@ type LifecycleHookRunner interface {
 // PendingContextAppender is the optional seam for injecting additional
 // system context into the next LLM turn. The kernel threads additional_context
 // from pre/post_tool_use hooks through this interface. Nil disables the
-// injection (the context is logged but not forwarded to the model).
+// injection (the context is logged as dropped, not forwarded to the
+// model). Production implementer: the chat runner's pendingContextQueue
+// (core/rpc/views/agentgraph/chat/pending_context.go).
 type PendingContextAppender interface {
 	AppendSystemContext(ctx context.Context, sessionID, text string) error
 }

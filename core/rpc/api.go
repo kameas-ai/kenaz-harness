@@ -2310,7 +2310,13 @@ func New(c *core.Core, opts ...Option) *API {
 	// SetSessionHookRunner's doc) — the adapter is built here, in core/rpc,
 	// and passed in as the session.SessionHookRunner interface.
 	if c != nil && a.hookRunner != nil {
-		c.SetSessionHookRunner(&hooks.SessionRunnerAdapter{Runner: a.hookRunner})
+		// v0.86.0 unwired sweep: decorated so session_start's
+		// additional_context is attached to the new session instead of
+		// discarded by Manager.Create (see hook_context_attacher.go).
+		c.SetSessionHookRunner(&sessionStartContextRunner{
+			SessionHookRunner: &hooks.SessionRunnerAdapter{Runner: a.hookRunner},
+			attach:            newHookContextAttacher(a.attachmentsMgr),
+		})
 	}
 	// subagent-control-and-background-tasks-01PMZB11 UNIT-4: late-bind
 	// the task registry's HookFirer now that the process-singleton
@@ -2567,6 +2573,10 @@ func New(c *core.Core, opts ...Option) *API {
 			// above the background_task_complete SetHookFirer block) —
 			// one Runner, fired from two independent sites.
 			HookRunner: a.hookRunner,
+			// v0.86.0 unwired sweep: subagent_start's
+			// additional_context becomes a system attachment on the
+			// child session before its first turn.
+			AttachHookContext: newHookContextAttacher(a.attachmentsMgr),
 			// Lazy, mirroring ChatRunDispatcherDeps.DefaultProfile
 			// (this file's scheduled-chat wiring, below): first
 			// personal-provider profile wins, re-read on every spawn
