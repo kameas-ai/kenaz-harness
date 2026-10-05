@@ -26,8 +26,10 @@ import (
 // THE HAZARD. 0341 DELETEs and UPDATEs session_messages rows on real,
 // upgraded installs. CLAUDE.md blind spot #3: a migration that has never
 // run against populated tables has never been tested. So this boots two
-// databases a PREVIOUS RELEASE produced — testdata/upgrade/v0.85.2 (the
-// newest snapshot, move-era schema: turn_span_id exists and anchors the
+// databases a PREVIOUS RELEASE produced — the NEWEST committed snapshot
+// that predates 0341 (newestSnapshotBefore0341; v0.86.0 when re-pointed by
+// units-debt-01UNITD01 WP03, was a hard-coded v0.85.2 — adversarial review
+// F4; move-era schema: turn_span_id exists and anchors the
 // doubled turns exactly as the bug wrote them) and testdata/upgrade/v0.63.0
 // (the OLDEST committed snapshot, whose session_messages predates the move
 // columns entirely: 0333 adds them during this very Open, so these pairs
@@ -58,7 +60,7 @@ func TestMigration0341_DedupesDoubledTurnsAgainstUpgradedDatabase(t *testing.T) 
 	// Installed before the parallel subtests start, restored after they
 	// all finish (parent cleanups run last).
 	captureDedupeLogs(t)
-	for _, tag := range []string{"v0.85.2", "v0.63.0"} {
+	for _, tag := range []string{newestSnapshotBefore0341(t), "v0.63.0"} {
 		tag := tag
 		t.Run(tag, func(t *testing.T) {
 			t.Parallel()
@@ -450,13 +452,14 @@ func TestMigration0341_SecondApplicationConvergesOnInterleavedPairs(t *testing.T
 	ctx := context.Background()
 	dir := t.TempDir()
 	rawPath := filepath.Join(dir, "data.db")
-	dumpText, err := os.ReadFile(filepath.Join("testdata", "upgrade", "v0.85.2", "dump.sql"))
+	tag := newestSnapshotBefore0341(t)
+	dumpText, err := os.ReadFile(filepath.Join("testdata", "upgrade", tag, "dump.sql"))
 	if err != nil {
-		t.Fatalf("read v0.85.2 dump.sql: %v", err)
+		t.Fatalf("read %s dump.sql: %v", tag, err)
 	}
 	raw := openRawSQLiteAt(t, rawPath)
 	if err := upgradesnap.Materialize(ctx, raw, string(dumpText)); err != nil {
-		t.Fatalf("materialise v0.85.2: %v", err)
+		t.Fatalf("materialise %s: %v", tag, err)
 	}
 	ms := func(n int64) int64 { return g0341Base + n*1_000_000 }
 	stmts := []struct {
@@ -565,13 +568,14 @@ func TestMigration0341_ReapplyAfterUnitsConversionDoesNotBrick(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	rawPath := filepath.Join(dir, "data.db")
-	dumpText, err := os.ReadFile(filepath.Join("testdata", "upgrade", "v0.85.2", "dump.sql"))
+	tag := newestSnapshotBefore0341(t)
+	dumpText, err := os.ReadFile(filepath.Join("testdata", "upgrade", tag, "dump.sql"))
 	if err != nil {
-		t.Fatalf("read v0.85.2 dump.sql: %v", err)
+		t.Fatalf("read %s dump.sql: %v", tag, err)
 	}
 	raw := openRawSQLiteAt(t, rawPath)
 	if err := upgradesnap.Materialize(ctx, raw, string(dumpText)); err != nil {
-		t.Fatalf("materialise v0.85.2: %v", err)
+		t.Fatalf("materialise %s: %v", tag, err)
 	}
 	ms := func(n int64) int64 { return g0341Base + n*1_000_000 }
 	stmts := []struct {
@@ -651,4 +655,37 @@ func TestMigration0341_ReapplyAfterUnitsConversionDoesNotBrick(t *testing.T) {
 	if n := countUsers(); n != 2 {
 		t.Fatalf("repair pass: user rows = %d, want 2 (pair kept via the units reference)", n)
 	}
+}
+
+// newestSnapshotBefore0341 returns the newest committed snapshot whose
+// ledger does not yet carry sessions/0341 — the database an upgrading user
+// reaching 0341 actually has (adversarial review F4: these tests pinned
+// v0.85.2 while 1104's pinned the newest; re-pointed by
+// units-debt-01UNITD01 WP03). "Newest overall" would be wrong once a
+// post-0341 snapshot (v0.87.0+) lands: Open would not re-run 0341 on it
+// and the dedupe assertions would test nothing.
+func newestSnapshotBefore0341(t *testing.T) string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join("testdata", "upgrade"))
+	if err != nil {
+		t.Fatalf("read snapshot dir: %v", err)
+	}
+	var tags []string
+	for _, e := range entries {
+		if e.IsDir() && upgradesnap.IsSnapshotTag(e.Name()) {
+			tags = append(tags, e.Name())
+		}
+	}
+	tags = upgradesnap.SortedSnapshotTags(tags)
+	for i := len(tags) - 1; i >= 0; i-- {
+		dump, err := os.ReadFile(filepath.Join("testdata", "upgrade", tags[i], "dump.sql"))
+		if err != nil {
+			continue // a tag recorded as unreplayable, no dump.sql
+		}
+		if !strings.Contains(string(dump), "sessions/0341-dedupe-user-turns") {
+			return tags[i]
+		}
+	}
+	t.Fatal("no committed snapshot predates sessions/0341")
+	return ""
 }
