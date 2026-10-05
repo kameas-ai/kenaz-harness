@@ -11,6 +11,7 @@ import {audit} from '../models';
 import {blockedrequests} from '../models';
 import {branches} from '../models';
 import {bundle} from '../models';
+import {install} from '../models';
 import {catalog} from '../models';
 import {cedarpolicy} from '../models';
 import {cedar} from '../models';
@@ -175,6 +176,14 @@ export function Bundle_Install(arg1:bundle.InstallRequest):Promise<bundle.Bundle
 export function Bundle_List():Promise<Array<bundle.Bundle>>;
 
 export function Bundle_Remove(arg1:string):Promise<void>;
+
+export function Capability_Install(arg1:string,arg2:string,arg3:string):Promise<install.Item>;
+
+export function Capability_List(arg1:install.Filter):Promise<install.Listing>;
+
+export function Capability_Uninstall(arg1:string,arg2:string):Promise<void>;
+
+export function Capability_Update(arg1:string,arg2:string):Promise<install.Item>;
 
 export function Catalog_Install(arg1:string,arg2:string):Promise<void>;
 

@@ -230,6 +230,22 @@ export function Bundle_Remove(arg1) {
   return window['go']['rpc']['Bindings']['Bundle_Remove'](arg1);
 }
 
+export function Capability_Install(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Capability_Install'](arg1, arg2, arg3);
+}
+
+export function Capability_List(arg1) {
+  return window['go']['rpc']['Bindings']['Capability_List'](arg1);
+}
+
+export function Capability_Uninstall(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Capability_Uninstall'](arg1, arg2);
+}
+
+export function Capability_Update(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Capability_Update'](arg1, arg2);
+}
+
 export function Catalog_Install(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Catalog_Install'](arg1, arg2);
 }

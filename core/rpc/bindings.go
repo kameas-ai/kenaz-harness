@@ -12,6 +12,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/contextbootstrap"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/install"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/llm/gemini" // model-lit-allow: import path into core/llm/** itself, not a literal
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -30,6 +31,7 @@ import (
 	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
+	capabilitiesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/capabilities"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
@@ -2132,21 +2134,36 @@ func (b *Bindings) Tools_ListRecipes() ([]tools.RecipeListing, error) {
 	return b.api.Tools().ListRecipes(b.ctx())
 }
 
+// Tools_InstallRecipe is the MCP key-prompt flow's install: the framework
+// install (install-framework-01DOGF0B WP04) with the env + config the
+// modal collected, returning the supervisor's status snapshot.
 func (b *Bindings) Tools_InstallRecipe(id string, env map[string]string, config map[string]any) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_InstallRecipe")()
-	return b.api.Tools().InstallRecipe(b.ctx(), id, env, config)
+	return installRecipe(b.ctx(), b.api.Capabilities().Framework(), b.api.Tools(), id, env, config)
 }
 
 // Tools_SignInRecipe runs the MCP OAuth sign-in for a remote recipe (opens the
 // system browser), persists the token, and respawns the recipe authenticated.
+// The sign-in installs the recipe itself; the framework then observes the
+// supervisor and announces capability:installed if it is there.
 func (b *Bindings) Tools_SignInRecipe(id string) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_SignInRecipe")()
-	return b.api.Tools().SignInRecipe(b.ctx(), id)
+	st, err := b.api.Tools().SignInRecipe(b.ctx(), id)
+	if err == nil {
+		observeRecipeFlow(b.ctx(), b.api.Capabilities().Framework(), id)
+	}
+	return st, err
 }
 
+// Tools_UninstallRecipe removes a recipe through the framework (consumer
+// confirmation, capability:uninstalled; org-provisioned recipes refused).
 func (b *Bindings) Tools_UninstallRecipe(id string) error {
 	defer sentry.WrapBinding("Tools_UninstallRecipe")()
-	return b.api.Tools().UninstallRecipe(b.ctx(), id)
+	fw := b.api.Capabilities().Framework()
+	if fw == nil {
+		return capabilitiesview.ErrUnavailable
+	}
+	return fw.Uninstall(b.ctx(), install.KindMCPRecipe, id)
 }
 
 func (b *Bindings) Tools_ForgetRecipeKey(id, envName string) error {
@@ -2229,7 +2246,43 @@ func (b *Bindings) Tools_BeginDeviceAuth(id string) (tools.DeviceAuthBeginResult
 // Returns the live RecipeStatus so the frontend can update the Tools panel.
 func (b *Bindings) Tools_PollDeviceAuth(id string) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_PollDeviceAuth")()
-	return b.api.Tools().PollDeviceAuth(b.ctx(), id)
+	st, err := b.api.Tools().PollDeviceAuth(b.ctx(), id)
+	if err == nil {
+		observeRecipeFlow(b.ctx(), b.api.Capabilities().Framework(), id)
+	}
+	return st, err
+}
+
+// ── capabilities: the one install framework (install-framework-01DOGF0B) ──
+
+// Capability_List returns every install provider's items — installed state
+// read from each runtime consumer — plus the sources that could not be
+// listed, each with a reason (rendered as a row, never a hidden tab).
+func (b *Bindings) Capability_List(filter install.Filter) (install.Listing, error) {
+	defer sentry.WrapBinding("Capability_List")()
+	return b.api.Capabilities().List(b.ctx(), filter)
+}
+
+// Capability_Install installs an item whose requirements are all satisfied
+// and returns its refreshed row. Items needing keys, OAuth or a directory
+// go through their per-kind flow binding (e.g. Tools_InstallRecipe), which
+// routes through the same framework.
+func (b *Bindings) Capability_Install(kind, id, version string) (install.Item, error) {
+	defer sentry.WrapBinding("Capability_Install")()
+	return b.api.Capabilities().Install(b.ctx(), kind, id, version)
+}
+
+// Capability_Uninstall removes an item through its provider; the consumer
+// must confirm it is gone.
+func (b *Bindings) Capability_Uninstall(kind, id string) error {
+	defer sentry.WrapBinding("Capability_Uninstall")()
+	return b.api.Capabilities().Uninstall(b.ctx(), kind, id)
+}
+
+// Capability_Update installs the newest version of an installed item.
+func (b *Bindings) Capability_Update(kind, id string) (install.Item, error) {
+	defer sentry.WrapBinding("Capability_Update")()
+	return b.api.Capabilities().Update(b.ctx(), kind, id)
 }
 
 // ── shell escape (chat input `!cmd` feature) ──────────────────────────

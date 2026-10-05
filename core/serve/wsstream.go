@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/net/websocket"
 
+	"github.com/kameas-ai/kenaz-harness/core/install"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	chatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
@@ -302,6 +303,16 @@ var passthroughTopics = []string{
 	// session id. Its single frontend consumer is the useFleetSession
 	// store, which every fleet surface reads. processWideTopics entry below.
 	topicFleetSessionChanged,
+
+	// install.TopicCapabilityInstalled / TopicCapabilityUninstalled
+	// (install-framework-01DOGF0B WP04): install.Event is {kind, id,
+	// version, via, verification} — an installed capability (an MCP
+	// server, a skill, a workflow) belongs to the process, not to any chat
+	// session, and the payload has no session field by design. Its
+	// frontend consumer is the "Add capability" surface, which refreshes
+	// its list on either topic. processWideTopics entries below.
+	install.TopicCapabilityInstalled,
+	install.TopicCapabilityUninstalled,
 }
 
 // PassthroughTopics returns a copy of passthroughTopics: the bus topics
@@ -592,11 +603,13 @@ func (s *Server) runPump(ctx context.Context, p *streamPump, sessionID string) {
 // (scripts/ci/check-no-fleet-imports.sh). See
 // TestFleetTopicLiterals_MatchCorefleetConstants for the drift guard.
 var processWideTopics = map[string]bool{
-	rpc.TopicMigrationDriftDetected:   true,
-	mcpview.TopicMCPHealthChanged:     true,
-	rpc.TopicContextBootstrapProgress: true,
-	topicFleetLockdownChanged:         true,
-	topicFleetSessionChanged:          true,
+	rpc.TopicMigrationDriftDetected:    true,
+	mcpview.TopicMCPHealthChanged:      true,
+	rpc.TopicContextBootstrapProgress:  true,
+	topicFleetLockdownChanged:          true,
+	topicFleetSessionChanged:           true,
+	install.TopicCapabilityInstalled:   true,
+	install.TopicCapabilityUninstalled: true,
 }
 
 // sessionIDOf extracts the session id from a bus event payload without

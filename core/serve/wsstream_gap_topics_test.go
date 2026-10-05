@@ -32,6 +32,7 @@ import (
 	"time"
 
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/install"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 )
@@ -137,6 +138,30 @@ func TestServedFleetSessionChanged_ReachesAnyConnectedSession(t *testing.T) {
 	}
 	if payload.State != "degraded" || payload.Reason != "needs_reauth" {
 		t.Errorf("payload = %+v, want degraded/needs_reauth", payload)
+	}
+}
+
+// TestServedCapabilityEvents_ReachAnyConnectedSession pins the
+// capability:installed / capability:uninstalled process-wide disposition
+// (install-framework-01DOGF0B WP04): an installed capability belongs to the
+// process, and install.Event has no session field.
+func TestServedCapabilityEvents_ReachAnyConnectedSession(t *testing.T) {
+	api, baseURL, cancel := newChatHarness(t)
+	defer cancel()
+
+	ws := dialChatWS(t, baseURL, "sess-A")
+	defer ws.Close() //nolint:errcheck
+
+	for _, topic := range []string{install.TopicCapabilityInstalled, install.TopicCapabilityUninstalled} {
+		api.EventBus().Publish(topic, install.Event{Kind: install.KindMCPRecipe, ID: "fetch", Installed: topic == install.TopicCapabilityInstalled, Via: "install"})
+		frame := readUntil(t, ws, topic, 2*time.Second)
+		var payload install.Event
+		if err := json.Unmarshal(frame.Data, &payload); err != nil {
+			t.Fatalf("unmarshal %s frame data: %v (raw: %s)", topic, err, frame.Data)
+		}
+		if payload.Kind != install.KindMCPRecipe || payload.ID != "fetch" {
+			t.Errorf("%s payload = %+v", topic, payload)
+		}
 	}
 }
 

@@ -68,6 +68,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
+	"github.com/kameas-ai/kenaz-harness/core/install"
 	"github.com/kameas-ai/kenaz-harness/core/keyring"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
@@ -103,6 +104,7 @@ import (
 	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
+	capabilitiesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/capabilities"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
@@ -373,6 +375,12 @@ type HarnessAPI interface {
 	// Catalog exposes the fleet catalog publish/list/install/uninstall surface
 	// (fleet-share-and-sync-01NDFSEX14 WP02). Backed by core/fleet/catalog.go.
 	Catalog() catalogview.CatalogAPI
+
+	// Capabilities exposes the one install framework's surface
+	// (install-framework-01DOGF0B): the Capability_* bindings and, via
+	// Framework(), the pipeline every per-kind install binding routes
+	// through.
+	Capabilities() *capabilitiesview.API
 
 	// Sync exposes the per-category settings sync surface
 	// (fleet-share-and-sync-01NDFSEX14 WP05). Backed by core/fleet/sync.go.
@@ -894,6 +902,11 @@ type API struct {
 	// catalogAPI is the fleet catalog publish/list/install/uninstall surface
 	// (fleet-share-and-sync-01NDFSEX14 WP02).
 	catalogAPI catalogview.CatalogAPI
+
+	// installFw is the one install framework (install-framework-01DOGF0B
+	// WP03/WP04); capabilitiesAPI is its Capability_* surface.
+	installFw       *install.Framework
+	capabilitiesAPI *capabilitiesview.API
 
 	// syncAPI is the per-category settings sync surface
 	// (fleet-share-and-sync-01NDFSEX14 WP05).
@@ -2931,6 +2944,18 @@ func New(c *core.Core, opts ...Option) *API {
 	// when the TODO was written. views/tools/impl.go:401,649,669,
 	// device_auth.go:179, oauth.go:109,132,179 have never fired.
 	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens, mcpUserRecipeSource(a.mcpUserStore), a.cedarGate(), &searchAuditEmitter{impl: a.auditImpl})
+	// install-framework-01DOGF0B WP04: the one install framework, built as
+	// soon as its first provider's consumer (the tools view) exists so every
+	// later consumer of an install path — the bindings, the fleet MCP sync
+	// applier below — can route through it. capability:installed /
+	// capability:uninstalled go out on the same broker every other desktop
+	// topic uses. Skill and workflow providers register later in New(),
+	// once their consumers exist (WP05).
+	a.installFw = install.New(chatBrokerAdapter{broker: a.broker}, nil)
+	a.capabilitiesAPI = capabilitiesview.New(a.installFw)
+	if err := a.installFw.Register(install.KindMCPRecipe, capabilitiesview.NewMCPProvider(a.toolsAPI)); err != nil {
+		logging.L().Error("install.register.failed", "kind", string(install.KindMCPRecipe), "err", err)
+	}
 	// Register the fsrequest built-in after toolsAPI is wired so the
 	// tool's delegate can be the real (non-stub) implementation. The
 	// tool is registered unconditionally; the EnabledFilter gates
@@ -4022,7 +4047,11 @@ func New(c *core.Core, opts ...Option) *API {
 		// set would ship unredacted secret env values off the device (see
 		// sync_mcp_registry.go and the redaction guard at
 		// core/fleet/sync_mcp.go:137).
-		mcpRegistry := newToolsMCPRegistry(a.toolsAPI)
+		// install-framework-01DOGF0B WP04: recipes a fleet sync pull applies
+		// install through the framework like a user install (same consumer
+		// check, same capability:installed event) — this is the one
+		// production caller of ToolsAPI.InstallRecipe outside the bindings.
+		mcpRegistry := newToolsMCPRegistry(frameworkRoutedTools{ToolsAPI: a.toolsAPI, fw: a.installFw})
 		mcpSyncCat := corefleet.NewMCPSyncCategory(mcpRegistry, mcpRegistry, func() map[string]bool {
 			// Resolved per Collect, not once at boot: a.mcpUserStore accepts
 			// recipe imports at runtime, and a boot-time snapshot shipped the
@@ -11605,6 +11634,16 @@ func (a *API) Fleet() fleetview.FleetAPI { return a.fleetAPI }
 // Catalog implements HarnessAPI. Returns the fleet catalog publish/list/install surface.
 // (fleet-share-and-sync-01NDFSEX14 WP02)
 func (a *API) Catalog() catalogview.CatalogAPI { return a.catalogAPI }
+
+// Capabilities implements HarnessAPI (install-framework-01DOGF0B). Never
+// nil: a chassis that never constructed the framework gets a surface whose
+// calls report capabilitiesview.ErrUnavailable.
+func (a *API) Capabilities() *capabilitiesview.API {
+	if a.capabilitiesAPI == nil {
+		return capabilitiesview.New(nil)
+	}
+	return a.capabilitiesAPI
+}
 
 // Sync implements HarnessAPI. Returns the per-category settings sync surface.
 // (fleet-share-and-sync-01NDFSEX14 WP05)

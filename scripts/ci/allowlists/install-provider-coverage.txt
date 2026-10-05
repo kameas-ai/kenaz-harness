@@ -11,7 +11,6 @@
 # listed). Until a kind leaves this file, the Marketplace keeps that kind's
 # Install disabled-with-reason (WP02's fleet.ErrCatalogKindNotInstallable).
 
-mcp_recipe  # 2026-10-05 blocker: the MCP-recipe provider adapter over Tools_InstallRecipe (install-framework-01DOGF0B WP04) owner: alec / install-framework-01DOGF0B
 skill       # 2026-10-05 blocker: the skill provider over fleet.InstallSkill / slashcmd.LiveRegister (install-framework-01DOGF0B WP05) owner: alec / install-framework-01DOGF0B
 workflow    # 2026-10-05 blocker: the workflow provider over wfcatalog Store.Save + cron (install-framework-01DOGF0B WP05) owner: alec / install-framework-01DOGF0B
 bundle      # 2026-10-05 blocker: the FR-2 bundle payload format (a kenaz.yaml archive) must be accepted by the fleet team before a bundle provider can consume it (install-framework-01DOGF0B WP06) owner: alec / fleet team

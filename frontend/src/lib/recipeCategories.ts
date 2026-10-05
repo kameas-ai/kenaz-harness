@@ -2,8 +2,8 @@
  * Shared recipe-category taxonomy (FR-005).
  *
  * Single source of truth for the 16 canonical MCP-connector categories:
- * their display names and their icons. Both the Registry catalog
- * (`RegistryTab.vue`) and the built-in Tools panel (`KenazToolsPanel.vue`)
+ * their display names and their icons. The "Add capability" surface
+ * (`views/capabilities/CapabilitySurface.vue`) and its MCP detail plugin
  * resolve icons + labels through here instead of maintaining parallel
  * `switch` statements.
  *

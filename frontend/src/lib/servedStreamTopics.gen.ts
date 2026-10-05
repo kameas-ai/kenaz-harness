@@ -32,4 +32,6 @@ export const SERVED_STREAM_TOPICS = [
   'advice:auto-acted',
   'fleet:lockdown:changed',
   'fleet:session-changed',
+  'capability:installed',
+  'capability:uninstalled',
 ] as const;

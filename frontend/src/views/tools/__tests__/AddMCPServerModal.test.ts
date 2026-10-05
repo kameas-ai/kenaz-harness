@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import AddMCPServerModal from '@/views/tools/AddMCPServerModal.vue';
-import RegistryTab from '@/views/tools/RegistryTab.vue';
 import PasteConfigTab from '@/views/tools/PasteConfigTab.vue';
 import CustomRecipeTab from '@/views/tools/CustomRecipeTab.vue';
 import {
@@ -9,12 +8,7 @@ import {
   type HarnessClient,
 } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type {
-  Recipe,
-  RecipeListing,
-  RecipeStatus,
-  MCPImportResponse,
-} from '@/lib/types';
+import type { Recipe, MCPImportResponse } from '@/lib/types';
 
 // ── helpers ────────────────────────────────────────────────────────────
 
@@ -35,45 +29,10 @@ function makeRecipe(id: string, overrides: Partial<Recipe> = {}): Recipe {
   };
 }
 
-function makeStatus(id: string, overrides: Partial<RecipeStatus> = {}): RecipeStatus {
-  return {
-    id,
-    enabled: false,
-    state: 'stopped',
-    restartAttempts: 0,
-    keysPresent: false,
-    pid: 0,
-    toolCount: 0,
-    resourceCount: 0,
-    promptCount: 0,
-    ...overrides,
-  };
-}
-
-function makeListing(recipe: Recipe, overrides: Partial<RecipeListing> = {}): RecipeListing {
-  return {
-    recipe,
-    enabled: false,
-    keysPresent: false,
-    status: makeStatus(recipe.id),
-    source: 'shipped',
-    ...overrides,
-  };
-}
-
 function mountModal(props: Record<string, unknown>, client?: Partial<HarnessClient>) {
   const fakeClient = createFakeHarnessClient(client);
   return mount(AddMCPServerModal, {
     props: { open: true, ...props },
-    global: {
-      provide: { [HarnessClientKey as symbol]: fakeClient },
-    },
-  });
-}
-
-function mountRegistryTab(client?: Partial<HarnessClient>) {
-  const fakeClient = createFakeHarnessClient(client);
-  return mount(RegistryTab, {
     global: {
       provide: { [HarnessClientKey as symbol]: fakeClient },
     },
@@ -102,34 +61,35 @@ function mountCustomTab(props: Record<string, unknown> = {}, client?: Partial<Ha
 // ── AddMCPServerModal — tabs render and switch ─────────────────────────
 
 describe('AddMCPServerModal — tabs', () => {
-  it('renders all three tabs and defaults to Registry', async () => {
+  it('renders the two "Add your own" tabs and defaults to Paste config (the Registry browse tab is retired)', async () => {
+    // install-framework-01DOGF0B WP04: browsing/installing catalog recipes
+    // moved to the one list in CapabilitySurface.vue — there is exactly one
+    // MCP browse-and-install path.
     const w = mountModal({});
     await flushPromises();
 
     expect(w.find('[data-testid="add-mcp-modal"]').exists()).toBe(true);
-    expect(w.find('[data-testid="add-mcp-tab-registry"]').exists()).toBe(true);
+    expect(w.find('[data-testid="add-mcp-tab-registry"]').exists()).toBe(false);
     expect(w.find('[data-testid="add-mcp-tab-paste"]').exists()).toBe(true);
     expect(w.find('[data-testid="add-mcp-tab-custom"]').exists()).toBe(true);
-    // Registry tab is active by default
-    expect(w.find('[data-testid="registry-tab"]').exists()).toBe(true);
-  });
-
-  it('switches to Paste tab on click', async () => {
-    const w = mountModal({});
-    await flushPromises();
-
-    await w.find('[data-testid="add-mcp-tab-paste"]').trigger('click');
     expect(w.find('[data-testid="paste-config-tab"]').exists()).toBe(true);
-    expect(w.find('[data-testid="registry-tab"]').exists()).toBe(false);
   });
 
-  it('switches to Custom tab on click', async () => {
+  it('opens on the entry point it was launched from (initialTab)', async () => {
+    const w = mountModal({ initialTab: 'custom' });
+    await flushPromises();
+    expect(w.find('[data-testid="custom-recipe-tab"]').exists()).toBe(true);
+  });
+
+  it('switches between Paste and Custom on click', async () => {
     const w = mountModal({});
     await flushPromises();
 
     await w.find('[data-testid="add-mcp-tab-custom"]').trigger('click');
     expect(w.find('[data-testid="custom-recipe-tab"]').exists()).toBe(true);
-    expect(w.find('[data-testid="registry-tab"]').exists()).toBe(false);
+    expect(w.find('[data-testid="paste-config-tab"]').exists()).toBe(false);
+    await w.find('[data-testid="add-mcp-tab-paste"]').trigger('click');
+    expect(w.find('[data-testid="paste-config-tab"]').exists()).toBe(true);
   });
 
   it('starts on Custom tab when editRecipe is provided', async () => {
@@ -138,7 +98,6 @@ describe('AddMCPServerModal — tabs', () => {
     await flushPromises();
 
     expect(w.find('[data-testid="custom-recipe-tab"]').exists()).toBe(true);
-    expect(w.find('[data-testid="registry-tab"]').exists()).toBe(false);
   });
 
   it('emits close when Close button is clicked', async () => {
@@ -160,97 +119,6 @@ describe('AddMCPServerModal — tabs', () => {
       global: { provide: { [HarnessClientKey as symbol]: fakeClient } },
     });
     expect(w.find('[data-testid="add-mcp-modal"]').exists()).toBe(false);
-  });
-});
-
-// ── RegistryTab ────────────────────────────────────────────────────────
-
-describe('RegistryTab — list and install', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('shows only non-enabled recipes after load', async () => {
-    const recipes = [
-      makeListing(makeRecipe('brave-search'), { enabled: false }),
-      makeListing(makeRecipe('filesystem'), { enabled: true }),
-    ];
-    const list = vi.fn(async () => recipes);
-    const w = mountRegistryTab({ tools: { recipes: { list, install: vi.fn(), uninstall: vi.fn(), forgetKey: vi.fn(), status: vi.fn(), config: vi.fn(async () => ({})) } as any } as any }) as any;
-
-    await flushPromises();
-
-    // Only non-enabled recipes appear
-    expect(w.find('[data-testid="registry-row-brave-search"]').exists()).toBe(true);
-    expect(w.find('[data-testid="registry-row-filesystem"]').exists()).toBe(false);
-  });
-
-  it('shows empty message when all recipes are enabled', async () => {
-    const recipes = [
-      makeListing(makeRecipe('brave-search'), { enabled: true }),
-    ];
-    const list = vi.fn(async () => recipes);
-    const w = mountRegistryTab({ tools: { recipes: { list, install: vi.fn(), uninstall: vi.fn(), forgetKey: vi.fn(), status: vi.fn(), config: vi.fn(async () => ({})) } as any } as any }) as any;
-    await flushPromises();
-
-    expect(w.find('[data-testid="registry-empty"]').exists()).toBe(true);
-  });
-
-  it('shows error when list fails', async () => {
-    const list = vi.fn(async () => { throw new Error('Network error'); });
-    const w = mountRegistryTab({ tools: { recipes: { list, install: vi.fn(), uninstall: vi.fn(), forgetKey: vi.fn(), status: vi.fn(), config: vi.fn(async () => ({})) } as any } as any }) as any;
-    await flushPromises();
-
-    expect(w.find('[data-testid="registry-error"]').text()).toContain('Network error');
-  });
-
-  it('Install button calls install and emits installed', async () => {
-    const recipes = [makeListing(makeRecipe('brave-search'), { enabled: false })];
-    const installFn = vi.fn(async () => makeStatus('brave-search', { enabled: true, state: 'running' }));
-    const list = vi.fn(async () => recipes);
-    const w = mountRegistryTab({
-      tools: {
-        recipes: {
-          list,
-          install: installFn,
-          uninstall: vi.fn(),
-          forgetKey: vi.fn(),
-          status: vi.fn(),
-          config: vi.fn(async () => ({})),
-        } as any,
-      } as any,
-    });
-    await flushPromises();
-
-    await w.find('[data-testid="registry-install-brave-search"]').trigger('click');
-    await flushPromises();
-
-    expect(installFn).toHaveBeenCalledWith('brave-search', {}, {});
-    expect(w.emitted('installed')).toBeTruthy();
-  });
-
-  it('shows row error when install fails', async () => {
-    const recipes = [makeListing(makeRecipe('brave-search'), { enabled: false })];
-    const installFn = vi.fn(async () => { throw new Error('Install failed'); });
-    const list = vi.fn(async () => recipes);
-    const w = mountRegistryTab({
-      tools: {
-        recipes: {
-          list,
-          install: installFn,
-          uninstall: vi.fn(),
-          forgetKey: vi.fn(),
-          status: vi.fn(),
-          config: vi.fn(async () => ({})),
-        } as any,
-      } as any,
-    });
-    await flushPromises();
-
-    await w.find('[data-testid="registry-install-brave-search"]').trigger('click');
-    await flushPromises();
-
-    expect(w.find('[data-testid="registry-row-error-brave-search"]').text()).toContain('Install failed');
   });
 });
 

@@ -15,7 +15,7 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import { defineComponent, h } from 'vue';
 import MemoryCaptureToggle from '@/views/memory/MemoryCaptureToggle.vue';
 import MemoryView from '@/views/memory/MemoryView.vue';
-import KenazToolsPanel from '@/views/tools/KenazToolsPanel.vue';
+import CapabilitySurface from '@/views/capabilities/CapabilitySurface.vue';
 import { createFakeHarnessClient, type HarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { Hook, MemoryChunk } from '@/lib/types';
@@ -195,7 +195,7 @@ describe('MemoryCaptureToggle honesty (P-4, FR-5)', () => {
 });
 
 describe('Tools no longer offers a memory toggle (P-3)', () => {
-  it('KenazToolsPanel renders a pointer to Learned and no memory switch', async () => {
+  it('the Tools surface (CapabilitySurface, formerly KenazToolsPanel) renders a pointer to Learned and no memory switch', async () => {
     const { client, calls } = makeClient(false);
     const router = createRouter({
       history: createMemoryHistory(),
@@ -206,7 +206,7 @@ describe('Tools no longer offers a memory toggle (P-3)', () => {
     });
     await router.push('/');
     await router.isReady();
-    const w = mount(KenazToolsPanel, {
+    const w = mount(CapabilitySurface, {
       global: { plugins: [router], provide: { [HarnessClientKey as symbol]: client } },
     });
     await flushPromises();

@@ -193,6 +193,10 @@ import type {
   CatalogPublishInput,
   CatalogItemView,
   CatalogFilter,
+  CapabilityFilter,
+  CapabilityItem,
+  CapabilityKind,
+  CapabilityListing,
   SyncStatusView,
   PendingMCPSecret,
   BootHealthReport,
@@ -982,6 +986,16 @@ interface WailsBindingsLike {
   /** Persists a new fleet telemetry consent level. Returns an error if the org tier is insufficient. */
   Fleet_SetTelemetryConsent(level: string): Promise<void>;
   Fleet_TelemetryStatus(): Promise<FleetTelemetryStatus>;
+
+  // ── Capabilities: the one install framework (install-framework-01DOGF0B) ──
+  /** Every install provider's items (consumer-derived state) + unreachable sources with reasons. */
+  Capability_List(filter: CapabilityFilter): Promise<CapabilityListing>;
+  /** Install a zero-input item; returns its refreshed row. */
+  Capability_Install(kind: string, id: string, version: string): Promise<CapabilityItem>;
+  /** Uninstall through the provider; the consumer must confirm. Org-managed items are refused. */
+  Capability_Uninstall(kind: string, id: string): Promise<void>;
+  /** Install the newest version of an installed item. */
+  Capability_Update(kind: string, id: string): Promise<CapabilityItem>;
 
   // ── Catalog (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────────
   /** Sign and publish a workflow/agent-pack/bundle to the fleet catalog. */
@@ -3838,6 +3852,22 @@ export interface FleetClient {
   setTelemetryConsent(level: 'none' | 'aggregate' | 'full'): Promise<void>;
 }
 
+// ── Capabilities client (install-framework-01DOGF0B) ────────────────────────
+
+/**
+ * CapabilitiesClient — the one install framework's generic surface. Every
+ * per-kind install binding (tools.recipes.install, slashcmd.skillInstall,
+ * the workflow catalog install) routes through the same Go pipeline; this
+ * client is what the shared list/detail UI uses for zero-input installs,
+ * uninstalls and updates.
+ */
+export interface CapabilitiesClient {
+  list(filter?: CapabilityFilter): Promise<CapabilityListing>;
+  install(kind: CapabilityKind, id: string, version?: string): Promise<CapabilityItem>;
+  uninstall(kind: CapabilityKind, id: string): Promise<void>;
+  update(kind: CapabilityKind, id: string): Promise<CapabilityItem>;
+}
+
 // ── Catalog client (fleet-share-and-sync-01NDFSEX14 WP02) ───────────────────
 
 export interface CatalogClient {
@@ -4023,6 +4053,8 @@ export interface HarnessClient {
   fleet: FleetClient;
   /** Catalog publish/list/install surface (fleet-share-and-sync-01NDFSEX14 WP02). */
   catalog: CatalogClient;
+  /** The one install framework's surface (install-framework-01DOGF0B). */
+  capabilities: CapabilitiesClient;
   /** Per-category settings sync surface (fleet-share-and-sync-01NDFSEX14 WP05). */
   sync: SyncClient;
   /** Team Cedar policy publish surface (fleet-share-and-sync-01NDFSEX14 WP07). */
@@ -4895,6 +4927,16 @@ export function createHarnessClient(): HarnessClient {
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
       setTelemetryConsent: (level) => b().Fleet_SetTelemetryConsent(level),
       getTelemetryStatus: () => b().Fleet_TelemetryStatus(),
+    },
+    // ── Capabilities (install-framework-01DOGF0B) ─────────────────────────
+    capabilities: {
+      list: (filter = {}) =>
+        b()
+          .Capability_List(filter)
+          .then((l) => ({ items: l?.items ?? [], unavailable: l?.unavailable ?? [] })),
+      install: (kind, id, version = '') => b().Capability_Install(kind, id, version),
+      uninstall: (kind, id) => b().Capability_Uninstall(kind, id),
+      update: (kind, id) => b().Capability_Update(kind, id),
     },
     // ── Catalog (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────
     catalog: {
@@ -6818,6 +6860,25 @@ export function createFakeHarnessClient(
           exports_unauthorized: 0,
           exports_identity_mismatch: 0,
         },
+      }),
+    },
+    capabilities: {
+      list: async () => ({ items: [], unavailable: [] }),
+      install: async (kind, id, version) => ({
+        kind,
+        id,
+        version,
+        name: id,
+        source: 'local',
+        state: { installed: true },
+      }),
+      uninstall: noop,
+      update: async (kind, id) => ({
+        kind,
+        id,
+        name: id,
+        source: 'local',
+        state: { installed: true },
       }),
     },
     catalog: {

@@ -1,26 +1,25 @@
 <script setup lang="ts">
 /**
- * AddMCPServerModal — three-tab modal for adding MCP servers.
+ * AddMCPServerModal — the "Add your own" MCP entry points of the
+ * "Add capability" surface (install-framework-01DOGF0B WP04).
  *
  * Tabs:
- *   - Registry: curated list from the recipe catalog (non-enabled entries).
  *   - Paste config: translate Claude Desktop / Cursor mcpServers JSON.
  *   - Custom recipe: form-based recipe author for stdio/http/sse.
  *
- * Registry tab is hidden when Settings.MCPRegistryEnabled === false.
- * BACKEND GAP: `client.settings.getMCPRegistryEnabled()` does not exist.
- * The registry tab is shown by default; once the RPC lands, wire it here.
+ * The Registry tab (RegistryTab.vue) is retired: browsing and installing
+ * catalog recipes happens in the surface's one list (CapabilitySurface.vue),
+ * so there is exactly one browse-and-install path for MCP recipes.
  *
  * The modal uses the same no-radix-vue, fixed-overlay shape as
  * RecipeKeyPromptModal.vue (the existing modal primitive in this project).
  */
 import { ref } from 'vue';
-import RegistryTab from './RegistryTab.vue';
 import PasteConfigTab from './PasteConfigTab.vue';
 import CustomRecipeTab from './CustomRecipeTab.vue';
 import type { Recipe } from '@/lib/types';
 
-type TabId = 'registry' | 'paste' | 'custom';
+type TabId = 'paste' | 'custom';
 
 const props = withDefaults(
   defineProps<{
@@ -29,10 +28,13 @@ const props = withDefaults(
     editRecipe?: Recipe | null;
     /** Existing recipe ids for the Custom tab shadow-warning check. */
     existingIds?: readonly string[];
+    /** Which entry point opened the modal. Edit mode always lands on Custom. */
+    initialTab?: TabId;
   }>(),
   {
     editRecipe: null,
     existingIds: () => [],
+    initialTab: 'paste',
   },
 );
 
@@ -41,11 +43,9 @@ const emit = defineEmits<{
   (e: 'installed'): void;
 }>();
 
-// Start on the Custom tab if we're editing a recipe.
-const activeTab = ref<TabId>(props.editRecipe ? 'custom' : 'registry');
+const activeTab = ref<TabId>(props.editRecipe ? 'custom' : props.initialTab);
 
 const tabs: { id: TabId; label: string }[] = [
-  { id: 'registry', label: 'Registry' },
   { id: 'paste', label: 'Paste config' },
   { id: 'custom', label: 'Custom recipe' },
 ];
@@ -135,13 +135,8 @@ function onKeydown(event: KeyboardEvent) {
 
       <!-- Tab content -->
       <div class="flex-1 overflow-y-auto px-5 py-4">
-        <RegistryTab
-          v-if="activeTab === 'registry'"
-          @installed="onInstalled"
-          @switch-tab="activeTab = $event"
-        />
         <PasteConfigTab
-          v-else-if="activeTab === 'paste'"
+          v-if="activeTab === 'paste'"
           @imported="onImported"
         />
         <CustomRecipeTab
