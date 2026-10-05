@@ -3,9 +3,12 @@ package artifacts_test
 // store_contract_test.go — one behavioural contract for every
 // artifacts.Store implementation (artifacts-as-units-01DOGF0C WP02).
 //
-// The units-backed store must be a drop-in for the legacy artifacts-table
+// The units-backed store had to be a drop-in for the legacy artifacts-table
 // store: the 11 consumers in spec §2.3 keep their call shapes, so any
-// behavioural difference here is a regression for them. Every SQL
+// behavioural difference here is a regression for them. Until the WP04
+// store switch this suite ran the legacy store through the same cases;
+// the legacy implementation (and the tables it read) retired with
+// migration units/1104, so the units store and the memory fixture remain. Every SQL
 // implementation runs against a REAL sqlite database opened through the
 // production storagesqlite.Open (CLAUDE.md blind spot #2 — no in-memory
 // fixture stands in for SQL encode/decode). The memory store rides along
@@ -31,18 +34,6 @@ type storeImpl struct {
 
 func contractImpls() []storeImpl {
 	return []storeImpl{
-		{name: "legacy-sql", build: func(t *testing.T, r artifacts.SessionProjectReader) (artifacts.Store, storage.DB) {
-			db := openTestDB(t)
-			// The legacy artifacts table carries FKs to sessions and
-			// projects; seed every id the contract cases use.
-			for _, p := range []string{"p1", "proj-1", "p9"} {
-				seedProject(t, db, p)
-			}
-			for _, s := range []string{"s", "s1", "s2", "s9", "sess-1", "s-proj", "s-none"} {
-				seedSession(t, db, s, nil)
-			}
-			return artifacts.NewSQLStore(db, artifacts.WithSessionProjectReader(r)), db
-		}},
 		{name: "units", build: func(t *testing.T, r artifacts.SessionProjectReader) (artifacts.Store, storage.DB) {
 			db := openTestDB(t)
 			return artifacts.NewUnitsStore(db, artifacts.WithSessionProjectReader(r)), db

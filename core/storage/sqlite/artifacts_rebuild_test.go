@@ -51,6 +51,7 @@ func TestMigration0332_PreservesArtifactVersionRows(t *testing.T) {
 	}
 
 	raw := openRaw(t, dir)
+	rewindArtifactsToUnits(t, ctx, raw)
 	// Rewind to the pre-0332 artifacts table (the narrower scope_kind CHECK)
 	// and drop the ledger rows for 0332+, so the reopen re-runs the rebuild.
 	rewind := []string{
@@ -86,10 +87,10 @@ func TestMigration0332_PreservesArtifactVersionRows(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close(context.Background()) })
 
 	var artifacts, versions int
-	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifacts").Scan(&artifacts); err != nil {
+	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifacts_legacy").Scan(&artifacts); err != nil {
 		t.Fatalf("count artifacts: %v", err)
 	}
-	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifact_versions").Scan(&versions); err != nil {
+	if err := db.Reader().QueryRow(ctx, "SELECT COUNT(*) FROM artifact_versions_legacy").Scan(&versions); err != nil {
 		t.Fatalf("count artifact_versions: %v", err)
 	}
 	if artifacts != 1 {
@@ -105,7 +106,7 @@ func TestMigration0332_PreservesArtifactVersionRows(t *testing.T) {
 	var byteSize, createdAt int64
 	if err := db.Reader().QueryRow(ctx,
 		`SELECT content_hash, summary, path, byte_size, created_at
-         FROM artifact_versions WHERE artifact_id='art-keep' AND version=2`).
+         FROM artifact_versions_legacy WHERE artifact_id='art-keep' AND version=2`).
 		Scan(&hash, &summary, &path, &byteSize, &createdAt); err != nil {
 		t.Fatalf("read restored version row: %v", err)
 	}
@@ -128,7 +129,7 @@ func TestMigration0332_PreservesArtifactVersionRows(t *testing.T) {
 	// And the point of 0332 in the first place: the widened CHECK is in place.
 	var check string
 	if err := db.Reader().QueryRow(ctx,
-		"SELECT sql FROM sqlite_master WHERE type='table' AND name='artifacts'").Scan(&check); err != nil {
+		"SELECT sql FROM sqlite_master WHERE type='table' AND name='artifacts_legacy'").Scan(&check); err != nil {
 		t.Fatalf("read artifacts ddl: %v", err)
 	}
 	if !strings.Contains(check, "'global'") {

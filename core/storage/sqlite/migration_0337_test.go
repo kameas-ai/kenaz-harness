@@ -344,8 +344,11 @@ func TestMigration0337_RepairsCheckpointRowsAgainstUpgradedDatabase(t *testing.T
 	// ---- Unrelated tables untouched (the sessions/0327 precedent: a
 	// migration can empty a CASCADE-linked child table while both
 	// integrity pragmas stay clean). ----
+	// units/1104 (artifacts-as-units-01DOGF0C) renames artifact_versions
+	// to artifact_versions_legacy during this same Open — same rows, new
+	// name — so the after-count reads the retained legacy table.
 	var artifactVersionsAfter, seedSessionMessagesAfter int
-	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM artifact_versions").Scan(&artifactVersionsAfter); err != nil {
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM artifact_versions_legacy").Scan(&artifactVersionsAfter); err != nil {
 		t.Fatalf("count artifact_versions after: %v", err)
 	}
 	if artifactVersionsAfter != artifactVersionsBefore {

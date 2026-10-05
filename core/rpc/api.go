@@ -5126,15 +5126,48 @@ func newArtifactsStack(c *core.Core, media coreatt.MediaStore) (coreart.Store, *
 	if s == nil {
 		return nil, nil
 	}
-	store := coreart.NewSQLStore(s,
+	// artifacts-as-units-01DOGF0C WP04: artifacts live in the units
+	// tables (kind='artifact') since migration units/1104 copied them out
+	// of the now-renamed artifacts_legacy table. The store switch, the
+	// refcount registration and the delete observers below are ONE change
+	// (spec §2.4/§2.6): switching the store without re-pointing the media
+	// refcount would let media GC see zero references and delete every
+	// artifact's bytes.
+	store := coreart.NewUnitsStore(s,
 		coreart.WithSessionProjectReader(&artifactSessionProjectReader{mgr: c.SessionManager()}),
 	)
 	// Register the artifacts refcount source on the SHARED MediaStore
 	// (the same instance the attachments manager already wired the
-	// AttachmentsRefcountSource into). This is the WP02 risk-note
-	// hookup: the on-disk file is only reclaimed when no attachments
-	// row AND no artifacts row references the hash.
+	// AttachmentsRefcountSource into): the on-disk file is only reclaimed
+	// when no attachment AND no artifact unit (head row or version row)
+	// references the hash.
 	media.RegisterRefcountSource(coreart.ArtifactsRefcountSource{Store: store})
+	// units.scope_id has no FK: session and project deletes reach
+	// artifact units only through these observers (spec FR-6). Every
+	// session delete path — the sessions view funnel, the branch-children
+	// cascade — goes through session.Manager.Delete.
+	if purger, ok := store.(coreart.ScopePurger); ok {
+		if sm := c.SessionManager(); sm != nil {
+			sm.AddDeleteObserver(func(ctx context.Context, sessionID string) error {
+				hashes, err := purger.PurgeSession(ctx, sessionID)
+				if err != nil {
+					return err
+				}
+				_, err = coreatt.ReleaseUnreferenced(ctx, media, hashes)
+				return err
+			})
+		}
+		if pm := c.ProjectManager(); pm != nil {
+			pm.AddDeleteObserver(func(ctx context.Context, projectID string) error {
+				hashes, err := purger.PurgeProject(ctx, projectID)
+				if err != nil {
+					return err
+				}
+				_, err = coreatt.ReleaseUnreferenced(ctx, media, hashes)
+				return err
+			})
+		}
+	}
 	mgr := coreart.NewManager(store, &mediaStorePutAdapter{inner: media},
 		coreart.WithSessionReader(&artifactSessionProjectReader{mgr: c.SessionManager()}),
 	)

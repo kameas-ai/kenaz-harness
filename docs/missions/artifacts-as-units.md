@@ -211,4 +211,8 @@ The 10k-artifact synthetic measurement is taken in WP04 against the real
 migration (`TestMigration1104_SyntheticTenThousand`, skipped under `-short`)
 and recorded below; batching is only introduced if it exceeds a few seconds.
 
-Measured (WP04): _see WP04 commit — filled in when the migration exists._
+Measured (WP04, 2026-10-04, Apple Silicon laptop, `go test` without
+`-race`): `storagesqlite.Open` of the v0.85.2 snapshot inflated to 10,001
+artifacts and 10,002 version rows — i.e. the whole pending set, 1104
+included — took **301 ms** (7.6 s under `-race`). No batching: the single
+transaction stays all-or-nothing and well under a second at 10k.

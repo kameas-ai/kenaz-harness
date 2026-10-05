@@ -52,15 +52,15 @@ type unitsStore struct {
 // NewUnitsStore constructs the units-backed Store. It accepts the same
 // options as NewSQLStore (clock, id generator, session→project reader).
 func NewUnitsStore(db storage.DB, opts ...SQLStoreOption) Store {
-	cfg := &sqlStore{
+	s := &unitsStore{
 		db:    db,
 		now:   func() time.Time { return time.Now().UTC() },
 		idGen: defaultArtifactID,
 	}
 	for _, opt := range opts {
-		opt(cfg)
+		opt(s)
 	}
-	return &unitsStore{db: cfg.db, now: cfg.now, idGen: cfg.idGen, sessReader: cfg.sessReader}
+	return s
 }
 
 // artifactUnitMeta is the JSON shape of units.metadata for an artifact

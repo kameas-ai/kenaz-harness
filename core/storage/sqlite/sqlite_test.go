@@ -272,9 +272,11 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// WP09 (0340) adds one more, hence 54; WP05 (0337) adds one more
 	// still, hence 55; cedar-policy/1300 adds one more, hence 56; WP06
 	// (0338) and WP08 (0339) add one more each, hence 58; laya-advisors/
-	// 1600 adds one more, hence 59; laya-advisors/1601 one more, hence 60.
-	if count != 60 {
-		t.Errorf("ledger count = %d, want 60", count)
+	// 1600 adds one more, hence 59; laya-advisors/1601 one more, hence 60;
+	// units/1104-artifacts-to-units (artifacts-as-units-01DOGF0C WP04) one
+	// more, hence 61.
+	if count != 61 {
+		t.Errorf("ledger count = %d, want 61", count)
 	}
 }
 
