@@ -89,6 +89,8 @@ import ContextPreview from './ContextPreview.vue';
 import GlobalContextPanel from '@/components/settings/GlobalContextPanel.vue';
 import ContextRecent from './ContextRecent.vue';
 import ContextHealthCard from '@/components/context/ContextHealthCard.vue';
+import FolderShareDialog from './FolderShareDialog.vue';
+import { contextEntryTitle, contextNodeID, type FolderBatchMode } from './folderBatch';
 
 const props = defineProps<{
   /**
@@ -192,19 +194,6 @@ const teamCapEnabled = computed(() => fleetSessionStore.capability('shared_team_
  * signed-out / needs-reauth / degraded / capability-missing; the gate
  * (`teamCapEnabled`) reads the same store.
  */
-/**
- * folderShareReason — the interim folder state for FR-7. Folder-level
- * share/promote (a batch dialog over per-entry publish/promote) is an OPEN
- * owner question (docs/missions/knowledge-home.md D4, asked 2026-10-04):
- * deferred, NOT rejected. Until it is answered the folder pane says how
- * sharing works today instead of showing nothing. When the owner answers,
- * either build the dialog (FR-7) or reword this to the dated rejection copy.
- */
-function folderShareReason(folderPath: string): string {
-  const name = folderPath.split('/').pop() || folderPath;
-  return `Sharing works per file today — select a file in “${name}” to share it. Sharing a whole folder is pending a product decision.`;
-}
-
 const sharingDisabledReason = computed<string | null>(() => {
   if (teamCapEnabled.value) return null;
   const snap = fleetSessionStore.session.value;
@@ -238,15 +227,44 @@ const shareTarget = computed<'folder' | 'file' | null>(() => {
   return null;
 });
 
-/** Everything that keeps Share… / Promote disabled, in one sentence group. */
+/**
+ * Why Share… / Promote cannot act, for either target. A folder target
+ * (FR-7, D4 ruled 2026-10-05) gets the same FleetSession reason as a file:
+ * there is one capability gate, not a folder-specific one.
+ */
 const shareBlockedReason = computed<string | null>(() => {
-  if (shareTarget.value === 'folder' && selectedFolder.value !== null) {
-    const folder = folderShareReason(selectedFolder.value);
-    return sharingDisabledReason.value ? `${folder} ${sharingDisabledReason.value}` : folder;
-  }
-  if (shareTarget.value === 'file') return sharingDisabledReason.value;
-  return null;
+  if (shareTarget.value === null) return null;
+  return sharingDisabledReason.value;
 });
+
+// ── Folder share / promote batch (knowledge-home-01DOGF0E FR-7) ─────────
+/**
+ * folderDialogMode — which batch dialog is open for the selected folder,
+ * or null. The folder buttons open the dialog even when sharing is off:
+ * the dialog then lists the entries with every control disabled and the
+ * same `sharingDisabledReason` sentence, so the user can see what a folder
+ * share would cover and what would enable it (FR-6 "never hidden").
+ */
+const folderDialogMode = ref<FolderBatchMode | null>(null);
+
+const selectedFolderNode = computed<ContextNode | null>(() =>
+  selectedFolder.value === null ? null : findNode(tree.value, selectedFolder.value),
+);
+
+function openFolderDialog(mode: FolderBatchMode) {
+  if (shareTarget.value !== 'folder' || !selectedFolderNode.value) return;
+  folderDialogMode.value = mode;
+}
+
+function onShareClick() {
+  if (shareTarget.value === 'folder') openFolderDialog('share');
+  else openPublishConfirm();
+}
+
+function onPromoteButton() {
+  if (shareTarget.value === 'folder') openFolderDialog('promote');
+  else void onPromoteClick();
+}
 
 /**
  * publishFellBackToOrg is true when the most recent publish was requested
@@ -262,15 +280,8 @@ const publishFellBackToOrg = computed(
     publishResult.value.effective_layer === 'org',
 );
 
-/** Stable node ID for the selected file (btoa of path). */
-const selectedNodeID = computed(() => {
-  if (!selectedPath.value) return '';
-  try {
-    return btoa(selectedPath.value);
-  } catch {
-    return selectedPath.value;
-  }
-});
+/** Stable node ID for the selected file (btoa of path; shared with the folder batch). */
+const selectedNodeID = computed(() => (selectedPath.value ? contextNodeID(selectedPath.value) : ''));
 
 async function loadSyncStatus() {
   try {
@@ -318,7 +329,7 @@ async function confirmPublish() {
       node_id: selectedNodeID.value,
       layer: publishLayer.value,
       kind: 'guidance',
-      title: selectedPath.value.replace(/.*\//, '').replace(/\.[^.]+$/, ''),
+      title: contextEntryTitle(selectedPath.value),
       body: previewContent.value,
       version: 1,
     });
@@ -894,6 +905,16 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- Folder share / promote batch dialog (FR-7). -->
+    <FolderShareDialog
+      v-if="folderDialogMode && selectedFolderNode"
+      :folder="selectedFolderNode"
+      :mode="folderDialogMode"
+      :disabled-reason="sharingDisabledReason"
+      @close="folderDialogMode = null"
+      @finished="loadSyncStatus"
+    />
+
     <!-- Publish result / error toast — always states the EFFECTIVE layer
          (finding #97), never the requested one, so a team→org fallback is
          never silent. -->
@@ -1052,12 +1073,13 @@ onBeforeUnmount(() => {
             v-if="shareTarget"
             type="button"
             class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
-            :disabled="shareBlockedReason !== null || publishLoading"
+            :disabled="shareTarget === 'folder' ? !selectedFolderNode : shareBlockedReason !== null || publishLoading"
             :title="shareBlockedReason ?? undefined"
             data-testid="context-publish-btn"
-            @click="openPublishConfirm"
+            @click="onShareClick"
           >
             <span v-if="publishLoading">Sharing…</span>
+            <span v-else-if="shareTarget === 'folder'">Share folder…</span>
             <span v-else>Share…</span>
           </button>
           <!-- Promote affordance (WP16) — visible whenever a file is
@@ -1067,12 +1089,13 @@ onBeforeUnmount(() => {
             v-if="shareTarget"
             type="button"
             class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
-            :disabled="shareBlockedReason !== null || promoteLoading"
+            :disabled="shareTarget === 'folder' ? !selectedFolderNode : shareBlockedReason !== null || promoteLoading"
             :title="shareBlockedReason ?? undefined"
             data-testid="context-promote-btn"
-            @click="onPromoteClick"
+            @click="onPromoteButton"
           >
             <span v-if="promoteLoading">Promoting…</span>
+            <span v-else-if="shareTarget === 'folder'">Promote folder…</span>
             <span v-else>Promote to org</span>
           </button>
           <button

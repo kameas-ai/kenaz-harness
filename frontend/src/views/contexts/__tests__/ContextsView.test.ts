@@ -1209,8 +1209,8 @@ describe('ContextsView sharing affordances (knowledge-home-01DOGF0E WP04, P-5)',
 describe('ContextsView folder sharing state (knowledge-home-01DOGF0E WP05, P-6)', () => {
   // The owner's F10 scenario: a context module folder selected, fleet team
   // cap off. Before WP05 a folder click only expanded the row and NO sharing
-  // affordance rendered. Folder-level promote itself is an open owner
-  // question (decision record D4) — this pins the interim honest state.
+  // affordance rendered. Folder-level share/promote is the FR-7 batch
+  // dialog (decision record D4, owner ruled "build" 2026-10-05).
   const tree: ContextNode = {
     name: '',
     path: '',
@@ -1228,7 +1228,7 @@ describe('ContextsView folder sharing state (knowledge-home-01DOGF0E WP05, P-6)'
     cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: cap,
   });
 
-  it('folder selected, cap off → sharing section renders, disabled, saying per-file + what enables sharing', async () => {
+  it('folder selected, cap off → sharing section renders with the session reason; folder actions open, nothing publishes', async () => {
     const publishSpy = vi.fn();
     const promoteSpy = vi.fn();
     const { client } = provide({ tree, files: { 'kameas-ai/context.md': '# k' }, syncStatus: status(false), publishSpy, promoteSpy });
@@ -1236,33 +1236,36 @@ describe('ContextsView folder sharing state (knowledge-home-01DOGF0E WP05, P-6)'
     await flushPromises();
     await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
     await flushPromises();
+    const reason = w.find('[data-testid=context-share-disabled-reason]');
+    expect(reason.attributes('data-share-target')).toBe('folder');
+    expect(reason.text()).toContain('does not have the team-graph capability');
     for (const id of ['context-publish-btn', 'context-promote-btn']) {
       const btn = w.find(`[data-testid=${id}]`);
       expect(btn.exists(), id).toBe(true);
-      expect((btn.element as HTMLButtonElement).disabled, id).toBe(true);
+      // FR-7 (D4 ruled 2026-10-05): the folder actions open the batch
+      // dialog, which renders disabled with the same reason.
+      expect((btn.element as HTMLButtonElement).disabled, id).toBe(false);
       await btn.trigger('click');
+      await flushPromises();
+      expect(w.find('[data-testid=folder-share-dialog]').attributes('data-disabled'), id).toBe('true');
+      await w.find('[data-testid=folder-share-cancel]').trigger('click');
+      await flushPromises();
     }
-    await flushPromises();
-    const reason = w.find('[data-testid=context-share-disabled-reason]');
-    expect(reason.attributes('data-share-target')).toBe('folder');
-    expect(reason.text()).toContain('Sharing works per file today — select a file in “kameas-ai” to share it.');
-    expect(reason.text()).toContain('pending a product decision');
-    expect(reason.text()).toContain('does not have the team-graph capability');
     expect(publishSpy).not.toHaveBeenCalled();
     expect(promoteSpy).not.toHaveBeenCalled();
     w.unmount();
   });
 
-  it('folder selected, cap on → still disabled with the per-file reason (no folder batch exists yet)', async () => {
+  it('folder selected, cap on → folder actions enabled, no reason shown', async () => {
     const { client } = provide({ tree, files: { 'kameas-ai/context.md': '# k' }, syncStatus: status(true) });
     const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
     await flushPromises();
     await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
     await flushPromises();
-    expect((w.find('[data-testid=context-publish-btn]').element as HTMLButtonElement).disabled).toBe(true);
-    const reason = w.find('[data-testid=context-share-disabled-reason]');
-    expect(reason.text()).toContain('select a file in “kameas-ai”');
-    expect(reason.text()).not.toContain('fleet team sync');
+    expect((w.find('[data-testid=context-publish-btn]').element as HTMLButtonElement).disabled).toBe(false);
+    expect(w.find('[data-testid=context-publish-btn]').text()).toBe('Share folder…');
+    expect(w.find('[data-testid=context-promote-btn]').text()).toBe('Promote folder…');
+    expect(w.find('[data-testid=context-share-disabled-reason]').exists()).toBe(false);
     expect(w.find('[data-testid=context-share-account-link]').exists()).toBe(false);
     w.unmount();
   });
@@ -1280,7 +1283,8 @@ describe('ContextsView folder sharing state (knowledge-home-01DOGF0E WP05, P-6)'
     await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
     await flushPromises();
     expect(w.text()).not.toContain('UNIQUE-PREVIEW-BODY');
-    expect(w.find('[data-testid=context-share-disabled-reason]').attributes('data-share-target')).toBe('folder');
+    // The sharing controls now act on the folder (FR-7 batch dialog).
+    expect(w.find('[data-testid=context-publish-btn]').text()).toBe('Share folder…');
     await w.find('[data-testid=context-create-folder]').trigger('click');
     await flushPromises();
     expect(w.find('[data-testid=context-new-folder-row]').text()).toContain('kameas-ai');
