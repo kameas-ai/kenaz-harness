@@ -99,6 +99,9 @@ function buildClient(initial: FleetSessionView) {
       }),
       fleetRefreshIdentity: vi.fn(async () => aliceIdentity),
       fleetRefreshCapabilities: vi.fn(async () => current.capabilities),
+      fleetSignInCancel: vi.fn(async () => {
+        current = signedOut();
+      }),
     } as any,
     appInfo: vi.fn(async () =>
       makeAppInfo(current.state === 'signed_out' ? {} : current.capabilities.enabled),
@@ -376,5 +379,20 @@ describe('UserMenu', () => {
     expect(wrapper.find('[data-testid="user-menu-status-chip"]').exists()).toBe(true);
     await openPopover(wrapper);
     expect(wrapper.find('[data-testid="user-menu-sync-unitPoll"]').text()).toContain("not syncing — can't reach fleet");
+  });
+
+  // ── WP07: sign-in in flight ──────────────────────────────────────────────
+
+  it('FR-5 / P-6 (UI): while a sign-in is in flight the menu offers Cancel, never a second "Sign in"', async () => {
+    const { client } = buildClient(fakeFleetSession({ state: 'signing_in', profile: prodProfile }));
+    const wrapper = mountUserMenu(client);
+    await flushPromises();
+    await openPopover(wrapper);
+    expect(wrapper.find('[data-testid="menu-sign-in"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="menu-signing-in"]').text()).toContain('Waiting for browser');
+    await wrapper.find('[data-testid="menu-sign-in-cancel"]').trigger('click');
+    await flushPromises();
+    expect(client.settings.fleetSignInCancel).toHaveBeenCalledOnce();
+    expect(wrapper.find('[data-testid="menu-sign-in"]').exists()).toBe(true);
   });
 });

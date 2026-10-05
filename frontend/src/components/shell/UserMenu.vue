@@ -25,7 +25,7 @@ import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { refreshFeatureFlags } from '@/lib/featureFlags';
-import { describeFleetReason, useFleetSession } from '@/lib/fleetSession';
+import { describeFleetReason, isSignInCancelled, useFleetSession } from '@/lib/fleetSession';
 import { isServedMode } from '@/lib/useServedMode';
 
 const client = useHarnessClient();
@@ -144,7 +144,8 @@ async function handleSignIn() {
     // must follow a menu sign-in exactly as they follow an Account-panel
     // one (P-4: they used to stay stale until restart).
     await refreshFeatureFlags(client);
-    if (err) void router.push('/settings?tab=account');
+    // A user cancel is not an error to explain; anything else is.
+    if (err && !isSignInCancelled(err)) void router.push('/settings?tab=account');
   } finally {
     loading.value = false;
   }
@@ -279,14 +280,23 @@ async function handleSignOut() {
           <div class="user-menu-divider" />
         </template>
 
-        <p
+        <div
           v-if="isSigningIn"
-          class="user-menu-sub px-2 py-1"
+          class="user-menu-degraded"
           role="status"
           data-testid="menu-signing-in"
         >
-          Waiting for browser…
-        </p>
+          <span>Waiting for browser…</span>
+          <button
+            v-if="!served"
+            type="button"
+            class="user-menu-link"
+            data-testid="menu-sign-in-cancel"
+            @click="fleet.cancelSignIn()"
+          >
+            Cancel
+          </button>
+        </div>
 
         <!-- Fleet account rows -->
         <button

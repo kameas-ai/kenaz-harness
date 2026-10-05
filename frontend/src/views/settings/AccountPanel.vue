@@ -27,7 +27,7 @@ import { computed, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { refreshFeatureFlags } from '@/lib/featureFlags';
 import { isUserNotProvisionedError } from '@/lib/errors';
-import { describeFleetReason, useFleetSession } from '@/lib/fleetSession';
+import { describeFleetReason, isSignInCancelled, useFleetSession } from '@/lib/fleetSession';
 
 const client = useHarnessClient();
 const fleet = useFleetSession(client);
@@ -122,7 +122,7 @@ async function signIn() {
   }
   try {
     const err = await fleet.signIn();
-    if (err) {
+    if (err && !isSignInCancelled(err)) {
       // Branch on the sentinel, not a substring of the raw fleet server
       // response (core/fleet/identity.go wraps ErrUserNotProvisioned with a
       // stable prefix) — this is what lets the template render a real link
@@ -273,6 +273,14 @@ async function refreshIdentity() {
         @click="signIn"
       >
         {{ loading || isSigningIn ? 'Waiting for browser…' : 'Sign in to fleet' }}
+      </button>
+      <button
+        v-if="isSigningIn"
+        class="btn btn-secondary"
+        data-testid="sign-in-cancel-btn"
+        @click="fleet.cancelSignIn()"
+      >
+        Cancel
       </button>
     </div>
     <p v-if="error" class="error-msg" data-testid="error-msg">

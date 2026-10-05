@@ -1673,6 +1673,12 @@ type SettingsAPI interface {
 	// HARNESS_FLEET_DISABLED=1.
 	FleetSignIn(ctx context.Context) (FleetIdentity, error)
 
+	// FleetSignInCancel cancels the in-flight sign-in flow (the UI's
+	// "Waiting for browser… Cancel"); the pending FleetSignIn returns
+	// context.Canceled. No-op when no flow is running.
+	// (fleet-session-truth-01DOGF0A FR-5)
+	FleetSignInCancel(ctx context.Context) error
+
 	// FleetSignOut clears persisted tokens and the identity cache.
 	// Returns fleet.ErrFleetDisabled when the kill switch is active.
 	FleetSignOut(ctx context.Context) error

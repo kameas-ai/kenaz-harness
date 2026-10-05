@@ -1326,6 +1326,10 @@ export function Settings_FleetSignIn() {
   return window['go']['rpc']['Bindings']['Settings_FleetSignIn']();
 }
 
+export function Settings_FleetSignInCancel() {
+  return window['go']['rpc']['Bindings']['Settings_FleetSignInCancel']();
+}
+
 export function Settings_FleetSignOut() {
   return window['go']['rpc']['Bindings']['Settings_FleetSignOut']();
 }

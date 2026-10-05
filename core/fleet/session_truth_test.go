@@ -253,3 +253,28 @@ func TestUnitPollReport_WarnsAndDegradesOnlyAtThreshold(t *testing.T) {
 		t.Fatalf("lane after success = %q, want ok", st)
 	}
 }
+
+// ── P-5 (flow half): DeviceCodeFlow honours cancellation ─────────────────────
+
+func TestDeviceCodeFlow_Cancel_ReturnsCanceled_OneBrowserOpen(t *testing.T) {
+	var opens atomic.Int32
+	prev := openBrowserFn
+	openBrowserFn = func(string) error { opens.Add(1); return nil } // never a real browser
+	t.Cleanup(func() { openBrowserFn = prev })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	_, err := DeviceCodeFlow(ctx, EnvProfile{
+		Name: EnvLocal, ZitadelIssuer: "http://127.0.0.1:1", NativeClientID: "test",
+		FleetBaseURL: "http://127.0.0.1:1", OIDCScopes: DefaultOIDCScopes,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("DeviceCodeFlow err = %v, want context.Canceled", err)
+	}
+	if n := opens.Load(); n != 1 {
+		t.Fatalf("browser opened %d times, want 1", n)
+	}
+}

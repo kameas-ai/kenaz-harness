@@ -47,6 +47,7 @@ export interface FleetSessionSource {
     fleetRefreshIdentity(): Promise<unknown>;
     fleetSignIn(): Promise<unknown>;
     fleetSignOut(): Promise<void>;
+    fleetSignInCancel?(): Promise<void>;
   };
 }
 
@@ -183,6 +184,28 @@ export async function signInFleet(): Promise<unknown | null> {
   }
   await refreshFleetSession();
   return err;
+}
+
+/**
+ * cancelSignInFleet cancels an in-flight sign-in (FR-5: "Waiting for
+ * browser… Cancel"). Best-effort; the pending signIn resolves with the
+ * cancellation and the snapshot returns to signed_out.
+ */
+export async function cancelSignInFleet(): Promise<void> {
+  const c = _client;
+  if (!c?.settings.fleetSignInCancel) return;
+  try {
+    await c.settings.fleetSignInCancel();
+  } catch {
+    // Nothing in flight / bridge gone: the snapshot is the truth either way.
+  }
+  await refreshFleetSession();
+}
+
+/** True for the error a cancelled sign-in flow resolves with. */
+export function isSignInCancelled(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return msg.includes('context canceled');
 }
 
 /** signOutFleet signs out; resolves to the error (or null). */
@@ -424,6 +447,7 @@ export function useFleetSession(client?: FleetSessionSource) {
     retry: retryFleetSession,
     signIn: signInFleet,
     signOut: signOutFleet,
+    cancelSignIn: cancelSignInFleet,
   };
 }
 

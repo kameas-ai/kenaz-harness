@@ -597,6 +597,7 @@ interface WailsBindingsLike {
   // fleet-auth-foundation-01NDFSEX08 WP05
   Settings_FleetSignIn(): Promise<FleetIdentity>;
   Settings_FleetSignOut(): Promise<void>;
+  Settings_FleetSignInCancel(): Promise<void>;
   Settings_FleetSignedIn(): Promise<boolean>;
   Settings_FleetRefreshIdentity(): Promise<FleetIdentity>;
   Settings_FleetProfile(): Promise<FleetProfileInfo>;
@@ -2499,6 +2500,12 @@ export interface SettingsClient {
    * returns the user's Identity. Returns an error when fleet is disabled.
    */
   fleetSignIn(): Promise<FleetIdentity>;
+  /**
+   * Cancel the in-flight sign-in flow (fleet-session-truth-01DOGF0A FR-5).
+   * The pending fleetSignIn() rejects with "context canceled". No-op when
+   * no flow is running.
+   */
+  fleetSignInCancel(): Promise<void>;
   /** Clear tokens and identity cache. */
   fleetSignOut(): Promise<void>;
   /** True iff valid fleet tokens exist. */
@@ -4557,6 +4564,7 @@ export function createHarnessClient(): HarnessClient {
       // fleet-auth-foundation-01NDFSEX08 WP05
       fleetSignIn: () => b().Settings_FleetSignIn(),
       fleetSignOut: () => b().Settings_FleetSignOut(),
+      fleetSignInCancel: () => b().Settings_FleetSignInCancel(),
       fleetSignedIn: () => b().Settings_FleetSignedIn(),
       fleetRefreshIdentity: () => b().Settings_FleetRefreshIdentity(),
       fleetProfile: () => b().Settings_FleetProfile(),
@@ -6083,6 +6091,7 @@ export function createFakeHarnessClient(
         userId: '', orgId: '', teamId: '',
       }),
       fleetSignOut: noop,
+      fleetSignInCancel: noop,
       fleetSignedIn: async () => false,
       fleetRefreshIdentity: async () => ({
         userId: '', orgId: '', teamId: '',

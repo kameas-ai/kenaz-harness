@@ -724,6 +724,8 @@ export function Settings_FleetSetTelemetryOptIn(arg1:string,arg2:boolean):Promis
 
 export function Settings_FleetSignIn():Promise<settings.FleetIdentity>;
 
+export function Settings_FleetSignInCancel():Promise<void>;
+
 export function Settings_FleetSignOut():Promise<void>;
 
 export function Settings_FleetSignedIn():Promise<boolean>;

@@ -158,6 +158,12 @@ type fleetState struct {
 	emitMu      sync.Mutex
 	lastEmitKey string
 
+	// signIn is the in-flight sign-in flow (nil when none); signInFlow is
+	// the browser flow, fleet.DeviceCodeFlow unless a test injects a fake
+	// (fleet-session-truth-01DOGF0A WP07).
+	signIn     *signInCall
+	signInFlow func(context.Context, fleet.EnvProfile) (fleet.TokenSet, error)
+
 	// sessionResetHooks run when one fleet session ends and another may
 	// begin (sign-in success, sign-out): per-session state held outside this
 	// package — the context-sync append breaker — forgets the old session.
@@ -762,9 +768,86 @@ func (a *API) CapabilityPoller() *fleet.CapabilityPoller {
 	return a.fleetPoller()
 }
 
+// signInCall is one in-flight sign-in flow that concurrent callers join
+// (fleet-session-truth-01DOGF0A FR-5 / P-6).
+type signInCall struct {
+	done   chan struct{}
+	cancel context.CancelFunc
+	id     FleetIdentity
+	err    error
+}
+
 // FleetSignIn kicks off the PKCE loopback OAuth flow. On success it
 // calls FleetRefreshIdentity to populate the cached identity.
+//
+// Single-flight (FR-5): a second call while a flow is in flight JOINS it
+// instead of opening a second browser window — dogfood B3's redundant flow
+// came from a bogus "Sign in" offered while a session existed. The flow runs
+// on its own context so that FleetSignInCancel (the UI's "Cancel") is what
+// stops it, not whichever caller's context happens to end first; a joining
+// caller whose own context ends just stops waiting.
 func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
+	if a.fleet == nil {
+		return FleetIdentity{}, fleet.ErrFleetDisabled
+	}
+	a.fleet.mu.Lock()
+	if call := a.fleet.signIn; call != nil {
+		a.fleet.mu.Unlock()
+		logging.L().Info("fleet.rpc.sign_in.joined_in_flight")
+		select {
+		case <-call.done:
+			return call.id, call.err
+		case <-ctx.Done():
+			return FleetIdentity{}, ctx.Err()
+		}
+	}
+	flowCtx, cancel := context.WithCancel(context.Background())
+	call := &signInCall{done: make(chan struct{}), cancel: cancel}
+	a.fleet.signIn = call
+	a.fleet.sess.signingIn = true
+	a.fleet.sess.signInReason, a.fleet.sess.signInErr = "", ""
+	a.fleet.mu.Unlock()
+	a.publishFleetSession("sign_in_start")
+
+	id, err := a.runSignIn(flowCtx)
+	cancel()
+
+	a.fleet.mu.Lock()
+	a.fleet.signIn = nil
+	a.fleet.sess.signingIn = false
+	if err != nil {
+		reason := FleetReasonSignInFailed
+		if errors.Is(err, context.Canceled) {
+			reason = FleetReasonSignInCancelled
+		}
+		a.fleet.sess.signInReason, a.fleet.sess.signInErr = reason, err.Error()
+	}
+	a.fleet.mu.Unlock()
+	call.id, call.err = id, err
+	close(call.done)
+	a.publishFleetSession("sign_in_end")
+	return id, err
+}
+
+// FleetSignInCancel cancels the in-flight sign-in flow, if any, through
+// DeviceCodeFlow's ctx.Done() branch (FR-5). Idempotent; a no-op when no
+// flow is running. The pending FleetSignIn returns context.Canceled.
+func (a *API) FleetSignInCancel(_ context.Context) error {
+	if a == nil || a.fleet == nil {
+		return nil
+	}
+	a.fleet.mu.RLock()
+	call := a.fleet.signIn
+	a.fleet.mu.RUnlock()
+	if call != nil {
+		logging.L().Info("fleet.rpc.sign_in.cancel_requested")
+		call.cancel()
+	}
+	return nil
+}
+
+// runSignIn is one sign-in flow: browser PKCE flow, token save, enroll.
+func (a *API) runSignIn(ctx context.Context) (FleetIdentity, error) {
 	logging.L().Info("fleet.rpc.sign_in.start")
 	c := a.fleetClient()
 	if c == nil || fleet.Disabled() {
@@ -781,8 +864,19 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 		)
 		return FleetIdentity{}, fleet.ErrProfileNotConfigured
 	}
-	ts, err := fleet.DeviceCodeFlow(ctx, profile)
+	a.fleet.mu.RLock()
+	flow := a.fleet.signInFlow
+	a.fleet.mu.RUnlock()
+	if flow == nil {
+		flow = fleet.DeviceCodeFlow
+	}
+	ts, err := flow(ctx, profile)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			// The user pressed Cancel: an outcome, not a failure (P-5).
+			logging.L().Info("fleet.rpc.sign_in.cancelled")
+			return FleetIdentity{}, err
+		}
 		logging.L().Error("fleet.rpc.sign_in.device_code_flow_failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}

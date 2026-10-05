@@ -1715,6 +1715,13 @@ func (b *Bindings) Settings_FleetSignIn() (settings.FleetIdentity, error) {
 	return b.api.Settings().FleetSignIn(b.ctx())
 }
 
+// Settings_FleetSignInCancel cancels the in-flight sign-in flow
+// (fleet-session-truth-01DOGF0A FR-5). No-op when none is running.
+func (b *Bindings) Settings_FleetSignInCancel() error {
+	defer sentry.WrapBinding("Settings_FleetSignInCancel")()
+	return b.api.Settings().FleetSignInCancel(b.ctx())
+}
+
 // Settings_FleetSignOut clears tokens and identity cache.
 func (b *Bindings) Settings_FleetSignOut() error {
 	defer sentry.WrapBinding("Settings_FleetSignOut")()
