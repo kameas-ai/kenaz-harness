@@ -2118,7 +2118,14 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// which is turn-wide by design — unlike the text, it is not
 		// scoped to the tail segment.
 		_, hasTool := sub.bridge.PartialState()
-		partialText := sub.bridge.PartialSegment()
+		// chat-single-writer-01DOGF0G WP04: and not even the whole
+		// segment — only the part the move journal neither wrote nor
+		// holds. A segment the journal already owns (the parked last fire
+		// that the deferred Finish below will write, or a `final`
+		// session_write already wrote) persisted here became a kind-less
+		// failed twin of that move: the "extra assistant bubble" of
+		// dogfood F12. See turnJournal.UnpersistedTail.
+		partialText := sub.journal.UnpersistedTail(sub.bridge.PartialSegment())
 		if partialText != "" {
 			partialFailureKind = classifyPartialFailureKind(message)
 			partialRecoverable = !hasTool

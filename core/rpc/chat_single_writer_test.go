@@ -27,7 +27,9 @@ package rpc
 //	(a) exactly ONE user row exists for the turn;
 //	(b) that row's id is every move's turn_span_id;
 //	(c) the provider received the user's text exactly once;
-//	(d) fleet context-sync saw exactly one user-turn event, naming that row.
+//	(d) fleet context-sync saw exactly one user-turn event, naming that row;
+//	(e) the answer is exactly one `final` assistant row, with no kind-less
+//	    assistant twin (WP04 — the assistant-side half of F12).
 //
 // (d) is spec FR-1d: the runner's re-append was the ONLY path that fed
 // SessionSyncer.AppendEvent for user turns (api.go llmHistoryWriter.AppendEntry
@@ -288,6 +290,25 @@ func TestChatTurn_UserMessageStoredOnce_AppendThenStartStream(t *testing.T) {
 			}
 			if spanned == 0 {
 				t.Errorf("(b) no row carries a turn_span_id — the turn's moves were not anchored at all")
+			}
+
+			// (e) WP04: the turn's answer is ONE assistant row — a move of
+			// this turn — with no kind-less twin (the extra assistant bubble
+			// half of F12).
+			finals := 0
+			for _, m := range stored {
+				if m.Role != session.RoleAssistant {
+					continue
+				}
+				if m.MoveKind() == "" {
+					t.Errorf("(e) kind-less assistant row %s %q in a turn whose span resolved — renders as an extra bubble", m.ID, m.Content)
+				}
+				if string(m.MoveKind()) == "final" {
+					finals++
+				}
+			}
+			if finals != 1 {
+				t.Errorf("(e) final assistant rows = %d, want exactly 1", finals)
 			}
 
 			// (c) the provider received the user's text exactly once.
