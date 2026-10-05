@@ -27,7 +27,8 @@
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { signedIn, capability } from '@/lib/featureFlags';
-import type { PolicyFileDetail, ParseError, FleetConfigPullStatusView, FleetIdentity } from '@/lib/types';
+import { useFleetSession } from '@/lib/fleetSession';
+import type { PolicyFileDetail, ParseError, FleetConfigPullStatusView } from '@/lib/types';
 import BaseDialog from '@/components/ui/BaseDialog.vue';
 
 const client = useHarnessClient();
@@ -53,32 +54,18 @@ async function loadConfigPullStatus() {
 }
 
 // ── fleet identity (for policy_admin role check) WP08 ─────────────────
+//
+// fleet-session-truth-01DOGF0A WP04: read from the shared fleet session
+// store. This used to fire its own fleetSignedIn() + fleetRefreshIdentity()
+// on mount — a full POST /api/v1/enroll per editor open, and a third
+// independent answer to "who am I" alongside UserMenu and AccountPanel.
 
-/** null = not yet loaded; false = not signed in; FleetIdentity = loaded */
-const fleetIdentity = ref<FleetIdentity | null | false>(null);
-
-async function loadFleetIdentity() {
-  if (!signedIn.value) {
-    fleetIdentity.value = false;
-    return;
-  }
-  try {
-    const [signedInFlag, identity] = await Promise.all([
-      client.settings.fleetSignedIn(),
-      // best-effort: use cached identity if available
-      client.settings.fleetRefreshIdentity().catch(() => null),
-    ]);
-    fleetIdentity.value = signedInFlag ? (identity ?? false) : false;
-  } catch {
-    fleetIdentity.value = false;
-  }
-}
+const fleet = useFleetSession(client);
 
 /** True when the current user has the policy_admin role (FR-201). */
 const isPolicyAdmin = computed<boolean>(() => {
-  if (!fleetIdentity.value) return false;
-  const id = fleetIdentity.value as FleetIdentity;
-  return Array.isArray(id.roles) && id.roles.includes('policy_admin');
+  const id = fleet.identity.value;
+  return !!id && Array.isArray(id.roles) && id.roles.includes('policy_admin');
 });
 
 // ── publish-to-team state (WP08) ──────────────────────────────────────
@@ -166,7 +153,7 @@ const hasConfigPullError = computed(
 // ── lifecycle ──────────────────────────────────────────────────────────
 
 onMounted(async () => {
-  await Promise.all([loadFileList(), loadConfigPullStatus(), loadFleetIdentity()]);
+  await Promise.all([loadFileList(), loadConfigPullStatus()]);
 });
 
 // ── helpers ────────────────────────────────────────────────────────────

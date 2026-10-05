@@ -268,6 +268,32 @@ export function describeFleetReason(reason: string | undefined): string {
 }
 
 /**
+ * accountSectionSubtitle derives Settings › Account's section-head subtitle
+ * from a snapshot (FR-10). Returns '' for signed-out / unknown so the caller
+ * keeps its "Sign in to access…" explainer — the only state it is true in.
+ */
+export function accountSectionSubtitle(s: FleetSessionView | null): string {
+  if (!s) return '';
+  const id = s.identity;
+  const label =
+    id?.email?.trim() || id?.displayName?.trim() || id?.orgName?.trim() || '';
+  const org = id?.orgName?.trim() && id.orgName.trim() !== label ? id.orgName.trim() : '';
+  const who = label ? `Signed in as ${label}${org ? ` · ${org}` : ''}` : 'Signed in';
+  switch (s.state) {
+    case 'signed_in':
+      return who;
+    case 'degraded':
+      return `${who} · ${describeFleetReason(s.reason)}`;
+    case 'signing_in':
+      return 'Waiting for the browser sign-in to finish…';
+    case 'disabled':
+      return 'Fleet features are disabled in this build.';
+    default:
+      return '';
+  }
+}
+
+/**
  * useFleetSession — the component entry point. Pass the harness client; the
  * first caller triggers the initial read and the single event subscription.
  */

@@ -21,7 +21,8 @@ import { defineComponent, h } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
 import SyncPanel from '@/views/settings/SyncPanel.vue';
-import { createFakeHarnessClient, type HarnessClient } from '@/lib/harnessClient';
+import { createFakeHarnessClient, fakeFleetSession, type HarnessClient } from '@/lib/harnessClient';
+import { _resetFleetSessionForTest } from '@/lib/fleetSession';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import { initFeatureFlags, signedIn, capability } from '@/lib/featureFlags';
 import type { AppInfo, FleetIdentity, FleetProfileInfo } from '@/lib/types';
@@ -74,6 +75,18 @@ function buildClient() {
     settings: {
       ...base.settings,
       fleetProfile: vi.fn(async () => prodProfile),
+      // fleet-session-truth-01DOGF0A: the panel renders the shared session
+      // snapshot; it follows the same server.session flag.
+      fleetSession: vi.fn(async () =>
+        server.session
+          ? fakeFleetSession({
+              state: 'signed_in',
+              identity: mockIdentity,
+              profile: prodProfile,
+              capabilities: { tier: 'team', enabled: { ...CAPS }, fetchedAt: '', source: 'fleet' },
+            })
+          : fakeFleetSession({ state: 'signed_out', profile: prodProfile }),
+      ),
       fleetSignedIn: vi.fn(async () => server.session),
       fleetSignIn: vi.fn(async () => {
         server.session = true;
@@ -110,6 +123,7 @@ describe('AccountPanel — capability refresh on session transitions', () => {
     // Boot state: app started signed out, so main.ts installed an AppInfo with
     // no capability map.
     initFeatureFlags(null);
+    _resetFleetSessionForTest();
   });
 
   it('opens the capability gates after a mid-session sign-in', async () => {
@@ -188,6 +202,7 @@ describe('AccountPanel — capability refresh on session transitions', () => {
 describe('Settings → Account and Settings → Sync agree with each other', () => {
   beforeEach(() => {
     initFeatureFlags(null);
+    _resetFleetSessionForTest();
   });
 
   /**

@@ -2,114 +2,95 @@
 /**
  * AccountPanel — Fleet identity + sign-in panel for Settings → Account.
  *
- * Three render states:
- *   1. Disabled (HARNESS_FLEET_DISABLED=1): banner only, no sign-in CTA.
- *   2. Signed-out: single "Sign in to fleet" button + brief explainer +
- *      env badge if not prod.
- *   3. Signed-in: email / tier badge / org_name / team_name / Refresh /
- *      Sign out + env badge if not prod.
+ * fleet-session-truth-01DOGF0A WP04: renders the shared fleet session store
+ * (lib/fleetSession.ts) instead of its own fleetSignedIn() +
+ * fleetRefreshIdentity() reads. Before this it was one of three surfaces
+ * with its own answer: during the 2026-10-04 dogfood it showed the user
+ * signed in while the UserMenu popover, reading its own copy, said signed
+ * out (F5).
+ *
+ * Render states (from the snapshot):
+ *   1. disabled (HARNESS_FLEET_DISABLED=1): banner only, no sign-in CTA.
+ *   2. signed_out / signing_in / unknown: "Sign in to fleet" (or "Waiting
+ *      for browser…") + explainer + env badge if not prod.
+ *   3. signed_in / degraded: identity card + Refresh / Sign out; degraded
+ *      adds the reason, and for not-provisioned the "Finish signup" link.
+ *
+ * Errors from an action the user just took (sign-in, refresh) are kept
+ * locally and humanized; everything about the SESSION comes from the store.
  *
  * OSS-first contract: this component is INVISIBLE to the user until they
  * open Settings → Account. No fleet affordances appear anywhere else in
  * the UI when the user is signed out.
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { refreshFeatureFlags } from '@/lib/featureFlags';
 import { isUserNotProvisionedError } from '@/lib/errors';
-import type { FleetIdentity, FleetProfileInfo } from '@/lib/types';
+import { describeFleetReason, useFleetSession } from '@/lib/fleetSession';
 
 const client = useHarnessClient();
+const fleet = useFleetSession(client);
 
 // ── state ────────────────────────────────────────────────────────────────
 
-/** null = not yet fetched; false = signed out; Identity = signed in */
-const identity = ref<FleetIdentity | null | false>(null);
-const profile = ref<FleetProfileInfo | null>(null);
-const fleetDisabled = ref(false);
 const loading = ref(false);
-const error = ref('');
-/**
- * True when the current `error` is ErrUserNotProvisioned — the Zitadel
- * identity authenticated but has no Fleet account. Tracked separately from
- * the humanized `error` string so the template can render a real `<a>`
- * link built from `profile.fleetBaseUrl` instead of baking the URL into
- * plain text (see humanizeFleetError below).
- */
-const signupRequired = ref(false);
-
-// ── lifecycle ─────────────────────────────────────────────────────────────
-
-onMounted(async () => {
-  await init();
-});
-
-async function init() {
-  loading.value = true;
-  error.value = '';
-  signupRequired.value = false;
-  try {
-    // Try to fetch profile first — if fleet is disabled this will throw.
-    profile.value = await client.settings.fleetProfile();
-    const signedIn = await client.settings.fleetSignedIn();
-    if (signedIn) {
-      identity.value = await client.settings.fleetRefreshIdentity();
-    } else {
-      identity.value = false;
-    }
-  } catch (e: any) {
-    const msg: string = e?.message ?? String(e);
-    if (msg.includes('disabled by env')) {
-      fleetDisabled.value = true;
-      identity.value = false;
-    } else if (isUserNotProvisionedError(e)) {
-      // This is the mount-time equivalent of signIn()'s catch: a user who
-      // signed in previously (tokens saved, SignedIn() reports true) but
-      // whose enroll never succeeded lands here on every app launch /
-      // Settings-Account visit, not just after clicking something. Without
-      // this branch they saw a plain "Sign in to fleet" button —
-      // indistinguishable from never having signed in at all, with no
-      // error text and no path to the fix.
-      signupRequired.value = true;
-      error.value = humanizeFleetError(msg);
-      identity.value = false;
-    } else {
-      // Profile not configured or network error — treat as signed out.
-      identity.value = false;
-    }
-  } finally {
-    loading.value = false;
-  }
-}
+/** Humanized error from the user's last action in this panel. */
+const actionError = ref('');
+/** The last action failed with ErrUserNotProvisioned (link target below). */
+const actionSignupRequired = ref(false);
 
 // ── computed ──────────────────────────────────────────────────────────────
 
-// Truthy only for a real identity object; null (unfetched) and false
-// (signed out) are both falsy, so the cast is unnecessary.
-const isSignedIn = computed(() => !!identity.value);
+const state = fleet.state;
+const fleetDisabled = computed(() => state.value === 'disabled');
+/** signed_in OR degraded — tokens are usable (FR-3). */
+const isSignedIn = fleet.signedIn;
+const isDegraded = computed(() => state.value === 'degraded');
+const isSigningIn = computed(() => state.value === 'signing_in');
+const identity = fleet.identity;
+const profile = computed(() => fleet.session.value?.profile ?? null);
 
 const badgeColor = computed(() => profile.value?.badgeColor ?? '');
 const envName = computed(() => (profile.value?.name ?? '').toUpperCase());
+const tierLabel = computed(() => identity.value?.tier ?? '');
 
-const tierLabel = computed(() => {
-  const id = identity.value;
-  if (!id) return '';
-  return id.tier ?? '';
+/** Not-provisioned, from the session (mount) or from the last action. */
+const signupRequired = computed(
+  () =>
+    actionSignupRequired.value ||
+    (isDegraded.value && fleet.session.value?.reason === 'not_provisioned'),
+);
+
+/** Session-level message: degraded reason, or why a session ended. */
+const sessionMessage = computed(() => {
+  const s = fleet.session.value;
+  if (!s) return '';
+  if (s.state === 'degraded') {
+    return s.reason === 'not_provisioned'
+      ? "You signed in with Zitadel, but this account hasn't finished Fleet signup yet."
+      : `${describeFleetReason(s.reason)} — showing your last known account details.`;
+  }
+  if (s.state === 'signed_out' && s.reason === 'session_expired') {
+    return 'Your session expired. Sign in again.';
+  }
+  return '';
 });
+
+/** One line under the actions: the action's own error wins. */
+const error = computed(() => actionError.value || sessionMessage.value);
 
 // ── actions ───────────────────────────────────────────────────────────────
 
 async function signIn() {
   loading.value = true;
-  error.value = '';
-  signupRequired.value = false;
+  actionError.value = '';
+  actionSignupRequired.value = false;
   // Pre-flight: if the build hasn't populated the env profile's client_id,
   // explain why sign-in is unavailable instead of trying and failing with
-  // an opaque message. The fleet client returns ErrProfileNotConfigured in
-  // this case, but surfacing it ahead of time keeps the button responsive
-  // and the explanation actionable.
+  // an opaque message.
   if (profile.value && !profile.value.configured) {
-    error.value =
+    actionError.value =
       `Sign-in is not available for the "${profile.value.name}" build profile — ` +
       `the identity provider is not configured in this build. ` +
       `This is a build-pipeline gap; contact your administrator.`;
@@ -117,25 +98,19 @@ async function signIn() {
     return;
   }
   try {
-    identity.value = await client.settings.fleetSignIn();
-    // Sign-in mutates fleet state long after boot, when main.ts's
-    // bootFeatureFlags has already run against a signed-out snapshot. Without
-    // this the user stays fully gated — no Sites nav, no Publish-to-team, and
-    // Settings → Sync still telling them to sign in — until they restart.
-    // (docs/dead-code-audit-2026-08-16.md finding A4, part 2)
+    const err = await fleet.signIn();
+    if (err) {
+      // Branch on the sentinel, not a substring of the raw fleet server
+      // response (core/fleet/identity.go wraps ErrUserNotProvisioned with a
+      // stable prefix) — this is what lets the template render a real link
+      // instead of the raw JSON body.
+      actionSignupRequired.value = isUserNotProvisionedError(err);
+      const raw = err instanceof Error ? err.message : String(err ?? '');
+      actionError.value = humanizeFleetError(raw);
+    }
+    // Sign-in mutates fleet state long after boot; the capability gates must
+    // follow (docs/dead-code-audit-2026-08-16.md finding A4, part 2).
     await refreshFeatureFlags(client);
-  } catch (e: any) {
-    // Branch on the sentinel, not a substring of the raw fleet server
-    // response — enrollIdentity now parses the {code, message} envelope
-    // and wraps ErrUserNotProvisioned with a stable prefix (see
-    // core/fleet/identity.go). Checking the raw error here (before
-    // humanizeFleetError's generic string matching) is what lets the
-    // template render an actual link instead of the raw JSON body that
-    // used to leak straight through humanizeFleetError's `return raw;`
-    // fallthrough.
-    signupRequired.value = isUserNotProvisionedError(e);
-    error.value = humanizeFleetError(e?.message ?? String(e ?? ''));
-    identity.value = false;
   } finally {
     loading.value = false;
   }
@@ -201,19 +176,18 @@ function humanizeFleetError(raw: string): string {
 
 async function signOut() {
   loading.value = true;
-  error.value = '';
+  actionError.value = '';
   try {
-    await client.settings.fleetSignOut();
-    identity.value = false;
-  } catch (e: any) {
-    error.value = e?.message ?? 'Sign-out failed.';
+    const err = await fleet.signOut();
+    if (err) {
+      actionError.value = err instanceof Error ? err.message : 'Sign-out failed.';
+    }
   } finally {
-    // Outside the try on purpose: FleetSignOut stops the capability poller
-    // and clears tokens *before* it reports a partial keychain failure, so the
-    // session is gone whether or not the RPC resolved cleanly. Leaving the
-    // capability snapshot behind would keep Publish-to-team and the Sites nav
-    // on screen for a signed-out user — the fail-OPEN direction, and the one
-    // that matters. refreshFeatureFlags never throws.
+    // FleetSignOut stops the capability poller and clears tokens *before* it
+    // reports a partial keychain failure, so the session is gone whether or
+    // not the RPC resolved cleanly — the gates must close either way (the
+    // fail-OPEN direction is the one that matters). refreshFeatureFlags
+    // never throws.
     await refreshFeatureFlags(client);
     loading.value = false;
   }
@@ -221,21 +195,21 @@ async function signOut() {
 
 async function refreshIdentity() {
   loading.value = true;
-  error.value = '';
-  signupRequired.value = false;
+  actionError.value = '';
+  actionSignupRequired.value = false;
   try {
-    identity.value = await client.settings.fleetRefreshIdentity();
-    // Re-enrolment is where a tier change lands (roles/tier come back from the
-    // enroll endpoint), and tier is what the capability set is derived from.
-    await refreshFeatureFlags(client);
-  } catch (e: any) {
-    // Same terminal condition as signIn()'s catch: route through
-    // humanizeFleetError instead of showing the raw error string, so a
-    // re-enroll that starts 403ing (e.g. the account was deprovisioned)
-    // renders the same actionable message + link, not raw JSON.
-    signupRequired.value = isUserNotProvisionedError(e);
-    error.value = humanizeFleetError(e?.message ?? String(e ?? 'Refresh failed.'));
+    await client.settings.fleetRefreshIdentity();
+  } catch (e: unknown) {
+    // Same terminal condition as signIn(): route through humanizeFleetError
+    // so a re-enroll that starts 403ing renders the actionable message +
+    // link, not raw JSON. The session itself turns degraded via the store.
+    actionSignupRequired.value = isUserNotProvisionedError(e);
+    const raw = e instanceof Error ? e.message : String(e ?? 'Refresh failed.');
+    actionError.value = humanizeFleetError(raw);
   } finally {
+    await fleet.refresh();
+    // Re-enrolment is where a tier change lands; capabilities follow it.
+    await refreshFeatureFlags(client);
     loading.value = false;
   }
 }
@@ -271,11 +245,11 @@ async function refreshIdentity() {
     <div class="panel-actions">
       <button
         class="btn btn-primary"
-        :disabled="loading"
+        :disabled="loading || isSigningIn"
         data-testid="sign-in-btn"
         @click="signIn"
       >
-        {{ loading ? 'Opening browser…' : 'Sign in to fleet' }}
+        {{ loading || isSigningIn ? 'Waiting for browser…' : 'Sign in to fleet' }}
       </button>
     </div>
     <p v-if="error" class="error-msg" data-testid="error-msg">
@@ -303,11 +277,20 @@ async function refreshIdentity() {
       >{{ envName }}</span>
     </div>
 
+    <p
+      v-if="isDegraded"
+      class="degraded-banner"
+      role="status"
+      data-testid="account-degraded"
+    >
+      {{ fleet.session.value?.reason === 'not_provisioned' ? 'Account setup not finished' : 'Not connected to fleet' }}
+    </p>
+
     <div class="identity-card" data-testid="identity-card">
-      <div v-if="(identity as FleetIdentity).email" class="identity-row">
+      <div v-if="identity?.email" class="identity-row">
         <span class="identity-label">Email</span>
         <span class="identity-value" data-testid="identity-email">
-          {{ (identity as FleetIdentity).email }}
+          {{ identity.email }}
         </span>
       </div>
       <div v-if="tierLabel" class="identity-row">
@@ -316,16 +299,16 @@ async function refreshIdentity() {
           {{ tierLabel }}
         </span>
       </div>
-      <div v-if="(identity as FleetIdentity).orgName" class="identity-row">
+      <div v-if="identity?.orgName" class="identity-row">
         <span class="identity-label">Organisation</span>
         <span class="identity-value" data-testid="identity-org">
-          {{ (identity as FleetIdentity).orgName }}
+          {{ identity.orgName }}
         </span>
       </div>
-      <div v-if="(identity as FleetIdentity).teamName" class="identity-row">
+      <div v-if="identity?.teamName" class="identity-row">
         <span class="identity-label">Team</span>
         <span class="identity-value" data-testid="identity-team">
-          {{ (identity as FleetIdentity).teamName }}
+          {{ identity.teamName }}
         </span>
       </div>
     </div>
@@ -337,7 +320,7 @@ async function refreshIdentity() {
         data-testid="refresh-btn"
         @click="refreshIdentity"
       >
-        {{ loading ? 'Refreshing…' : 'Refresh' }}
+        {{ loading ? 'Refreshing…' : isDegraded ? 'Retry' : 'Refresh' }}
       </button>
       <button
         class="btn btn-danger"
@@ -504,6 +487,12 @@ async function refreshIdentity() {
 .btn-danger {
   background: var(--danger);
   color: var(--surface-0);
+}
+
+.degraded-banner {
+  font-size: 0.8125rem;
+  color: var(--warn);
+  margin: 0 0 0.75rem;
 }
 
 .error-msg {
