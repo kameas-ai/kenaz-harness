@@ -277,11 +277,12 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// still, hence 55; cedar-policy/1300 adds one more, hence 56; WP06
 	// (0338) and WP08 (0339) add one more each, hence 58; laya-advisors/
 	// 1600 adds one more, hence 59; laya-advisors/1601 one more, hence 60;
-	// chat-single-writer-01DOGF0G's sessions/0341 one more, hence 61; and
+	// chat-single-writer-01DOGF0G's sessions/0341 one more, hence 61;
 	// agentgraph-settings-linkage-01DOGF0D's sessions/0342 one more,
-	// hence 62.
-	if count != 62 {
-		t.Errorf("ledger count = %d, want 62", count)
+	// hence 62; and units/1104-artifacts-to-units
+	// (artifacts-as-units-01DOGF0C WP04) one more, hence 63.
+	if count != 63 {
+		t.Errorf("ledger count = %d, want 63", count)
 	}
 }
 

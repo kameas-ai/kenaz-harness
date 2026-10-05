@@ -473,6 +473,8 @@ describe('LeftRail (project grouping)', () => {
     await w.find('[data-testid="project-menu-delete-p1"]').trigger('click');
     await nextTick();
     expect(w.find('[data-testid="delete-project-modal"]').exists()).toBe(true);
+    // artifacts-as-units-01DOGF0C: the modal must say project artifacts go.
+    expect(w.find('[data-testid="delete-project-artifacts-warning"]').text()).toContain('permanently deleted');
     const cb = w.find<HTMLInputElement>('[data-testid="delete-project-cascade"]');
     expect(cb.exists()).toBe(true);
     await cb.setValue(true);

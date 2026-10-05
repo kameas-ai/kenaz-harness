@@ -11,8 +11,12 @@
 // version so the graph's lineage is also auditable.
 //
 // DIRECTIVE_001: this package is the single owner of the units and
-// unit_edges tables; all read/write access from other packages must go
-// through the public Manager API.
+// unit_edges tables' schema; all read/write access from other packages
+// must go through the public Manager API — with ONE delegated exception:
+// rows with kind='artifact' are owned by core/artifacts' units-backed
+// store (artifacts-as-units-01DOGF0C), which reads and writes them
+// directly and never touches another kind. Nothing in this package
+// creates kind='artifact' rows.
 package units
 
 import (

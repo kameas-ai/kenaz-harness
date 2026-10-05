@@ -435,92 +435,14 @@ func TestSQLStore_RefcountFor(t *testing.T) {
 	}
 }
 
-// TestSQLStore_SessionDeleteCascadesArtifacts verifies the FK ON
-// DELETE CASCADE: removing a sessions row drops every artifact that
-// references it.
-func TestSQLStore_SessionDeleteCascadesArtifacts(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-	seedSession(t, db, "s1", nil)
-	store := artifacts.NewSQLStore(db)
-	ctx := context.Background()
-
-	for i := 0; i < 2; i++ {
-		_, _ = store.Insert(ctx, artifacts.Artifact{
-			SessionID:   "s1",
-			MimeType:    "text/plain",
-			ContentHash: "h",
-			Source:      artifacts.SourceCodeBlock,
-			SourceRef:   artifacts.ArtifactSourceRef{MessageID: "m"},
-		})
-	}
-	got, _ := store.List(ctx, artifacts.ArtifactFilter{SessionID: "s1"})
-	if len(got) != 2 {
-		t.Fatalf("setup: List len = %d, want 2", len(got))
-	}
-
-	if err := db.WriteTx(ctx, func(tx storage.WriteTx) error {
-		_, err := tx.Exec(ctx, "DELETE FROM sessions WHERE id = ?", "s1")
-		return err
-	}); err != nil {
-		t.Fatalf("delete sessions row: %v", err)
-	}
-	got, _ = store.List(ctx, artifacts.ArtifactFilter{SessionID: "s1"})
-	if len(got) != 0 {
-		t.Errorf("after session cascade: List len = %d, want 0", len(got))
-	}
-}
-
-// TestSQLStore_ProjectDeleteSetsArtifactProjectNull verifies the FK ON
-// DELETE SET NULL: removing a project severs the project_id link
-// without losing the artifact row, and scope_kind is preserved per
-// FR-015 (caller decides demotion semantics).
-func TestSQLStore_ProjectDeleteSetsArtifactProjectNull(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-	seedProject(t, db, "p1")
-	seedSession(t, db, "s1", strPtr("p1"))
-	store := artifacts.NewSQLStore(db)
-	ctx := context.Background()
-
-	pid := "p1"
-	a, _ := store.Insert(ctx, artifacts.Artifact{
-		SessionID:   "s1",
-		ProjectID:   &pid,
-		MimeType:    "text/plain",
-		ContentHash: "h",
-		Source:      artifacts.SourceCodeBlock,
-		SourceRef:   artifacts.ArtifactSourceRef{MessageID: "m"},
-		ScopeKind:   artifacts.ScopeKindProject,
-	})
-
-	// Detach the session from the project before deleting (sessions
-	// have ON DELETE SET NULL on project_id too — but we want to
-	// isolate the artifact-side cascade behavior).
-	if err := db.WriteTx(ctx, func(tx storage.WriteTx) error {
-		_, err := tx.Exec(ctx, "UPDATE sessions SET project_id = NULL WHERE id = ?", "s1")
-		return err
-	}); err != nil {
-		t.Fatalf("detach session: %v", err)
-	}
-	if err := db.WriteTx(ctx, func(tx storage.WriteTx) error {
-		_, err := tx.Exec(ctx, "DELETE FROM projects WHERE id = ?", "p1")
-		return err
-	}); err != nil {
-		t.Fatalf("delete project: %v", err)
-	}
-	round, err := store.Get(ctx, a.ID)
-	if err != nil {
-		t.Fatalf("Get after project delete: %v", err)
-	}
-	if round.ProjectID != nil {
-		t.Errorf("ProjectID = %v, want nil after project delete", round.ProjectID)
-	}
-	// scope_kind stays project — caller decides whether to demote.
-	if round.ScopeKind != artifacts.ScopeKindProject {
-		t.Errorf("ScopeKind = %q, want project preserved", round.ScopeKind)
-	}
-}
+// The legacy table's FK-cascade tests (TestSQLStore_SessionDeleteCascadesArtifacts,
+// TestSQLStore_ProjectDeleteSetsArtifactProjectNull) were retired by
+// artifacts-as-units-01DOGF0C WP04: artifacts now live in the units tables,
+// where scope_id has no FK, and session/project deletes reach them through
+// session.Manager / projects.Manager delete observers. That behaviour is
+// pinned on real sqlite in units_cascade_test.go
+// (TestUnitsStore_SessionDelete_PurgesArtifactUnits,
+// TestUnitsStore_ProjectDelete_PurgesArtifactUnits).
 
 // TestSQLStore_GetNotFound exercises the sentinel.
 func TestSQLStore_GetNotFound(t *testing.T) {

@@ -61,6 +61,9 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	//    sessions migrations and the columns 0333/0334 added. The units
 	//    rows (1100-1103) stay — they are what made max(applied) 1103.
 	raw := openRaw(t, dir)
+	// 0332 rebuilds `artifacts`, which units/1104 renamed on the HEAD
+	// database this test starts from — rewind 1104 too.
+	rewindArtifactsToUnits(t, ctx, raw)
 	rewind := []string{
 		"DELETE FROM harness_migrations WHERE owning_mission='sessions' AND version >= 332",
 		"ALTER TABLE session_messages DROP COLUMN kind",

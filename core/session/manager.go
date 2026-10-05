@@ -132,6 +132,34 @@ type Manager struct {
 	// reach anything that cached the old value).
 	kindObserversMu sync.Mutex
 	kindObservers   []KindTransitionObserver
+
+	// deleteObservers run synchronously after Delete removes the session
+	// row (artifacts-as-units-01DOGF0C WP03, spec FR-6). Storage that
+	// references a session WITHOUT a foreign key — core/units' scope_id is
+	// plain TEXT — has no schema cascade to lean on, so it registers here
+	// instead. Every session delete path funnels through Manager.Delete
+	// (the sessions view, the branch-children cascade in
+	// core/conversation), so an observer sees all of them.
+	deleteObserversMu sync.Mutex
+	deleteObservers   []DeleteObserver
+}
+
+// DeleteObserver is called after a session row has been deleted. A
+// returned error is surfaced from Manager.Delete (the session row is
+// already gone at that point — the error reports that cleanup of
+// FK-less dependants did not finish).
+type DeleteObserver func(ctx context.Context, sessionID string) error
+
+// AddDeleteObserver registers fn to run after every successful Delete.
+// Append-only, safe for concurrent use, intended for boot-time wiring.
+// A nil fn is ignored.
+func (m *Manager) AddDeleteObserver(fn DeleteObserver) {
+	if m == nil || fn == nil {
+		return
+	}
+	m.deleteObserversMu.Lock()
+	m.deleteObservers = append(m.deleteObservers, fn)
+	m.deleteObserversMu.Unlock()
 }
 
 // KindTransitionObserver is notified when SetKind changes a session's
@@ -510,6 +538,18 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	m.audit.Emit(ctx, EventKindSessionDeleted, map[string]any{
 		"session_id": id,
 	})
+	m.deleteObserversMu.Lock()
+	observers := append([]DeleteObserver(nil), m.deleteObservers...)
+	m.deleteObserversMu.Unlock()
+	var errs []error
+	for _, fn := range observers {
+		if err := fn(ctx, id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("session: %s deleted, but dependant cleanup failed: %w", id, errors.Join(errs...))
+	}
 	return nil
 }
 

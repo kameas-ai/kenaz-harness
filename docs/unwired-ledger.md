@@ -467,6 +467,82 @@ reopening the view shows the redrive. **Blocker:** a durable
 **Owner:** the follow-up to 01DOGF0D that persists exact run state
 (spec §5 follow-up). Deleted when that record exists and the status
 test asserts "running" across the whole redrive window.
+### 2026-10-04 (artifacts-as-units-01DOGF0C review F10) · artifact purge after a session/project delete has no retry — purge-retry
+
+`purgeArtifactsAfterDelete` (`core/rpc/api.go`) runs after the session or
+project row is already gone. If it fails, the error is logged
+(`rpc.artifacts.purge_failed`) and the delete still reports success.
+Returning the error would show "delete failed" for an item that no longer
+exists and cannot be deleted again. The residue is artifact units whose
+`scope_id` / `metadata.session_id` / `metadata.project_id` name a deleted
+row, and the media they pin. These are still visible and deletable one by
+one in the Library's Captured view. No sweep re-runs the purge. Fix shape: a
+boot-time sweep that purges artifact units whose session/project no longer
+exists. Blocker: none technical; it was descoped from the review round.
+Owner: artifacts-as-units-01DOGF0C follow-up (filed 2026-10-04).
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C review F11) · session delete funnel deletes promoted artifacts — pre-existing, preserved
+
+`rpc/views/sessions` `DeleteWithOptions` (default cascade) lists artifacts
+by ORIGIN session and deletes all of them, including ones the user promoted
+to project or global scope. That contradicts what promotion is for. The core
+session-delete observer only deletes session-SCOPED units and unlinks
+promoted ones. The legacy store behaved the same way as the funnel, so
+artifacts-as-units kept it as is: a storage migration is the wrong place to
+change delete semantics. Decision needed: should the funnel skip promoted
+artifacts (filter `ScopeKind=session`)? Owner: the product owner, raised by
+artifacts-as-units-01DOGF0C. Decision record:
+`docs/missions/artifacts-as-units.md` "Review follow-ups".
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `units.KindArtifact` defined, accepted by the schema, used only in tests — CLOSED
+
+`core/units/unit.go` has declared `KindArtifact = "artifact"` and the
+`units.kind` CHECK has admitted `'artifact'` since
+`unified-context-artifacts-01NCTXU01` (units/1100), but every reference was
+in a test (`resolution_test.go`, `store_mem_test.go`, `store_sql_test.go`)
+and artifacts kept living in their own `artifacts` / `artifact_versions`
+tables. 01NCTXU01 FR-003 ("artifacts are units with kind=artifact") was
+ratified and never implemented — a schema that promised a shape no writer
+produced.
+
+**Closed** by artifacts-as-units-01DOGF0C: migration
+`units/1104-artifacts-to-units` copies every artifact and version onto
+`units` / `unit_versions` (ids preserved, verified in-transaction), and
+`core/rpc/api.go` `newArtifactsStack` now builds `artifacts.NewUnitsStore`
+— every capture, revision, promote and delete in production writes
+`kind='artifact'` units. Decision record: `docs/missions/artifacts-as-units.md`.
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `artifacts_legacy` / `artifact_versions_legacy` retained read-only — DROP due next release
+
+Migration `units/1104-artifacts-to-units` RENAMES the legacy tables
+instead of dropping them (spec FR-3.3: never drop in the migration that
+copies — dropping in place is how `sessions/0327` and `sessions/0332`
+destroyed `artifact_versions`). Nothing reads or writes them after 1104:
+the legacy store implementation was deleted with the store switch. They are
+a recovery copy for one release of real upgrades.
+
+**Follow-up (dated, owned):** the release AFTER the one that ships 1104
+adds `units/1105-drop-artifacts-legacy` (`DROP TABLE
+artifact_versions_legacy` first, then `artifacts_legacy` — child before
+parent so no cascade fires), with a populated-snapshot test from the
+first snapshot that carries the `*_legacy` tables, per the I14 gate.
+Blocker: one shipped release of 1104 against real installs. Owner:
+artifacts-as-units-01DOGF0C (filed 2026-10-04). Do not fold it into 1104
+or into the same release.
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP01, D4) · artifact version history is write-only — `Store.ListVersions` has no production reader
+
+`kenaz__update_artifact`, plan-mode Edit and edit-file sync all append
+revisions (`Manager.WriteVersion`), but nothing outside the store
+implementations and their tests calls `ListVersions`, and
+`ArtifactsAPI.Get` / the Captured preview always serve the ORIGINAL
+capture's bytes (`Artifact.ContentHash`). A user who asks the model to
+update an artifact sees the old content in the Library. Found while
+mapping versions onto `unit_versions`; not fixed here because it is a
+product decision (show history and latest, or serve latest only), not a
+storage one. Blocker: that decision. Owner: the next artifacts/Library
+mission — escalate to the owner before wiring, do not delete the
+WriteVersion path (it is the only revision capability).
 
 ### 2026-09-30 (laya-advisors-01LAYA001 WP13) · the dated-nil `sidecarProbe` is replaced; two dated justifications remain
 

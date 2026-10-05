@@ -8,6 +8,10 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/artifacts"
 )
 
+// The TestMemStore_* cases test the memory store itself (WP-PI AC-PI-2);
+// global scope on the production (units-backed) store is pinned by the
+// TestSQLStore_* cases below and store_contract_test.go on real sqlite.
+
 // TestMemStore_GlobalScope_Insert verifies that ScopeKindGlobal is
 // accepted by both the memory and SQL stores.
 func TestMemStore_GlobalScope_Insert(t *testing.T) {

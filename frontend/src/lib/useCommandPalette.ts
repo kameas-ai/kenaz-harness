@@ -53,7 +53,8 @@ const NAV_ACTIONS: PaletteAction[] = [
   { id: 'nav.contexts', label: 'Go to Contexts', hint: 'Session context files', perform: () => navigate('#/contexts') },
   { id: 'nav.memory', label: 'Go to Memory', hint: 'Memory capture settings', perform: () => navigate('#/memory') },
   { id: 'nav.workflows', label: 'Go to Workflows', hint: 'Scheduled workflows', perform: () => navigate('#/workflows') },
-  { id: 'nav.artifacts', label: 'Go to Artifacts', hint: 'Saved artifacts & outputs', perform: () => navigate('#/artifacts') },
+  // artifacts-as-units-01DOGF0C WP06: Artifacts + Documents → one Library.
+  { id: 'nav.library', label: 'Go to Library', hint: 'Captured artifacts & authored documents', perform: () => navigate('#/library/captured') },
   // agentgraph-total-convergence-01PMGX01 WP16: back in the left rail as well
   // (see LeftRail.vue). The palette entry stays — a rail entry and a Cmd+K
   // action are not redundant, they serve different reach.

@@ -555,8 +555,11 @@ func TestMigration0341_SecondApplicationConvergesOnInterleavedPairs(t *testing.T
 // re-applies late sessions migrations, so 0341 can run AGAIN on a
 // database units/1104 has already converted (artifacts renamed to
 // artifacts_legacy). A bare `FROM artifacts` would fail Open there.
-// The hardened artifactReferences consults sqlite_master and falls back
-// to artifact units, so the referenced pair is still SKIPPED.
+// End-to-end: pass 1 applies 0341 (pair protected via the REAL
+// artifacts-table reference) then 1104 (artifact copied to units,
+// table renamed); the rewind-and-reopen repair shape re-runs 0341 on
+// the converted database — it must neither brick Open nor delete the
+// pair, now resolved through the units path.
 func TestMigration0341_ReapplyAfterUnitsConversionDoesNotBrick(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -570,46 +573,73 @@ func TestMigration0341_ReapplyAfterUnitsConversionDoesNotBrick(t *testing.T) {
 		t.Fatalf("materialise v0.85.2: %v", err)
 	}
 	ms := func(n int64) int64 { return g0341Base + n*1_000_000 }
-	stmts := []string{
-		`INSERT INTO sessions (id, name, created_at, updated_at, last_active_at, position) VALUES ('zz-re', 'reapply', 1, 1, 1, 71)`,
-		`ALTER TABLE artifacts RENAME TO artifacts_legacy`,
-		`INSERT INTO units (id, kind, scope, scope_id, classification, version, load_policy, title, body, metadata, created_at, updated_at)
-		 VALUES ('unit-art-1','artifact','session','zz-re','personal',1,'on_demand','t','','{"source_ref":{"message_id":"zr-a"}}',1,1)`,
+	stmts := []struct {
+		q    string
+		args []any
+	}{
+		{`INSERT INTO sessions (id, name, created_at, updated_at, last_active_at, position) VALUES ('zz-re', 'reapply', 1, 1, 1, 71)`, nil},
+		{`INSERT INTO session_messages (id, session_id, sequence, role, content, created_at) VALUES ('zr-a', 'zz-re', 0, 'user', 'same text', ?)`, []any{ms(0)}},
+		{`INSERT INTO session_messages (id, session_id, sequence, role, content, created_at) VALUES ('zr-a-copy', 'zz-re', 1, 'user', 'same text', ?)`, []any{ms(1)}},
+		{`INSERT INTO artifacts (id, session_id, project_id, title, mime_type, content_hash, byte_size, source, source_ref_json, scope_kind, created_at)
+		  VALUES ('zz-re-art', 'zz-re', NULL, 'ref', 'text/plain', 'zzrehash', 3, 'user_pin', '{"message_id":"zr-a"}', 'session', 1)`, nil},
 	}
-	for _, q := range stmts {
-		if _, err := raw.ExecContext(ctx, q); err != nil {
-			t.Fatalf("seed %q: %v", q, err)
-		}
-	}
-	for i, row := range []struct {
-		id string
-		at int64
-	}{{"zr-a", ms(0)}, {"zr-a-copy", ms(1)}} {
-		if _, err := raw.ExecContext(ctx,
-			`INSERT INTO session_messages (id, session_id, sequence, role, content, created_at) VALUES (?, 'zz-re', ?, 'user', 'same text', ?)`,
-			row.id, i, row.at); err != nil {
-			t.Fatalf("seed pair row: %v", err)
+	for _, st := range stmts {
+		if _, err := raw.ExecContext(ctx, st.q, st.args...); err != nil {
+			t.Fatalf("seed %q: %v", st.q, err)
 		}
 	}
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw: %v", err)
 	}
 
-	// Open applies 0341 against the post-1104 shape. It must NOT fail,
-	// and the pair referenced through the artifact UNIT must be kept.
+	countUsers := func() int {
+		t.Helper()
+		db := openRawSQLiteAt(t, rawPath)
+		defer func() { _ = db.Close() }()
+		var n int
+		if err := db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM session_messages WHERE session_id = 'zz-re' AND role = 'user'`).Scan(&n); err != nil {
+			t.Fatalf("count zz-re users: %v", err)
+		}
+		return n
+	}
+
+	// Pass 1: real Open applies 0341 (artifacts path protects the pair)
+	// then 1104 (converts + renames).
 	db, err := storagesqlite.Open(newConfig(dir))
 	if err != nil {
-		t.Fatalf("Open on a units-converted database: %v", err)
-	}
-	var n int
-	if err := db.Reader().QueryRow(ctx,
-		`SELECT COUNT(*) FROM session_messages WHERE session_id = 'zz-re' AND role = 'user'`).Scan(&n); err != nil {
-		t.Fatalf("count zz-re users: %v", err)
+		t.Fatalf("Open pass 1: %v", err)
 	}
 	if err := db.Close(ctx); err != nil {
-		t.Fatalf("close: %v", err)
+		t.Fatalf("close pass 1: %v", err)
 	}
-	if n != 2 {
-		t.Fatalf("user rows after 0341 on units-converted db = %d, want 2 (pair kept via units reference)", n)
+	if n := countUsers(); n != 2 {
+		t.Fatalf("pass 1: user rows = %d, want 2 (artifacts-path protection)", n)
+	}
+
+	// Repair shape: rewind 0341's ledger row and reopen on the CONVERTED
+	// database (artifacts renamed, reference now in units metadata).
+	rawDB := openRawSQLiteAt(t, rawPath)
+	if _, err := rawDB.ExecContext(ctx, `DELETE FROM harness_migrations WHERE id = 'sessions/0341-dedupe-user-turns'`); err != nil {
+		t.Fatalf("rewind 0341: %v", err)
+	}
+	var legacy int
+	if err := rawDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artifacts_legacy'`).Scan(&legacy); err != nil || legacy != 1 {
+		t.Fatalf("precondition: artifacts_legacy present = %d err=%v, want 1 (1104 ran)", legacy, err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close raw: %v", err)
+	}
+
+	db2, err := storagesqlite.Open(newConfig(dir))
+	if err != nil {
+		t.Fatalf("Open repair pass on a units-converted database: %v", err)
+	}
+	if err := db2.Close(ctx); err != nil {
+		t.Fatalf("close repair pass: %v", err)
+	}
+	if n := countUsers(); n != 2 {
+		t.Fatalf("repair pass: user rows = %d, want 2 (pair kept via the units reference)", n)
 	}
 }
