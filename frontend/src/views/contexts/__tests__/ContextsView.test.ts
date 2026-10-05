@@ -1184,3 +1184,79 @@ describe('ContextsView sharing affordances (knowledge-home-01DOGF0E WP04, P-5)',
     w.unmount();
   });
 });
+
+describe('ContextsView folder sharing state (knowledge-home-01DOGF0E WP05, P-6)', () => {
+  // The owner's F10 scenario: a context module folder selected, fleet team
+  // cap off. Before WP05 a folder click only expanded the row and NO sharing
+  // affordance rendered. Folder-level promote itself is an open owner
+  // question (decision record D4) — this pins the interim honest state.
+  const tree: ContextNode = {
+    name: '',
+    path: '',
+    kind: 'folder',
+    children: [
+      {
+        name: 'kameas-ai',
+        path: 'kameas-ai',
+        kind: 'folder',
+        children: [{ name: 'context.md', path: 'kameas-ai/context.md', kind: 'file' }],
+      },
+    ],
+  };
+  const status = (cap: boolean): ContextSyncStatusView => ({
+    cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: cap,
+  });
+
+  it('folder selected, cap off → sharing section renders, disabled, saying per-file + what enables sharing', async () => {
+    const publishSpy = vi.fn();
+    const promoteSpy = vi.fn();
+    const { client } = provide({ tree, files: { 'kameas-ai/context.md': '# k' }, syncStatus: status(false), publishSpy, promoteSpy });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    for (const id of ['context-publish-btn', 'context-promote-btn']) {
+      const btn = w.find(`[data-testid=${id}]`);
+      expect(btn.exists(), id).toBe(true);
+      expect((btn.element as HTMLButtonElement).disabled, id).toBe(true);
+      await btn.trigger('click');
+    }
+    await flushPromises();
+    const reason = w.find('[data-testid=context-share-disabled-reason]');
+    expect(reason.attributes('data-share-target')).toBe('folder');
+    expect(reason.text()).toContain('Sharing works per file today — select a file in “kameas-ai” to share it.');
+    expect(reason.text()).toContain('pending a product decision');
+    expect(reason.text()).toContain('fleet team sync is not active');
+    expect(publishSpy).not.toHaveBeenCalled();
+    expect(promoteSpy).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it('folder selected, cap on → still disabled with the per-file reason (no folder batch exists yet)', async () => {
+    const { client } = provide({ tree, files: { 'kameas-ai/context.md': '# k' }, syncStatus: status(true) });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    expect((w.find('[data-testid=context-publish-btn]').element as HTMLButtonElement).disabled).toBe(true);
+    const reason = w.find('[data-testid=context-share-disabled-reason]');
+    expect(reason.text()).toContain('select a file in “kameas-ai”');
+    expect(reason.text()).not.toContain('fleet team sync');
+    expect(w.find('[data-testid=context-share-account-link]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it('then selecting a file in the folder → the file is shareable (cap on)', async () => {
+    const { client } = provide({ tree, files: { 'kameas-ai/context.md': '# k' }, syncStatus: status(true) });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai/context.md"]').trigger('click');
+    await flushPromises();
+    expect((w.find('[data-testid=context-publish-btn]').element as HTMLButtonElement).disabled).toBe(false);
+    expect((w.find('[data-testid=context-promote-btn]').element as HTMLButtonElement).disabled).toBe(false);
+    expect(w.find('[data-testid=context-share-disabled-reason]').exists()).toBe(false);
+    w.unmount();
+  });
+});

@@ -105,6 +105,20 @@ const rootPath = ref<string>('');
 const treeError = ref<string | null>(null);
 
 const selectedPath = ref<string | null>(null);
+
+/**
+ * selectedFolder — the folder row the user last clicked, when that click is
+ * more recent than any file selection (knowledge-home-01DOGF0E WP05, FR-7).
+ * Only the sharing section reads it: the owner's F10 case was "kameas-ai
+ * folder selected → no sharing affordance at all", because folder clicks
+ * only expanded the row. Kept separate from `selectedPath` so the preview,
+ * "+ Folder" and import targets behave exactly as before.
+ */
+const selectedFolder = ref<string | null>(null);
+
+function selectFolder(path: string) {
+  selectedFolder.value = path;
+}
 const previewContent = ref<string>('');
 const previewLoading = ref(false);
 const previewError = ref<string | null>(null);
@@ -161,12 +175,42 @@ const teamCapEnabled = computed(
  * second swaps this computed for FleetSession-derived sentences — the gate
  * (`teamCapEnabled`) stays where it is (docs/missions/knowledge-home.md D5).
  */
+/**
+ * folderShareReason — the interim folder state for FR-7. Folder-level
+ * share/promote (a batch dialog over per-entry publish/promote) is an OPEN
+ * owner question (docs/missions/knowledge-home.md D4, asked 2026-10-04):
+ * deferred, NOT rejected. Until it is answered the folder pane says how
+ * sharing works today instead of showing nothing. When the owner answers,
+ * either build the dialog (FR-7) or reword this to the dated rejection copy.
+ */
+function folderShareReason(folderPath: string): string {
+  const name = folderPath.split('/').pop() || folderPath;
+  return `Sharing works per file today — select a file in “${name}” to share it. Sharing a whole folder is pending a product decision.`;
+}
+
 const sharingDisabledReason = computed<string | null>(() => {
   if (teamCapEnabled.value) return null;
   if (syncStatus.value === null) {
     return 'Sharing is unavailable — fleet team-sync status could not be read. Sharing needs a signed-in fleet connection with the team-graph capability.';
   }
   return 'Sharing is off — fleet team sync is not active. Sharing needs a signed-in fleet connection with the team-graph capability.';
+});
+
+/** What the sharing controls act on: the last-clicked folder, else the selected file. */
+const shareTarget = computed<'folder' | 'file' | null>(() => {
+  if (selectedFolder.value !== null) return 'folder';
+  if (selectedPath.value) return 'file';
+  return null;
+});
+
+/** Everything that keeps Share… / Promote disabled, in one sentence group. */
+const shareBlockedReason = computed<string | null>(() => {
+  if (shareTarget.value === 'folder' && selectedFolder.value !== null) {
+    const folder = folderShareReason(selectedFolder.value);
+    return sharingDisabledReason.value ? `${folder} ${sharingDisabledReason.value}` : folder;
+  }
+  if (shareTarget.value === 'file') return sharingDisabledReason.value;
+  return null;
 });
 
 /**
@@ -210,7 +254,7 @@ async function loadSyncStatus() {
  * time the dialog opens.
  */
 function openPublishConfirm() {
-  if (!teamCapEnabled.value) return;
+  if (!teamCapEnabled.value || shareTarget.value !== 'file') return;
   publishError.value = null;
   publishResult.value = null;
   publishLayer.value = 'team';
@@ -269,7 +313,7 @@ const promoteLoading = ref(false);
  * covers the fleet-off case rather than hiding the control outright.
  */
 async function onPromoteClick() {
-  if (!teamCapEnabled.value || !selectedPath.value) return;
+  if (!teamCapEnabled.value || shareTarget.value !== 'file' || !selectedPath.value) return;
   promoteLoading.value = true;
   promoteError.value = null;
   promoteResult.value = null;
@@ -302,6 +346,9 @@ async function onRenameNode({ path, newName }: { path: string; newName: string }
     if (selectedPath.value === path) {
       selectedPath.value = newPath;
     }
+    if (selectedFolder.value === path) {
+      selectedFolder.value = newPath;
+    }
     await loadTree();
   } catch (e) {
     treeError.value = e instanceof Error ? e.message : 'Rename failed.';
@@ -323,6 +370,9 @@ async function onDeleteNode(path: string) {
     if (selectedPath.value === path) {
       selectedPath.value = null;
       previewContent.value = '';
+    }
+    if (selectedFolder.value === path) {
+      selectedFolder.value = null;
     }
     await loadTree();
   } catch (e) {
@@ -449,6 +499,7 @@ async function loadRoot() {
 }
 
 async function selectFile(path: string) {
+  selectedFolder.value = null;
   selectedPath.value = path;
   previewContent.value = '';
   previewError.value = null;
@@ -963,11 +1014,11 @@ onBeforeUnmount(() => {
                destination is chosen in the dialog, not implied by the
                button. -->
           <button
-            v-if="selectedPath"
+            v-if="shareTarget"
             type="button"
             class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
-            :disabled="!teamCapEnabled || publishLoading"
-            :title="sharingDisabledReason ?? undefined"
+            :disabled="shareBlockedReason !== null || publishLoading"
+            :title="shareBlockedReason ?? undefined"
             data-testid="context-publish-btn"
             @click="openPublishConfirm"
           >
@@ -978,11 +1029,11 @@ onBeforeUnmount(() => {
                selected, disabled (with the shared reason below) when
                fleet's team cap is off, rather than hidden. See spec §1.10. -->
           <button
-            v-if="selectedPath"
+            v-if="shareTarget"
             type="button"
             class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
-            :disabled="!teamCapEnabled || promoteLoading"
-            :title="sharingDisabledReason ?? undefined"
+            :disabled="shareBlockedReason !== null || promoteLoading"
+            :title="shareBlockedReason ?? undefined"
             data-testid="context-promote-btn"
             @click="onPromoteClick"
           >
@@ -1002,12 +1053,14 @@ onBeforeUnmount(() => {
         <!-- Why Share… / Promote are disabled, and what would enable them
              (knowledge-home-01DOGF0E WP04, FR-6). One reason for both. -->
         <p
-          v-if="selectedPath && sharingDisabledReason"
+          v-if="shareBlockedReason"
           class="px-3 py-1.5 border-b border-border-muted font-ui text-[10px] leading-snug text-ink-subtle"
+          :data-share-target="shareTarget"
           data-testid="context-share-disabled-reason"
         >
-          {{ sharingDisabledReason }}
+          {{ shareBlockedReason }}
           <a
+            v-if="sharingDisabledReason"
             href="#/settings?tab=account"
             class="text-accent hover:text-accent-muted underline"
             data-testid="context-share-account-link"
@@ -1125,6 +1178,7 @@ onBeforeUnmount(() => {
             :selected-path="selectedPath"
             :is-root="true"
             @select="selectFile"
+            @select-folder="selectFolder"
             @rename="onRenameNode"
             @delete="onDeleteNode"
           />

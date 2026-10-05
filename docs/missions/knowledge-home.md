@@ -106,6 +106,15 @@ placeholder until the owner answers. Owner: alec. Whoever records the answer
 either builds the dialog (WP05 as specced, pins P-6/P-7) or rewords the
 interim sentence to the rejection copy and dates it.
 
+**As shipped (WP05):** ContextsView now listens to ContextTree's
+`select-folder` event (it was emitted but ignored, so a folder click only
+expanded the row and `selectedPath` was never a folder — §2.3 of the spec
+assumed otherwise). The last-clicked folder drives the sharing section only;
+preview, "+ Folder" and import targets are unchanged. The reason names the
+folder ("select a file in “kameas-ai”") and appends the fleet reason when
+the cap is off. P-6 pins this interim state; P-7 (per-entry batch results)
+does not apply until the dialog exists.
+
 ## D5 — Sharing reason source (FR-6)
 
 A (`fleet-session-truth-01DOGF0A`) is not merged, so reasons derive from
