@@ -664,11 +664,10 @@ not exploitable: a concurrent bump between the read and the write makes
 the history INSERT hit `UNIQUE(unit_id, version)`, which surfaces as
 `ErrVersionConflict`. Moving the check without keeping that UNIQUE path
 would be the regression.
-**Residual:** `TestMigration1105_V087SnapshotBoots` — P-1 against the REAL
-first snapshot that carries the `*_legacy` tables — SKIPS until
-`testdata/upgrade/v0.87.0/` is committed, then activates with no edit;
-whoever commits that snapshot must see it PASS (not skip). Owner:
-units-debt-01UNITD01 / the v0.87.0 snapshot PR.
+**Resolved residual (2026-10-05):** `TestMigration1105_V087SnapshotBoots`
+runs against the real `testdata/upgrade/v0.87.0/` snapshot (committed on
+release/v0.88.0, 3490ee44) and PASSES; the guard fails loudly if a tag
+>= v0.87.0 ever exists without a legacy-carrying snapshot.
 
 ### 2026-10-04 (artifacts-as-units-01DOGF0C WP01, D4) · artifact version history is write-only — `Store.ListVersions` has no production reader
 
