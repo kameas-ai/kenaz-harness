@@ -477,3 +477,80 @@ func scanArtifactUnit(sc interface{ Scan(dest ...any) error }) (Artifact, error)
 	a.CreatedAt = time.Unix(0, createdNs).UTC()
 	return a, nil
 }
+
+// ScopePurger is implemented by stores whose rows reference sessions and
+// projects WITHOUT a foreign key (the units-backed store: units.scope_id
+// is plain TEXT). The legacy artifacts table had schema FKs —
+// sessions(id)/projects(id) ON DELETE SET NULL — so it needed none of
+// this; after the move onto units the cascade is explicit code, registered
+// as session.Manager / projects.Manager delete observers
+// (artifacts-as-units-01DOGF0C WP03, spec FR-6).
+type ScopePurger interface {
+	// PurgeSession deletes every artifact unit scoped to the session
+	// (with its versions, edges and sync rows) and nulls the origin
+	// session_id on artifact units that merely originated there but were
+	// promoted to project/global scope — the legacy SET NULL parity.
+	// Returns the distinct content hashes the deleted units and versions
+	// referenced, so the caller can release the media they pinned.
+	PurgeSession(ctx context.Context, sessionID string) ([]string, error)
+	// PurgeProject deletes every artifact unit scoped to the project and
+	// nulls project_id on the rest that referenced it. Returns hashes as
+	// PurgeSession does.
+	PurgeProject(ctx context.Context, projectID string) ([]string, error)
+}
+
+var _ ScopePurger = (*unitsStore)(nil)
+
+func (s *unitsStore) PurgeSession(ctx context.Context, sessionID string) ([]string, error) {
+	return s.purgeScope(ctx, ScopeKindSession, "$.session_id", sessionID)
+}
+
+func (s *unitsStore) PurgeProject(ctx context.Context, projectID string) ([]string, error) {
+	return s.purgeScope(ctx, ScopeKindProject, "$.project_id", projectID)
+}
+
+func (s *unitsStore) purgeScope(ctx context.Context, scope, metaPath, id string) ([]string, error) {
+	if id == "" {
+		return nil, nil // never widen to "every unscoped row"
+	}
+	var hashes []string
+	err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		rows, err := tx.Query(ctx, `
+            SELECT json_extract(metadata, '$.content_hash') FROM units
+             WHERE kind = 'artifact' AND scope = ? AND scope_id = ?
+            UNION
+            SELECT json_extract(uv.metadata, '$.content_hash') FROM unit_versions uv
+              JOIN units u ON u.id = uv.unit_id
+             WHERE u.kind = 'artifact' AND u.scope = ? AND u.scope_id = ?`,
+			scope, id, scope, id)
+		if err != nil {
+			return fmt.Errorf("artifacts: purge %s %s: collect hashes: %w", scope, id, err)
+		}
+		for rows.Next() {
+			var h sql.NullString
+			if err := rows.Scan(&h); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if h.Valid && h.String != "" {
+				hashes = append(hashes, h.String)
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if _, err := deleteArtifactUnitsTx(ctx, tx, "scope = ? AND scope_id = ?", scope, id); err != nil {
+			return fmt.Errorf("artifacts: purge %s %s: %w", scope, id, err)
+		}
+		if _, err := tx.Exec(ctx, `
+            UPDATE units SET metadata = json_set(metadata, '`+metaPath+`', NULL)
+             WHERE kind = 'artifact' AND json_extract(metadata, '`+metaPath+`') = ?`, id); err != nil {
+			return fmt.Errorf("artifacts: purge %s %s: unlink: %w", scope, id, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return hashes, nil
+}
