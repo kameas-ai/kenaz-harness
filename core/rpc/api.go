@@ -6576,11 +6576,11 @@ func newLLMStack(
 		// gates guard this layer, so a kind the user disabled is never
 		// sent to the engine either.
 		//
-		// DATED NIL (2026-09-30, owner: laya-advisors WP13): sidecarProbe
-		// is nil until WP13 wires the real *mlsidecar.Manager, and a nil
-		// probe means "never healthy" — so today this layer always falls
-		// through and nothing dials the loopback port. The wiring is real
-		// and reachable; only the probe is pending.
+		// (The 2026-09-30 "DATED NIL" that stood here is RESOLVED: WP13
+		// landed — newSidecarStack above constructs the real
+		// *mlsidecar.Manager + demand-driven probe when a data dir exists,
+		// so this layer genuinely routes to the local engine once one is
+		// installed and /v1/contracts serves the kind.)
 		sidecarAdvisor := advice.NewSidecarAdvisor(
 			mlsidecar.AdviceEngine{Client: mlsidecar.NewClient(mlsidecar.DefaultEngineBaseURL(), nil)},
 			sidecarProbe, heuristicAdvisor)
