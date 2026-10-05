@@ -17,6 +17,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/event"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -819,7 +820,6 @@ type ChatRunner struct {
 	mu         sync.Mutex
 	subs       map[string]*chatSub
 	pausedSubs map[string]*pausedTurn // keyed by profileID; last-write-wins
-	nextID     uint64
 	// adviceStates is laya-advisors-01LAYA001 WP07's per-session,
 	// process-lifetime bookkeeping for the post-turn advice hook (see
 	// advice_hook.go's sessionAdviceState doc comment). Protected by mu
@@ -934,6 +934,21 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	}
 	if sessionID == "" {
 		return "", errors.New("chat: session id required")
+	}
+
+	// The turn's run id (agentgraph-settings-linkage-01DOGF0D WP02). It
+	// is both the stream subscription id the frontend holds and the
+	// kernel RunID every event of this turn is written under — and the
+	// event log is PERSISTENT (api.go buildAgentGraphEventLog ->
+	// NewSQLEventLog). It used to be "chat-<n>" from a per-process
+	// counter that restarted at 0 on every boot, so today's chat-1 and
+	// yesterday's chat-1 shared one run id in one durable log and
+	// materializing either projected both turns as one graph. A ULID is
+	// unique across restarts with no coordination. Allocated before the
+	// user turn is persisted so a failure here cannot orphan that row.
+	subID, err := newChatRunID()
+	if err != nil {
+		return "", err
 	}
 
 	// laya-advisors-01LAYA001 WP08: detect + audit a user-initiated model
@@ -1156,11 +1171,6 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// risk-rated-autonomy-01PMRA01 WP05: nil RiskRater leaves rung 0's
 	// layer-3 branch at the WP02/WP03 stub (always Confirm).
 	toolAdapter.withRater(r.cfg.RiskRater)
-
-	r.mu.Lock()
-	r.nextID++
-	subID := fmt.Sprintf("chat-%d", r.nextID)
-	r.mu.Unlock()
 
 	bridge := NewStreamBridge(r.cfg.Broker, subID, sessionID)
 
@@ -3043,4 +3053,16 @@ type historyAdapterFunc func(ctx context.Context, sessionID string, n int) ([]co
 // History satisfies agentgraph.HistoryReader.
 func (f historyAdapterFunc) History(ctx context.Context, sessionID string, n int) ([]coreag.Message, error) {
 	return f(ctx, sessionID, n)
+}
+
+// newChatRunID returns a globally unique chat run id, "chat-<ULID>"
+// (agentgraph-settings-linkage-01DOGF0D WP02). The "chat-" prefix is
+// kept so a run id still says where it came from in logs and URLs; no
+// consumer parses what follows it.
+func newChatRunID() (string, error) {
+	u, err := event.NewULID()
+	if err != nil {
+		return "", fmt.Errorf("chat: allocate run id: %w", err)
+	}
+	return "chat-" + string(u), nil
 }

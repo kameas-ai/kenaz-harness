@@ -76,6 +76,7 @@ package agentgraph
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -143,14 +144,38 @@ func MaterializeRun(source Graph, runID string, log EventLog, opts ...Materializ
 	for _, o := range opts {
 		o(m)
 	}
-	if err := log.Replay(runID, m.observe); err != nil {
+	runStarts := 0
+	observe := func(ev Event) error {
+		if ev.Kind == EventRunStart {
+			runStarts++
+		}
+		return m.observe(ev)
+	}
+	if err := log.Replay(runID, observe); err != nil {
 		return Graph{}, fmt.Errorf("agentgraph: materialize: replay run %q: %w", runID, err)
+	}
+	if runStarts > 1 {
+		// agentgraph-settings-linkage-01DOGF0D WP02: before chat run ids
+		// were ULIDs they came from a per-process counter, so "chat-3"
+		// written by two boots is two unrelated turns under one id in the
+		// persistent log. Projecting them as one graph would be a
+		// confident, wrong picture of "what the agent did" — refuse.
+		return Graph{}, fmt.Errorf("%w: run %q has %d run_start events", ErrRunIDReused, runID, runStarts)
 	}
 	if len(m.fires) == 0 {
 		return Graph{}, fmt.Errorf("agentgraph: materialize: run %q has no recorded node fires", runID)
 	}
 	return m.build(), nil
 }
+
+// ErrRunIDReused reports a run id whose event log holds more than one
+// run_start — i.e. several distinct runs recorded under one id. Only
+// pre-fix chat run ids ("chat-<n>" from a per-process counter, reused
+// after every restart) can produce it; ids minted since
+// agentgraph-settings-linkage-01DOGF0D WP02 are ULIDs. The events are
+// kept (they are an audit trail), but they cannot be separated into
+// turns, so the run is not materializable.
+var ErrRunIDReused = errors.New("agentgraph: materialize: run id was reused by several runs (pre-fix chat run id); its events cannot be attributed to one turn")
 
 // MaterializeOption tunes a projection.
 type MaterializeOption func(*materializer)
