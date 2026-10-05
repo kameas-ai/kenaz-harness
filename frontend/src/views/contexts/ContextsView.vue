@@ -24,8 +24,10 @@
  * WP07 additions (fleet-context-graph-sync-01NDFSEX17):
  *   - Sync status strip in the tree panel header (team cap, pull count,
  *     cursor). Hidden when fleet is not signed in / team cap absent.
- *   - "Share to team" affordance in the preview panel for files when the
- *     team-graph capability is active. Gated on `syncStatus.team_cap_enabled`.
+ *   - "Share to team" affordance in the preview panel for files. Usable
+ *     when `syncStatus.team_cap_enabled`; otherwise rendered disabled with
+ *     `sharingDisabledReason` (knowledge-home-01DOGF0E WP04 — it used to be
+ *     hidden, contradicting the "hidden vs broken" doctrine below).
  *   - First-publish confirm: "This entry will be visible to your org" so
  *     users don't accidentally publish secrets into a shared layer (NFR-006).
  *   - `publish` calls `client.contexts.publish` with a deterministic nodeID
@@ -146,6 +148,28 @@ const teamCapEnabled = computed(
 );
 
 /**
+ * sharingDisabledReason — why Share… / Promote are disabled, or null when
+ * they are usable (knowledge-home-01DOGF0E WP04, spec FR-6). Sharing
+ * controls are never hidden for capability reasons: a user who cannot see
+ * the control cannot learn the feature exists or what would enable it
+ * (dogfood F10b — "i see no way to promote my kameas-ai context").
+ *
+ * Source: `syncStatus` (Contexts_SyncStatus → core/fleet/context_graph_sync.go
+ * team_cap_enabled). It can only tell "read it, cap is off" from "could not
+ * read it"; signed-out vs degraded vs capability-missing needs
+ * fleet-session-truth-01DOGF0A's FleetSession. Whichever of A / E lands
+ * second swaps this computed for FleetSession-derived sentences — the gate
+ * (`teamCapEnabled`) stays where it is (docs/missions/knowledge-home.md D5).
+ */
+const sharingDisabledReason = computed<string | null>(() => {
+  if (teamCapEnabled.value) return null;
+  if (syncStatus.value === null) {
+    return 'Sharing is unavailable — fleet team-sync status could not be read. Sharing needs a signed-in fleet connection with the team-graph capability.';
+  }
+  return 'Sharing is off — fleet team sync is not active. Sharing needs a signed-in fleet connection with the team-graph capability.';
+});
+
+/**
  * publishFellBackToOrg is true when the most recent publish was requested
  * as "team" but actually landed at "org" — the finding #97 fallback for
  * when fleet has no team_id to give this org yet. Drives the honest
@@ -180,11 +204,13 @@ async function loadSyncStatus() {
 
 /**
  * openPublishConfirm — show the "visible to your org" confirm dialog.
- * Only called when teamCapEnabled and a file is selected. Resets the
+ * Guarded on teamCapEnabled (the button is disabled, not hidden, when the
+ * cap is off). Resets the
  * layer choice to "team" (the default, still-most-common intent) each
  * time the dialog opens.
  */
 function openPublishConfirm() {
+  if (!teamCapEnabled.value) return;
   publishError.value = null;
   publishResult.value = null;
   publishLayer.value = 'team';
@@ -922,16 +948,20 @@ onBeforeUnmount(() => {
           <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle flex-1">
             Library
           </span>
-          <!-- Publish affordance — only when team cap enabled and a file is
-               selected. Opens a dialog offering both "team" and the
-               explicit "org" choice (finding #97); label stays generic
-               since the destination is chosen in the dialog, not implied
-               by the button. -->
+          <!-- Publish affordance — visible whenever an entry is selected;
+               disabled with the reason below when fleet's team cap is off
+               (knowledge-home-01DOGF0E WP04, FR-6 — it used to be hidden,
+               which is how the owner concluded sharing did not exist).
+               Opens a dialog offering both "team" and the explicit "org"
+               choice (finding #97); label stays generic since the
+               destination is chosen in the dialog, not implied by the
+               button. -->
           <button
-            v-if="teamCapEnabled && selectedPath"
+            v-if="selectedPath"
             type="button"
-            class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50"
-            :disabled="publishLoading"
+            class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
+            :disabled="!teamCapEnabled || publishLoading"
+            :title="sharingDisabledReason ?? undefined"
             data-testid="context-publish-btn"
             @click="openPublishConfirm"
           >
@@ -939,28 +969,20 @@ onBeforeUnmount(() => {
             <span v-else>Share…</span>
           </button>
           <!-- Promote affordance (WP16) — visible whenever a file is
-               selected, disabled (with a reason below) when fleet's team
-               cap is off, rather than hidden. See spec §1.10. -->
-          <span v-if="selectedPath" class="flex items-center gap-1">
-            <button
-              type="button"
-              class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
-              :disabled="!teamCapEnabled || promoteLoading"
-              :title="!teamCapEnabled ? 'Fleet team sync is off' : undefined"
-              data-testid="context-promote-btn"
-              @click="onPromoteClick"
-            >
-              <span v-if="promoteLoading">Promoting…</span>
-              <span v-else>Promote to org</span>
-            </button>
-            <span
-              v-if="!teamCapEnabled"
-              class="font-ui text-[10px] text-ink-subtle"
-              data-testid="context-promote-disabled-reason"
-            >
-              (fleet off)
-            </span>
-          </span>
+               selected, disabled (with the shared reason below) when
+               fleet's team cap is off, rather than hidden. See spec §1.10. -->
+          <button
+            v-if="selectedPath"
+            type="button"
+            class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
+            :disabled="!teamCapEnabled || promoteLoading"
+            :title="sharingDisabledReason ?? undefined"
+            data-testid="context-promote-btn"
+            @click="onPromoteClick"
+          >
+            <span v-if="promoteLoading">Promoting…</span>
+            <span v-else>Promote to org</span>
+          </button>
           <button
             type="button"
             class="text-[11px] text-ink-dim hover:text-accent flex items-center gap-1"
@@ -971,6 +993,20 @@ onBeforeUnmount(() => {
             <span>Folder</span>
           </button>
         </header>
+        <!-- Why Share… / Promote are disabled, and what would enable them
+             (knowledge-home-01DOGF0E WP04, FR-6). One reason for both. -->
+        <p
+          v-if="selectedPath && sharingDisabledReason"
+          class="px-3 py-1.5 border-b border-border-muted font-ui text-[10px] leading-snug text-ink-subtle"
+          data-testid="context-share-disabled-reason"
+        >
+          {{ sharingDisabledReason }}
+          <a
+            href="#/settings?tab=account"
+            class="text-accent hover:text-accent-muted underline"
+            data-testid="context-share-account-link"
+          >Settings › Account</a>
+        </p>
         <!-- WP11: text filter input for the context tree -->
         <div class="px-2 pt-2">
           <input

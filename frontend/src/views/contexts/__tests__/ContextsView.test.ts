@@ -393,7 +393,7 @@ describe('ContextsView', () => {
       expect(w.find('[data-testid=context-sync-pull-count]').text()).toContain('5');
     });
 
-    it('does not show publish button when team cap is absent', async () => {
+    it('shows the publish button disabled with a reason when team cap is absent (knowledge-home WP04, P-5)', async () => {
       const tree: ContextNode = {
         name: '',
         path: '',
@@ -418,7 +418,18 @@ describe('ContextsView', () => {
       // Click to select a file.
       await w.find('[data-testid="context-node-guide.md"]').trigger('click');
       await flushPromises();
-      expect(w.find('[data-testid=context-publish-btn]').exists()).toBe(false);
+      // Never hidden for capability reasons (FR-6): rendered, disabled, and
+      // the reason says what would enable it.
+      const btn = w.find('[data-testid=context-publish-btn]');
+      expect(btn.exists()).toBe(true);
+      expect((btn.element as HTMLButtonElement).disabled).toBe(true);
+      const reason = w.find('[data-testid=context-share-disabled-reason]');
+      expect(reason.text()).toContain('fleet team sync is not active');
+      expect(reason.text()).toContain('signed-in fleet connection with the team-graph capability');
+      expect(w.find('[data-testid=context-share-account-link]').attributes('href')).toBe('#/settings?tab=account');
+      await btn.trigger('click');
+      await flushPromises();
+      expect(w.find('[data-testid=context-publish-confirm-dialog]').exists()).toBe(false);
     });
 
     it('shows publish button when team cap is enabled and a file is selected', async () => {
@@ -904,7 +915,7 @@ describe('ContextsView', () => {
         const btn = w.find('[data-testid="context-promote-btn"]');
         expect(btn.exists()).toBe(true);
         expect((btn.element as HTMLButtonElement).disabled).toBe(true);
-        expect(w.find('[data-testid="context-promote-disabled-reason"]').exists()).toBe(true);
+        expect(w.find('[data-testid="context-share-disabled-reason"]').exists()).toBe(true);
 
         await btn.trigger('click');
         await flushPromises();
@@ -1112,5 +1123,59 @@ describe('ContextsView', () => {
         expect(w.find('[data-testid="context-export-error"]').exists()).toBe(true);
       });
     });
+  });
+});
+
+describe('ContextsView sharing affordances (knowledge-home-01DOGF0E WP04, P-5)', () => {
+  const tree: ContextNode = {
+    name: '',
+    path: '',
+    kind: 'folder',
+    children: [{ name: 'notes.md', path: 'notes.md', kind: 'file' }],
+  };
+  const status = (cap: boolean): ContextSyncStatusView => ({
+    cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: cap,
+  });
+
+  async function selectNotes(client: ReturnType<typeof provide>['client']) {
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-notes.md"]').trigger('click');
+    await flushPromises();
+    return w;
+  }
+
+  it('cap off + file selected → Share… and Promote both visible, disabled, with one reason', async () => {
+    const { client } = provide({ tree, files: { 'notes.md': '# n' }, syncStatus: status(false) });
+    const w = await selectNotes(client);
+    for (const id of ['context-publish-btn', 'context-promote-btn']) {
+      const btn = w.find(`[data-testid=${id}]`);
+      expect(btn.exists(), id).toBe(true);
+      expect((btn.element as HTMLButtonElement).disabled, id).toBe(true);
+      expect(btn.attributes('title'), id).toContain('Sharing is off');
+    }
+    expect(w.findAll('[data-testid=context-share-disabled-reason]')).toHaveLength(1);
+    w.unmount();
+  });
+
+  it('cap on + file selected → both enabled, no reason shown', async () => {
+    const { client } = provide({ tree, files: { 'notes.md': '# n' }, syncStatus: status(true) });
+    const w = await selectNotes(client);
+    for (const id of ['context-publish-btn', 'context-promote-btn']) {
+      expect((w.find(`[data-testid=${id}]`).element as HTMLButtonElement).disabled, id).toBe(false);
+    }
+    expect(w.find('[data-testid=context-share-disabled-reason]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it('unreadable sync status → disabled with a reason that says it could not be read', async () => {
+    const { client } = provide({ tree, files: { 'notes.md': '# n' } });
+    (client.contexts as any).syncStatus = async () => {
+      throw new Error('fleet not wired');
+    };
+    const w = await selectNotes(client);
+    expect((w.find('[data-testid=context-publish-btn]').element as HTMLButtonElement).disabled).toBe(true);
+    expect(w.find('[data-testid=context-share-disabled-reason]').text()).toContain('could not be read');
+    w.unmount();
   });
 });
