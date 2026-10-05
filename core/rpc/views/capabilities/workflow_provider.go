@@ -2,7 +2,6 @@ package capabilities
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -21,14 +20,9 @@ type WorkflowConsumer interface {
 	ScheduleClear(ctx context.Context, workflowID string) error
 	Catalog_List(ctx context.Context) ([]workflowsview.CatalogEntry, error)
 	Catalog_Install(ctx context.Context, id string) (workflowsview.CatalogInstallResult, error)
-	InstallDocument(ctx context.Context, payload []byte) (workflowsview.CatalogInstallResult, error)
+	Catalog_Update(ctx context.Context, id string) (workflowsview.CatalogInstallResult, error)
+	InstallDocument(ctx context.Context, payload []byte, origin workflowsview.DocumentOrigin) (workflowsview.CatalogInstallResult, error)
 }
-
-// ErrWorkflowIDMismatch is returned when a fleet workflow payload's id is not
-// the id its catalog item advertised (FR-2: a workflow item's slug is the
-// workflow id — that is how its installed state is read back after a
-// restart). The partial install is rolled back.
-var ErrWorkflowIDMismatch = errors.New("install workflow: the payload's workflow id does not match the catalog item's slug")
 
 // WorkflowProvider is install.Provider for workflows (WP05): the shipped
 // workflow templates (the former Workflows › Catalog) and fleet catalog
@@ -150,22 +144,62 @@ func (p *WorkflowProvider) Verify(ctx context.Context, ref install.Ref) (install
 
 // Install implements install.Provider. Returns the
 // workflowsview.CatalogInstallResult Workflows_CatalogInstall hands back.
+//
+// A shipped template that is already installed is UPDATED
+// (Catalog_Update: new body, the user's schedule state kept); otherwise it
+// is installed. A fleet payload goes to InstallDocument with the item's
+// advertised id, which refuses — before writing anything — a payload whose
+// id is not that slug or that would overwrite a workflow this item does not
+// own (review H1/H2).
 func (p *WorkflowProvider) Install(ctx context.Context, req install.InstallRequest) (any, error) {
 	if req.Verification.Method == install.VerifyBuiltin {
+		st, err := p.InstalledState(ctx, req.Ref.ID)
+		if err != nil {
+			return nil, err
+		}
+		if st.Installed {
+			return p.wf.Catalog_Update(ctx, req.Ref.ID)
+		}
 		return p.wf.Catalog_Install(ctx, req.Ref.ID)
 	}
-	want := p.workflowID(req.Ref.ID)
-	res, err := p.wf.InstallDocument(ctx, req.Verification.Payload)
+	slug, err := p.advertisedSlug(ctx, req.Ref.ID)
 	if err != nil {
 		return nil, err
 	}
-	if want != "" && want != req.Ref.ID && res.WorkflowID != want {
-		_ = p.wf.ScheduleClear(ctx, res.WorkflowID)
-		_ = p.wf.Delete(ctx, res.WorkflowID)
-		return nil, fmt.Errorf("%w: catalog %q advertises %q, payload is %q", ErrWorkflowIDMismatch, req.Ref.ID, want, res.WorkflowID)
+	res, err := p.wf.InstallDocument(ctx, req.Verification.Payload, workflowsview.DocumentOrigin{
+		CatalogID: req.Ref.ID, Slug: slug, Version: req.Ref.Version,
+	})
+	if err != nil {
+		return nil, err
 	}
 	p.remember(req.Ref.ID, res.WorkflowID)
 	return res, nil
+}
+
+// advertisedSlug is the workflow id catalogID advertised — learned from a
+// List, or fetched now. Without it the payload's id cannot be checked, so
+// the install is refused.
+func (p *WorkflowProvider) advertisedSlug(ctx context.Context, catalogID string) (string, error) {
+	p.mu.Lock()
+	slug, ok := p.fleetWorkflowID[catalogID]
+	p.mu.Unlock()
+	if ok {
+		return slug, nil
+	}
+	if p.catalog == nil {
+		return "", fmt.Errorf("%w: workflow %q", install.ErrNotFound, catalogID)
+	}
+	entries, err := p.catalog.List(ctx, string(install.KindWorkflow))
+	if err != nil {
+		return "", fmt.Errorf("install workflow %q: cannot confirm the id its catalog item advertises: %w", catalogID, err)
+	}
+	for _, e := range entries {
+		if e.ID == catalogID && e.Slug != "" {
+			p.remember(e.ID, e.Slug)
+			return e.Slug, nil
+		}
+	}
+	return "", fmt.Errorf("install workflow %q: the catalog item advertises no workflow id", catalogID)
 }
 
 // Uninstall implements install.Provider: disarm the schedule, then delete

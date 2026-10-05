@@ -290,7 +290,14 @@ type WorkflowsAPI interface {
 	// fleet catalog's workflow payload, install-framework-01DOGF0B FR-2)
 	// through the same consumer path as Catalog_Install: Cedar save gate,
 	// Store.Save, the catalog Workflows_List reads, cron arm. The
-	// document's id is kept. Returns ErrWorkflowPayloadMalformed for a
-	// payload that is not a valid workflow document.
-	InstallDocument(ctx context.Context, payload []byte) (CatalogInstallResult, error)
+	// document's id is kept and must equal origin.Slug; it may only create
+	// a new id or update origin's own earlier install
+	// (ErrWorkflowIDMismatch / ErrWorkflowIDCollision, nothing written).
+	// Returns ErrWorkflowPayloadMalformed for a payload that is not a valid
+	// workflow document.
+	InstallDocument(ctx context.Context, payload []byte, origin DocumentOrigin) (CatalogInstallResult, error)
+
+	// Catalog_Update re-installs a shipped template's newer body over its
+	// installed copy, keeping the user's schedule state (review H4).
+	Catalog_Update(ctx context.Context, id string) (CatalogInstallResult, error)
 }

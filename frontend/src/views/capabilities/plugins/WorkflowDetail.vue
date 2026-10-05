@@ -107,6 +107,15 @@ function openInWorkflows() {
     </header>
 
     <p
+      v-if="isTemplate && item.state.update_available"
+      class="font-ui text-[11px] text-accent"
+      data-testid="workflow-detail-update-note"
+    >
+      A newer version of this template ships with the app. Update (in the list) replaces your
+      installed copy with it — edits you made to the copy are overwritten; its schedule is kept.
+    </p>
+
+    <p
       v-if="!isTemplate"
       class="font-ui text-[11px] text-ink-muted"
       data-testid="workflow-detail-unverified"

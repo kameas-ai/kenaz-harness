@@ -102,6 +102,16 @@ describe('WorkflowDetail — shipped template (the former Workflows › Catalog)
   });
 });
 
+describe('WorkflowDetail — template update (review H4)', () => {
+  it('an outdated installed template says Update overwrites edits and keeps the schedule', async () => {
+    const { w } = mountDetail({ ...template, state: { installed: true, update_available: true } });
+    await flushPromises();
+    const note = w.get('[data-testid=workflow-detail-update-note]').text();
+    expect(note).toContain('overwritten');
+    expect(note).toContain('schedule is kept');
+  });
+});
+
 describe('WorkflowDetail — fleet catalog workflow', () => {
   it('installs through Capability_Install with its catalog version, and says it is unverified', async () => {
     const fleet: CapabilityItem = { ...template, id: 'cat-td', name: 'team-digest', source: 'team_catalog', version: '1.0.0' };

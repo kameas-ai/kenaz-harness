@@ -451,7 +451,8 @@ func TestInstallDocument_KeepsIDAndRejectsOpaquePayloads(t *testing.T) {
 	store := newWP07TestStore(t)
 	api := New(Config{Engine: corewf.NewEngine(), Store: store})
 	ctx := context.Background()
-	res, err := api.InstallDocument(ctx, []byte("id: doc-flow\nname: Doc flow\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n"))
+	origin := DocumentOrigin{CatalogID: "cat-doc", Slug: "doc-flow", Version: "1.0.0"}
+	res, err := api.InstallDocument(ctx, []byte("id: doc-flow\nname: Doc flow\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n"), origin)
 	if err != nil {
 		t.Fatalf("InstallDocument: %v", err)
 	}
@@ -459,7 +460,7 @@ func TestInstallDocument_KeepsIDAndRejectsOpaquePayloads(t *testing.T) {
 		t.Fatalf("WorkflowID = %q, want the document's own id (not a fresh import id)", res.WorkflowID)
 	}
 	for _, bad := range []string{"", "{not json", "just: [a, yaml, list]"} {
-		if _, err := api.InstallDocument(ctx, []byte(bad)); !errors.Is(err, ErrWorkflowPayloadMalformed) {
+		if _, err := api.InstallDocument(ctx, []byte(bad), origin); !errors.Is(err, ErrWorkflowPayloadMalformed) {
 			t.Errorf("payload %q: got %v, want ErrWorkflowPayloadMalformed", bad, err)
 		}
 	}

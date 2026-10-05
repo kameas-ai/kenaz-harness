@@ -3307,10 +3307,20 @@ func New(c *core.Core, opts ...Option) *API {
 		// re-reads recipes.enabled.json per call (dataDir=="" degrades to
 		// Has()==false, matching the prior always-missing behaviour on the
 		// test-chassis / disabled path).
+		// install-framework-01DOGF0B WP05 review H1/H2/H4: one install
+		// provenance store shared by the catalog (records template installs
+		// and their shipped version → installed_outdated) and the workflows
+		// view (InstallDocument's collision refusal, Delete's cleanup).
+		wfProvenance := corewf.NewFileProvenanceStore(dataDir)
 		wfCatalog := wfcatalogpkg.New(wfcatalogpkg.Config{
 			Store:          wfStore,
 			Scheduler:      sched,
 			RecipeRegistry: &wfRecipeRegistryAdapter{dataDir: dataDir},
+			Provenance:     wfProvenance,
+			// The same template list the workflows view lists, so the
+			// catalog's "installed_outdated" compares against exactly what
+			// this binary ships.
+			Builtins: catalog,
 		})
 		// WP01 (workflows-finalization-01NWFX01): wire a concrete MCPCaller
 		// and LLMStreamer into the workflow engine so mcp_call and model_turn
@@ -3440,6 +3450,7 @@ func New(c *core.Core, opts ...Option) *API {
 			Store:           wfStore,
 			Scheduler:       sched,
 			WorkflowCatalog: wfCatalog,
+			Provenance:      wfProvenance,
 			Cedar:           a.cedarGate(),
 			CedarModeFn:     workflowCedarModeFn(settingsImpl),
 			// audit-that-tells-the-truth-01PMZA10 UNIT-5: this field
