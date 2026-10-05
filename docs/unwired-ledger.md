@@ -401,6 +401,45 @@ after a ledger rewind is a no-op once the tables are gone
 re-application against a database with NO artifacts table of either
 generation.
 
+### 2026-10-05 (install-framework-01DOGF0B review L2) · install consent is UI-enforced only; fleet workflows install unverified until C-2
+
+**Class:** a control that reads as enforced but is enforced only in one
+caller (consent); a verification step that reports, not refuses (C-2).
+
+**(a) Consent (pre-existing, owner: Phase 3 / install-framework-01DOGF0B).**
+`install.RequirementConsent` (an MCP recipe's `Warning`) is declared by the
+MCP provider and routes the "Add capability" row to the key-prompt modal,
+whose acknowledgement checkbox is the only thing that enforces it.
+`install.Framework` deliberately enforces only input-bearing requirements
+(key / config / directory); a direct `Tools_InstallRecipe` or
+`Capability_Install` call installs a warning-bearing recipe without any
+acknowledgement — exactly as `Tools_InstallRecipe` did before the
+framework. Blocker: an acknowledgement token on the install request (a
+binding-signature change) belongs with Phase 3's surface consolidation.
+
+**(b) Fleet workflows join skills' unverified posture (owner: register
+C-2 / the FR-2 fleet payload brief).** Since WP05, org-catalog workflow
+payloads install through `WorkflowsAPI.InstallDocument`, verified by the
+same single `installSignatureVerifier` as skills. With no per-device
+catalog key (C-2) the verifier reports `verified=false` with the C-2
+reason and the install proceeds — recorded on the `capability:installed`
+event and stated in the workflow detail pane, not refused. A workflow can
+carry shell steps and a cron schedule, so this posture is a larger trust
+surface than a text skill; the collision refusal (review H1/H2 — a payload
+can never overwrite a template, a user workflow or another item's
+workflow) bounds it to new ids. Clears when C-2's key source lands in the
+verifier.
+
+### 2026-10-05 (install-framework-01DOGF0B review L3) · `slashcmd.Registry` has no mutex
+
+**Class:** latent data race on a live map. `Registry.commands` is read by
+dispatch (`Lookup`/`List`) and mutated by `LiveRegister` /
+`LiveUnregister` / `RenameLocalTrigger` from RPC goroutines and the fleet
+mandated-skill applier, with no lock. Not changed in this review (a
+drive-by lock on a hot dispatch path wants its own race test).
+Owner: Phase 3 (install-framework-01DOGF0B). Blocker: a `-race` test
+driving concurrent install + dispatch, written with the lock.
+
 ### 2026-10-04 (install-framework-01DOGF0B WP01/WP02) · Marketplace "Install" for workflow / agent_pack / bundle was badge-only — nothing consumes `installed/`; the skill badge lied the other way
 
 **Class:** registered/advertised capability with no consumer.

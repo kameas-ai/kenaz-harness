@@ -1005,7 +1005,8 @@ interface WailsBindingsLike {
   /**
    * Refuses every catalog kind (install-framework-01DOGF0B WP02): no kind has
    * an install on this path that anything consumes. Skills install via
-   * Slash_SkillInstall. Writes nothing.
+   * Slashcmd_SkillInstall, workflows via the Add-capability surface (both
+   * through the install framework). Writes nothing.
    */
   Catalog_Install(catalogID: string, version: string): Promise<void>;
   /** Remove a downloaded catalog payload (installed/ residue) from the local DataDir. Idempotent. */

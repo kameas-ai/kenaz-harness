@@ -3681,7 +3681,8 @@ func (b *Bindings) Catalog_List(filter catalogview.CatalogFilter) ([]catalogview
 // Catalog_Install refuses every catalog kind with
 // fleet.ErrCatalogKindNotInstallable (install-framework-01DOGF0B WP02): no
 // kind has an install on this path that a runtime consumer reads. Skills
-// install via Slash_SkillInstall. Writes nothing.
+// install via Slashcmd_SkillInstall, workflows via the Add-capability
+// surface (both through the install framework). Writes nothing.
 func (b *Bindings) Catalog_Install(catalogID, version string) error {
 	defer sentry.WrapBinding("Catalog_Install")()
 	return b.api.Catalog().Catalog_Install(b.ctx(), catalogID, version)

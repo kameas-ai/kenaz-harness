@@ -29,8 +29,8 @@ type API struct {
 	emitter auditEmitter
 	// skills is the consumer-side source of truth for kind=skill installed
 	// state (install-framework-01DOGF0B WP01). Skill installs never touch
-	// <dataDir>/installed/ — they go fleet.InstallSkill → slashcmd.LiveRegister
-	// → SkillStore — so the installed/ scan alone painted every installed
+	// <dataDir>/installed/ — they go through the install framework
+	// (fleet.InstallSkillPayload → slashcmd.LiveRegister → SkillStore) — so the installed/ scan alone painted every installed
 	// skill as "Install". nil means skill items always report not-installed
 	// (fail toward offering Install, never toward a false "Installed").
 	skills skillLister

@@ -221,13 +221,15 @@
 "Bundle_List"
 "Bundle_Remove"
 
-# Caller(s) CatalogPreviewDrawer.vue, MarketplaceView.vue span multiple views,
+# Caller(s) MarketplaceView.vue (CatalogPreviewDrawer.vue was retired by
+# install-framework-01DOGF0B WP05, 2026-10-05) spans multiple views,
 # ALL of which are inaccessible in served mode (boundary-panelled and/or
 # unrouted and/or gated) -- no single caller reaches this in a served build via
 # any path.
 "Catalog_Install"
 
-# Caller(s) CatalogView.vue, MarketplaceView.vue span multiple views, ALL of
+# Caller(s) MarketplaceView.vue (workflows' CatalogView.vue was retired by
+# install-framework-01DOGF0B WP05, 2026-10-05) spans multiple views, ALL of
 # which are inaccessible in served mode (boundary-panelled and/or unrouted
 # and/or gated) -- no single caller reaches this in a served build via any path.
 "Catalog_List"

@@ -167,7 +167,7 @@ describe('MarketplaceView', () => {
     // clicking it called catalog.install, which wrote a payload nothing
     // reads and painted "Installed".
     const kinds: Array<[string, string, RegExp]> = [
-      ['workflow', 'wf-a', /Workflows › Catalog/],
+      ['workflow', 'wf-a', /Tools › Add capability/],
       ['agent_pack', 'pack-a', /agents folder/],
       ['bundle', 'bundle-a', /Settings › Integrations › Bundles/],
     ];
@@ -238,7 +238,7 @@ describe('MarketplaceView', () => {
     expect(pushToastSpy).toHaveBeenCalledTimes(1);
     const [msg, opts] = pushToastSpy.mock.calls[0];
     expect(msg).toContain("isn't supported yet");
-    expect(msg).toContain('Workflows › Catalog');
+    expect(msg).toContain('Tools › Add capability');
     expect(opts).toEqual({ level: 'error' });
   });
 
