@@ -52,6 +52,7 @@ type subagentSpawnerTestStack struct {
 	seam        *graphview.BranchSeamAdapter
 	tasks       *coretasks.Registry
 	model       *fakeModel
+	core        *core.Core
 }
 
 func buildSubagentSpawnerTestStack(t *testing.T, responseText string) *subagentSpawnerTestStack {
@@ -144,6 +145,7 @@ func buildSubagentSpawnerTestStackWithLLM(t *testing.T, llm coreag.LLMProvider) 
 		bus:         bus,
 		seam:        seam,
 		tasks:       taskReg,
+		core:        c,
 	}
 }
 

@@ -345,9 +345,10 @@ func TestUninstall_RemovesEverything(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.root, "models", "w.bin"), []byte("w"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.root, "lease", "shutdown.token"), []byte("tok\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// No hand-written lease/shutdown.token (v0.86.0 unwired sweep): the
+	// fixture used to write it, doing the production layer's job — the
+	// Enable above must have written it at spawn time, or the engine
+	// could never be stopped.
 	v, err := f.impl.Uninstall(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -405,5 +406,61 @@ func TestStatus_SurfacesPausedLabelLanes(t *testing.T) {
 	}
 	if v.LabelLanes[1].Code != "names_mismatch" || v.LabelLanes[1].Until != "2026-09-30T12:00:00Z" {
 		t.Fatalf("lane fields: %+v", v.LabelLanes[1])
+	}
+}
+
+// TestUninstall_RewindsLabelCursor (v0.86.0 unwired sweep): Uninstall
+// deletes the engine's retained-label mirror, so it must rewind the push
+// cursor — otherwise a re-Enable starts an engine with an empty mirror
+// while the cursor claims every label was delivered.
+// LabelPusher.ResetCursor had no production caller before this.
+func TestUninstall_RewindsLabelCursor(t *testing.T) {
+	f := newFixture(t)
+	resets := 0
+	f.impl.ResetLabelCursor = func(context.Context) error { resets++; return nil }
+	if _, err := f.impl.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.impl.Uninstall(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if resets != 1 {
+		t.Fatalf("label cursor resets = %d, want 1 after a successful uninstall", resets)
+	}
+
+	// A failing reset must not turn a completed uninstall into an error.
+	f2 := newFixture(t)
+	f2.impl.ResetLabelCursor = func(context.Context) error { return errors.New("db locked") }
+	if _, err := f2.impl.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := f2.impl.Uninstall(context.Background()); err != nil || v.Installed {
+		t.Fatalf("Uninstall with a failing cursor reset = (%+v, %v), want a clean uninstall", v, err)
+	}
+}
+
+// TestEnable_NudgesLabelLaneOnceHealthy (v0.86.0 unwired sweep): the push
+// lane only drains on a nudge, so a freshly healthy engine must be nudged
+// or the backlog (and an uninstall's queued re-push) waits for an
+// unrelated future label write. A refused action must not nudge.
+func TestEnable_NudgesLabelLaneOnceHealthy(t *testing.T) {
+	f := newFixture(t)
+	nudges := 0
+	f.impl.NudgeLabels = func() { nudges++ }
+	if _, err := f.impl.Repair(context.Background()); !errors.Is(err, ErrNotInstalled) {
+		t.Fatalf("Repair before install: err = %v, want ErrNotInstalled", err)
+	}
+	if nudges != 0 {
+		t.Fatalf("nudges = %d after a refused Repair, want 0", nudges)
+	}
+	v, err := f.impl.Enable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.State != string(mlsidecar.StateHealthy) {
+		t.Fatalf("Enable left state %q, want healthy", v.State)
+	}
+	if nudges != 1 {
+		t.Fatalf("nudges = %d after a healthy Enable, want 1", nudges)
 	}
 }

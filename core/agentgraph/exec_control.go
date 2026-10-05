@@ -1294,15 +1294,15 @@ func (branchExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	// (trust-surfaces-that-fire-01PMZ202 WP15 / R-09). This used to be
 	// labelled "subagent_start" in the comment, the audit event's "at"
 	// value, and the error string below — but the call three lines down
-	// dispatches FirePreToolUse, not a subagent_start hook, and
-	// SubagentStartEvent (core/hooks/fire.go) is never constructed
-	// anywhere in the repo. That mislabel attributed a pre_tool_use
-	// decision to a hook the user could not have written: fixed here to
-	// say what actually fires. Do NOT change which event fires — that
-	// is a separate mission's producer work (see
-	// scripts/ci/allowlists/i17-eventless-hook-events.txt), and
-	// changing it here would silently disable any pre_tool_use hook a
-	// user already has against branch forks.
+	// dispatches FirePreToolUse, not a subagent_start hook. That
+	// mislabel attributed a pre_tool_use decision to a hook the user
+	// could not have written: fixed here to say what actually fires.
+	// subagent_start now has its own producer —
+	// core/rpc/subagent_run_spawner.go fires it before the child run's
+	// first turn (2026-09-12, UNIT-7) — so do NOT add a second
+	// subagent_start fire here, and do not change which event this site
+	// fires: that would silently disable any pre_tool_use hook a user
+	// already has against branch forks.
 	// Fire before Fork so hooks can inspect / block the spawn before it commits.
 	// The BranchID is not yet known; use an empty string.
 	if env.LifecycleHooks != nil {

@@ -26,6 +26,18 @@
 //     not an allowlist — a brand-new *Config/*Options/*Deps struct
 //     anywhere under core/ is in scope automatically, with no edit to
 //     this file.
+//  3. v0.86.0 unwired sweep (2026-10-04): the same derivation also scans
+//     exported structs whose name ends in "Env" — chiefly
+//     core/agentgraph.Env, the kernel's seam bag. Its interface fields
+//     are exactly the *Config-shaped "optional collaborator" slots G-1a
+//     was built for, but the struct's name kept them out of scope:
+//     Env.PendingContext's PendingContextAppender had ZERO non-test
+//     implementers for its whole life, so every hook's
+//     additional_context was dropped on every chat run with this gate
+//     green. (The widening also caught PromptTemplateSource's
+//     wiring:deferred directive sitting one line too high — above its
+//     doc comment instead of directly above the type — which this
+//     checker's one-line-up rule never honoured.)
 //
 // An interface with zero implementers (by value or by pointer — most
 // seam implementers here use pointer receivers) is reported as a
@@ -165,7 +177,7 @@ func run() error {
 		os.Exit(2)
 	}
 
-	fmt.Printf("checkseams: clean — %d seam interfaces (%d from seams.go, %d derived from *Config/*Options/*Deps fields) each have an implementer or a wiring:deferred directive.\n",
+	fmt.Printf("checkseams: clean — %d seam interfaces (%d from seams.go, %d derived from *Config/*Options/*Deps/*Env fields) each have an implementer or a wiring:deferred directive.\n",
 		len(allInterfaces), len(seamInterfaces), len(allInterfaces)-len(seamInterfaces))
 	return nil
 }
@@ -248,10 +260,11 @@ type ifaceDecl struct {
 }
 
 // hasConfigOptionsDepsSuffix reports whether name ends in one of the
-// three struct-name suffixes G-1a scopes to (spec §8: "exported struct
-// named *Config / *Options / *Deps").
+// struct-name suffixes the derivation scopes to (spec §8: "exported
+// struct named *Config / *Options / *Deps", plus "*Env" since the
+// v0.86.0 sweep — see the package doc's item 3).
 func hasConfigOptionsDepsSuffix(name string) bool {
-	for _, suffix := range []string{"Config", "Options", "Deps"} {
+	for _, suffix := range []string{"Config", "Options", "Deps", "Env"} {
 		if strings.HasSuffix(name, suffix) {
 			return true
 		}

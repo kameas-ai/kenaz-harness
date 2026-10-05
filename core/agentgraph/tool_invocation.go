@@ -184,10 +184,29 @@ func toolPreDispatch(
 		}
 	}
 
-	if merged.AdditionalContext != "" && env.PendingContext != nil {
-		_ = env.PendingContext.AppendSystemContext(ctx, env.SessionID, merged.AdditionalContext)
-	}
+	forwardHookContext(ctx, env, merged.AdditionalContext)
 	return outArgs, argsJSON, rewritten, nil, events
+}
+
+// forwardHookContext hands a hook's additional_context to
+// env.PendingContext for the session's next LLM turn. A nil
+// PendingContext (graph runs outside the chat runner) drops it — and
+// says so in the log, which the field's doc has always promised but
+// which used to be a silent drop.
+func forwardHookContext(ctx context.Context, env *Env, text string) {
+	if text == "" {
+		return
+	}
+	if env.PendingContext == nil {
+		logging.L().Info("agentgraph.hook_context.dropped",
+			"run_id", env.RunID, "session_id", env.SessionID,
+			"reason", "no PendingContext on this run", "len", len(text))
+		return
+	}
+	if err := env.PendingContext.AppendSystemContext(ctx, env.SessionID, text); err != nil {
+		logging.L().Warn("agentgraph.hook_context.append_failed",
+			"run_id", env.RunID, "session_id", env.SessionID, "err", err.Error())
+	}
 }
 
 // chargeToolIteration applies the FR-010 iteration gate: a passive tool
@@ -233,8 +252,12 @@ func toolPostDispatch(
 
 	if callErr != nil {
 		if env.LifecycleHooks != nil {
-			_, _ = env.LifecycleHooks.FirePostToolUse(ctx, env.SessionID, tc.ToolName,
+			// post_tool_use_failure: only additional_context is honoured
+			// (there is no result to rewrite) — it used to be discarded
+			// with the rest of the merge (v0.86.0 unwired sweep).
+			failMerged, _ := env.LifecycleHooks.FirePostToolUse(ctx, env.SessionID, tc.ToolName,
 				argsJSON, nil, true, callErr.Error(), "", "")
+			forwardHookContext(ctx, env, failMerged.AdditionalContext)
 		}
 		return tr, events
 	}
@@ -273,9 +296,7 @@ func toolPostDispatch(
 			tr.Content = updatedContent
 		}
 	}
-	if merged.AdditionalContext != "" && env.PendingContext != nil {
-		_ = env.PendingContext.AppendSystemContext(ctx, env.SessionID, merged.AdditionalContext)
-	}
+	forwardHookContext(ctx, env, merged.AdditionalContext)
 	return tr, events
 }
 

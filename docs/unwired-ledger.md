@@ -47,7 +47,9 @@ shipped product boundary, not unwired code. Read that doc before flagging
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
 `check-knob-coverage.sh` (registered config field with no consumer),
-`check-seam-implementers.sh`, `check-node-dispatch.sh`,
+`check-seam-implementers.sh` (interface fields of `*Config`/`*Options`/
+`*Deps` structs, and of `*Env` structs since the 2026-10-04 v0.86.0
+sweep), `check-node-dispatch.sh`,
 `check-serve-dispatch-drift.sh`, `scripts/ci/check-codegen.sh`'s
 served-stream-topics block (`frontend/src/lib/servedStreamTopics.gen.ts`
 generated from `core/serve/wsstream.go`'s `passthroughTopics` — findings
@@ -543,6 +545,101 @@ product decision (show history and latest, or serve latest only), not a
 storage one. Blocker: that decision. Owner: the next artifacts/Library
 mission — escalate to the owner before wiring, do not delete the
 WriteVersion path (it is the only revision capability).
+### 2026-10-04 · v0.86.0 release-start unwired sweep — findings and dispositions
+
+**Scope.** Base `main` `b8079d48`. Fresh surface: `v0.85.0..HEAD` (the
+fs-gate/policy family, the mlsidecar spawn-lock flip) **plus the
+v0.85.0 ML-engine surface itself** (`v0.84.0..v0.85.0`: `core/mlsidecar`,
+`core/advice/sidecar.go`, `core/rpc/views/sidecar`, the Recommendations
+panel) — the v0.85.0 sweep ran at the *start* of that release, before the
+engine mission merged, so that code had never been swept.
+`cmd/kenaz-ml-sign` and the engine-publication seams are **not on
+`main`** (they live only on `feat/engine-publication`) and were not swept;
+the next sweep after that branch lands owns them. Already-ledgered items
+(engine-publication residuals, marketplace badge-only lie, fail-closed
+shared-engine residual, `LaneStatus`) were not re-found.
+
+Baseline before any fix: `check-no-unwired-gates.sh`, builtin-tool
+registration, broker topics, knob coverage, output ports, serve-dispatch
+drift, agentgraph convergence, seam implementers, node dispatch, single
+move writer, Cedar gate arguments and Cedar singleton — all clean. Every
+find below is one those gates could not see.
+
+| # | Find (pass) | Disposition | Class / commit |
+|---|---|---|---|
+| 1 | **`SubagentStartEvent.AdditionalContext` discarded** (pass 2). `subagent_run_spawner.go` fired `subagent_start` with `_, _ =` while `hooks/fire.go` documented the context as "prepended to the child's system context". VERIFIED as briefed. | **Wired** — merged context becomes a session-scoped system attachment on the CHILD session before `StartStream`; the doc now says what happens (and that the decision is not honoured). | Documented lie, producer live / consumer missing — `fix(hooks)` 9caf4197 |
+| 2 | **`agentgraph.Env.PendingContext` had zero production writers** (pass 2, then confirmed by the widened gate). No non-test `PendingContextAppender` existed, so every `pre_tool_use` / `post_tool_use` `additional_context` was dropped on every chat run; the field doc's "it is still logged" was also false. | **Wired** — `chat.pendingContextQueue` (per-session, bounded at 64) set on every chat run's Env after `EnvDefaults`; `LLMProviderAdapter` drains it into the next **primary** (`StreamToChat`, i.e. `assistant_turn`) call's system prompt — router / exit-gate / escalation / compaction calls leave it queued (review M2); a failed primary call re-queues it (L3); it is the second-to-last prompt layer, before user instructions (L4); session delete forgets the queue and overflow logs once per burst (L5). Library-graph runs outside chat still drop it — now with a real log line (residual below). | Seam with no implementer — 9caf4197 |
+| 3 | `post_tool_use_failure` result discarded with `_, _ =` (pass 2). | **Wired** through the same `forwardHookContext`. | 9caf4197 |
+| 4 | `session_start` `AdditionalContext` discarded by `Manager.Create` while `SessionHookRunner`'s doc promised it (pass 2). | **Wired** — rpc-level decorator on the session hook runner attaches it to the new session (never at position 0, which `Sessions_SetSystemPrompt` owns and deletes), under a provenance heading, removable from the Resolved Context panel (review M1/L6). | 9caf4197 |
+| 5 | `HookDryRunDrawer` labelled every event's context "injected" (pass 5). | **Wired** — event-aware label ("not delivered for this event" outside the five events that deliver it). | 9caf4197 |
+| 6 | Stale comment: `exec_control.go` said `SubagentStartEvent` "is never constructed anywhere" (pass 2). | **Fixed** (comment). | 9caf4197 |
+| 7 | `PromptTemplateSource`'s `wiring:deferred` directive sat above its doc comment, where `checkseams`' one-line-up rule never saw it (found by the widened gate). | **Fixed** — directive moved; deferral reason unchanged (versioned-model-profile-01PMDL04 WP02+). | Vacuous-allow directive — 9caf4197 |
+| 8 | **`mlsidecar.WriteLocalToken` had zero non-test callers** (pass 3). kenaz-ml reads `lease/shutdown.token` on every shutdown, fails closed without it, and never creates it ("written user-read-only by the spawning client"). Production never wrote it: `Update` never stopped the old engine and `Uninstall` RemoveAll'd the root under a running engine. Every test hand-wrote the token (blind spot #2). | **Wired** — `spawnLocked` writes it under the spawn lock before the process exists; `Update`/`Uninstall` use `ensureLocalToken` (write-if-absent, never rotate). Latent in the field only because `PinnedEngineRelease` is still unpublished — it would have shipped live with the pin. | Fixture doing the production layer's job — `fix(mlsidecar)` 92a0d21b |
+| 9 | **`LabelPusher.ResetCursor` had zero non-test callers** (pass 3). The pusher's "rebuildable mirror" guarantee never held: Uninstall wipes the engine's label mirror but the harness cursor survived. | **Wired** — `sidecar.Impl.ResetLabelCursor` after a successful Uninstall only. | Documented guarantee with no caller — dc7e5083 |
+| 10 | `LabelPusher.Run` had zero callers, test or production; `Nudge`'s doc still promised "(or Run tick)" (pass 3). | **Deleted** — `Nudge` is the live substitute. The gap a ticker would have covered is closed by `NudgeLabels` (Enable/Update/Repair nudge when they leave the engine healthy). | Live substitute — dc7e5083 |
+| 11 | `StatusView.LabelLanes[].until/.detail` sent, never rendered, while the panel promised "it retries automatically" (pass 1 + 5). | **Wired** — the panel shows retry time and engine detail; copy says the lane retries on the next recommendation after that time (there is no timer). | Output with no reader + overclaiming copy — dc7e5083 |
+| 12 | `advice.WithSidecarCacheCapacity` — zero callers anywhere (pass 3). | **Deleted** — `defaultAdviceCacheCapacity` is the live value; no product surface tunes it. | No consumer, no product intent — c9adfd92 |
+| 13 | `advice.WithSidecarBudget` / `WithSidecarContractsTTL` — test-only callers (pass 3). | **Unexported** (`withSidecar*`), matching `withSidecarClock`. | Test seam exported as a tunable — c9adfd92 |
+| 14a | `mlsidecar.Client.Lease` — doc claimed callers use its 404 for legacy detection; zero callers (pass 3). | **Justified** (dated 2026-10-04). Legacy detection reads `/health`'s `lifecycle_protocol`, leases are file-based, contracts come from `/v1/contracts`. **Blocker:** the engine-interop ruling on whether clients must perform the HTTP registration handshake (`POST /v1/clients/lease`). **Owner:** alec. **Deleted by:** that ruling — wire `Lease` into adoption, or delete it with `LeaseWire*` and the stub handler. Doc now says "no production caller". | Cross-repo wire contract — c9adfd92 |
+| 14b | `mlsidecar.Client.SystemOne` — zero callers (pass 3). | **Justified** (dated 2026-10-04), on its OWN blocker, not Lease's. `/v1/systemone` is the raw laya pass-through the design §3.2 owner ruling kept in the engine's contract; no harness feature asks laya a raw System-One question (every advisor goes through `/v1/recommend/{kind}` with a feature contract). **Blocker:** a product decision that some harness surface needs raw laya answers outside the advice-kind contract — none is specced or roadmapped. **Owner:** alec. **Deleted by:** the next sweep if no spec has claimed it by then (delete the method, `SystemOne*` wire types and the stub's `/v1/systemone` handler together), or by the spec that wires it. | Wire completeness, no product consumer — c9adfd92 |
+
+**Gate extension (rule: a class the gates could not see).**
+`check-seam-implementers.sh`'s derivation (`scripts/ci/cmd/checkseams`)
+now also scans exported structs whose name ends in **`Env`** —
+`agentgraph.Env`'s interface fields are exactly G-1a's
+optional-collaborator shape, but the struct's name kept them out of
+scope, which is how find #2 survived with the gate green. Widened, it
+fired on exactly `PendingContextAppender` (pre-fix) and
+`PromptTemplateSource` (find #7). Planted-violation proof:
+`TestGates_PlantedViolationFires/seam-implementers/derived-env-field-unsatisfiable`,
+verified failing against the pre-widening checker. No allowlist changed.
+
+**Declined gate — finds #8–#10, #12–#14 (zero-call-site exported
+functions outside the I10 name heuristic).** A general "exported func
+with no non-test caller" gate over-reports badly (Wails bindings, wire
+mirrors, interface methods, `json` decode targets all look unconsumed to
+a grep), and an allowlist big enough to hold that noise would be the
+"clean verdict indistinguishable from did not look" class
+`gates_can_fail_test.go` exists to prevent. The CLAUDE.md pass-3 scan
+over `git diff <last-tag>..HEAD` *is* the mechanism; this sweep's
+scratch scan (exported `func` declarations in files changed since
+v0.84.0, filtered to symbols added since then, with zero non-test
+references) is reproducible from that description. Finding #8's real
+root cause — fixtures that do the production layer's job — is blind
+spot #2, which no file-level gate can see.
+
+**Residuals, not drained (each with blocker + owner):**
+
+- **Hook `additional_context` on library-graph runs outside the chat
+  runner** is still dropped (now logged as
+  `agentgraph.hook_context.dropped`). Blocker: those runs drive LLM nodes
+  through the graph manager's own provider path, which has no per-session
+  system-prompt layer to drain into; giving it one is graph-runtime
+  work, not a sweep fix. Owner: alec — the agent-graph convergence
+  mission (01PMGX01) closes or re-dates this.
+- **`user_prompt_submit` / `setup` additional_context** — those events
+  still do not fire at all; already held by
+  `scripts/ci/allowlists/i17-eventless-hook-events.txt` (no new entry).
+- **Hook-attached session context is persistent**, by design: a
+  `session_start` / `subagent_start` attachment stays in that session's
+  system prompt every turn until the user removes it. It carries an
+  "Additional context from the user's <event> hook:" heading (review
+  L6), and the session's Resolved Context panel now offers Remove on
+  session-scope rows (review M1 — until the review follow-up every row
+  there was mounted read-only, so "removable" was false and the context
+  could not be taken back). Recorded so a later reader does not mistake
+  it for a one-turn note.
+
+**Not findings (recorded so the next sweep skips them):** mlsidecar wire
+types carry decode-only fields with no Go reader (`HealthPayload`/
+`KindContract`/`LabelPushResponse` fields such as `DTypes`,
+`SupportedVersions`, `Replaced`, `Stale`, `Generation`, `Slot`,
+`Refusal`) — wire mirrors of the engine's contract, not claims.
+`StatusView.Supported` has no frontend reader, but its doc already names
+`Available` as "the single 'may the Enable button be offered' bit".
+`SettingsView.vue`'s `TODO(compaction-strategy-ui-01KQ8TDI WP06)`
+deprecated-model chip predates the fresh surface and describes a missing
+feature, not a lie.
 
 ### 2026-09-30 (laya-advisors-01LAYA001 WP13) · the dated-nil `sidecarProbe` is replaced; two dated justifications remain
 

@@ -153,8 +153,15 @@ type SubagentRunSpawnerDeps struct {
 	// honour here — a hook wanting to prevent a dispatch must act on
 	// tool.subagent.dispatch's Cedar action (ActionToolSubagentDispatch),
 	// not this event. Mirrors background_task_complete's own `_, _ =
-	// ...Fire(...)` discard.
+	// ...Fire(...)` discard. The hook's merged additional_context is
+	// NOT discarded (v0.86.0 unwired sweep): see AttachHookContext.
 	HookRunner *hooks.Runner
+	// AttachHookContext delivers subagent_start's merged
+	// additional_context to the CHILD session as a session-scoped system
+	// attachment, before StartStream, so it is in the child's system
+	// prompt from its first turn — what hooks.SubagentStartEvent's doc
+	// has always promised. nil logs the drop (nil-core chassis).
+	AttachHookContext hookContextAttacher
 }
 
 // NewSubagentRunSpawner constructs the production graphview.RunSpawner.
@@ -228,17 +235,23 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 		// BEFORE the child run's first turn (the very next statement is
 		// StartStream). Ordering is the falsifiable half of AC-08: an
 		// event that fired after StartStream would arrive after the
-		// worker had already spoken, which is not a start hook. Result
-		// discarded, matching background_task_complete's own `_, _ =
-		// ...Fire(...)` — see HookRunner's doc for why this event does
-		// not block the dispatch.
+		// worker had already spoken, which is not a start hook. The
+		// hook's decision is ignored (see HookRunner's doc for why this event does
+		// not block the dispatch); additional_context delivered to the
+		// child session.
 		if deps.HookRunner != nil {
-			_, _ = deps.HookRunner.Fire(ctx, hooks.EventSubagentStart, hooks.SubagentStartEvent{
+			outputs, _ := deps.HookRunner.Fire(ctx, hooks.EventSubagentStart, hooks.SubagentStartEvent{
 				ParentSessionID: req.ParentSessionID,
 				BranchID:        branchID,
 				ProfileID:       profileID,
 				Prompt:          req.HandoffPrompt,
 			})
+			// v0.86.0 unwired sweep: the decision is still not honoured
+			// (non-blocking by design, see HookRunner's doc), but the
+			// additional_context is — it used to be thrown away with the
+			// rest of the result.
+			merged := hooks.MergeOutputs(outputs)
+			deliverHookContext(ctx, deps.AttachHookContext, hooks.EventSubagentStart, childSessionID, merged.AdditionalContext)
 		}
 
 		// WP05's posture, reused here: a sub-agent run is unattended by

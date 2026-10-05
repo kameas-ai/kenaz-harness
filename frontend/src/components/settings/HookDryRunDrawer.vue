@@ -43,6 +43,21 @@ const emit = defineEmits<{
 
 const client = useHarnessClient();
 
+// Events whose additional_context actually reaches the model — mirrors
+// core/hooks/hooks.go's HookOutput.AdditionalContext doc (v0.86.0 unwired
+// sweep, 2026-10-04). For every other event the dry run still shows the
+// text, but must not claim it is "injected": nothing delivers it.
+const CONTEXT_DELIVERED_EVENTS = new Set<string>([
+  'pre_tool_use',
+  'post_tool_use',
+  'post_tool_use_failure',
+  'session_start',
+  'subagent_start',
+]);
+const contextDelivered = computed(
+  () => !!props.hook && CONTEXT_DELIVERED_EVENTS.has(props.hook.event as string),
+);
+
 // ── payload state ────────────────────────────────────────────────────
 
 const payload = ref('{}');
@@ -243,9 +258,14 @@ const decisionLabel = computed<string>(() => {
             <div
               v-if="result.output.additionalContext || result.merged.additionalContext"
               data-testid="hook-dry-run-additional-context"
+              :data-delivered="contextDelivered ? 'true' : 'false'"
             >
               <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
-                Additional context injected
+                {{
+                  contextDelivered
+                    ? 'Additional context injected'
+                    : 'Additional context — not delivered for this event'
+                }}
               </p>
               <pre
                 class="text-xs font-mono bg-surface-1 border border-border-muted rounded p-2 whitespace-pre-wrap text-ink"

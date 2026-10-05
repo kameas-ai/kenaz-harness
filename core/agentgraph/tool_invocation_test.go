@@ -135,17 +135,25 @@ func TestToolDispatch_PostToolUseHookFires(t *testing.T) {
 
 	t.Run("failure fires post_tool_use_failure", func(t *testing.T) {
 		t.Parallel()
-		hooks := &fakeLifecycleHookRunner{}
+		// v0.86.0 sweep: the failure leg's additional_context used to be
+		// discarded with the rest of the `_, _ =` merge.
+		hooks := &fakeLifecycleHookRunner{
+			postResult: LifecycleMergedOutput{AdditionalContext: "glob failed: try a narrower pattern"},
+		}
+		pending := &pendingContextRecorder{}
 		tools := newStubTools()
 		tools.allow("kenaz__glob", "", false)
 		tools.failWith("kenaz__glob", "boom")
-		env := &Env{RunID: "r", SessionID: "s", Tools: tools, LifecycleHooks: hooks}
+		env := &Env{RunID: "r", SessionID: "s", Tools: tools, LifecycleHooks: hooks, PendingContext: pending}
 		applyEnvDefaults(env)
 
 		dispatchOneCall(t, env, "kenaz__glob", `{"pattern":"*.go"}`)
 		post := hooks.snapshotPost()
 		if len(post) != 1 || !post[0].IsFailure || !strings.Contains(post[0].ErrMsg, "boom") {
 			t.Errorf("post_tool_use calls = %+v, want one failure call carrying the error", post)
+		}
+		if len(pending.entries) != 1 || pending.entries[0] != "glob failed: try a narrower pattern" {
+			t.Errorf("PendingContext entries = %v, want the failure hook's additional_context", pending.entries)
 		}
 	})
 }

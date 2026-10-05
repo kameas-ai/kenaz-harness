@@ -334,8 +334,12 @@ type Env struct {
 	ToolUsage ToolUsageObserver
 
 	// PendingContext receives additional system-context injected by hooks
-	// (e.g. additional_context from pre_tool_use). Nil drops the context
-	// (it is still logged but not forwarded to the next LLM turn).
+	// (additional_context from pre_tool_use / post_tool_use). Nil drops
+	// the context with an "agentgraph.hook_context.dropped" log line.
+	// Production: the chat runner sets its per-session queue on every
+	// chat run (core/rpc/views/agentgraph/chat/pending_context.go), and
+	// its LLMProviderAdapter drains it into the next model call's system
+	// prompt. Library-graph runs outside the chat runner leave it nil.
 	PendingContext PendingContextAppender
 
 	// Compactor is the optional compaction pipeline (Bundle D). The

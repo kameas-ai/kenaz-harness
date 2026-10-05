@@ -251,6 +251,15 @@ func (m *Manager) spawnLocked(ctx context.Context) Status {
 	if m.Spawner == nil {
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: "no spawner configured", UpdatedAt: now}
 	}
+	// The spawning client owns lease/shutdown.token (kenaz-ml reads it on
+	// every /v1/admin/shutdown and never creates it). Written — rotated —
+	// here, under the spawn lock, before the process exists, so every
+	// engine this client starts can be stopped by Update / Uninstall.
+	// Until the v0.86.0 unwired sweep nothing in production wrote it.
+	// Not fatal: Update/Uninstall fall back to ensureLocalToken.
+	if _, terr := WriteLocalToken(m.Layout); terr != nil {
+		logging.L().Warn("mlsidecar.spawn.token_write_failed", "err", terr.Error())
+	}
 	if _, serr := m.Spawner.Spawn(ctx, exePath); serr != nil {
 		logging.L().Warn("mlsidecar.spawn_failed", "exe", exePath, "err", serr.Error())
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: serr.Error(), UpdatedAt: now}
@@ -552,8 +561,11 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 	}
 
 	// Sole leaseholder: ask the engine to stop (token-authorized, drained).
+	// ensureLocalToken (v0.86.0 unwired sweep): no production code
+	// wrote the token before, so this used to skip the stop entirely and
+	// remove the root out from under a still-running engine.
 	if m.Client != nil {
-		if token, ok, _ := ReadLocalToken(m.Layout); ok {
+		if token, terr := ensureLocalToken(m.Layout); terr == nil {
 			_ = m.Client.Shutdown(ctx, token)
 		}
 	}

@@ -2311,7 +2311,13 @@ func New(c *core.Core, opts ...Option) *API {
 	// SetSessionHookRunner's doc) — the adapter is built here, in core/rpc,
 	// and passed in as the session.SessionHookRunner interface.
 	if c != nil && a.hookRunner != nil {
-		c.SetSessionHookRunner(&hooks.SessionRunnerAdapter{Runner: a.hookRunner})
+		// v0.86.0 unwired sweep: decorated so session_start's
+		// additional_context is attached to the new session instead of
+		// discarded by Manager.Create (see hook_context_attacher.go).
+		c.SetSessionHookRunner(&sessionStartContextRunner{
+			SessionHookRunner: &hooks.SessionRunnerAdapter{Runner: a.hookRunner},
+			attach:            newHookContextAttacher(a.attachmentsMgr),
+		})
 	}
 	// subagent-control-and-background-tasks-01PMZB11 UNIT-4: late-bind
 	// the task registry's HookFirer now that the process-singleton
@@ -2513,8 +2519,19 @@ func New(c *core.Core, opts ...Option) *API {
 	// demand-driven probe, and the Settings RPC surface over them.
 	a.sidecarMgr = stack.sidecarMgr
 	a.sidecarProbe = stack.sidecarProbe
-	a.sidecarAPI = &sidecarview.Impl{Manager: stack.sidecarMgr, Release: mlsidecar.PinnedEngineRelease,
+	sidecarImpl := &sidecarview.Impl{Manager: stack.sidecarMgr, Release: mlsidecar.PinnedEngineRelease,
 		Lanes: stack.labelPusher.LaneStatus}
+	// v0.86.0 unwired sweep: Uninstall wipes the engine's label mirror,
+	// so it must also rewind the push cursor (LabelPusher.ResetCursor had
+	// no production caller).
+	// Enable/Update/Repair nudge the event-driven lane so a freshly
+	// healthy engine receives the backlog without waiting for the next
+	// label write.
+	if stack.labelPusher != nil {
+		sidecarImpl.ResetLabelCursor = stack.labelPusher.ResetCursor
+		sidecarImpl.NudgeLabels = stack.labelPusher.Nudge
+	}
+	a.sidecarAPI = sidecarImpl
 	// model-settings-reach-the-model-01PMZ101 WP07: same pattern as the
 	// compaction pair above, for the chat runner's auto-title caller.
 	a.autotitleLLM = stack.autotitleLLM
@@ -2568,6 +2585,10 @@ func New(c *core.Core, opts ...Option) *API {
 			// above the background_task_complete SetHookFirer block) —
 			// one Runner, fired from two independent sites.
 			HookRunner: a.hookRunner,
+			// v0.86.0 unwired sweep: subagent_start's
+			// additional_context becomes a system attachment on the
+			// child session before its first turn.
+			AttachHookContext: newHookContextAttacher(a.attachmentsMgr),
 			// Lazy, mirroring ChatRunDispatcherDeps.DefaultProfile
 			// (this file's scheduled-chat wiring, below): first
 			// personal-provider profile wins, re-read on every spawn
@@ -2795,10 +2816,20 @@ func New(c *core.Core, opts ...Option) *API {
 	// session id cannot inherit approvals the user threw away
 	// (confirm-each-enforcement-01PMAG05 review finding 7, wired by the
 	// 2026-08-13 adversarial review).
-	if a.confirmSessionGrants != nil {
-		grants := a.confirmSessionGrants
+	//
+	// v0.86.0 sweep review (L5): the same teardown forgets any hook
+	// additional_context still queued for the session in the chat runner.
+	// One hook, both duties — WithDeleteHookOpt replaces, not chains.
+	grants := a.confirmSessionGrants
+	chatRunnerForDelete := stack.chatRunner
+	if grants != nil || chatRunnerForDelete != nil {
 		a.sessionsAPI = sessions.WithDeleteHookOpt(a.sessionsAPI, func(sessionID string) {
-			grants.RevokeSession(sessionID)
+			if grants != nil {
+				grants.RevokeSession(sessionID)
+			}
+			if chatRunnerForDelete != nil {
+				chatRunnerForDelete.ForgetSession(sessionID)
+			}
 		})
 	}
 	// Wire export dependencies (Cedar gate) at boot time so the Cedar

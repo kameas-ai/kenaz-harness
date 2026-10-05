@@ -186,10 +186,16 @@ func (c *Client) Contracts(ctx context.Context) (ContractsPayload, error) {
 }
 
 // Lease calls POST /v1/clients/lease. StatusCode is returned alongside
-// the error so callers can distinguish "sidecar too old to know about
-// leases" (404, design §3.7 R4's legacy-engine detection: "a harness
-// that finds a legacy engine (no /v1/clients/lease → 404 ...)") from
-// every other failure.
+// the error so a caller could distinguish "sidecar too old to know about
+// leases" (404) from every other failure.
+//
+// NO PRODUCTION CALLER (v0.86.0 unwired sweep, 2026-10-04 — see
+// docs/unwired-ledger.md): leases are file-based on the harness side
+// (AcquireOrRenewLease), legacy-engine detection reads /health's
+// lifecycle_protocol (EvaluateAdoption → AdoptLegacyUnverified), and
+// kind compatibility comes from /v1/contracts. Kept, not deleted,
+// pending the engine-interop ruling on whether the HTTP registration
+// handshake is required.
 func (c *Client) Lease(ctx context.Context, req LeaseWireRequest) (LeaseWireResponse, int, error) {
 	var out LeaseWireResponse
 	status, err := c.postJSON(ctx, "/v1/clients/lease", req, &out, nil)
@@ -230,8 +236,9 @@ func (c *Client) Recommend(ctx context.Context, kind string, req RecommendReques
 }
 
 // SystemOne calls POST /v1/systemone — raw laya pass-through (design
-// §3.2 owner ruling; not called by anything in WP12, present so the
-// stub's coverage of the design's wire shapes is complete).
+// §3.2 owner ruling). NO PRODUCTION CALLER (still true at the v0.86.0
+// unwired sweep, 2026-10-04): present only so the client covers the
+// design's wire shapes; see docs/unwired-ledger.md.
 func (c *Client) SystemOne(ctx context.Context, req SystemOneRequest) (SystemOneResponse, error) {
 	var out SystemOneResponse
 	if _, err := c.postJSON(ctx, "/v1/systemone", req, &out, nil); err != nil {

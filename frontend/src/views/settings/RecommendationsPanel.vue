@@ -27,6 +27,18 @@ const confirmingUninstall = ref(false);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+// A paused lane's next-retry time (RFC3339 from LaneView.until) as local
+// clock time; '' when absent or unparsable. The lane is event-driven — it
+// retries on the next label write (a recommendation) once this passes —
+// so the copy names both rather than promising a timer that does not
+// exist (v0.86.0 unwired sweep: until/detail were sent and never shown).
+function retryAt(until: string): string {
+  if (!until) return '';
+  const d = new Date(until);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 async function refresh(): Promise<void> {
   try {
     view.value = await client.sidecar.status();
@@ -211,15 +223,17 @@ const showUninstall = computed(() => !!view.value?.installed);
         </p>
         <!-- Paused label lanes (design A4): honest, per-kind, never only a log line. -->
         <div v-if="view.labelLanes?.length" class="space-y-0.5" data-testid="sidecar-label-lanes">
-          <p
-            v-for="lane in view.labelLanes"
-            :key="lane.kind"
-            class="text-xs text-amber-700 dark:text-amber-400"
-            :data-lane-kind="lane.kind"
-          >
-            Label sync for “{{ lane.kind }}” is paused ({{ lane.code || lane.reason }}); nothing is lost — it retries
-            automatically.
-          </p>
+          <div v-for="lane in view.labelLanes" :key="lane.kind" :data-lane-kind="lane.kind">
+            <p class="text-xs text-amber-700 dark:text-amber-400">
+              Label sync for “{{ lane.kind }}” is paused ({{ lane.code || lane.reason }}); nothing is lost — it
+              retries on the next recommendation<template v-if="retryAt(lane.until)">
+                after <span data-testid="sidecar-lane-until">{{ retryAt(lane.until) }}</span></template
+              >.
+            </p>
+            <p v-if="lane.detail" class="text-xs text-ink-muted break-all" data-testid="sidecar-lane-detail">
+              {{ lane.detail }}
+            </p>
+          </div>
         </div>
       </div>
       <p v-else class="text-xs text-ink-muted" data-testid="sidecar-loading">Checking the ML engine…</p>

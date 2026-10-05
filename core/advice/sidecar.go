@@ -150,10 +150,11 @@ type SidecarAdvisor struct {
 // SidecarAdvisorOption tunes a SidecarAdvisor at construction time.
 type SidecarAdvisorOption func(*SidecarAdvisor)
 
-// WithSidecarBudget overrides DefaultAdvisorBudget. d <= 0 is ignored.
-// Production wiring does not call it; tests use it to exercise the
-// timeout path quickly.
-func WithSidecarBudget(d time.Duration) SidecarAdvisorOption {
+// withSidecarBudget overrides DefaultAdvisorBudget. d <= 0 is ignored.
+// Tests only — production wiring always runs on DefaultAdvisorBudget
+// (unexported in the v0.86.0 unwired sweep: an exported option with no
+// production caller reads as a tunable that nothing tunes).
+func withSidecarBudget(d time.Duration) SidecarAdvisorOption {
 	return func(a *SidecarAdvisor) {
 		if d > 0 {
 			a.budget = d
@@ -161,20 +162,9 @@ func WithSidecarBudget(d time.Duration) SidecarAdvisorOption {
 	}
 }
 
-// WithSidecarCacheCapacity overrides defaultAdviceCacheCapacity. n <= 0
-// is ignored.
-func WithSidecarCacheCapacity(n int) SidecarAdvisorOption {
-	return func(a *SidecarAdvisor) {
-		if n > 0 {
-			a.cache = newAdviceCache(n)
-		}
-	}
-}
-
-// WithSidecarContractsTTL overrides defaultContractsTTL. d <= 0 is
-// ignored (use a tiny positive value in tests that need every call to
-// re-fetch).
-func WithSidecarContractsTTL(d time.Duration) SidecarAdvisorOption {
+// withSidecarContractsTTL overrides defaultContractsTTL. d <= 0 is
+// ignored. Tests only (see withSidecarBudget).
+func withSidecarContractsTTL(d time.Duration) SidecarAdvisorOption {
 	return func(a *SidecarAdvisor) {
 		if d > 0 {
 			a.ttl = d

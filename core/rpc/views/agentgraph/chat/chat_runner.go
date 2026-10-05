@@ -873,6 +873,11 @@ type ChatRunner struct {
 	// above, not a separate lock — reads/writes are cheap map lookups,
 	// never worth a dedicated mutex's added surface.
 	adviceStates map[string]*sessionAdviceState
+	// pendingContext is the env.PendingContext every chat run carries
+	// and every LLMProviderAdapter drains (v0.86.0 unwired sweep — see
+	// pending_context.go). Own lock; never nil on a New-constructed
+	// runner.
+	pendingContext *pendingContextQueue
 }
 
 // chatSub is the per-StartStream bookkeeping entry.
@@ -963,9 +968,10 @@ func New(cfg Config) (*ChatRunner, error) {
 		cfg.ReasoningBudget = func() int { return 0 }
 	}
 	return &ChatRunner{
-		cfg:        cfg,
-		subs:       map[string]*chatSub{},
-		pausedSubs: map[string]*pausedTurn{},
+		cfg:            cfg,
+		subs:           map[string]*chatSub{},
+		pausedSubs:     map[string]*pausedTurn{},
+		pendingContext: newPendingContextQueue(),
 	}, nil
 }
 
@@ -1190,6 +1196,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
 		WithSessionID(sessionID).
 		WithAttachments(r.cfg.Attachments).
+		withPendingContext(r.pendingContext).
 		WithKnobsDefault(r.cfg.KnobsDefault).
 		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir, r.cfg.WorkspaceNote).
 		WithCustomInstructions(r.cfg.CustomInstructions).
@@ -1439,6 +1446,16 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	}
 	if r.cfg.EnvDefaults != nil {
 		r.cfg.EnvDefaults(env)
+	}
+	// v0.86.0 unwired sweep: the write half of hook additional_context.
+	// env.LifecycleHooks (set by EnvDefaults above) fires pre_tool_use /
+	// post_tool_use, and tool_invocation.go hands any additional_context
+	// to env.PendingContext — which no production code ever set, so the
+	// context was dropped on every chat run. Set AFTER EnvDefaults so the
+	// process-wide closure cannot clobber the per-runner queue that this
+	// run's llmAdapter drains.
+	if env.PendingContext == nil && r.pendingContext != nil {
+		env.PendingContext = r.pendingContext
 	}
 	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04 second seam): apply
 	// the resolved posture mode to the Cedar gate env.Policy now points

@@ -477,27 +477,6 @@ func (p *LabelPusher) ResetCursor(ctx context.Context) error {
 	return p.Source.ResetCursors(ctx, labelPushSink)
 }
 
-// Run pushes every interval until ctx is cancelled. Kept for a caller
-// that owns a lifecycle (the WP13 Manager wiring); the event-driven
-// Nudge below is what newLLMStack uses today.
-func (p *LabelPusher) Run(ctx context.Context, interval time.Duration) {
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		if _, err := p.PushOnce(ctx); err != nil {
-			logging.L().Debug("mlsidecar.labelpush.tick_failed", "err", err.Error())
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
-}
-
 // nudgeTimeout bounds one background drain started by Nudge.
 const nudgeTimeout = 15 * time.Second
 
@@ -507,7 +486,11 @@ const nudgeTimeout = 15 * time.Second
 // sidecar unhealthy it returns before spawning anything, and a drain
 // already in flight just gets flagged to loop once more. Rows a nudge
 // could not push (unhealthy at the time) stay pending; the next nudge
-// (or Run tick) picks them up, so nothing is lost by a missed nudge.
+// picks them up, so nothing is lost by a missed nudge. Nudge sources in
+// production: every label write, and every Settings action that leaves
+// the engine healthy (core/rpc/views/sidecar Impl.NudgeLabels). There is
+// no periodic ticker — the interval-driven Run had no caller and was
+// deleted in the v0.86.0 unwired sweep.
 func (p *LabelPusher) Nudge() {
 	if p == nil || p.Client == nil || p.Source == nil {
 		return

@@ -451,7 +451,7 @@ func TestSidecarAdvisor_Budget_ContractsFetchIsInsideTheBudgetToo(t *testing.T) 
 	fb := NewHeuristicAdvisor()
 	fh := &fixedHeuristic{confidence: 41, modelID: "heuristic/toy-v1"}
 	fb.RegisterHeuristic(kind.ID, fh.fn)
-	adv := NewSidecarAdvisor(engine, healthyProbe(), fb, WithSidecarBudget(40*time.Millisecond))
+	adv := NewSidecarAdvisor(engine, healthyProbe(), fb, withSidecarBudget(40*time.Millisecond))
 
 	done := make(chan struct{})
 	var rec Recommendation
@@ -631,7 +631,7 @@ func TestSidecarAdvisor_ContractsView_IsCachedWithinTTL_AndRefreshedAfter(t *tes
 	now := time.Unix(1_000_000, 0)
 	var mu sync.Mutex
 	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
-	f := newSidecarFixture("sc_ttl", WithSidecarContractsTTL(time.Minute), withSidecarClock(clock))
+	f := newSidecarFixture("sc_ttl", withSidecarContractsTTL(time.Minute), withSidecarClock(clock))
 	for i := 1; i <= 3; i++ {
 		if _, err := f.recommend(t, toyFeatures{N: i}, sidecarSess); err != nil {
 			t.Fatal(err)

@@ -164,6 +164,61 @@ describe('ResolvedContextPanel', () => {
     expect(preview.text()).toContain('preview body 123');
   });
 
+  // v0.86.0 unwired sweep review (M1): hook-attached session context
+  // (session_start / subagent_start additional_context) is a session-scope
+  // inline row, and this panel is the only place a session's attachments
+  // are listed. It used to mount every row readonly, so that context was
+  // sent to the model for the session's whole life with no way to remove it.
+  it('lets the user remove a session-scope inline row (hook context) and refreshes', async () => {
+    const hookRow = makeAttachment({
+      id: 's-hook',
+      scopeKind: 'session',
+      scopeId: 's-1',
+      contentSource: 'inline:deadbeef',
+      content: 'session_start says: this project uses Go',
+      position: 1,
+    });
+    const globalRow = makeAttachment({
+      id: 'g-1',
+      scopeKind: 'global',
+      contentSource: 'library:global.md',
+    });
+    let rows: Attachment[] = [globalRow, hookRow];
+    const remove = vi.fn(async (id: string) => {
+      rows = rows.filter((r) => r.id !== id);
+    });
+    const client = createFakeHarnessClient({
+      attachments: {
+        list: async () => [],
+        listResolved: async () => [...rows],
+        add: async () => rows[0],
+        remove,
+        reorder: async () => undefined,
+        refresh: async () => rows[0],
+      } as any,
+    });
+    const wrapper = mount(ResolvedContextPanel, {
+      props: { sessionId: 's-1' },
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    await wrapper.find('[data-testid=resolved-context-toggle]').trigger('click');
+    await flushPromises();
+
+    // Global rows stay read-only here (managed in Settings).
+    expect(wrapper.find('[data-testid=attachment-remove-g-1]').exists()).toBe(false);
+
+    const btn = wrapper.find('[data-testid=attachment-remove-s-hook]');
+    expect(btn.exists()).toBe(true);
+    await btn.trigger('click');
+    await flushPromises();
+
+    expect(remove).toHaveBeenCalledWith('s-hook');
+    expect(wrapper.find('[data-testid=resolved-row-s-hook]').exists()).toBe(false);
+    // The remove click must not have toggled the row's preview open.
+    expect(wrapper.find('[data-testid=resolved-preview-s-hook]').exists()).toBe(false);
+  });
+
   it('uses only design tokens — no raw hex/rgba', async () => {
     const { wrapper } = mountPanel([]);
     await flushPromises();
