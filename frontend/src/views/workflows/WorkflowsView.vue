@@ -17,7 +17,7 @@
  *     progress once a real model_turn dispatcher is wired.
  */
 import { ref, computed, onMounted, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
@@ -27,6 +27,11 @@ import WorkflowGraphEditor from '@/components/workflows/WorkflowGraphEditor.vue'
 import CatalogView from './CatalogView.vue';
 import CatalogPreviewDrawer from './CatalogPreviewDrawer.vue';
 import RunsHistoryTab from './RunsHistoryTab.vue';
+// nav-ia-sweep-01DOGF0F WP04 — Workflows is the automation home: schedules
+// (workflow cron + scheduled chats) and background tasks moved here from
+// Settings › Runtime and Settings › Authoring › Workflows.
+import SchedulesTab from './SchedulesTab.vue';
+import TasksTab from './tasks/TasksTab.vue';
 // fleet-share-and-sync-01NDFSEX14 WP03 — Publish to team catalog
 import PublishDialog from '@/views/marketplace/PublishDialog.vue';
 import { signedIn } from '@/lib/featureFlags';
@@ -41,6 +46,7 @@ import {
   type WorkflowsCatalogEntry,
   type WorkflowsArtifactOption,
   type WorkflowsProjectOption,
+  type WorkflowsScheduleEntry,
 } from '@/lib/workflowsClient';
 import {
   createScheduledChatClient,
@@ -104,6 +110,7 @@ async function selectWorkflow(id: string) {
   selectedID.value = id;
   runResult.value = null;
   runError.value = null;
+  confirmingDelete.value = false;
   try {
     const w = await client.get(id);
     selected.value = w;
@@ -192,11 +199,53 @@ async function deleteSelected() {
     runResult.value = null;
     runError.value = null;
     await loadCatalog();
+    await loadSchedules();
   } catch (err) {
     saveError.value = err instanceof Error ? err.message : String(err);
   } finally {
     saving.value = false;
+    confirmingDelete.value = false;
   }
+}
+
+// nav-ia-sweep-01DOGF0F WP04 — merged from WorkflowsSettingsPanel (WP01
+// parity rows 10, 11, 15): the Delete button opens a confirmation instead of
+// deleting on one click, and the confirmation warns when the workflow has an
+// active cron schedule (deleting it removes the schedule too).
+const confirmingDelete = ref(false);
+const schedules = ref<WorkflowsScheduleEntry[]>([]);
+
+async function loadSchedules() {
+  try {
+    schedules.value = (await client.scheduleList()) ?? [];
+  } catch {
+    schedules.value = [];
+  }
+}
+
+const selectedHasSchedule = computed<boolean>(
+  () => !!selected.value && schedules.value.some((s) => s.workflowId === selected.value!.id),
+);
+
+// WP01 parity row 9: only user-saved workflows are deletable. Builtins come
+// from LoadBuiltins, not the store, so Workflows_Delete on one returns
+// "not found" — the retired Settings panel hid the button for them; the
+// Library used to offer it and fail. Now the Library hides it too.
+const selectedDeletable = computed<boolean>(() => {
+  if (!selected.value) return false;
+  const row = catalog.value.find((w) => w.id === selected.value!.id);
+  return row?.source === 'user';
+});
+
+function requestDelete() {
+  if (!selected.value || !selectedDeletable.value) return;
+  saveError.value = null;
+  confirmingDelete.value = true;
+  void loadSchedules();
+}
+
+function cancelDelete() {
+  confirmingDelete.value = false;
 }
 
 // Test seam: the spec drives import via this method so it doesn't need
@@ -204,10 +253,20 @@ async function deleteSelected() {
 // real editor's save button.
 defineExpose({ importFromYaml, deleteSelected });
 
-// WP03: tab navigation. "Library" is the default (preserving existing UX);
-// "Catalog" opens the install-flow surface; "Runs" is reserved.
-type Tab = 'Library' | 'Catalog' | 'Runs';
+// WP03: tab navigation. "Library" is the default (preserving existing UX).
+// nav-ia-sweep-01DOGF0F WP04 (FR-3): Schedules + Tasks joined, and the tab is
+// URL-addressable (`/workflows?tab=schedules|runs|tasks|catalog`) so deep
+// links — the chat header's background-task chip, the legacy
+// /settings?tab=… redirects — land on the right tab.
+const TABS = ['Library', 'Schedules', 'Runs', 'Tasks', 'Catalog'] as const;
+type Tab = (typeof TABS)[number];
 const activeTab = ref<Tab>('Library');
+
+function tabFromQuery(raw: unknown): Tab | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof v !== 'string') return null;
+  return TABS.find((t) => t.toLowerCase() === v.toLowerCase()) ?? null;
+}
 
 // WP03: catalog selection for the preview drawer.
 const catalogSelectedEntry = ref<WorkflowsCatalogEntry | null>(null);
@@ -448,7 +507,32 @@ const route = (() => {
   }
 })();
 
+const router = (() => {
+  try {
+    return useRouter();
+  } catch {
+    return null;
+  }
+})();
+
 const focusRunId = ref<string | null>(null);
+
+function applyTabQuery() {
+  const t = tabFromQuery(route?.query?.tab);
+  if (t) activeTab.value = t;
+}
+
+/** Tab click: switch, and mirror it into `?tab=` so the URL is shareable. */
+function selectTab(tab: Tab) {
+  activeTab.value = tab;
+  if (!route || !router) return;
+  const query = { ...route.query };
+  // `run` focuses a run on the Runs tab; it means nothing elsewhere.
+  delete query.run;
+  if (tab === 'Library') delete query.tab;
+  else query.tab = tab.toLowerCase();
+  void router.replace({ query });
+}
 
 function applyRunQuery() {
   const raw = route?.query?.run;
@@ -464,9 +548,13 @@ function applyRunQuery() {
 // LeftRail, so a click while already on /workflows only changes the
 // query — Vue Router does not remount the view for a query-only change
 // on the same route).
-onMounted(applyRunQuery);
+onMounted(() => {
+  applyTabQuery();
+  applyRunQuery();
+});
 if (route) {
   watch(() => route.query.run, applyRunQuery);
+  watch(() => route.query.tab, applyTabQuery);
 }
 </script>
 
@@ -481,13 +569,13 @@ if (route) {
       number="08"
       section="WORKFLOWS"
       title="Agentic Workflows"
-      subtitle="Pre-canned multi-step agent recipes."
+      subtitle="Multi-step agent recipes, what runs on a schedule, and background tasks."
     />
     <div class="px-6 py-4 space-y-4" data-testid="workflows-view">
       <!-- Tab nav (WP03) -->
       <nav class="flex gap-1 border-b border-border-muted" data-testid="workflows-tab-nav">
         <button
-          v-for="tab in (['Library', 'Catalog', 'Runs'] as const)"
+          v-for="tab in TABS"
           :key="tab"
           type="button"
           class="px-4 py-2 font-ui text-sm focus:outline-none"
@@ -497,7 +585,7 @@ if (route) {
               : 'text-ink-muted hover:text-ink'
           "
           :data-testid="`workflows-tab-${tab.toLowerCase()}`"
-          @click="activeTab = tab"
+          @click="selectTab(tab)"
         >
           {{ tab }}
         </button>
@@ -521,6 +609,16 @@ if (route) {
       <!-- Runs tab (01NBUG04 — execution history + scheduled subsection) -->
       <template v-else-if="activeTab === 'Runs'">
         <RunsHistoryTab :client="client" :chat-client="chatClient" :focus-run-id="focusRunId" />
+      </template>
+
+      <!-- Schedules tab (nav-ia-sweep-01DOGF0F WP04) -->
+      <template v-else-if="activeTab === 'Schedules'">
+        <SchedulesTab :client="client" :chat-client="chatClient" />
+      </template>
+
+      <!-- Tasks tab (nav-ia-sweep-01DOGF0F WP04) -->
+      <template v-else-if="activeTab === 'Tasks'">
+        <TasksTab />
       </template>
 
       <!-- Library tab (existing content) -->
@@ -867,11 +965,12 @@ if (route) {
               Edit on canvas
             </button>
             <button
+              v-if="selectedDeletable"
               type="button"
               class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink-muted hover:text-signal-danger hover:border-signal-danger disabled:opacity-50"
               :disabled="saving"
               data-testid="workflows-delete-button"
-              @click="deleteSelected"
+              @click="requestDelete"
             >
               Delete
             </button>
@@ -885,6 +984,47 @@ if (route) {
             >
               Publish to team
             </button>
+          </div>
+          <!-- Delete confirmation (nav-ia-sweep-01DOGF0F WP04, from the
+               retired Settings › Workflows panel). -->
+          <div
+            v-if="confirmingDelete"
+            role="alertdialog"
+            aria-labelledby="workflows-delete-title"
+            class="rounded-sm border border-signal-danger bg-surface-2 p-3 space-y-2"
+            data-testid="workflows-delete-confirm-dialog"
+          >
+            <h4 id="workflows-delete-title" class="font-ui text-sm text-ink">
+              Delete “{{ selected.name }}”?
+            </h4>
+            <p
+              v-if="selectedHasSchedule"
+              class="font-ui text-xs text-signal-warn"
+              data-testid="workflows-delete-schedule-warning"
+            >
+              This workflow has an active cron schedule. Deleting it will also
+              remove the schedule.
+            </p>
+            <p class="font-ui text-xs text-ink-muted">This action cannot be undone.</p>
+            <div class="flex gap-2 justify-end">
+              <button
+                type="button"
+                class="rounded-sm border border-border-muted px-3 py-1 font-ui text-xs text-ink hover:bg-surface-1"
+                data-testid="workflows-delete-cancel"
+                @click="cancelDelete"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                class="rounded-sm bg-signal-danger px-3 py-1 font-ui text-xs text-white hover:brightness-90 disabled:opacity-50"
+                :disabled="saving"
+                data-testid="workflows-delete-confirm"
+                @click="deleteSelected"
+              >
+                {{ saving ? 'Deleting…' : 'Delete' }}
+              </button>
+            </div>
           </div>
           <!-- Publish dialog (WP03) -->
           <PublishDialog

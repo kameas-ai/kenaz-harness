@@ -24,11 +24,11 @@ import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
 import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
 import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
 import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue';
-import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
+import ScheduledChatsPanel from '@/views/workflows/scheduledchat/ScheduledChatsPanel.vue';
 // subagent-control-and-background-tasks-01PMZB11 UNIT-11 — Tasks sub-tab,
 // restored now that bash.Options.BackgroundSpawn has a real producer.
-import TasksPanel from '@/views/settings/TasksPanel.vue';
-import TaskOutputViewer from '@/views/settings/TaskOutputViewer.vue';
+import TasksPanel from '@/views/workflows/tasks/TasksPanel.vue';
+import TaskOutputViewer from '@/views/workflows/tasks/TaskOutputViewer.vue';
 import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';

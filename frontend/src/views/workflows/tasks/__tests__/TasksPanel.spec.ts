@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import TasksPanel from '@/views/settings/TasksPanel.vue';
+import TasksPanel from '@/views/workflows/tasks/TasksPanel.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { TaskRow } from '@/lib/types';

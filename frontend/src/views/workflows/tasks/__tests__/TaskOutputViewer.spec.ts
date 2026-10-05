@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import TaskOutputViewer from '@/views/settings/TaskOutputViewer.vue';
+import TaskOutputViewer from '@/views/workflows/tasks/TaskOutputViewer.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { LineRow, TaskRow } from '@/lib/types';

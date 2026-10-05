@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
+import ScheduledChatsPanel from '@/views/workflows/scheduledchat/ScheduledChatsPanel.vue';
 import {
   createFakeScheduledChatClient,
   type ScheduledChatEntry,

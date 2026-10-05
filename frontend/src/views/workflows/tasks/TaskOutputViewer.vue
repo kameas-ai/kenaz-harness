@@ -15,8 +15,8 @@
  */
 
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
-import type { TaskRow, LineRow } from '../../lib/types';
-import { useHarnessClient } from '../../lib/useHarnessAPI';
+import type { TaskRow, LineRow } from '@/lib/types';
+import { useHarnessClient } from '@/lib/useHarnessAPI';
 
 const props = defineProps<{
   taskId: string;
