@@ -66,7 +66,9 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
@@ -358,7 +360,14 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 		t.Fatalf("SessionManager().Create: %v", err)
 	}
 	sessionID := sessRec.ID
-	if _, err := stack.chatRunner.StartStream(ctx, prof.ID, sessionID, "", "run it"); err != nil {
+	// The user turn is persisted by the caller, as every production
+	// caller does; the chat runner never writes it
+	// (chat-single-writer-01DOGF0G).
+	userRow, err := c.SessionManager().AppendMessage(ctx, sessionID, session.Message{Role: session.RoleUser, Content: "run it"})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if _, err := stack.chatRunner.StartStream(ctx, prof.ID, sessionID, "", chat.UserTurn{MessageID: userRow.ID, Text: "run it", Announce: true}); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 

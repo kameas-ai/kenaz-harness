@@ -177,7 +177,7 @@ func TestSecretResolver_ChatRunnerSubstitutesAndSanitizes(t *testing.T) {
 	pool := &echoingSecretPool{}
 	runner, broker, writer := buildSecretAwareRunner(t, reg, pool, idx)
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "run it"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("run it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -236,7 +236,7 @@ func TestSecretResolver_NilLookupLeavesLiteralUnsubstituted(t *testing.T) {
 	pool := &echoingSecretPool{}
 	runner, broker, _ := buildSecretAwareRunner(t, reg, pool, nil)
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "run it"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("run it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)

@@ -7523,11 +7523,13 @@ func buildChatRunner(
 		historyAdapter.mgr.SetMoveFidelityDial(moveFidelityHistory)
 	}
 	historyWriter := &llmHistoryWriter{inner: historyAdapter}
-	// model-moves-transcript-01PMCH01 WP02: the turn-span lookup for
-	// StartStream's empty-userMessage paths (keychain redrive; the
-	// multimodal send, where the frontend already landed the user row).
-	// nil manager leaves it nil, which makes those turns write classic
-	// entries — see chat.TurnSpanReader.
+	// model-moves-transcript-01PMCH01 WP02: the turn-span lookup for a
+	// StartStream whose caller could not name the user row
+	// (chat-single-writer-01DOGF0G: the row is always the caller's — the
+	// runner never writes a user turn). nil manager leaves it nil, which
+	// makes those turns write classic entries — see chat.TurnSpanReader.
+	// historyWriter also announces each fresh user turn to fleet
+	// context-sync (chat.UserTurnAnnouncer, FR-1d).
 	var turnSpanReader chat.TurnSpanReader
 	if historyAdapter != nil && historyAdapter.mgr != nil {
 		turnSpanReader = chatTurnSpanReader{mgr: historyAdapter.mgr}
@@ -8015,7 +8017,8 @@ const continuationPromptPrefix = "Your previous reply was cut off by a network e
 const continuationPromptTailLen = 200
 
 // buildContinuationPrompt builds the continuation prompt the resume
-// RPC hands to chat.ChatRunner.StartStream as the userMessage.
+// RPC persists as a user turn and hands to chat.ChatRunner.StartStream
+// (by reference — see buildResumeStarter).
 func buildContinuationPrompt(partial string) string {
 	tail := partial
 	if len(tail) > continuationPromptTailLen {
@@ -8039,9 +8042,11 @@ func buildContinuationPrompt(partial string) string {
 //     wiring uses the chassis-default profile id; the frontend can
 //     override via a future RPC arg).
 //  2. Synthesizes the continuation prompt via buildContinuationPrompt.
-//  3. Calls runner.StartStream with the synthesized prompt as the
-//     userMessage so the existing AskBus/HistoryReadNode pump delivers
-//     it on the first kernel fire.
+//  3. Persists the synthesized prompt as a user row (the starter is that
+//     row's single writer — the chat runner never writes a user turn,
+//     chat-single-writer-01DOGF0G) and calls runner.StartStream with a
+//     reference to it, so HistoryReadNode reads it and the AskBus
+//     pre-seed carries its text on the first kernel fire.
 //
 // long-turn-resilience-01KR3PRS WP03.
 func buildResumeStarter(runner *chat.ChatRunner, mgr *session.Manager, defaultProfileID, defaultModel string) sessions.ResumeStarter {
@@ -8060,22 +8065,39 @@ func buildResumeStarter(runner *chat.ChatRunner, mgr *session.Manager, defaultPr
 		if modelOverride == "" {
 			modelOverride = defaultModel
 		}
-		// StartStream persists the continuation prompt as a user turn
-		// before opening the kernel run. That's the wrong shape for a
-		// resume — we want the continuation row to be assistant-role
-		// and stamped with continuation_of. The chat runner will need
-		// a dedicated resume entrypoint to land the right shape; for
-		// now we emit a user-turn with the continuation prompt, which
-		// produces a fresh assistant turn that the frontend can wire
-		// into the partial bubble manually via the OriginalMessageID
-		// returned by the resume RPC.
+		// The continuation prompt lands as a user turn. That's the wrong
+		// shape for a resume — we want the continuation row to be
+		// assistant-role and stamped with continuation_of. The chat
+		// runner will need a dedicated resume entrypoint to land the
+		// right shape; for now we emit a user-turn with the continuation
+		// prompt, which produces a fresh assistant turn that the frontend
+		// can wire into the partial bubble manually via the
+		// OriginalMessageID returned by the resume RPC.
 		//
 		// TODO(long-turn-resilience-WP04): plumb a dedicated
 		// runner.StartResume(originalMessageID, prompt) entrypoint so
 		// the persisted assistant row carries continuation_of natively
 		// (via session.Manager.AppendContinuation) instead of relying
 		// on the frontend to stitch the bubbles.
-		return runner.StartStream(ctx, profileID, sessionID, modelOverride, prompt)
+		//
+		// SINGLE WRITER (chat-single-writer-01DOGF0G): before that
+		// mission the runner persisted this prompt from the string it was
+		// handed. It no longer writes user turns at all, so this starter —
+		// the only caller with no frontend append in front of it — writes
+		// the row itself and passes the runner a reference. Announce:
+		// true, because nothing else will report this turn to fleet sync.
+		stored, aerr := mgr.AppendMessage(ctx, sessionID, session.Message{
+			Role:    session.RoleUser,
+			Content: prompt,
+		})
+		if aerr != nil {
+			return "", fmt.Errorf("rpc: persist continuation prompt: %w", aerr)
+		}
+		return runner.StartStream(ctx, profileID, sessionID, modelOverride, chat.UserTurn{
+			MessageID: stored.ID,
+			Text:      prompt,
+			Announce:  true,
+		})
 	})
 }
 
@@ -9679,6 +9701,7 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 	out := make([]llm.SessionMessage, 0, len(stored))
 	for _, m := range stored {
 		out = append(out, llm.SessionMessage{
+			ID:            m.ID,
 			Role:          string(m.Role),
 			Content:       m.Content,
 			ContentBlocks: m.ContentBlocks,
@@ -9752,17 +9775,44 @@ func (w *llmHistoryWriter) AppendEntry(ctx context.Context, sessionID string,
 		return "", err
 	}
 	// FR-003: stream event to fleet when session sync is enabled.
-	// The hook is stored on inner (sessionHistoryReader).
-	if hook := w.inner.syncHook; hook != nil {
-		payload, merr := json.Marshal(map[string]string{
-			"id":   stored.ID,
-			"role": entry.Role,
-		})
-		if merr == nil {
-			hook(ctx, sessionID, 0, payload)
-		}
-	}
+	w.emitSync(ctx, sessionID, stored.ID, entry.Role)
 	return stored.ID, nil
+}
+
+// AnnounceUserTurn satisfies chat.UserTurnAnnouncer: it reports an
+// EXISTING user row to fleet context-sync without writing anything
+// (chat-single-writer-01DOGF0G FR-1d).
+//
+// Why it exists: the chat runner used to re-append every user turn
+// through AppendEntry above, and that second write was the ONLY path by
+// which a user turn reached SessionSyncer.AppendEvent — the frontend's
+// Sessions_AppendMessage never touches syncHook. The runner no longer
+// writes the user turn (it was the duplicate behind dogfood F12), so it
+// announces the frontend's row here instead: same hook, same payload,
+// once per fresh turn.
+func (w *llmHistoryWriter) AnnounceUserTurn(ctx context.Context, sessionID, messageID string) {
+	if w == nil || w.inner == nil || messageID == "" {
+		return
+	}
+	w.emitSync(ctx, sessionID, messageID, string(session.RoleUser))
+}
+
+// emitSync fires the fleet session-sync hook for one persisted row. The
+// hook is stored on inner (sessionHistoryReader) so it survives
+// independently of who holds the writer. Only opaque ids cross this
+// boundary — never content (privacy invariant on syncHook).
+func (w *llmHistoryWriter) emitSync(ctx context.Context, sessionID, messageID, role string) {
+	hook := w.inner.syncHook
+	if hook == nil {
+		return
+	}
+	payload, merr := json.Marshal(map[string]string{
+		"id":   messageID,
+		"role": role,
+	})
+	if merr == nil {
+		hook(ctx, sessionID, 0, payload)
+	}
 }
 
 // moveToolCalls projects the seam's tool payload onto the store's

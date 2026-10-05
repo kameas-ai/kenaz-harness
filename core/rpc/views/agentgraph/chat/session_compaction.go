@@ -48,9 +48,19 @@ import (
 // `loadHistory() + userMessage`, but StartStream had already persisted
 // the user turn before calling it — so the new user message was counted
 // twice, and the trigger fired marginally early. The node is handed the
-// history slice that `history_read` produced, which contains the user
-// turn exactly once, and this strategy counts what it is given. One
-// message's worth of tokens, in the correct direction.
+// history slice that `history_read` produced, and this strategy counts
+// what it is given. One message's worth of tokens, in the correct
+// direction.
+//
+// RE-VERIFIED (chat-single-writer-01DOGF0G). This comment used to say the
+// slice "contains the user turn exactly once". Until that mission it did
+// not: the chat surface persisted every turn via Sessions_AppendMessage
+// AND the runner re-appended it, so `history_read` returned two physical
+// rows and this count included the user turn twice (dogfood F12). With
+// the runner no longer writing the user turn, the slice holds one row per
+// turn and the arithmetic below — unchanged — counts it once. Stored
+// duplicates on upgraded installs are removed by
+// sessions/0341-dedupe-user-turns.
 
 // sessionRewriteStrategy implements compaction.Compactor for
 // compaction.StrategySessionRewrite: it rewrites the persisted history of

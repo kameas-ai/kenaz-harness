@@ -154,7 +154,7 @@ func TestStreamCheckpoint_AC002_Durability(t *testing.T) {
 	release := func() { releaseOnce.Do(func() { close(llm.proceed) }) }
 	defer release() // avoid leaking the run goroutine if an assertion fails early; idempotent vs. the explicit call below
 
-	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", "hi")
+	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", testTurn("hi"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestDriveRun_AC003_CleanCloseClearsCheckpoint(t *testing.T) {
 	}
 	runner, broker, mgr, sessionID := buildCheckpointRunner(t, llm)
 
-	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", "hi")
+	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", testTurn("hi"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -275,7 +275,7 @@ func testAC003ErrorClose(t *testing.T, emitTool bool) {
 	}
 	runner, broker, mgr, sessionID := buildCheckpointRunner(t, llm)
 
-	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", "hi")
+	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", testTurn("hi"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestDriveRun_AC003_StopCalledClearsCheckpoint(t *testing.T) {
 	}
 	runner, broker, mgr, sessionID := buildCheckpointRunner(t, llm)
 
-	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", "hi")
+	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", testTurn("hi"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}

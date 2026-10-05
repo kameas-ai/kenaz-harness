@@ -175,10 +175,46 @@ type CredPeeker interface {
 // uses ContentBlocks verbatim and ignores Content; legacy text-only
 // rows leave ContentBlocks nil so the historical Content path keeps
 // working.
+//
+// ID is the persisted row id. StartStream needs it to hand the chat
+// runner the user turn it is about to run — by reference, never as text
+// to persist (chat-single-writer-01DOGF0G). A reader that leaves it
+// empty (test fakes) degrades to the runner's own TurnSpan lookup.
 type SessionMessage struct {
+	ID            string
 	Role          string
 	Content       string
 	ContentBlocks []corellm.ContentBlock
+}
+
+// UserTurn identifies the user message that opens a chat turn. It
+// describes a row that is ALREADY PERSISTED — by Sessions_AppendMessage /
+// Sessions_SendMessageWithBlocks (the chat surface), by the scheduler's or
+// sub-agent spawner's own append, or by the resume starter. The chat
+// runner never writes it.
+//
+// chat-single-writer-01DOGF0G (dogfood F12): this used to be a bare
+// `userMessage string` that the runner re-appended through its
+// HistoryWriter, so every typed turn landed twice — once from the
+// frontend, once from the runner — and the model read every user message
+// twice on every subsequent request. Passing a reference instead of text
+// makes a second write impossible to express: there is no field here the
+// runner could persist.
+type UserTurn struct {
+	// MessageID is the persisted user row's id — the turn's span, which
+	// every move of the turn carries as turn_span_id. Empty means "the
+	// caller could not resolve it"; the runner then asks its
+	// TurnSpanReader for the session's latest user row.
+	MessageID string
+	// Text is the row's flattened text. It is consumed, never stored:
+	// it pre-seeds the chat graph's ask node and feeds the post_send hook
+	// and the advisors. Empty for an image/document-only send.
+	Text string
+	// Announce is true on a turn's FIRST run: the runner then reports the
+	// row to fleet context-sync exactly once (FR-1d). The keychain
+	// redrive re-runs a turn that was already announced and leaves it
+	// false.
+	Announce bool
 }
 
 // SessionMessageReader is the minimal session-history surface the
@@ -282,14 +318,14 @@ type HookRunner interface {
 // chat package directly (DIRECTIVE_001 — keeps the import direction
 // one-way: chat package can import llm view, not the other way around).
 type ChatRunner interface {
-	StartStream(ctx context.Context, profileID, sessionID, modelOverride, userMessage string) (string, error)
+	StartStream(ctx context.Context, profileID, sessionID, modelOverride string, turn UserTurn) (string, error)
 	StopStream(ctx context.Context, subID string) error
 	// HasPausedSubFor reports whether a paused turn exists for the given
 	// profileID and returns its sub_id token.
 	// (provider-keychain-rotation-01KQ8TD9 WP04)
 	HasPausedSubFor(profileID string) (token string, ok bool)
 	// RedriveLastTurn re-issues a kernel run for the paused turn
-	// identified by profileID without re-appending the user message.
+	// identified by profileID, re-running the same persisted user turn.
 	// (provider-keychain-rotation-01KQ8TD9 WP04)
 	RedriveLastTurn(ctx context.Context, profileID string) (newSubID string, err error)
 }
@@ -944,23 +980,37 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		log.Error("llm.start_stream.failed", "reason", "chat runner not wired")
 		return "", errors.New("llm: chat runner not wired")
 	}
-	// Pull the latest user message — the chat surface posts the user
-	// turn via Sessions_AppendMessage immediately before calling
-	// StartStream, so the trailing user row is the new turn. The
-	// runner re-appends it through the HistoryWriter seam so the kernel
-	// run sees consistent history.
-	var userMessage string
+	// SINGLE WRITER (chat-single-writer-01DOGF0G). The user turn is
+	// already persisted, exactly once, by whoever asked for this stream:
+	// the chat surface posts it via Sessions_AppendMessage /
+	// Sessions_SendMessageWithBlocks immediately before calling
+	// StartStream, and the scheduler and sub-agent spawner append their
+	// prompt the same way. So this resolves the newest user row and hands
+	// the runner a REFERENCE to it — id + text — and nothing it could
+	// write. (This comment used to say "the runner re-appends it through
+	// the HistoryWriter seam so the kernel run sees consistent history";
+	// that re-append was the second writer behind dogfood F12.)
+	//
+	// Announce: the row is a fresh turn — so it is reported to fleet
+	// context-sync once — when it is the session's last row. A stream
+	// started over a session whose newest user row is already answered
+	// is re-running a turn, not opening one.
+	var turn UserTurn
 	if a.history != nil && sessionID != "" {
 		if stored, herr := a.history.ListMessages(ctx, sessionID); herr == nil {
 			for i := len(stored) - 1; i >= 0; i-- {
 				if stored[i].Role == "user" {
-					userMessage = stored[i].Content
+					turn = UserTurn{
+						MessageID: stored[i].ID,
+						Text:      stored[i].Content,
+						Announce:  i == len(stored)-1,
+					}
 					break
 				}
 			}
 		}
 	}
-	return a.chatRunner.StartStream(ctx, profileID, sessionID, modelOverride, userMessage)
+	return a.chatRunner.StartStream(ctx, profileID, sessionID, modelOverride, turn)
 }
 
 // StopStream terminates the subscription. Forwards to the ChatRunner
