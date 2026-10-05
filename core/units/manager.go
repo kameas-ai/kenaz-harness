@@ -100,6 +100,24 @@ func (m *Manager) UpsertSyncState(ctx context.Context, st SyncState) (SyncState,
 	return m.store.UpsertSyncState(ctx, st)
 }
 
+// CreateWithSyncState creates a unit pulled from fleet together with its
+// sync sidecar row, atomically (see Store.CreateWithSyncState). The fleet
+// pull path's first-sight create goes through here so a crash can never
+// leave a shared unit without its baseline (units-debt-01UNITD01 FR-4).
+func (m *Manager) CreateWithSyncState(ctx context.Context, u Unit, st SyncState) (Unit, SyncState, error) {
+	return m.store.CreateWithSyncState(ctx, u, st)
+}
+
+// UpdateWithSyncState fast-forwards a unit to a pulled body and advances its
+// sync sidecar, atomically (see Store.UpdateWithSyncState). metadata may be
+// nil (stored as "{}").
+func (m *Manager) UpdateWithSyncState(ctx context.Context, id, body string, metadata json.RawMessage, st SyncState) (Unit, SyncState, error) {
+	if id == "" {
+		return Unit{}, SyncState{}, errors.New("units: empty id")
+	}
+	return m.store.UpdateWithSyncState(ctx, id, body, []byte(metadata), st)
+}
+
 // GetSyncState returns the sidecar for a unit, or ErrSyncStateNotFound when
 // the unit has never been synced.
 func (m *Manager) GetSyncState(ctx context.Context, unitID string) (SyncState, error) {
