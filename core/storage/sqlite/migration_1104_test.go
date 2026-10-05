@@ -345,6 +345,25 @@ func TestMigration1104_PopulatedSnapshots(t *testing.T) {
 				t.Errorf("artifact units = %d, %v; want %d (one per legacy artifact)", n, err, legacyArtifacts)
 			}
 
+			// ---- P-5 (WP05): no MIGRATED artifact unit is in the fleet
+			// push worklist for either shared classification.
+			for _, class := range []units.Classification{units.ClassTeam, units.ClassOrg} {
+				dirty, err := um.ListDirty(ctx, class)
+				if err != nil {
+					t.Fatalf("ListDirty(%s): %v", class, err)
+				}
+				for _, u := range dirty {
+					if u.Kind == units.KindArtifact {
+						t.Errorf("migrated artifact unit %s is in the %s push worklist", u.ID, class)
+					}
+				}
+			}
+			var syncRows int
+			if err := db.Reader().QueryRow(ctx,
+				"SELECT COUNT(*) FROM unit_sync_state s JOIN units u ON u.id = s.unit_id WHERE u.kind = 'artifact'").Scan(&syncRows); err != nil || syncRows != 0 {
+				t.Errorf("artifact units with a sync sidecar row = %d, %v; want 0", syncRows, err)
+			}
+
 			// ---- AC-PI-3: unrelated (document) units and their history
 			// survive byte-identical.
 			post := openRawSQLiteAt(t, filepath.Join(dir, "data.db"))
