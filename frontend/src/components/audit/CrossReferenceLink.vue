@@ -8,7 +8,8 @@
  *   branch_id    → /branches/<id>
  *   artifact_id  → /artifacts/<id>
  *   workflow_id  → /workflows/<id>
- *   memory_chunk_id → /memory/<id>
+ *   memory_chunk_id → /knowledge/learned?chunk=<id> (Knowledge › Learned,
+ *                     row highlighted; knowledge-home-01DOGF0E review F3a)
  *
  * Unknown kinds render as a monospaced span with no link.
  */
@@ -35,7 +36,7 @@ const route = computed(() => {
     case 'branch_id': return `/branches/${props.id}`;
     case 'artifact_id': return `/artifacts/${props.id}`;
     case 'workflow_id': return `/workflows/${props.id}`;
-    case 'memory_chunk_id': return `/memory/${props.id}`;
+    case 'memory_chunk_id': return `/knowledge/learned?chunk=${encodeURIComponent(props.id)}`;
     default: return null;
   }
 });

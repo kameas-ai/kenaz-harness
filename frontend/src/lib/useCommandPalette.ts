@@ -50,8 +50,12 @@ const NAV_ACTIONS: PaletteAction[] = [
   },
   { id: 'nav.tools', label: 'Go to Tools', hint: 'MCP servers & tool bundles', perform: () => navigate('#/tools') },
   { id: 'nav.providers', label: 'Go to Providers', hint: 'AI provider configuration', perform: () => navigate('#/providers') },
-  { id: 'nav.contexts', label: 'Go to Contexts', hint: 'Session context files', perform: () => navigate('#/contexts') },
-  { id: 'nav.memory', label: 'Go to Memory', hint: 'Memory capture settings', perform: () => navigate('#/memory') },
+  // knowledge-home-01DOGF0E WP02: Contexts + Memory → one Knowledge home.
+  // The old nav.memory hint promised "Memory capture settings"; the view never
+  // showed the setting (it lived under Tools).
+  { id: 'nav.knowledge', label: 'Go to Knowledge', hint: 'Curated context files & learned memory', perform: () => navigate('#/knowledge/curated') },
+  { id: 'nav.knowledge.curated', label: 'Go to Knowledge › Curated', hint: 'Context files you write and attach to conversations', perform: () => navigate('#/knowledge/curated') },
+  { id: 'nav.knowledge.learned', label: 'Go to Knowledge › Learned', hint: 'Memory captured from conversations — on/off switch and saved chunks', perform: () => navigate('#/knowledge/learned') },
   { id: 'nav.workflows', label: 'Go to Workflows', hint: 'Scheduled workflows', perform: () => navigate('#/workflows') },
   // artifacts-as-units-01DOGF0C WP06: Artifacts + Documents → one Library.
   { id: 'nav.library', label: 'Go to Library', hint: 'Captured artifacts & authored documents', perform: () => navigate('#/library/captured') },

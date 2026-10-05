@@ -331,13 +331,18 @@
 # NotAvailableInServedMode.
 "Hooks_DryRun"
 
-# Caller(s) HooksSettingsView.vue, KenazToolsPanel.vue only reachable from a
-# view that renders NotAvailableInServedMode.
+# Caller(s) HooksSettingsView.vue, MemoryCaptureToggle.vue only reachable
+# from a view that renders NotAvailableInServedMode.
 "Hooks_InstallStarterMemory"
+
+# Caller(s) MemoryCaptureToggle.vue (inside MemoryView.vue, Knowledge ›
+# Learned) only reachable from a view that renders NotAvailableInServedMode.
+# Moved from KenazToolsPanel.vue by knowledge-home-01DOGF0E WP03.
+"Hooks_RemoveStarterMemory"
+"Settings_SetMemory"
 
 # Caller(s) KenazToolsPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
-"Hooks_RemoveStarterMemory"
 "Settings_GetBash"
 "Settings_GetFSReadEnabled"
 "Settings_GetFSWriteEnabled"
@@ -348,7 +353,6 @@
 "Settings_SetBash"
 "Settings_SetFSReadEnabled"
 "Settings_SetFSWriteEnabled"
-"Settings_SetMemory"
 "Settings_SetSaveArtifactEnabled"
 "Settings_SetTodoEnabled"
 "Settings_SetWebFetchEnabled"

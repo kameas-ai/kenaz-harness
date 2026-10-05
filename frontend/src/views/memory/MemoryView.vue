@@ -32,7 +32,7 @@
  *   - "N narratives unrecoverable" banner when narrativeFailedCount > 0,
  *     with a per-job "Retry" action and a "Retry all" affordance.
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -49,9 +49,18 @@ import type {
   ScoredChunk,
 } from '@/lib/types';
 import MemoryHealthPanel from './MemoryHealthPanel.vue';
+import MemoryCaptureToggle from './MemoryCaptureToggle.vue';
 import PrunePreviewModal from './PrunePreviewModal.vue';
 import ProvenanceDrawer from './ProvenanceDrawer.vue';
 import type { ChunkProvenance } from '@/lib/types';
+
+const props = defineProps<{
+  /**
+   * Rendered inside KnowledgeView's Learned section (knowledge-home-01DOGF0E
+   * WP02): Knowledge owns the page header, so this view drops its own.
+   */
+  embedded?: boolean;
+}>();
 
 const servedMode = useServedMode();
 const client = useHarnessClient();
@@ -126,7 +135,41 @@ async function refresh() {
   } finally {
     loading.value = false;
   }
+  void focusLinkedChunk();
 }
+
+// ── Linked chunk (?chunk=<id>) ─────────────────────────────────────────
+// knowledge-home-01DOGF0E review F3a: audit rows link a memory_chunk_id here
+// (CrossReferenceLink → /knowledge/learned?chunk=<id>). The targeted row is
+// highlighted and scrolled into view; when it is not in the loaded list
+// (forgotten, pruned, or outside the active scope pill) the view says so
+// instead of silently showing an unrelated list.
+const linkedChunkId = computed<string | null>(() => {
+  const raw = route?.query?.chunk;
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return typeof v === 'string' && v.length > 0 ? v : null;
+});
+const linkedChunkMissing = computed<boolean>(
+  () =>
+    linkedChunkId.value !== null &&
+    !loading.value &&
+    !error.value &&
+    !chunks.value.some((c) => c.id === linkedChunkId.value),
+);
+
+async function focusLinkedChunk(): Promise<void> {
+  const id = linkedChunkId.value;
+  if (!id || typeof document === 'undefined') return;
+  await nextTick();
+  const el = document.querySelector(`[data-testid="memory-chunk-${CSS.escape(id)}"]`);
+  if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+    (el as HTMLElement).scrollIntoView({ block: 'center' });
+  }
+}
+
+watch(linkedChunkId, () => {
+  void focusLinkedChunk();
+});
 
 async function setFilter(pill: FilterPill) {
   if (activeFilter.value === pill) return;
@@ -583,11 +626,16 @@ defineExpose({ refresh });
   />
   <div v-else>
     <CanvasHead
+      v-if="!props.embedded"
       number="07"
       section="MEMORY"
       title="Long-term memory"
       subtitle="Every snippet you have asked the harness to remember. These are pulled into future conversations across all sessions."
     />
+
+    <!-- knowledge-home-01DOGF0E WP03 (FR-4, FR-5): the on/off switch lives
+         here now (moved from Tools), and says plainly when capture is off. -->
+    <MemoryCaptureToggle />
 
     <!-- §2.4 — Main tab bar: Chunks / Health / Retrieval -->
     <div
@@ -965,6 +1013,16 @@ defineExpose({ refresh });
         {{ error }}
       </div>
 
+      <p
+        v-if="linkedChunkMissing"
+        class="mb-3 rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+        role="status"
+        data-testid="memory-linked-chunk-missing"
+      >
+        The linked memory chunk <span class="font-mono">{{ linkedChunkId }}</span> is not in
+        this list — it may have been forgotten or pruned, or it sits outside the selected scope.
+      </p>
+
       <div
         v-if="loading"
         class="font-ui text-[12px] text-ink-muted"
@@ -997,7 +1055,9 @@ defineExpose({ refresh });
         <li
           v-for="chunk in visibleChunks"
           :key="chunk.id"
-          class="relative rounded-md border border-border-muted bg-surface-1 px-4 py-3"
+          class="relative rounded-md border bg-surface-1 px-4 py-3"
+          :class="chunk.id === linkedChunkId ? 'border-accent ring-1 ring-accent' : 'border-border-muted'"
+          :aria-current="chunk.id === linkedChunkId ? 'true' : undefined"
           :data-testid="`memory-chunk-${chunk.id}`"
         >
           <div class="flex flex-wrap items-baseline gap-3">

@@ -9,7 +9,7 @@
  *   5. Dot is green on "ok" health.
  *   6. Dot is amber on "slow" health.
  *   7. Dot is red on "error" health.
- *   8. Click navigates to /memory.
+ *   8. Click navigates to /knowledge/learned.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
@@ -19,7 +19,7 @@ import MemoryCaptureRatePill from '@/shell/MemoryCaptureRatePill.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import type { MemoryCaptureRateSnapshot } from '@/lib/types';
 
-const memRoute = { path: '/memory', component: defineComponent({ render: () => h('div', 'memory') }) };
+const memRoute = { path: '/knowledge/learned', component: defineComponent({ render: () => h('div', 'memory') }) };
 const otherRoute = { path: '/', component: defineComponent({ render: () => h('div', 'home') }) };
 
 async function mountPill(snap: Partial<MemoryCaptureRateSnapshot> = {}) {
@@ -118,11 +118,11 @@ describe('MemoryCaptureRatePill (§2.7)', () => {
     expect(dot.classes()).toContain('bg-signal-danger');
   });
 
-  it('click navigates to /memory', async () => {
+  it('click navigates to /knowledge/learned', async () => {
     const { w, router } = await mountPill({ chunksPerMinute: 5 });
     await w.find('button').trigger('click');
     await flushPromises();
-    expect(router.currentRoute.value.path).toBe('/memory');
+    expect(router.currentRoute.value.path).toBe('/knowledge/learned');
   });
 
   // ── v0.5.x audit: 5 s poll timer ─────────────────────────────────────

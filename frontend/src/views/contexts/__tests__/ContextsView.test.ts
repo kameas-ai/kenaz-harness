@@ -393,7 +393,7 @@ describe('ContextsView', () => {
       expect(w.find('[data-testid=context-sync-pull-count]').text()).toContain('5');
     });
 
-    it('does not show publish button when team cap is absent', async () => {
+    it('shows the publish button disabled with a reason when team cap is absent (knowledge-home WP04, P-5)', async () => {
       const tree: ContextNode = {
         name: '',
         path: '',
@@ -418,7 +418,18 @@ describe('ContextsView', () => {
       // Click to select a file.
       await w.find('[data-testid="context-node-guide.md"]').trigger('click');
       await flushPromises();
-      expect(w.find('[data-testid=context-publish-btn]').exists()).toBe(false);
+      // Never hidden for capability reasons (FR-6): rendered, disabled, and
+      // the reason says what would enable it.
+      const btn = w.find('[data-testid=context-publish-btn]');
+      expect(btn.exists()).toBe(true);
+      expect((btn.element as HTMLButtonElement).disabled).toBe(true);
+      const reason = w.find('[data-testid=context-share-disabled-reason]');
+      expect(reason.text()).toContain('team sync is not active on this device');
+      expect(reason.text()).toContain('signed-in fleet connection with the team-graph capability');
+      expect(w.find('[data-testid=context-share-account-link]').attributes('href')).toBe('#/settings?tab=account');
+      await btn.trigger('click');
+      await flushPromises();
+      expect(w.find('[data-testid=context-publish-confirm-dialog]').exists()).toBe(false);
     });
 
     it('shows publish button when team cap is enabled and a file is selected', async () => {
@@ -730,16 +741,21 @@ describe('ContextsView', () => {
     });
   });
 
-  // BLOCKER-1: ContextHealthCard must be mounted in the right column.
+  // BLOCKER-1: ContextHealthCard must be mounted. knowledge-home-01DOGF0E
+  // WP06 moved it from the top of the right column to a collapsed status
+  // chip in the toolbar (dogfood F11 — too prominent for a rarely-used card).
   describe('ContextHealthCard (context-bootstrap-harness-integration WP07b)', () => {
-    it('mounts ContextHealthCard in the right-hand column (data-testid=context-health-card)', async () => {
+    it('mounts ContextHealthCard as a collapsed chip in the toolbar, not the right column', async () => {
+      try { localStorage.removeItem('harness.knowledge.contextHealthExpanded.v1'); } catch { /* */ }
       const { client } = provide({});
       const w = mount(ContextsView, {
         global: { provide: { [HarnessClientKey as symbol]: client } },
       });
       await flushPromises();
-      // ContextHealthCard renders with data-testid="context-health-card" on mount.
-      expect(w.find('[data-testid="context-health-card"]').exists()).toBe(true);
+      const toolbar = w.find('[data-testid="context-toolbar"]');
+      expect(toolbar.find('[data-testid="context-health-chip"]').exists()).toBe(true);
+      // Collapsed by default: the full card is not rendered.
+      expect(w.find('[data-testid="context-health-card"]').exists()).toBe(false);
     });
 
     it('calls contextBootstrap.health() on mount via ContextHealthCard', async () => {
@@ -904,7 +920,7 @@ describe('ContextsView', () => {
         const btn = w.find('[data-testid="context-promote-btn"]');
         expect(btn.exists()).toBe(true);
         expect((btn.element as HTMLButtonElement).disabled).toBe(true);
-        expect(w.find('[data-testid="context-promote-disabled-reason"]').exists()).toBe(true);
+        expect(w.find('[data-testid="context-share-disabled-reason"]').exists()).toBe(true);
 
         await btn.trigger('click');
         await flushPromises();
@@ -1112,5 +1128,167 @@ describe('ContextsView', () => {
         expect(w.find('[data-testid="context-export-error"]').exists()).toBe(true);
       });
     });
+  });
+});
+
+describe('ContextsView sharing affordances (knowledge-home-01DOGF0E WP04, P-5)', () => {
+  const tree: ContextNode = {
+    name: '',
+    path: '',
+    kind: 'folder',
+    children: [{ name: 'notes.md', path: 'notes.md', kind: 'file' }],
+  };
+  const status = (cap: boolean): ContextSyncStatusView => ({
+    cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: cap,
+  });
+
+  async function selectNotes(client: ReturnType<typeof provide>['client']) {
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-notes.md"]').trigger('click');
+    await flushPromises();
+    return w;
+  }
+
+  it('cap off + file selected → Share… and Promote both visible, disabled, with one reason', async () => {
+    const { client } = provide({ tree, files: { 'notes.md': '# n' }, syncStatus: status(false) });
+    const w = await selectNotes(client);
+    for (const id of ['context-publish-btn', 'context-promote-btn']) {
+      const btn = w.find(`[data-testid=${id}]`);
+      expect(btn.exists(), id).toBe(true);
+      expect((btn.element as HTMLButtonElement).disabled, id).toBe(true);
+      expect(btn.attributes('title'), id).toContain('Sharing is off');
+    }
+    expect(w.findAll('[data-testid=context-share-disabled-reason]')).toHaveLength(1);
+    w.unmount();
+  });
+
+  it('cap on + file selected → both enabled, no reason shown', async () => {
+    const { client } = provide({ tree, files: { 'notes.md': '# n' }, syncStatus: status(true) });
+    const w = await selectNotes(client);
+    for (const id of ['context-publish-btn', 'context-promote-btn']) {
+      expect((w.find(`[data-testid=${id}]`).element as HTMLButtonElement).disabled, id).toBe(false);
+    }
+    expect(w.find('[data-testid=context-share-disabled-reason]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it('unreadable sync status → disabled with a reason that says it could not be read', async () => {
+    const { client } = provide({ tree, files: { 'notes.md': '# n' } });
+    (client.contexts as any).syncStatus = async () => {
+      throw new Error('fleet not wired');
+    };
+    const w = await selectNotes(client);
+    expect((w.find('[data-testid=context-publish-btn]').element as HTMLButtonElement).disabled).toBe(true);
+    expect(w.find('[data-testid=context-share-disabled-reason]').text()).toContain('could not be read');
+    w.unmount();
+  });
+});
+
+describe('ContextsView folder sharing state (knowledge-home-01DOGF0E WP05, P-6)', () => {
+  // The owner's F10 scenario: a context module folder selected, fleet team
+  // cap off. Before WP05 a folder click only expanded the row and NO sharing
+  // affordance rendered. Folder-level promote itself is an open owner
+  // question (decision record D4) — this pins the interim honest state.
+  const tree: ContextNode = {
+    name: '',
+    path: '',
+    kind: 'folder',
+    children: [
+      {
+        name: 'kameas-ai',
+        path: 'kameas-ai',
+        kind: 'folder',
+        children: [{ name: 'context.md', path: 'kameas-ai/context.md', kind: 'file' }],
+      },
+    ],
+  };
+  const status = (cap: boolean): ContextSyncStatusView => ({
+    cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: cap,
+  });
+
+  it('folder selected, cap off → sharing section renders, disabled, saying per-file + what enables sharing', async () => {
+    const publishSpy = vi.fn();
+    const promoteSpy = vi.fn();
+    const { client } = provide({ tree, files: { 'kameas-ai/context.md': '# k' }, syncStatus: status(false), publishSpy, promoteSpy });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    for (const id of ['context-publish-btn', 'context-promote-btn']) {
+      const btn = w.find(`[data-testid=${id}]`);
+      expect(btn.exists(), id).toBe(true);
+      expect((btn.element as HTMLButtonElement).disabled, id).toBe(true);
+      await btn.trigger('click');
+    }
+    await flushPromises();
+    const reason = w.find('[data-testid=context-share-disabled-reason]');
+    expect(reason.attributes('data-share-target')).toBe('folder');
+    expect(reason.text()).toContain('Sharing works per file today — select a file in “kameas-ai” to share it.');
+    expect(reason.text()).toContain('pending a product decision');
+    expect(reason.text()).toContain('team sync is not active on this device');
+    expect(publishSpy).not.toHaveBeenCalled();
+    expect(promoteSpy).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it('folder selected, cap on → still disabled with the per-file reason (no folder batch exists yet)', async () => {
+    const { client } = provide({ tree, files: { 'kameas-ai/context.md': '# k' }, syncStatus: status(true) });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    expect((w.find('[data-testid=context-publish-btn]').element as HTMLButtonElement).disabled).toBe(true);
+    const reason = w.find('[data-testid=context-share-disabled-reason]');
+    expect(reason.text()).toContain('select a file in “kameas-ai”');
+    expect(reason.text()).not.toContain('fleet team sync');
+    expect(w.find('[data-testid=context-share-account-link]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it('selecting a folder clears the previewed file (review F6) and targets "+ Folder" at it', async () => {
+    const { client } = provide({ tree, files: { 'kameas-ai/context.md': 'UNIQUE-PREVIEW-BODY' }, syncStatus: status(true) });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai/context.md"]').trigger('click');
+    await flushPromises();
+    expect(w.text()).toContain('UNIQUE-PREVIEW-BODY');
+    // Click the folder again (collapses it) — the file preview must go.
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    expect(w.text()).not.toContain('UNIQUE-PREVIEW-BODY');
+    expect(w.find('[data-testid=context-share-disabled-reason]').attributes('data-share-target')).toBe('folder');
+    await w.find('[data-testid=context-create-folder]').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid=context-new-folder-row]').text()).toContain('kameas-ai');
+    w.unmount();
+  });
+
+  it('cap off with a readable status names the possibilities, not one guessed cause (review F2)', async () => {
+    const { client } = provide({ tree, files: { 'kameas-ai/context.md': '# k' }, syncStatus: status(false) });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    const text = w.find('[data-testid=context-share-disabled-reason]').text();
+    expect(text).toContain('fleet not set up, signed out, or the team-graph capability is missing');
+    expect(text).not.toContain('could not be read');
+    w.unmount();
+  });
+
+  it('then selecting a file in the folder → the file is shareable (cap on)', async () => {
+    const { client } = provide({ tree, files: { 'kameas-ai/context.md': '# k' }, syncStatus: status(true) });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai"]').trigger('click');
+    await flushPromises();
+    await w.find('[data-testid="context-node-kameas-ai/context.md"]').trigger('click');
+    await flushPromises();
+    expect((w.find('[data-testid=context-publish-btn]').element as HTMLButtonElement).disabled).toBe(false);
+    expect((w.find('[data-testid=context-promote-btn]').element as HTMLButtonElement).disabled).toBe(false);
+    expect(w.find('[data-testid=context-share-disabled-reason]').exists()).toBe(false);
+    w.unmount();
   });
 });
