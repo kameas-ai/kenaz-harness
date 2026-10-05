@@ -262,6 +262,7 @@ var expectedChangedTablesArtifactsToUnits = map[string][]string{
 	"v0.85.0": artifactsToUnitsTables,
 	"v0.85.1": artifactsToUnitsTables,
 	"v0.85.2": artifactsToUnitsTables,
+	"v0.86.0": artifactsToUnitsTables,
 }
 
 // scheduledChatRunsTriggerKindNote documents WHY scheduled_chat_runs is
