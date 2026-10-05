@@ -96,10 +96,12 @@ export function defaultAttrsForKind(
 // ── run overlay (WP05) ────────────────────────────────────────────────
 
 /**
- * `Graph.SpecProvenance` value marking a projection that fell back to
- * the library file because the resolved spec the run executed had been
- * evicted (core/agentgraph/spec.go). The topology shown may differ from
- * the one that ran, which is why it is badged rather than served silently.
+ * `Graph.SpecProvenance` value marking a projection reconstructed from
+ * the library file because the resolved spec the run executed was never
+ * recorded — the run predates per-run spec recording
+ * (core/agentgraph/spec.go, run_spec_store.go). The topology shown may
+ * differ from the one that ran, which is why it is badged rather than
+ * served silently.
  */
 export const SPEC_PROVENANCE_LIBRARY_FALLBACK = 'library_fallback';
 

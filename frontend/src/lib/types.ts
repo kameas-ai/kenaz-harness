@@ -3147,8 +3147,8 @@ export interface GraphSpec {
    * `yaml` (model-authored-graphs-01PMGA01 UNIT-6) — a convenience
    * projection, not a second source of truth. "model_authored" marks
    * an unreviewed model draft; "library_fallback" marks a materialized
-   * run projected against the library file because the resolved spec
-   * was no longer available.
+   * run reconstructed from the library file because its resolved spec
+   * was never recorded (runs before per-run spec recording).
    */
   specProvenance?: string;
 }
