@@ -35,7 +35,13 @@
 core/serve/server.go:AppendMessage:1
 core/rpc/chat_run_dispatcher.go:AppendMessage:1
 core/rpc/bindings.go:AppendMessage:1
-core/rpc/api.go:AppendMessage:2
+# --- 2026-10-05 (chat-single-writer-01DOGF0G): 2 -> 3. The resume/
+#     continuation starter is the ONE StartStream caller with no frontend
+#     append in front of it; the single-writer design has it persist the
+#     user row itself and pass the runner a reference (api.go ~:8209,
+#     "SINGLE WRITER" comment). Same change deletes the runner's old
+#     chat_runner.go:AppendEntry entry — net writer count unchanged. ---
+core/rpc/api.go:AppendMessage:3
 core/conversation/manager.go:AppendMessage:1
 core/session/moves.go:AppendMessage:1
 core/session/manager.go:AppendMessage:1
@@ -92,6 +98,5 @@ core/rpc/views/agentgraph/chat/chat_runner.go:PersistPartial:1
 #     append, promote, finalize), and the interrupt-persistence path
 #     (interrupt.go, two call sites: interrupt row + resume marker). ---
 core/agentgraph/exec_state.go:AppendEntry:1
-core/rpc/views/agentgraph/chat/chat_runner.go:AppendEntry:1
 core/rpc/views/agentgraph/chat/moves.go:AppendEntry:3
 core/rpc/views/agentgraph/chat/interrupt.go:AppendEntry:2

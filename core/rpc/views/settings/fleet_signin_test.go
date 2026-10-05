@@ -68,7 +68,19 @@ func TestFleetSignInCancel_EndsFlowWithCanceled_NoErrorLog(t *testing.T) {
 		errCh <- err
 	}()
 	waitState(t, r.api, FleetSessionSigningIn)
-	if ev := last(b.sessionEvents()); ev == nil || ev.State != FleetSessionSigningIn {
+	// The broker event is emitted AFTER the state becomes snapshot-visible
+	// (publishFleetSession runs on the transition's tail), so poll for it
+	// instead of asserting the instant waitState returns (CI flake,
+	// 2026-10-05).
+	sawSigningIn := false
+	for i := 0; i < 200 && !sawSigningIn; i++ {
+		if ev := last(b.sessionEvents()); ev != nil && ev.State == FleetSessionSigningIn {
+			sawSigningIn = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !sawSigningIn {
 		t.Fatalf("no signing_in event pushed (UI cannot show 'Waiting for browser… Cancel')")
 	}
 
