@@ -18,6 +18,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	coreatt "github.com/kameas-ai/kenaz-harness/core/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
@@ -171,6 +172,32 @@ func TestArtifactsStack_IsUnitsBacked_EveryConsumerWritesUnits(t *testing.T) {
 	}
 	assertArtifactUnit("edit-file sync", syncedID)
 
+	// ---- FR-4 in production wiring: with the artifact's media metadata
+	// rows gone, the ONLY reference left to its bytes is the artifact unit.
+	// A GC pass over the production media store must keep them — this is
+	// the assertion that fails if newArtifactsStack switches the store
+	// without registering its refcount source (spec §2.4).
+	head, err := store.Get(ctx, saved.ArtifactID)
+	if err != nil {
+		t.Fatalf("Get saved: %v", err)
+	}
+	rows, err := media.List(ctx, coreatt.MediaFilter{ContentHash: head.ContentHash})
+	if err != nil {
+		t.Fatalf("media List: %v", err)
+	}
+	for _, r := range rows {
+		if err := media.Delete(ctx, r.ID); err != nil {
+			t.Fatalf("media Delete: %v", err)
+		}
+	}
+	if _, err := media.PruneOrphans(ctx); err != nil {
+		t.Fatalf("PruneOrphans: %v", err)
+	}
+	headPath := filepath.Join(dataDir, "media", head.ContentHash)
+	if _, err := os.Stat(headPath); err != nil {
+		t.Fatalf("media GC deleted a live artifact's bytes in the production wiring: %v", err)
+	}
+
 	// ---- FR-6 in production wiring: deleting the session through
 	// session.Manager purges every session-scoped artifact unit.
 	if err := c.SessionManager().Delete(ctx, sess.ID); err != nil {
@@ -182,5 +209,8 @@ func TestArtifactsStack_IsUnitsBacked_EveryConsumerWritesUnits(t *testing.T) {
 	}
 	if len(left) != 0 {
 		t.Errorf("%d artifact unit(s) survived their session's delete in the production wiring", len(left))
+	}
+	if _, err := os.Stat(headPath); !os.IsNotExist(err) {
+		t.Errorf("purged artifact's bytes still on disk after the session delete (err=%v) — the observer did not release them", err)
 	}
 }

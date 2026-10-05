@@ -11,6 +11,13 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/attachments"
 )
 
+// In-memory fixtures on purpose (WP-PI AC-PI-2, artifacts-as-units-01DOGF0C):
+// these pin Manager logic — candidate materialisation, hash dedup, partial
+// batch failure via an injected failing media store, session→project
+// defaulting. Persistence of what Capture/WriteVersion write is pinned on
+// real sqlite by store_contract_test.go, units_cascade_test.go and
+// core/rpc/artifacts_units_wiring_test.go.
+
 // TestManager_Capture_Single materializes one candidate and verifies
 // that an artifact row, a media metadata row, and a CAS file all
 // exist after the call.

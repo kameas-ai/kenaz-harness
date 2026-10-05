@@ -238,3 +238,53 @@ transaction stays all-or-nothing and well under a second at 10k.
 - **Unwired ledger** (`docs/unwired-ledger.md`, 2026-10-04 entries): closes
   "KindArtifact defined, test-only"; files the dated drop-legacy follow-up
   (owner: this mission); records the write-only version history found in D4.
+
+## WP-PI — persistence integrity
+
+**Ran (not read).** `go test ./core/units/... ./core/artifacts/... ./core/docs/... ./core/rpc/views/artifacts/ ./core/rpc/views/documents/ -race -count=1 -p 4`
+→ 388 passed; `go test ./core/storage/sqlite/ -race -count=1` → ok
+(TestUpgradePath boots all 39 committed snapshots, v0.63.0–v0.85.2, through
+1104); `go test ./core/rpc/ -race -count=1 -short -p 4` → 485 passed;
+`go test ./core/{session,projects,attachments,fleet,rpc/views,tools,storage}/... -race -short -p 4`
+→ 2831 passed. `check-destructive-migration-coverage.sh` → "7 destructive
+migration(s) all covered"; `check-upgrade-snapshots-locked.sh` and
+`check-upgrade-snapshot-present.sh` clean. AC-PI-1: 1104's tests boot from
+`testdata/upgrade/<tag>/dump.sql` (oldest v0.63.0 and newest v0.85.2,
+seeded with 15 artifacts across every Source × scope, half with versions,
+plus orphan / project-linked / unparseable-ref rows) and from every tag via
+TestUpgradePath. AC-PI-3: the copy+rename runs against populated
+`artifacts`, `artifact_versions` and `units` (seed KindDoc rows + a seeded
+document `unit_versions` row) and asserts the document rows byte-identical.
+No committed snapshot predates `sessions/0327`; the 0327 damage is
+reproduced as version-less artifacts, which is the post-damage state.
+
+**Fixtures.** Changed: `rpc/views/artifacts/impl_test.go` — the two
+refcount-driven Delete/CAS-sweep tests now also run over real sqlite + the
+units store + the SQL media store; the legacy-FK store tests in
+`core/artifacts/store_sql_test.go` were retired in WP04 in favour of
+real-sqlite observer tests. Examined and deliberately left in-memory (each
+now says so in a comment): `core/artifacts/manager_test.go` (Manager logic:
+dedup, partial-batch failure via an injected failing media store),
+`core/artifacts/global_scope_test.go` `TestMemStore_*` (tests the memory
+store itself). Also left: `core/tools/{saveartifact,updateartifact,planmode}`
+tests (recording fakes for tool argument/result handling — the real-store
+path for each is `core/rpc/artifacts_units_wiring_test.go`), `core/docs`
+service tests on `units.NewMemoryStore` (documents unchanged by FR-8), and
+`core/fleet/unit_sync_test.go` on the units memory store (syncer logic; the
+artifact exclusion is pinned on real sqlite in `unit_sync_artifacts_test.go`).
+
+**Falsifiability (ran).** (1) Commented out `migration1104()` in
+`core/units/migrations.go` and moved `migration_1104_test.go` aside:
+`TestUpgradePath` failed on all 39 tags (e.g. "units row for seed-artifact-1
+(kind=artifact) = 0, want 1", "no such table: artifacts_legacy"), restored.
+(2) Commented out the `RegisterRefcountSource` call in `newArtifactsStack`:
+`TestArtifactsStack_IsUnitsBacked_EveryConsumerWritesUnits` failed with
+"media GC deleted a live artifact's bytes in the production wiring",
+restored. (3) Dropped the refcount source in `units_cascade_test.go`'s rig:
+"GC removed 2 file(s)". AC-PI-5: NOT run — the release tag that will carry
+1104 does not exist yet. After tagging, run
+`bash scripts/ci/upgrade-snapshot.sh <tag>` and hand-write `PROVENANCE.md`
+noting that this is the first snapshot whose dump has `artifacts_legacy` /
+`artifact_versions_legacy` and kind='artifact' units (it needs no
+`expectedChangedTablesArtifactsToUnits` entry), and that it is the
+populated-table base for the next release's `units/1105` drop.
