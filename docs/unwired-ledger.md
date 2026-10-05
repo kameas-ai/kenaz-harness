@@ -4343,6 +4343,61 @@ semantics from what its doc currently claims.
 
 ## Drained
 
+### 2026-10-04 · CLOSED — every user chat turn had two writers; the second was the only path into fleet sync (`chat-single-writer-01DOGF0G`)
+
+Dogfood finding F12 ("i keep seeing messages i send in chats get
+duplicated"). Class: **rival writer**, plus a **comment asserting an
+invariant nothing enforced**.
+
+- **Two writers for one row.** The chat surface persisted each turn via
+  `Sessions_AppendMessage` / `SendMessageWithBlocks`; `LLM.StartStream`
+  then read that row's text back and `ChatRunner.StartStream` re-appended
+  it through the HistoryWriter, anchoring the turn's span on the copy.
+  Every typed turn since 2026-06-07 was stored twice (dev profile: 40
+  pairs, 0.7–17 ms apart), and every history read handed the model each
+  user message twice. Text+image sends were doubled too (the flattened
+  text was re-appended text-only); only image/document-only sends escaped.
+  The runner's comment ("the multimodal send, where the frontend already
+  landed the user's row") described a property of ALL sends as if it held
+  for one. **Drained — wired** (WP02): the runner takes a `UserTurn`
+  reference (id + text + announce) and has no code path that writes a user
+  row; the span is the caller's row, `TurnSpan.LatestUserMessageID` the
+  only fallback. Pin: `TestChatTurn_UserMessageStoredOnce_AppendThenStartStream`
+  (`core/rpc`, real sqlite, append → StartStream; verified failing on
+  `b8079d48`).
+- **The duplicate was load-bearing for fleet sync.** The re-append was the
+  ONLY path by which a user turn reached `SessionSyncer.AppendEvent`
+  (`llmHistoryWriter.AppendEntry` → `syncHook`); image-only sends never
+  synced at all. **Drained — wired:** `llmHistoryWriter.AnnounceUserTurn`
+  (`chat.UserTurnAnnouncer`) emits the same `{id, role}` event for the
+  existing row, once per fresh turn, never on the keychain redrive. Pinned
+  by assertion (d) of the test above and by the key-rotation redrive test
+  (one announcement across start + redrive).
+- **Assistant-side twin.** Not any of the spec's three candidates: the
+  backend-error `PartialPersister` path re-persisted text the move journal
+  already owned (a parked last fire, or an absorbed `final`) as a
+  kind-less failed row. **Drained — wired** (WP04):
+  `turnJournal.UnpersistedTail`. Pin:
+  `TestChatRunner_BackendErrorAfterCompletedFire_WritesTheAnswerOnce`.
+- **Stored history.** `sessions/0341-dedupe-user-turns` (WP05) removes
+  existing pairs pair-type-aware (an image-bearing row always survives)
+  and the assistant twins; populated-snapshot test
+  `TestMigration0341_DedupesDoubledTurnsAgainstUpgradedDatabase`.
+- **Why the suite never saw it:** frontend tests fake `startStream`;
+  backend chat-runner tests called `StartStream(…, userMessage)` directly
+  and skipped the frontend append. Blind spot #2 in a new shape — the
+  fixture bypassed the OTHER writer.
+- **Residual, not drained — recorded so the next sweep does not re-find
+  it as new:** (1) equal-content assistant rows that are BOTH classic
+  failed partials (pre-0336 periodic-flush residue; 0337's strict-prefix
+  rule leaves them; neither is "the answer") — 4 on the dev profile.
+  (2) whole-turn partials from before finding #105 whose text differs from
+  the move they duplicate. (3) the destructive-migration gate sees a
+  procedural `Up` only through its `UpSource` text: a named-function `Up`
+  whose UpSource omitted the word DELETE would be invisible (0337 and 0341
+  both state it). **Owner:** alec — a follow-up to the chat-turn-integrity
+  repair family for (1)/(2); a gate change for (3) dates or closes it.
+
 ### 2026-10-03 · CLOSED — graph file nodes bypassed fs.Gate; a corrupt user policy failed the graph path OPEN (`graph-fs-gate-01GFSG01`)
 
 Two findings from the 2026-10-03 peer-session verification pass (the

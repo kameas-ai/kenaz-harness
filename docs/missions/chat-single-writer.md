@@ -229,3 +229,29 @@ mission consumes exactly one ID.
 Residual: a multimodal pair whose B had already been fleet-synced keeps A;
 the remote event stream names B's id. Fleet pull idempotency is
 out of scope (spec §5) and handed to `fleet-session-truth-01DOGF0A`.
+
+---
+
+## 7. Release-note text (WP06 — for the shipping PR body)
+
+> **Chat: every message you sent was stored — and sent to the model —
+> twice.** Since early June, each user chat turn was written to the
+> session twice (once by the chat window, once again by the chat engine),
+> so on every request the model received every one of your earlier
+> messages duplicated. This affected answer quality and token cost, and
+> showed up as repeated message bubbles. The engine no longer writes your
+> message; the chat window's copy is the only one. A one-time migration
+> (`sessions/0341-dedupe-user-turns`) removes the stored duplicates from
+> existing conversations — when a duplicate pair involved an attached
+> image, the copy that carries the image is the one kept. It also removes
+> extra assistant bubbles that repeated an answer after a late provider
+> error. Fleet session sync keeps receiving each of your messages exactly
+> once (image-only messages now sync too; previously they did not).
+
+## 8. Records
+
+* Ledger: `docs/unwired-ledger.md` → Drained → 2026-10-04 entry.
+* Roadmap: `docs/roadmap.md` is git-ignored and absent from this
+  worktree; the row ("chat-single-writer-01DOGF0G — shipped") is to be
+  added by whoever merges the release branch, with the spec dir moved to
+  `kitty-specs/_archive/` in the same step (CLAUDE.md mission convention).
