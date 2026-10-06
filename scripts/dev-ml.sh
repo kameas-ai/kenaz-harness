@@ -3,7 +3,8 @@
 #
 # Finds an engine onedir (a kenaz-ml `make freeze` output) and seeds it into
 # the DEV engine root (~/.kenaz/ml/dev) with cmd/mlsidecar-devseed, so the
-# harness's own sidecar lifecycle spawns it on :7775 the first time an
+# harness's own sidecar lifecycle spawns it on the dev lane (base :7785,
+# then :7795, … past a foreign listener; recorded in engine.port) the first time an
 # advisor asks — the same adopt-or-spawn path a released engine takes.
 #
 # NEVER fails the caller. Every problem here is a warning: the harness still
