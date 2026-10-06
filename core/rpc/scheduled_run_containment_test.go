@@ -613,3 +613,51 @@ func sortedCalls(p *containmentPool) string {
 	sort.Strings(c)
 	return strings.Join(c, ",")
 }
+
+// TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins (security
+// review M2): a contained session's catalog lists only the builtins on its
+// allowlist — visibility matches reachability — and listing records no
+// blocked rows. An uncontained session still sees the full set. Production
+// resolver and builtin registry from rpc.New.
+func TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins(t *testing.T) {
+	sandboxUserConfigDir(t)
+	c, err := core.New(core.Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	api := New(c)
+	t.Cleanup(api.Shutdown)
+	ctx := context.Background()
+	contained, err := api.Sessions().Create(ctx, "Scheduled: list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := api.Sessions().Create(ctx, "interactive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.scheduledRunContainment.Contain(contained.ID, "cr-list", []string{"kenaz__sleep"})
+
+	disc := llmview.NewMCPToolDiscovererWithBuiltins(nil, api.toolPermsResolver, api.Builtins())
+	names := func(sid string) []string {
+		specs, err := disc.Tools(ctx, sid)
+		if err != nil {
+			t.Fatalf("Tools: %v", err)
+		}
+		var out []string
+		for _, s := range specs {
+			out = append(out, s.Name)
+		}
+		sort.Strings(out)
+		return out
+	}
+	if got := names(contained.ID); len(got) != 1 || got[0] != "kenaz__sleep" {
+		t.Fatalf("contained listing = %v, want exactly [kenaz__sleep]", got)
+	}
+	if got := names(other.ID); len(got) < 2 {
+		t.Fatalf("uncontained listing = %v, want the full builtin set", got)
+	}
+	if rows := toolBlockedRows(t, blockedrequests.NewSQLiteStore(c.Storage())); len(rows) != 0 {
+		t.Fatalf("listing recorded blocked rows: %+v", rows)
+	}
+}

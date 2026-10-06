@@ -7,6 +7,7 @@ package llm
 
 import (
 	"context"
+	"strings"
 
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/mcp"
@@ -106,7 +107,24 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 		}
 	}
 	if d.builtins != nil && !d.builtins.Empty() {
+		probeCtx := toolloop.WithVisibilityProbe(ctx)
 		for _, b := range d.builtins.List() {
+			// Visibility matches reachability for builtins too
+			// (model-harness-toolset-01MHTS001 WP02 security review, M2):
+			// a builtin the resolver denies for this session — e.g. one
+			// off a scheduled run's allowlist — is not advertised, since
+			// every call to it would be refused (and recorded). Same
+			// probe-marked path as the pool tools above, same "omit on
+			// error" rule. Builtins publish "kenaz__<tool>"; the resolver
+			// sees (server, tool) exactly as the kernel adapter's split
+			// hands it at dispatch.
+			if d.perms != nil {
+				server, tool := splitBuiltinName(b.Name())
+				res, perr := d.perms.Resolve(probeCtx, sessionID, server, tool)
+				if perr != nil || res.Policy == toolloop.PolicyDeny {
+					continue
+				}
+			}
 			// Built-ins use the reserved "kenaz" server prefix so the
 			// toolloop's namespaced-name split sends Call back to
 			// BuiltinPool. The Name() value already includes the
@@ -120,4 +138,15 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 		}
 	}
 	return out, nil
+}
+
+// splitBuiltinName splits a published builtin name ("kenaz__web_fetch")
+// into the (server, tool) pair the dispatch-time permission check sees.
+// A name without the separator resolves as (name, "") — never matched by
+// an allowlist entry, so it fails closed under containment.
+func splitBuiltinName(name string) (string, string) {
+	if i := strings.Index(name, ToolNameSeparator); i > 0 {
+		return name[:i], name[i+len(ToolNameSeparator):]
+	}
+	return name, ""
 }

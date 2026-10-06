@@ -5211,10 +5211,10 @@ sqlite, v0.89.2 upgrade snapshot for the pre-0340 user row),
 `core/scheduler/containment_test.go`. The 2026-08-22 `CreateAsModel` entry
 above is superseded (it has a production caller now).
 
-**Accepted residuals:** (1) builtin `kenaz__*` tools are still LISTED to a
-contained run (the discoverer filters only pool tools through the
-resolver); every off-list call is denied and recorded, so this is a
-visibility cost, not a reachability hole. (2) An entry is released only on
+**Accepted residuals:** (1) ~~builtin `kenaz__*` tools are still LISTED to
+a contained run~~ — closed by security review M2 (2026-10-05): the
+discoverer now filters builtins through the same probe-marked resolver
+path as pool tools (`TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins`). (2) An entry is released only on
 the run's terminal stream event; a timed-out run's session stays contained
 for the process lifetime, deliberately. Owner of both: WP16
 (`kenaz__schedule_chat`), which must re-read this seam before shipping.
