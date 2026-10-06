@@ -413,6 +413,27 @@ describe('ContextsView', () => {
       expect(strip.exists()).toBe(true);
       expect(strip.text()).toContain('Team sync active');
       expect(w.find('[data-testid=context-sync-pull-count]').text()).toContain('5');
+      // No skipped kinds → no skipped readout.
+      expect(w.find('[data-testid=context-sync-skipped-kinds]').exists()).toBe(false);
+    });
+
+    it('surfaces pulled nodes of other kinds as skipped, not errors (fleet contract WP03)', async () => {
+      const { client } = provide({
+        syncStatus: {
+          cursor: 'c',
+          last_pull_err: '',
+          last_push_err: '',
+          pull_count: 3,
+          team_cap_enabled: true,
+          skipped_unknown_kinds: 2,
+        },
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      expect(w.find('[data-testid=context-sync-skipped-kinds]').text()).toContain('2 items of other kinds skipped');
+      expect(w.find('[data-testid=context-sync-pull-err]').exists()).toBe(false);
     });
 
     it('shows the publish button disabled with a reason when team cap is absent (knowledge-home WP04, P-5)', async () => {

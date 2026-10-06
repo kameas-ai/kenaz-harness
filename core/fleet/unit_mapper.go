@@ -14,20 +14,28 @@
 //	team      → team_shared
 //	org       → org_shared
 //
-// The existing wire node carries id/kind/title/body/metadata/classification/
-// version but has no first-class scope or load_policy column. To carry the
-// unified Unit fields (FR-030: "carrying kind, scope, classification,
-// version, load_policy") losslessly, scope/scope_id/load_policy are folded
-// into the node Metadata under a reserved "_unit" envelope, alongside any
-// caller metadata. PulledNodeToUnit reverses the fold. This keeps the wire
-// schema unchanged while round-tripping every Unit field.
+// Unit fields on the wire (owner ruling 2026-10-06, WP03): push writes the
+// TOP-LEVEL unit_kind / unit_scope / scope_id / load_policy columns fleet
+// validates (and its admin-only load_policy=always guard reads), and — for
+// one release of compat — ALSO the metadata "_unit" envelope, built from the
+// very same values so the two can never diverge (fleet 400s a contradiction:
+// unit_kind_mismatch / unit_scope_mismatch).
+//
+// Pull reads the TOP-LEVEL fields. load_policy is read ONLY from top level
+// (absent → on_demand); "_unit" is consulted only as a scope / scope_id
+// fallback for pre-Phase-2 nodes, decoded with EXACT key matching — never a
+// case-insensitive struct decode, which let {"_unit":{"LOAD_POLICY":
+// "always"}} through fleet's old guard. "_unit" is always stripped from the
+// local metadata.
 //
 // (unified-context-artifacts-01NCTXU01 / Phase 2 / WP13)
 package fleet
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/kameas-ai/kenaz-harness/core/units"
 )
@@ -43,6 +51,10 @@ type unitMetaEnvelope struct {
 	Scope      string `json:"scope"`
 	ScopeID    string `json:"scope_id,omitempty"`
 	LoadPolicy string `json:"load_policy"`
+	// UnitKind / UnitScope mirror the top-level columns (fleet compares
+	// these two keys against top level). Write-only compat for one release.
+	UnitKind  string `json:"unit_kind"`
+	UnitScope string `json:"unit_scope"`
 }
 
 // UnitMapper maps units.Unit/Edge ↔ context node/edge wire shapes. It is
@@ -51,6 +63,25 @@ type unitMetaEnvelope struct {
 // scopes team_shared rows by team).
 type UnitMapper struct {
 	teamID *string
+	// canLoadAlways reports whether the signed-in user may push
+	// load_policy=always (fleet: org_admin / org_owner only — 403
+	// load_policy_requires_admin otherwise). nil = not allowed.
+	canLoadAlways func() bool
+}
+
+// SetLoadAlwaysAllowed wires the admin check consulted when a unit with
+// load_policy=always is pushed. Without it (or when it returns false) the
+// unit goes on the wire as on_demand — never a whole-batch 403.
+func (m *UnitMapper) SetLoadAlwaysAllowed(f func() bool) {
+	m.canLoadAlways = f
+}
+
+// wireLoadPolicy is the load_policy a unit is pushed with.
+func (m *UnitMapper) wireLoadPolicy(lp units.LoadPolicy) string {
+	if lp == units.LoadAlways && (m.canLoadAlways == nil || !m.canLoadAlways()) {
+		return string(units.LoadOnDemand)
+	}
+	return string(lp)
 }
 
 // NewUnitMapper constructs a UnitMapper. teamID may be empty (no team
@@ -102,18 +133,31 @@ func (m *UnitMapper) MapUnitToNode(u units.Unit) (contextNodeInput, bool, error)
 	if !ok {
 		return contextNodeInput{}, false, nil // personal → never pushed
 	}
-	meta, err := foldUnitMetadata(u)
+	if !unitKindPushable(u.Kind) {
+		// artifact (device-local by design) or an unknown kind: fleet 400s
+		// it (invalid_unit_kind), so it never reaches the wire.
+		return contextNodeInput{}, false, fmt.Errorf("fleet: MapUnitToNode %s: %w: %q", u.ID, ErrUnitKindNotPushable, u.Kind)
+	}
+	if err := checkMetadataNotCapability(u.Metadata); err != nil {
+		return contextNodeInput{}, false, fmt.Errorf("fleet: MapUnitToNode %s: %w", u.ID, err)
+	}
+	loadPolicy := m.wireLoadPolicy(u.LoadPolicy)
+	meta, err := foldUnitMetadata(u, loadPolicy)
 	if err != nil {
 		return contextNodeInput{}, false, fmt.Errorf("fleet: MapUnitToNode: %w", err)
 	}
 	node := contextNodeInput{
 		ID:             u.ID,
-		Kind:           string(u.Kind),
+		Kind:           string(u.Kind), // unit lane: kind == unit_kind
 		Title:          u.Title,
 		Body:           u.Body,
 		Metadata:       meta,
 		Classification: classification,
 		Version:        u.Version,
+		UnitKind:       string(u.Kind),
+		UnitScope:      string(u.Scope),
+		ScopeID:        u.ScopeID,
+		LoadPolicy:     loadPolicy,
 	}
 	if classification == ClassTeamShared {
 		node.TeamID = m.teamID
@@ -137,6 +181,10 @@ func (m *UnitMapper) MapEdgeToWire(e units.Edge, c units.Classification) (contex
 		Classification: classification,
 		Version:        e.Version,
 	}
+	switch e.Kind {
+	case units.EdgeReferences, units.EdgeDerivedFrom, units.EdgePromotedFrom, units.EdgeSupersedes:
+		edge.UnitKind = string(e.Kind) // fleet's lineage enum; conflicts_with is not in it
+	}
 	if classification == ClassTeamShared {
 		edge.TeamID = m.teamID
 	}
@@ -155,7 +203,7 @@ func (m *UnitMapper) PulledNodeToUnit(n ContextPulledNode) (units.Unit, bool, er
 	if !ok {
 		return units.Unit{}, false, nil
 	}
-	scope, scopeID, loadPolicy, cleanMeta, err := unfoldUnitMetadata(n.Metadata, n.Scope)
+	scope, scopeID, loadPolicy, cleanMeta, err := unfoldUnitMetadata(n)
 	if err != nil {
 		return units.Unit{}, false, fmt.Errorf("fleet: PulledNodeToUnit: %w", err)
 	}
@@ -183,10 +231,11 @@ func (m *UnitMapper) PulledNodeToUnit(n ContextPulledNode) (units.Unit, bool, er
 	return u, true, nil
 }
 
-// foldUnitMetadata merges the caller metadata with a reserved "_unit"
-// envelope carrying scope/scope_id/load_policy. nil/empty caller metadata
-// is treated as an empty object.
-func foldUnitMetadata(u units.Unit) (json.RawMessage, error) {
+// foldUnitMetadata merges the caller metadata with the reserved "_unit"
+// envelope. loadPolicy is the WIRE load policy (after the admin downgrade),
+// so the envelope always equals the top-level columns. nil/empty caller
+// metadata is treated as an empty object; a caller "_unit" key is replaced.
+func foldUnitMetadata(u units.Unit, loadPolicy string) (json.RawMessage, error) {
 	obj := map[string]json.RawMessage{}
 	if len(u.Metadata) > 0 {
 		if err := json.Unmarshal(u.Metadata, &obj); err != nil {
@@ -196,7 +245,9 @@ func foldUnitMetadata(u units.Unit) (json.RawMessage, error) {
 	env := unitMetaEnvelope{
 		Scope:      string(u.Scope),
 		ScopeID:    u.ScopeID,
-		LoadPolicy: string(u.LoadPolicy),
+		LoadPolicy: loadPolicy,
+		UnitKind:   string(u.Kind),
+		UnitScope:  string(u.Scope),
 	}
 	envBytes, err := json.Marshal(env)
 	if err != nil {
@@ -210,38 +261,46 @@ func foldUnitMetadata(u units.Unit) (json.RawMessage, error) {
 	return out, nil
 }
 
-// unfoldUnitMetadata extracts scope/scope_id/load_policy from the "_unit"
-// envelope and returns the caller metadata with the envelope stripped. When
-// the envelope is absent it falls back to wireScope (the node's top-level
-// scope column, if the server set one) for scope and ScopeGlobal /
-// LoadOnDemand otherwise — a conservative default for nodes pushed before
-// the fold existed.
-func unfoldUnitMetadata(raw json.RawMessage, wireScope string) (units.Scope, string, units.LoadPolicy, json.RawMessage, error) {
-	scope := units.ScopeGlobal
-	if wireScope != "" {
-		scope = units.Scope(wireScope)
-	}
+// unfoldUnitMetadata derives scope / scope_id / load_policy for a pulled node
+// and returns its metadata with "_unit" stripped.
+//
+//   - load_policy: TOP-LEVEL ONLY. Absent or unrecognised → on_demand. The
+//     "_unit" envelope is never read for it (WP03 security ruling).
+//   - scope / scope_id: top-level unit_scope / scope_id; when unit_scope is
+//     absent (pre-Phase-2 node), the "_unit" envelope's exact "scope" /
+//     "scope_id" keys (strictUnitEnvelope), then the legacy wire scope.
+func unfoldUnitMetadata(n ContextPulledNode) (units.Scope, string, units.LoadPolicy, json.RawMessage, error) {
 	loadPolicy := units.LoadOnDemand
-	scopeID := ""
+	if n.LoadPolicy == string(units.LoadAlways) {
+		loadPolicy = units.LoadAlways
+	}
+	scope := units.ScopeGlobal
+	scopeID := n.ScopeID
+	fromTop := n.UnitScope != ""
+	if fromTop {
+		scope = units.Scope(n.UnitScope)
+	} else if n.Scope != "" && validUnitScope(n.Scope) {
+		scope = units.Scope(n.Scope)
+	}
 
+	raw := n.Metadata
 	if len(raw) == 0 {
 		return scope, scopeID, loadPolicy, json.RawMessage("{}"), nil
 	}
 	obj := map[string]json.RawMessage{}
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		// Metadata is opaque/non-object — pass it through untouched with
-		// defaulted scope/load_policy rather than failing the whole pull.
+		// Metadata is opaque/non-object — pass it through untouched.
 		return scope, scopeID, loadPolicy, raw, nil
 	}
 	if envRaw, ok := obj[unitMetaKey]; ok {
-		var env unitMetaEnvelope
-		if err := json.Unmarshal(envRaw, &env); err == nil {
-			if env.Scope != "" {
-				scope = units.Scope(env.Scope)
-			}
-			scopeID = env.ScopeID
-			if env.LoadPolicy != "" {
-				loadPolicy = units.LoadPolicy(env.LoadPolicy)
+		if !fromTop {
+			if env, ok := strictUnitEnvelope(envRaw); ok {
+				if v := env["scope"]; v != "" && validUnitScope(v) {
+					scope = units.Scope(v)
+				}
+				if scopeID == "" {
+					scopeID = env["scope_id"]
+				}
 			}
 		}
 		delete(obj, unitMetaKey)
@@ -251,4 +310,62 @@ func unfoldUnitMetadata(raw json.RawMessage, wireScope string) (units.Scope, str
 		return scope, scopeID, loadPolicy, nil, err
 	}
 	return scope, scopeID, loadPolicy, clean, nil
+}
+
+// unitEnvelopeKeys are the only keys strictUnitEnvelope reads, matched
+// EXACTLY (byte-for-byte, lower case).
+var unitEnvelopeKeys = map[string]bool{
+	"scope": true, "scope_id": true, "load_policy": true, "unit_kind": true, "unit_scope": true,
+}
+
+// strictUnitEnvelope decodes a "_unit" envelope with exact key matching:
+// json.Unmarshal into a struct matches tags case-insensitively (so
+// "LOAD_POLICY" would fill load_policy) — this does not. An envelope with a
+// case variant of a known key, a duplicate known key, or a non-string value
+// for one is rejected wholesale (ok=false) as hostile.
+func strictUnitEnvelope(raw json.RawMessage) (map[string]string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return nil, false
+	}
+	out := map[string]string{}
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		key, _ := kt.(string)
+		var val json.RawMessage
+		if err := dec.Decode(&val); err != nil {
+			return nil, false
+		}
+		lower := strings.ToLower(key)
+		if !unitEnvelopeKeys[lower] {
+			continue // unrelated key
+		}
+		if key != lower {
+			return nil, false // case variant of a known key
+		}
+		if _, dup := out[key]; dup {
+			return nil, false // duplicate known key
+		}
+		var s string
+		if err := json.Unmarshal(val, &s); err != nil {
+			return nil, false // non-string value
+		}
+		out[key] = s
+	}
+	if lp, ok := out["load_policy"]; ok && lp != "" && lp != string(units.LoadAlways) && lp != string(units.LoadOnDemand) {
+		return nil, false
+	}
+	return out, true
+}
+
+func validUnitScope(s string) bool {
+	switch units.Scope(s) {
+	case units.ScopeGlobal, units.ScopeProject, units.ScopeSession:
+		return true
+	}
+	return false
 }

@@ -95,6 +95,15 @@ type UnitSyncer struct {
 	pushCount   int
 	pullCount   int
 	conflicts   []UnitConflict
+	// skippedUnknownKinds counts pulled nodes that are not Unit-lane kinds
+	// (WP03: skip and count — never abort the cursor). skippedInvalid
+	// counts unit-lane nodes the local store refused as invalid (unknown
+	// scope / classification / load policy). Both cumulative.
+	skippedUnknownKinds int
+	skippedInvalid      int
+	// pushRefused counts dirty units refused BEFORE the wire (non-pushable
+	// kind, capability word in metadata); they stay dirty.
+	pushRefused int
 
 	stopCh chan struct{}
 	once   sync.Once
@@ -199,6 +208,15 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 
 	for _, u := range dirty {
 		node, ok, err := s.mapper.MapUnitToNode(u)
+		if errors.Is(err, ErrUnitKindNotPushable) || errors.Is(err, ErrKindNotKnowledge) {
+			// Refused before the wire (fleet would 400 the WHOLE batch):
+			// skip this unit, keep it dirty, keep pushing the rest.
+			logging.L().Warn("fleet.unit.push.refused_locally", "unit_id", u.ID, "err", err.Error())
+			s.mu.Lock()
+			s.pushRefused++
+			s.mu.Unlock()
+			continue
+		}
 		if err != nil {
 			return 0, fmt.Errorf("fleet: unit push: map %s: %w", u.ID, err)
 		}
@@ -342,10 +360,8 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	cursor := s.cursor
 	s.mu.RUnlock()
 
-	urlPath := "/api/v1/context/pull"
-	if cursor != "" {
-		urlPath += "?since=" + cursor
-	}
+	// The Unit lane pulls only unit kinds (WP03 lane split by kind).
+	urlPath := lanePullPath(unitLaneKinds, cursor)
 
 	resp, err := s.client.Get(ctx, urlPath)
 	if err != nil {
@@ -380,9 +396,29 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	}
 
 	applied := 0
+	skippedKinds, skippedInvalid := 0, 0
 	for _, n := range pullResp.Nodes {
+		// Another lane's node — a Curated "guidance", a bootstrap
+		// "project", or a kind this build has never heard of (a server that
+		// ignores ?kind= sends them all). Skip and count: before WP03 one
+		// such node made applyPulledNode fail and PullDown return BEFORE the
+		// cursor advanced, stalling the lane on that page forever (§0-E).
+		if !unitLaneAccepts(n) {
+			skippedKinds++
+			continue
+		}
 		ok, err := s.applyPulledNode(ctx, n)
 		if err != nil {
+			if isUnitValidationErr(err) {
+				// The node itself is invalid for the local store (unknown
+				// scope / classification / load policy): a permanent
+				// property of the node, so retrying cannot help. Skip it.
+				logging.L().Warn("fleet.unit.pull.skipped_invalid", "node_id", n.ID, "err", err.Error())
+				skippedInvalid++
+				continue
+			}
+			// A storage failure is transient: abort before the cursor
+			// advances so the page is retried.
 			return applied, err
 		}
 		if ok {
@@ -391,6 +427,8 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	}
 
 	s.mu.Lock()
+	s.skippedUnknownKinds += skippedKinds
+	s.skippedInvalid += skippedInvalid
 	if pullResp.Cursor != "" {
 		s.cursor = pullResp.Cursor
 		if s.dataDir != "" {
@@ -405,6 +443,13 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	s.mu.Unlock()
 
 	return applied, nil
+}
+
+// isUnitValidationErr reports whether err is the local store refusing a node
+// as invalid (a permanent property of the node, not a transient failure).
+func isUnitValidationErr(err error) bool {
+	return errors.Is(err, units.ErrUnsupportedKind) || errors.Is(err, units.ErrUnsupportedScope) ||
+		errors.Is(err, units.ErrUnsupportedClassification) || errors.Is(err, units.ErrUnsupportedLoadPolicy)
 }
 
 // applyPulledNode maps one pulled node into the local store and returns
@@ -692,6 +737,11 @@ type UnitSyncStatus struct {
 	PushCount     int       `json:"push_count"`
 	PullCount     int       `json:"pull_count"`
 	ConflictCount int       `json:"conflict_count"`
+	// SkippedUnknownKinds / SkippedInvalid / PushRefused — WP03 counters
+	// (see the UnitSyncer fields).
+	SkippedUnknownKinds int `json:"skipped_unknown_kinds"`
+	SkippedInvalid      int `json:"skipped_invalid"`
+	PushRefused         int `json:"push_refused"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -706,6 +756,10 @@ func (s *UnitSyncer) Status() UnitSyncStatus {
 		PushCount:     s.pushCount,
 		PullCount:     s.pullCount,
 		ConflictCount: len(s.conflicts),
+
+		SkippedUnknownKinds: s.skippedUnknownKinds,
+		SkippedInvalid:      s.skippedInvalid,
+		PushRefused:         s.pushRefused,
 	}
 }
 

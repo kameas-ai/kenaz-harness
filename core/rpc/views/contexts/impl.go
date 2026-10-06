@@ -400,6 +400,8 @@ func (a *API) Context_SyncStatus(_ context.Context) (ContextSyncStatusView, erro
 		PullCount:      snap.PullCount,
 		TeamCapEnabled: snap.TeamCapEnabled,
 		Conflicts:      conflicts,
+
+		SkippedUnknownKinds: snap.SkippedUnknownKinds,
 	}, nil
 }
 

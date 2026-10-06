@@ -293,6 +293,10 @@ func (f *Impl) Unit_SyncStatus(_ context.Context) (UnitSyncStatusView, error) {
 		PushCount:     st.PushCount,
 		PullCount:     st.PullCount,
 		ConflictCount: st.ConflictCount,
+
+		SkippedUnknownKinds: st.SkippedUnknownKinds,
+		SkippedInvalid:      st.SkippedInvalid,
+		PushRefused:         st.PushRefused,
 	}
 	if !st.LastPullAt.IsZero() {
 		v.LastPullAt = st.LastPullAt.UTC().Format(time.RFC3339)

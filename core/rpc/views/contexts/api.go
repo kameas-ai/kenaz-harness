@@ -193,6 +193,10 @@ type ContextSyncStatusView struct {
 	// recent push (empty when the last push had none). The frontend prompts
 	// the user to reconcile each conflicted entry.
 	Conflicts []ContextConflictView `json:"conflicts,omitempty"`
+	// SkippedUnknownKinds counts pulled nodes skipped because their kind is
+	// not a Curated kind (another lane's node, or one this build does not
+	// know) — never listed, never a pull error (WP03).
+	SkippedUnknownKinds int `json:"skipped_unknown_kinds"`
 }
 
 // ContextConflictView is one per-node version conflict surfaced by

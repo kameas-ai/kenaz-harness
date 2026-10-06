@@ -192,3 +192,41 @@ Body
 		t.Errorf("inferred kind = %q, want %q", p.Entries[0].Kind, KindGlossary)
 	}
 }
+
+// TestParse_LegacySkillKindReadsAsProcedure — owner ruling 2026-10-06: the
+// pack kind "skill" was renamed "procedure" (a capability word must never be
+// a knowledge kind; fleet 400s it). A pack on disk that still says
+// `kind: skill`, or keeps entries under skills/, reads as procedure — and the
+// entry content hash is computed over the AUTHORED bytes, so it is unchanged
+// by the rename (pinned bundle content hashes stay valid).
+func TestParse_LegacySkillKindReadsAsProcedure(t *testing.T) {
+	root := t.TempDir()
+	makeFile(t, root, "pack.yaml", minimalManifest)
+	makeFile(t, root, "entries/skills/rollup.md", workflowScopedEntry) // kind: skill in frontmatter
+	makeFile(t, root, "entries/skills/nokind.md", "---\nname: nokind\n---\nInferred from the folder.\n")
+	p, err := ParseAndValidate(root, ValidatorOptions{})
+	if err != nil {
+		t.Fatalf("ParseAndValidate: %v", err)
+	}
+	for _, e := range p.Entries {
+		if e.Kind != KindProcedure {
+			t.Errorf("entry %q kind = %q, want procedure", e.Name, e.Kind)
+		}
+	}
+	for _, e := range p.Entries {
+		if e.Name != "rollup" {
+			continue
+		}
+		authored := e
+		authored.Kind = "skill" // what the frontmatter says
+		if e.ContentHash != entryHash(authored) {
+			t.Errorf("content hash is not over the authored kind — the rename would break pinned hashes")
+		}
+	}
+	if NormalizeEntryKind("skill") != KindProcedure || NormalizeEntryKind(KindGuidance) != KindGuidance {
+		t.Error("NormalizeEntryKind mapping wrong")
+	}
+	if EntryKind("skill").Valid() {
+		t.Error(`"skill" must no longer be a valid pack kind`)
+	}
+}

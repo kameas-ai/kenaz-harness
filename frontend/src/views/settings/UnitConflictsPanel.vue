@@ -126,6 +126,14 @@ async function submitResolve() {
         Push: {{ syncStatus.lastPushErr }}
       </p>
     </div>
+    <p
+      v-if="(syncStatus?.skippedUnknownKinds ?? 0) + (syncStatus?.skippedInvalid ?? 0) + (syncStatus?.pushRefused ?? 0) > 0"
+      class="text-xs text-ink-subtle"
+      data-testid="unit-sync-skipped"
+    >
+      Skipped: {{ syncStatus?.skippedUnknownKinds ?? 0 }} pulled item(s) of other kinds,
+      {{ syncStatus?.skippedInvalid ?? 0 }} invalid, {{ syncStatus?.pushRefused ?? 0 }} not shareable (kept local).
+    </p>
 
     <!-- Conflict list -->
     <div>

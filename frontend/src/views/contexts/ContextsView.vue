@@ -856,6 +856,14 @@ onBeforeUnmount(() => {
       <span v-if="syncStatus && syncStatus.pull_count > 0" data-testid="context-sync-pull-count">
         {{ syncStatus.pull_count }} shared entr{{ syncStatus.pull_count === 1 ? 'y' : 'ies' }} received
       </span>
+      <span
+        v-if="syncStatus && (syncStatus.skipped_unknown_kinds ?? 0) > 0"
+        class="text-ink-subtle"
+        data-testid="context-sync-skipped-kinds"
+        title="Shared items of kinds Knowledge › Curated does not show (library units, other sources, or kinds this version does not know). They are skipped, not lost."
+      >
+        {{ syncStatus.skipped_unknown_kinds }} item{{ syncStatus.skipped_unknown_kinds === 1 ? '' : 's' }} of other kinds skipped
+      </span>
       <span v-if="syncStatus && syncStatus.last_pull_err" class="text-signal-danger" data-testid="context-sync-pull-err">
         Pull error: {{ syncStatus.last_pull_err }}
       </span>

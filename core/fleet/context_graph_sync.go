@@ -117,6 +117,13 @@ type contextNodeInput struct {
 	Classification ContextClassification `json:"classification"`
 	TeamID         *string               `json:"team_id,omitempty"`
 	Version        int                   `json:"version"`
+	// Unified-Unit dimensions (fleet ContextNodeInput, WP03). unit_kind is
+	// REQUIRED by fleet's knowledge-boundary validation (doc | root |
+	// snippet | tool_output); the rest are optional.
+	UnitKind   string `json:"unit_kind,omitempty"`
+	UnitScope  string `json:"unit_scope,omitempty"`
+	ScopeID    string `json:"scope_id,omitempty"`
+	LoadPolicy string `json:"load_policy,omitempty"`
 }
 
 // contextEdgeInput is the client-side push shape for a single edge.
@@ -129,6 +136,10 @@ type contextEdgeInput struct {
 	Classification ContextClassification `json:"classification"`
 	TeamID         *string               `json:"team_id,omitempty"`
 	Version        int                   `json:"version"`
+	// UnitKind is the lineage overlay (references | derived_from |
+	// promoted_from | supersedes) — set only for those; fleet's enum has no
+	// conflicts_with, which travels in the free-form kind alone.
+	UnitKind string `json:"unit_kind,omitempty"`
 }
 
 // contextPushRequest is the body for POST /api/v1/context/push.
@@ -178,6 +189,12 @@ type ContextPulledNode struct {
 	UpdatedAt      string                `json:"updated_at"`
 	// DeletedAt is non-nil when the entry is a tombstone (FR-103).
 	DeletedAt *string `json:"deleted_at,omitempty"`
+	// Unified-Unit dimensions (fleet ContextNode). Top-level is the ONLY read
+	// path for load_policy (WP03); metadata._unit is write-only compat.
+	UnitKind   string `json:"unit_kind,omitempty"`
+	UnitScope  string `json:"unit_scope,omitempty"`
+	ScopeID    string `json:"scope_id,omitempty"`
+	LoadPolicy string `json:"load_policy,omitempty"`
 }
 
 // ContextPulledEdge is a single edge from the pull response.
@@ -304,6 +321,10 @@ type ContextGraphSyncer struct {
 	lastConflicts []ContextPushConflict
 	// pullCount is the total number of entries received from fleet (cumulative).
 	pullCount int
+	// skippedUnknownKinds counts pulled nodes whose kind is not a Curated
+	// kind (a server that ignores ?kind= returns every lane's nodes; WP03).
+	// Skipped, never listed, never a pull error. Cumulative.
+	skippedUnknownKinds int
 
 	// pollOnce guards StartPoller so the background loop starts at most once.
 	pollOnce sync.Once
@@ -434,15 +455,26 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	if wireID == "" {
 		return nil, fmt.Errorf("fleet: context push: empty node id")
 	}
+	// Knowledge boundary (WP03): the Curated lane pushes only its own kinds
+	// (legacy "skill" → "procedure"), never a capability word in kind or in
+	// metadata type/kind/category, and always unit_kind=doc.
+	kind, err := NormalizeCuratedKind(entry.Kind)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: context push: %w", err)
+	}
+	if err := checkMetadataNotCapability(entry.Metadata); err != nil {
+		return nil, fmt.Errorf("fleet: context push: %w", err)
+	}
 	node := contextNodeInput{
 		ID:             wireID,
-		Kind:           entry.Kind,
+		Kind:           kind,
 		Title:          entry.Title,
 		Body:           entry.Body,
 		Metadata:       entry.Metadata,
 		Classification: classification,
 		TeamID:         entry.TeamID,
 		Version:        entry.Version,
+		UnitKind:       curatedUnitKind,
 	}
 
 	// Build edges slice (two-phase: nodes first, then edges — FR-003).
@@ -631,10 +663,8 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 	cursor := s.cursor
 	s.mu.RUnlock()
 
-	urlPath := "/api/v1/context/pull"
-	if cursor != "" {
-		urlPath += "?since=" + cursor
-	}
+	// The Curated lane pulls only Curated kinds (WP03 lane split by kind).
+	urlPath := lanePullPath(curatedKinds, cursor)
 
 	resp, err := s.client.Get(ctx, urlPath)
 	if err != nil {
@@ -678,6 +708,13 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 	defer s.mu.Unlock()
 
 	for _, n := range pullResp.Nodes {
+		// Another lane's node (unit kinds, bootstrap taxonomy, anything a
+		// server that ignores ?kind= sends): skip and count — never list it
+		// under Knowledge › Curated (audit §0-E).
+		if !curatedLaneAccepts(n) {
+			s.skippedUnknownKinds++
+			continue
+		}
 		layer, ok := LayerForClassification(n.Classification)
 		if !ok {
 			continue // skip unknown classifications
@@ -1053,6 +1090,9 @@ type ContextSyncStatusSnapshot struct {
 	// most recent push (empty when the last push had none). Lets the Contexts
 	// view prompt the user to reconcile.
 	Conflicts []ContextPushConflict `json:"conflicts,omitempty"`
+	// SkippedUnknownKinds is the cumulative count of pulled nodes skipped
+	// because their kind is not a Curated kind (WP03).
+	SkippedUnknownKinds int `json:"skipped_unknown_kinds"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -1076,6 +1116,8 @@ func (s *ContextGraphSyncer) Status() ContextSyncStatusSnapshot {
 		PullCount:      s.pullCount,
 		TeamCapEnabled: teamCap,
 		Conflicts:      conflicts,
+
+		SkippedUnknownKinds: s.skippedUnknownKinds,
 	}
 }
 

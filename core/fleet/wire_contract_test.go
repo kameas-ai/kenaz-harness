@@ -109,6 +109,9 @@ func decodeFleetPush(t *testing.T, raw []byte) fleetContextPushRequest {
 		if n.ID == uuid.Nil {
 			t.Errorf("node id is the nil UUID")
 		}
+		if msg := fleetValidateNodeKinds(n); msg != "" {
+			t.Errorf("node %s: fleet knowledge boundary would 400: %s", n.ID, msg)
+		}
 		if !fleetPushClassifications[n.Classification] {
 			t.Errorf("node %s classification %q ∉ {team_shared, org_shared}", n.ID, n.Classification)
 		}
@@ -123,6 +126,52 @@ func decodeFleetPush(t *testing.T, raw []byte) fleetContextPushRequest {
 		}
 	}
 	return req
+}
+
+// fleetValidateNodeKinds re-implements kenaz-fleet's knowledge-boundary
+// validation (feat/context-kind-boundary 6980280, service/context_kinds.go
+// validateContextNodeKinds + loadPolicyAlwaysDenied for a NON-admin caller).
+// Returns "" when fleet would accept the node.
+func fleetValidateNodeKinds(n fleetContextNodeInput) string {
+	pushable := map[string]bool{"doc": true, "snippet": true, "tool_output": true, "root": true}
+	knowledge := map[string]bool{
+		"glossary": true, "explanation": true, "guidance": true, "procedure": true,
+		"root": true, "doc": true, "snippet": true, "tool_output": true,
+		"project": true, "person": true, "system": true, "glossary_term": true,
+		"work_item": true, "document": true,
+		"fact": true, "preference": true, "entity": true, "directive": true, "doc-ref": true,
+	}
+	reserved := map[string]bool{"skill": true, "workflow": true, "pack": true, "bundle": true, "agent_pack": true, "mcp": true, "recipe": true}
+	if !pushable[n.UnitKind] {
+		return "invalid_unit_kind " + n.UnitKind
+	}
+	kind := strings.ToLower(strings.TrimSpace(n.Kind))
+	if reserved[kind] {
+		return "kind_not_knowledge " + n.Kind
+	}
+	if n.Kind != kind || !knowledge[kind] {
+		return "invalid_kind " + n.Kind
+	}
+	if u, ok := n.Metadata["_unit"].(map[string]any); ok {
+		if mk, _ := u["unit_kind"].(string); mk != "" && mk != n.UnitKind {
+			return "unit_kind_mismatch"
+		}
+		if ms, _ := u["unit_scope"].(string); ms != "" && ms != n.UnitScope {
+			return "unit_scope_mismatch"
+		}
+		if lp, _ := u["load_policy"].(string); strings.EqualFold(strings.TrimSpace(lp), "always") {
+			return "load_policy_requires_admin (_unit)"
+		}
+	}
+	if n.LoadPolicy == "always" {
+		return "load_policy_requires_admin"
+	}
+	for _, key := range []string{"type", "kind", "category"} {
+		if v, _ := n.Metadata[key].(string); reserved[strings.ToLower(strings.TrimSpace(v))] {
+			return "metadata " + key + " is a capability word"
+		}
+	}
+	return ""
 }
 
 // wireCapture is a fake fleet that records raw request bodies by path and

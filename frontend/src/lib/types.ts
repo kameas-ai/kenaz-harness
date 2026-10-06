@@ -714,6 +714,8 @@ export interface ContextSyncStatusView {
   last_push_err: string;
   pull_count: number;
   team_cap_enabled: boolean;
+  /** Pulled nodes skipped because their kind is not a Curated kind (WP03). */
+  skipped_unknown_kinds?: number;
 }
 
 /** One search result from `contexts.search` (Contexts_ContextSearch). */
@@ -4792,6 +4794,12 @@ export interface UnitSyncStatusView {
   pushCount: number;
   pullCount: number;
   conflictCount: number;
+  /** Pulled nodes skipped because they are not unit kinds (WP03). */
+  skippedUnknownKinds?: number;
+  /** Unit nodes the local store refused as invalid. */
+  skippedInvalid?: number;
+  /** Dirty units refused before the wire (artifact / capability metadata). */
+  pushRefused?: number;
 }
 
 // ── Catalog types (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────

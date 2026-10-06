@@ -64,6 +64,14 @@ type UnitSyncStatusView struct {
 	PullCount int `json:"pullCount"`
 	// ConflictCount is the number of currently surfaced conflicts.
 	ConflictCount int `json:"conflictCount"`
+	// SkippedUnknownKinds counts pulled nodes that are not unit kinds
+	// (skipped, never a lane-stalling error — WP03).
+	SkippedUnknownKinds int `json:"skippedUnknownKinds"`
+	// SkippedInvalid counts unit nodes the local store refused as invalid.
+	SkippedInvalid int `json:"skippedInvalid"`
+	// PushRefused counts dirty units refused before the wire (artifact /
+	// unknown kind, capability word in metadata); they stay dirty.
+	PushRefused int `json:"pushRefused"`
 }
 
 // FleetAPI is the view-scoped RPC surface for fleet telemetry consent and

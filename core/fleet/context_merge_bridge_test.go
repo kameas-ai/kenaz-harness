@@ -168,7 +168,7 @@ func TestMergeBridge_PulledEntriesInList(t *testing.T) {
 
 	pullBody := `{
 		"nodes": [
-			{"id": "team-1", "kind": "fact", "title": "Team entry", "body": "b",
+			{"id": "team-1", "kind": "guidance", "title": "Team entry", "body": "b",
 			 "classification": "team_shared", "version": 1,
 			 "updated_at": "2026-07-05T10:00:00Z"},
 			{"id": "org-1", "kind": "guidance", "title": "Org entry", "body": "b",
@@ -216,10 +216,10 @@ func TestMergeBridge_TombstonesExcluded(t *testing.T) {
 
 	pullBody := `{
 		"nodes": [
-			{"id": "alive-1", "kind": "fact", "title": "Alive", "body": "b",
+			{"id": "alive-1", "kind": "guidance", "title": "Alive", "body": "b",
 			 "classification": "team_shared", "version": 1,
 			 "updated_at": "2026-07-05T10:00:00Z"},
-			{"id": "dead-1", "kind": "fact", "title": "Dead", "body": "b",
+			{"id": "dead-1", "kind": "guidance", "title": "Dead", "body": "b",
 			 "classification": "team_shared", "version": 2,
 			 "updated_at": "2026-07-05T10:00:01Z",
 			 "deleted_at": "2026-07-05T10:00:01Z"}

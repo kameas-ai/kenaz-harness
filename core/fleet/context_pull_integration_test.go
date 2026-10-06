@@ -130,7 +130,7 @@ func TestContextPull_Backfill(t *testing.T) {
 				Version: 1, UpdatedAt: teamUpdated,
 			},
 			{
-				ID: "n2", Kind: "fact", Title: "Org fact",
+				ID: "n2", Kind: "guidance", Title: "Org fact",
 				Body: "body2", Classification: ClassOrgShared,
 				Version: 1, UpdatedAt: orgUpdated,
 			},
@@ -201,12 +201,12 @@ func TestContextPull_DeltaOnlySinceNewCursor(t *testing.T) {
 
 	// First pull: 1 node, cursor A.
 	fake.addPullResponse(contextPullResponse{
-		Nodes:  []ContextPulledNode{{ID: "n1", Kind: "fact", Title: "first", Body: "b", Classification: ClassTeamShared, Version: 1, UpdatedAt: firstCursor}},
+		Nodes:  []ContextPulledNode{{ID: "n1", Kind: "guidance", Title: "first", Body: "b", Classification: ClassTeamShared, Version: 1, UpdatedAt: firstCursor}},
 		Cursor: firstCursor,
 	})
 	// Second pull: 1 new node, cursor B.
 	fake.addPullResponse(contextPullResponse{
-		Nodes:  []ContextPulledNode{{ID: "n2", Kind: "fact", Title: "second", Body: "b2", Classification: ClassTeamShared, Version: 1, UpdatedAt: secondCursor}},
+		Nodes:  []ContextPulledNode{{ID: "n2", Kind: "guidance", Title: "second", Body: "b2", Classification: ClassTeamShared, Version: 1, UpdatedAt: secondCursor}},
 		Cursor: secondCursor,
 	})
 
@@ -252,8 +252,8 @@ func TestContextPull_TombstonePropagated(t *testing.T) {
 
 	fake.addPullResponse(contextPullResponse{
 		Nodes: []ContextPulledNode{
-			{ID: "n1", Kind: "fact", Title: "alive", Body: "b", Classification: ClassTeamShared, Version: 1, UpdatedAt: "2026-06-08T10:00:00Z"},
-			{ID: "n2", Kind: "fact", Title: "gone", Body: "b", Classification: ClassTeamShared, Version: 2, UpdatedAt: "2026-06-08T12:00:00Z", DeletedAt: &deletedAt},
+			{ID: "n1", Kind: "guidance", Title: "alive", Body: "b", Classification: ClassTeamShared, Version: 1, UpdatedAt: "2026-06-08T10:00:00Z"},
+			{ID: "n2", Kind: "guidance", Title: "gone", Body: "b", Classification: ClassTeamShared, Version: 2, UpdatedAt: "2026-06-08T12:00:00Z", DeletedAt: &deletedAt},
 		},
 		Cursor: "2026-06-08T12:00:00Z",
 	})
@@ -296,8 +296,8 @@ func TestContextPull_PrecedencePreserved(t *testing.T) {
 	fake := &contextFakeServer{}
 	fake.addPullResponse(contextPullResponse{
 		Nodes: []ContextPulledNode{
-			{ID: "t1", Classification: ClassTeamShared, Kind: "fact", Title: "t", Body: "b", Version: 1, UpdatedAt: "2026-06-08T10:00:00Z"},
-			{ID: "o1", Classification: ClassOrgShared, Kind: "fact", Title: "o", Body: "b", Version: 1, UpdatedAt: "2026-06-08T10:01:00Z"},
+			{ID: "t1", Classification: ClassTeamShared, Kind: "guidance", Title: "t", Body: "b", Version: 1, UpdatedAt: "2026-06-08T10:00:00Z"},
+			{ID: "o1", Classification: ClassOrgShared, Kind: "guidance", Title: "o", Body: "b", Version: 1, UpdatedAt: "2026-06-08T10:01:00Z"},
 		},
 		Cursor: "2026-06-08T10:01:00Z",
 	})
@@ -410,7 +410,7 @@ func TestContextPush_IdempotentRepush(t *testing.T) {
 	syncer := NewContextGraphSyncer(client, t.TempDir(), caps)
 
 	teamID := "tid-1"
-	entry := ContextNodeEntry{ID: "e1", Layer: contextpack.LayerTeam, Kind: "fact", Title: "T", Body: "B", TeamID: &teamID, Version: 3}
+	entry := ContextNodeEntry{ID: "e1", Layer: contextpack.LayerTeam, Kind: "guidance", Title: "T", Body: "B", TeamID: &teamID, Version: 3}
 
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {

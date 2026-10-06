@@ -37,7 +37,7 @@ func TestContextE2E_PushThenPullThenPulledEntries(t *testing.T) {
 		Nodes: []ContextPulledNode{
 			{
 				ID:             "e2e-n1",
-				Kind:           "fact",
+				Kind:           "guidance",
 				Title:          "E2E team entry",
 				Body:           "pushed then pulled",
 				Classification: ClassTeamShared,
@@ -67,7 +67,7 @@ func TestContextE2E_PushThenPullThenPulledEntries(t *testing.T) {
 	entry := ContextNodeEntry{
 		ID:     "e2e-n1",
 		Layer:  contextpack.LayerTeam,
-		Kind:   "fact",
+		Kind:   "guidance",
 		Title:  "E2E team entry",
 		Body:   "pushed then pulled",
 		TeamID: &teamID,
@@ -112,12 +112,12 @@ func TestContextE2E_TombstonePropagation(t *testing.T) {
 	fake.addPullResponse(contextPullResponse{
 		Nodes: []ContextPulledNode{
 			{
-				ID: "tombstone-alive", Kind: "fact", Title: "alive",
+				ID: "tombstone-alive", Kind: "guidance", Title: "alive",
 				Body: "b", Classification: ClassTeamShared,
 				Version: 1, UpdatedAt: "2026-07-05T10:00:00Z",
 			},
 			{
-				ID: "tombstone-dead", Kind: "fact", Title: "gone",
+				ID: "tombstone-dead", Kind: "guidance", Title: "gone",
 				Body: "b", Classification: ClassTeamShared,
 				Version: 2, UpdatedAt: "2026-07-05T12:00:00Z",
 				DeletedAt: &deletedAt,
@@ -231,7 +231,7 @@ func TestContextE2E_FullRoundTripAudit(t *testing.T) {
 		Nodes: []ContextPulledNode{
 			{
 				ID:             "e2e-full-n1",
-				Kind:           "fact",
+				Kind:           "guidance",
 				Title:          "Full round-trip",
 				Body:           "body",
 				Classification: ClassTeamShared,
@@ -264,7 +264,7 @@ func TestContextE2E_FullRoundTripAudit(t *testing.T) {
 	entry := ContextNodeEntry{
 		ID:     "e2e-full-n1",
 		Layer:  contextpack.LayerTeam,
-		Kind:   "fact",
+		Kind:   "guidance",
 		Title:  "Full round-trip",
 		Body:   "body",
 		TeamID: &teamID,

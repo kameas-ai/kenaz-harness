@@ -2006,6 +2006,7 @@ export namespace contexts {
 	    pull_count: number;
 	    team_cap_enabled: boolean;
 	    conflicts?: ContextConflictView[];
+	    skipped_unknown_kinds: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ContextSyncStatusView(source);
@@ -2020,6 +2021,7 @@ export namespace contexts {
 	        this.pull_count = source["pull_count"];
 	        this.team_cap_enabled = source["team_cap_enabled"];
 	        this.conflicts = this.convertValues(source["conflicts"], ContextConflictView);
+	        this.skipped_unknown_kinds = source["skipped_unknown_kinds"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3149,6 +3151,9 @@ export namespace fleet {
 	    pushCount: number;
 	    pullCount: number;
 	    conflictCount: number;
+	    skippedUnknownKinds: number;
+	    skippedInvalid: number;
+	    pushRefused: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new UnitSyncStatusView(source);
@@ -3163,6 +3168,9 @@ export namespace fleet {
 	        this.pushCount = source["pushCount"];
 	        this.pullCount = source["pullCount"];
 	        this.conflictCount = source["conflictCount"];
+	        this.skippedUnknownKinds = source["skippedUnknownKinds"];
+	        this.skippedInvalid = source["skippedInvalid"];
+	        this.pushRefused = source["pushRefused"];
 	    }
 	}
 

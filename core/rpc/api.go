@@ -4286,6 +4286,26 @@ func New(c *core.Core, opts ...Option) *API {
 				}
 			}
 			unitMapper := corefleet.NewUnitMapper(teamID)
+			// WP03: fleet lets only org_admin / org_owner push
+			// load_policy=always (403 load_policy_requires_admin otherwise);
+			// for everyone else the mapper sends on_demand. Read live so a
+			// role change after boot takes effect.
+			adminDataDir := flDataDir
+			unitMapper.SetLoadAlwaysAllowed(func() bool {
+				if adminDataDir == "" {
+					return false
+				}
+				id, err := corefleet.LoadIdentity(adminDataDir)
+				if err != nil {
+					return false
+				}
+				for _, r := range id.Roles {
+					if r == "org_admin" || r == "org_owner" {
+						return true
+					}
+				}
+				return false
+			})
 			unitSyncer := corefleet.NewUnitSyncer(flCl, a.unitsMgr, unitMapper, caps, flDataDir)
 			// fleet-session-truth-01DOGF0A FR-6: the poll reports into the
 			// shared lane board (FleetSession.sync.unitPoll).
