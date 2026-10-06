@@ -8,7 +8,7 @@
  * monotonic across a conversation by construction (the backend sums).
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { defineComponent, h, ref, nextTick } from 'vue';
 import { mount } from '@vue/test-utils';
 import { useSession } from '@/lib/useSession';

@@ -364,7 +364,12 @@ export function useSession(id: Ref<string>): UseSessionResult {
         client.sessions.get(sessionId),
         fetchMessages(sessionId, showFullHistory.value),
         client.sessions.loadDraft(sessionId).catch(() => ""),
-        client.sessions.getUsage(sessionId).catch(() => null),
+        // Optional-chained: older fakes/partial clients may not stub
+        // getUsage; a missing method means "no aggregate", never a
+        // failed load.
+        (client.sessions.getUsage?.(sessionId) ?? Promise.resolve(null)).catch(
+          () => null,
+        ),
       ]);
       session.value = s;
       // chat-turn-integrity-01PMZ606 WP11 (task #37, C-5): repopulate the
@@ -430,10 +435,9 @@ export function useSession(id: Ref<string>): UseSessionResult {
     // Refetch the cumulative aggregate (fires once per turn; the
     // backend sum is authoritative — no client-side accumulation drift).
     const sid = payload.sessionId;
-    void client.sessions
-      .getUsage(sid)
+    void (client.sessions.getUsage?.(sid) ?? Promise.resolve(null))
       .then((u) => {
-        if (id.value === sid) cumulativeUsage.value = u;
+        if (u && id.value === sid) cumulativeUsage.value = u;
       })
       .catch(() => {});
   });
