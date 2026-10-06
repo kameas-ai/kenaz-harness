@@ -126,7 +126,7 @@ func FetchCatalogItem(ctx context.Context, client *Client, catalogID, version st
 // C-2): there is NO per-org or per-device catalog key, and there never will
 // be. Org-MANDATED items ship inside the ed25519-signed config bundle,
 // verified against the build-time-pinned fleet key (config_pull.go
-// VerifyWithKeySet → ApplyMandatedSkills). Non-mandated catalog installs
+// VerifyWithKeySet → MandatedApplier.Apply). Non-mandated catalog installs
 // carry no fleet signature today. A possible future design signs item
 // payloads with the bundle key (fleet owner decision pending); pubKeyBase64
 // is the seam that would carry it. With no key it reports verified=false and
@@ -223,44 +223,11 @@ func UninstallSkill(
 	return nil
 }
 
-// ── WP05: Push-down (org-mandated skills) ───────────────────────────────────
-
-// ApplyMandatedSkills processes the MandatedSkills section of a config bundle
-// and installs any new/updated skills read-only in the SkillStore.
+// ── Push-down (org-mandated skills) ───────────────────────────────────────
 //
-// Each entry in mandatedSkills is an opaque JSON blob encoding a slashcmd.Skill
-// with Source=SkillSourceMandated. Malformed entries are skipped with an error
-// collected in the returned slice (partial-success pattern matching the rest of
-// the bundle applier).
-//
-// Called by the compositeConfigApplier in settings/fleet.go.
-func ApplyMandatedSkills(
-	store *slashcmd.SkillStore,
-	registry *slashcmd.Registry,
-	mandatedSkills []json.RawMessage,
-) []error {
-	var errs []error
-	for i, raw := range mandatedSkills {
-		var skill slashcmd.Skill
-		if err := json.Unmarshal(raw, &skill); err != nil {
-			errs = append(errs, fmt.Errorf("fleet/skills: mandated[%d] unmarshal: %w", i, err))
-			continue
-		}
-		// Ensure source is mandated regardless of what the server sent.
-		skill.Source = slashcmd.SkillSourceMandated
-		skill.OrgManaged = true
-
-		if err := slashcmd.LiveRegister(store, registry, skill); err != nil {
-			// ErrTriggerShadowed is informational — persist the skill but
-			// don't treat as a hard error so the bundle ACK still advances.
-			if isSkillShadowedErr(err) {
-				continue
-			}
-			errs = append(errs, fmt.Errorf("fleet/skills: mandated[%d] register %q: %w", i, skill.ID, err))
-		}
-	}
-	return errs
-}
+// Mandated skills arrive as kind=skill envelopes in the bundle's
+// mandated_items section and are applied by MandatedApplier (mandated.go),
+// which replaced ApplyMandatedSkills (owner ruling 2026-10-06, WP02).
 
 // isSkillShadowedErr reports whether err wraps ErrTriggerShadowed.
 // LiveRegister wraps the sentinel with %w, so errors.Is traverses the chain.

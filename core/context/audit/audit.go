@@ -1644,7 +1644,7 @@ type FleetConfigAppliedPayload struct {
 	IssuedAt time.Time `json:"issued_at"`
 	// Sections is the list of non-empty sections that were present:
 	// "cedar_delta", "mcp_allowlist", "model_prefs",
-	// "kameas_ml_weight_urls", "provisioned_mcp", "mandated_skills",
+	// "kameas_ml_weight_urls", "provisioned_mcp", "mandated_items",
 	// "org_config".
 	Sections []string `json:"sections"`
 	// OrgID / OrgName name the org this bundle was pulled for (fleet-org-

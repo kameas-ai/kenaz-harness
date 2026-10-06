@@ -55,6 +55,13 @@ type ConfigApplier interface {
 	ApplyBundle(ctx context.Context, b *Bundle) []error
 }
 
+// ConfigItemApplier is the optional extension a ConfigApplier implements to
+// report per-mandated-item statuses for the ACK (WP02). When the applier
+// implements it the poller calls ApplyBundleItems INSTEAD of ApplyBundle.
+type ConfigItemApplier interface {
+	ApplyBundleItems(ctx context.Context, b *Bundle) ([]error, []MandatedItemStatus)
+}
+
 // ConfigPollStatus is the wire shape returned to the frontend via the
 // ConfigPullStatus RPC. It is a snapshot of the poller's last state.
 type ConfigPollStatus struct {
@@ -345,7 +352,15 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 
 	// Apply the bundle through the registered applier.
 	// FR-012: applier returns ALL per-section errors so the ACK can carry them.
-	applyErrs := p.applier.ApplyBundle(ctx, &b)
+	var (
+		applyErrs []error
+		itemStats []MandatedItemStatus
+	)
+	if ia, ok := p.applier.(ConfigItemApplier); ok {
+		applyErrs, itemStats = ia.ApplyBundleItems(ctx, &b)
+	} else {
+		applyErrs = p.applier.ApplyBundle(ctx, &b)
+	}
 
 	// Compute new checksum of the raw body (for 304 on next poll).
 	newChecksum := hexChecksumOf(body)
@@ -386,7 +401,8 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	// the caller's context is cancelled around the same time (e.g. Stop()).
 	ackCtx, ackCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer ackCancel()
-	if ackErr := PostConfigACK(ackCtx, p.client, b.BundleID, applyErrs); ackErr != nil {
+	machineID, _ := NodeID(p.dataDir) // the same id the pull's ?machine= sends
+	if ackErr := PostConfigACK(ackCtx, p.client, b.BundleID, applyErrs, ConfigACKReport{MachineID: machineID, Items: itemStats}); ackErr != nil {
 		log.Printf("fleet: config ack: %v", ackErr)
 	}
 

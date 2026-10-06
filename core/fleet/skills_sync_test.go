@@ -5,6 +5,7 @@
 package fleet
 
 import (
+	"fmt"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -319,7 +320,7 @@ func TestUninstallSkill_NotFound(t *testing.T) {
 	}
 }
 
-// ── ApplyMandatedSkills ───────────────────────────────────────────────────────
+// ── Mandated skills (MandatedApplier, kind=skill) ───────────────────────────────────────────────────────
 
 // TestApplyMandatedSkills_Basic verifies that ApplyMandatedSkills installs
 // read-only mandated skills and registers them live.
@@ -343,7 +344,7 @@ func TestApplyMandatedSkills_Basic(t *testing.T) {
 		t.Fatalf("json.Marshal mandate: %v", err)
 	}
 
-	errs := ApplyMandatedSkills(store, registry, []json.RawMessage{raw})
+	errs := applyMandatedSkillsForTest(store, registry, []json.RawMessage{raw})
 	if len(errs) != 0 {
 		t.Fatalf("ApplyMandatedSkills returned errors: %v", errs)
 	}
@@ -384,7 +385,7 @@ func TestApplyMandatedSkills_MalformedEntry(t *testing.T) {
 	validRaw, _ := json.Marshal(valid)
 	badRaw := json.RawMessage(`{not valid json`)
 
-	errs := ApplyMandatedSkills(store, registry, []json.RawMessage{badRaw, validRaw})
+	errs := applyMandatedSkillsForTest(store, registry, []json.RawMessage{badRaw, validRaw})
 	// One error for the malformed entry.
 	if len(errs) != 1 {
 		t.Errorf("expected 1 error, got %d: %v", len(errs), errs)
@@ -415,7 +416,7 @@ func TestApplyMandatedSkills_ShadowedIsSilent(t *testing.T) {
 	}
 	raw, _ := json.Marshal(mandate)
 
-	errs := ApplyMandatedSkills(store, registry, []json.RawMessage{raw})
+	errs := applyMandatedSkillsForTest(store, registry, []json.RawMessage{raw})
 	// ErrTriggerShadowed is NOT added to errs (informational only).
 	if len(errs) != 0 {
 		t.Errorf("expected 0 errors for shadowed mandated skill, got %d: %v", len(errs), errs)
@@ -529,7 +530,7 @@ func TestApplyMandatedSkills_ReplacesCatalogAndLocalSkillsCleanly(t *testing.T) 
 		b, _ := json.Marshal(sk)
 		raws = append(raws, b)
 	}
-	if errs := ApplyMandatedSkills(store, registry, raws); len(errs) != 0 {
+	if errs := applyMandatedSkillsForTest(store, registry, raws); len(errs) != 0 {
 		t.Fatalf("ApplyMandatedSkills: %v", errs)
 	}
 	for id, trig := range map[string]string{"from-cat": "catcmd", "from-local": "localcmd"} {
@@ -542,4 +543,17 @@ func TestApplyMandatedSkills_ReplacesCatalogAndLocalSkillsCleanly(t *testing.T) 
 			t.Fatalf("/%s dispatch = %v (found %v) — still the replaced skill", trig, cmd, ok)
 		}
 	}
+}
+
+// applyMandatedSkillsForTest drives the REAL MandatedApplier with each raw
+// skill payload wrapped in a kind=skill envelope (catalog ids cat-0, cat-1, …)
+// and returns its errors — the successor of the retired ApplyMandatedSkills.
+func applyMandatedSkillsForTest(store *slashcmd.SkillStore, registry *slashcmd.Registry, raws []json.RawMessage) []error {
+	items := make([]BundleMandatedItem, len(raws))
+	for i, raw := range raws {
+		items[i] = BundleMandatedItem{CatalogID: fmt.Sprintf("cat-%d", i), Kind: MandatedKindSkill, Version: "1.0.0", Payload: raw}
+	}
+	m := &MandatedApplier{Skills: store, Registry: registry}
+	_, errs := m.Apply(context.Background(), items)
+	return errs
 }

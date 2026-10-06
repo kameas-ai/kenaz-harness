@@ -165,6 +165,13 @@ launch" table).
 
 ## §6.3 decision — grandfathering `mandated_skills` (resolved, not escalated)
 
+> **Superseded 2026-10-06:** the owner wire-contract ruling replaced
+> `mandated_skills` with the `mandated_items` envelope
+> (`[{catalog_id, kind, version, payload}]`, kenaz-fleet PR #178), still a
+> bespoke signed `Bundle` field rather than an `org_config` kind. Applied by
+> `fleet.MandatedApplier` (`core/fleet/mandated.go`). The text below is
+> historical.
+
 spec.md §6 item 3 asked review to pick between grandfathering
 `mandated_skills` as its existing bespoke `Bundle` field or migrating it
 into `org_config`. This did NOT need an owner escalation: plan.md's own

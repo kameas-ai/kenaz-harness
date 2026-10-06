@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -572,6 +573,8 @@ func mutateFieldForTest(t *testing.T, name string, v reflect.Value) {
 		v.Set(reflect.ValueOf([]json.RawMessage{json.RawMessage(`{"mutated_for_test":true}`)}))
 	case *BundleModelPrefs:
 		v.Set(reflect.ValueOf(&BundleModelPrefs{DefaultModel: "mutated-for-test"}))
+	case []BundleMandatedItem:
+		v.Set(reflect.ValueOf([]BundleMandatedItem{{CatalogID: "mutated-for-test", Kind: "skill", Version: "1", Payload: json.RawMessage(`{}`)}}))
 	case []ProvisionedMCP:
 		v.Set(reflect.ValueOf([]ProvisionedMCP{{RecipeID: "mutated-for-test"}}))
 	case []ProviderSetup:
@@ -750,4 +753,147 @@ func TestConfigDistributionEnabled(t *testing.T) {
 	if !ConfigDistributionEnabled() {
 		t.Error("expected true when valid key bytes set")
 	}
+}
+
+// ─── mandated_items (owner wire-contract ruling 2026-10-06, WP02) ───────────
+//
+// Contract: kenaz-fleet PR #178. TestSigningPayload_MandatedItems_FleetVector
+// replays fleet's own TestBundleMandatedItems_WireOrder vector
+// (service/handlers_config_test.go) byte-for-byte.
+
+// TestSigningPayload_MandatedItems_ByteOrder pins the signed bytes of a
+// multi-item section in fleet's (kind, catalog_id) sort order, its slot
+// between kameas_ml_weight_urls and provisioned_mcp, and that no
+// mandated_skills key survives.
+func TestSigningPayload_MandatedItems_ByteOrder(t *testing.T) {
+	b := &Bundle{
+		BundleID:           7,
+		IssuedAt:           time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC),
+		KameasMLWeightURLs: []string{"https://w.invalid/a"},
+		MandatedItems: []BundleMandatedItem{
+			{CatalogID: "11111111-1111-4111-8111-111111111111", Kind: "pack", Version: "2.0.0", Payload: json.RawMessage(`{"p":1}`)},
+			{CatalogID: "22222222-2222-4222-8222-222222222222", Kind: "skill", Version: "1.0.0", Payload: json.RawMessage(`{"id":"s"}`)},
+			{CatalogID: "33333333-3333-4333-8333-333333333333", Kind: "skill", Version: "", Payload: json.RawMessage(`{"id":"t"}`)},
+			{CatalogID: "44444444-4444-4444-8444-444444444444", Kind: "workflow", Version: "3", Payload: json.RawMessage(`{"id":"w"}`)},
+		},
+		ProvisionedMCP: []ProvisionedMCP{{RecipeID: "slack"}},
+	}
+	got, err := b.signingPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"bundle_id":7,"issued_at":"2026-10-06T12:00:00Z","mcp_allowlist":null,` +
+		`"kameas_ml_weight_urls":["https://w.invalid/a"],` +
+		`"mandated_items":[` +
+		`{"catalog_id":"11111111-1111-4111-8111-111111111111","kind":"pack","version":"2.0.0","payload":{"p":1}},` +
+		`{"catalog_id":"22222222-2222-4222-8222-222222222222","kind":"skill","version":"1.0.0","payload":{"id":"s"}},` +
+		`{"catalog_id":"33333333-3333-4333-8333-333333333333","kind":"skill","version":"","payload":{"id":"t"}},` +
+		`{"catalog_id":"44444444-4444-4444-8444-444444444444","kind":"workflow","version":"3","payload":{"id":"w"}}],` +
+		`"provisioned_mcp":[{"recipe_id":"slack"}]}`
+	if string(got) != want {
+		t.Fatalf("mandated_items signing bytes drifted:\n got %s\nwant %s", got, want)
+	}
+	if strings.Contains(string(got), "mandated_skills") {
+		t.Fatal("mandated_skills must not appear in the signing payload — the section was replaced, not aliased")
+	}
+	// The pinned items ARE in fleet's (kind, catalog_id) order; a harness
+	// re-marshal must preserve received order (it never re-sorts), so the
+	// verifier hashes exactly what fleet signed.
+	for i := 1; i < len(b.MandatedItems); i++ {
+		p, c := b.MandatedItems[i-1], b.MandatedItems[i]
+		if p.Kind > c.Kind || (p.Kind == c.Kind && p.CatalogID > c.CatalogID) {
+			t.Fatalf("fixture not in fleet sort order at %d", i)
+		}
+	}
+
+	// Empty section: key absent (omitempty) — same bytes as a bundle that
+	// never had the field.
+	b.MandatedItems = nil
+	got, _ = b.signingPayload()
+	if strings.Contains(string(got), "mandated_items") {
+		t.Errorf("nil mandated_items must be omitted, got %s", got)
+	}
+}
+
+// TestVerify_TamperedMandatedItems — a mandated item is installed read-only
+// on every member device, so it must be covered by the signature.
+func TestVerify_TamperedMandatedItems(t *testing.T) {
+	pub, priv := newTestKeyPair(t)
+	b := sampleBundle()
+	b.MandatedItems = []BundleMandatedItem{{CatalogID: "c", Kind: "skill", Version: "1", Payload: json.RawMessage(`{"id":"s","body":"ok"}`)}}
+	signBundle(t, priv, b)
+	b.MandatedItems[0].Payload = json.RawMessage(`{"id":"s","body":"evil"}`)
+	if err := Verify(b, pub, 0); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("tampered mandated item payload verified (err=%v) — the section is not signed", err)
+	}
+}
+
+// TestSigningPayload_MandatedItems_FleetVector mirrors kenaz-fleet PR #178
+// service/handlers_config_test.go TestBundleMandatedItems_WireOrder: the SAME
+// bundle must produce the SAME signing bytes on both sides, or no mandated
+// bundle ever verifies.
+func TestSigningPayload_MandatedItems_FleetVector(t *testing.T) {
+	b := &Bundle{
+		BundleID:           1,
+		KeyID:              "k",
+		IssuedAt:           time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		KameasMLWeightURLs: []string{"u"},
+		MandatedItems: []BundleMandatedItem{{
+			CatalogID: "c", Kind: "workflow", Version: "2", Payload: json.RawMessage(`{"a":1}`),
+		}},
+	}
+	got, err := b.signingPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"bundle_id":1,"key_id":"k","issued_at":"2026-06-01T00:00:00Z","mcp_allowlist":null,` +
+		`"kameas_ml_weight_urls":["u"],"mandated_items":[{"catalog_id":"c","kind":"workflow","version":"2","payload":{"a":1}}]}`
+	if string(got) != want {
+		t.Fatalf("signing payload diverges from fleet's vector:\n got %s\nwant %s", got, want)
+	}
+}
+
+// TestMandatedItems_OddWhitespacePayload_VerifiesAndStaysOpaque — payload
+// bytes are opaque (fleet PR #178): a payload with odd whitespace must (a)
+// verify after a wire round trip — both sides' encoding/json compacts a
+// RawMessage identically when building the signing payload — and (b) reach
+// the consumer byte-identical to what arrived on the wire.
+func TestMandatedItems_OddWhitespacePayload_VerifiesAndStaysOpaque(t *testing.T) {
+	pub, priv := newTestKeyPair(t)
+	const odd = "{ \"id\" :\t\"nightly\" ,\n  \"steps\": [ ] }"
+	signed := sampleBundle()
+	signed.MandatedItems = []BundleMandatedItem{{CatalogID: "11111111-1111-4111-8111-111111111111", Kind: "workflow", Version: "1", Payload: json.RawMessage(odd)}}
+	signBundle(t, priv, signed)
+	// The wire: fleet serves the payload bytes verbatim. encoding/json
+	// compacts a RawMessage on Marshal, so splice the odd bytes back in.
+	marshalled := mustJSON(t, signed)
+	compact := `{"id":"nightly","steps":[]}`
+	if !strings.Contains(marshalled, compact) {
+		t.Fatalf("fixture: compacted payload not found in %s", marshalled)
+	}
+	wire := strings.Replace(marshalled, compact, odd, 1)
+	var got Bundle
+	if err := json.Unmarshal([]byte(wire), &got); err != nil {
+		t.Fatalf("decode wire bundle: %v", err)
+	}
+	if err := Verify(&got, pub, 0); err != nil {
+		t.Fatalf("odd-whitespace payload failed verification after a wire round trip: %v", err)
+	}
+	wf := &recordingMandatedWorkflows{}
+	m := &MandatedApplier{Workflows: wf}
+	if _, errs := m.Apply(context.Background(), got.MandatedItems); len(errs) != 0 {
+		t.Fatalf("apply: %v", errs)
+	}
+	if p := wf.payloads(); len(p) != 1 || string(p[0]) != odd {
+		t.Fatalf("payload reached the consumer as %q, want byte-identical %q", p, odd)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

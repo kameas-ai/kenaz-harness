@@ -3526,10 +3526,17 @@ func New(c *core.Core, opts ...Option) *API {
 
 		// fleet-skills-sync-01NDFSEX18 WP05: wire skill refs into the fleet
 		// settings state so the compositeConfigApplier can call
-		// fleet.ApplyMandatedSkills when a config bundle carries mandated_skills.
+		// fleet.MandatedApplier for kind=skill items of a bundle's mandated_items.
 		if skillStore != nil && a.settingsImpl != nil {
 			a.settingsImpl.SetSkillRefs(skillStore, slashRegistry)
 		}
+	}
+
+	// Owner wire-contract ruling 2026-10-06 (WP02): mandated kind=workflow
+	// items install through the workflows view's InstallDocument path with
+	// mandated provenance, and are removed when no longer mandated.
+	if wfImpl, ok := a.workflowsAPI.(*workflowsview.API); ok && wfImpl != nil && a.settingsImpl != nil {
+		a.settingsImpl.SetMandatedWorkflows(mandatedWorkflowsAdapter{wf: wfImpl})
 	}
 
 	// Auto-update subsystem (mission auto-update, v0.4.0 WP03).
@@ -11932,4 +11939,22 @@ func (e *auditArchiverEmitter) Emit(_ context.Context, ev contextaudit.Event) er
 		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
 	})
 	return nil
+}
+
+// mandatedWorkflowsAdapter adapts the workflows view to
+// fleet.MandatedWorkflows (core/fleet must not import the view).
+type mandatedWorkflowsAdapter struct{ wf *workflowsview.API }
+
+func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (string, error) {
+	res, err := m.wf.InstallDocument(ctx, payload, workflowsview.DocumentOrigin{
+		CatalogID: catalogID, Version: version, Mandated: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	return res.WorkflowID, nil
+}
+
+func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string) error {
+	return m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID)
 }

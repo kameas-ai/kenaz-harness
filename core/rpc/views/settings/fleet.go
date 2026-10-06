@@ -50,11 +50,17 @@ type fleetState struct {
 	cedarEngine *cedarpolicy.Engine
 
 	// skillStore + skillRegistry are wired at boot time via SetSkillRefs so the
-	// compositeConfigApplier can call fleet.ApplyMandatedSkills when a bundle
-	// carries the mandated_skills section (fleet-skills-sync-01NDFSEX18 WP05).
+	// compositeConfigApplier's fleet.MandatedApplier can install / remove
+	// kind=skill mandated items (owner ruling 2026-10-06, WP02).
 	// Both may be nil when fleet skill sync is not configured.
 	skillStore    *slashcmd.SkillStore
 	skillRegistry *slashcmd.Registry
+
+	// mandatedWorkflows is the kind=workflow mandated-item consumer, wired
+	// via SetMandatedWorkflows (an adapter over the workflows view's
+	// InstallDocument path). nil → workflow items fail with
+	// fleet.ErrMandatedConsumerUnwired, never a silent drop.
+	mandatedWorkflows fleet.MandatedWorkflows
 
 	// otlpPipeline is the post-login OTLP export pipeline
 	// (harness-fleet-otlp-export-01NTLMEX01). Set via SetFleetOTLPPipeline;
@@ -130,7 +136,7 @@ type fleetState struct {
 	// section. nil in the rpc.New(nil) test harness path — the
 	// provisioned_mcp branch turns a missing catalog into a named apply
 	// error rather than a silently-discarded org config (same posture as
-	// the cedar_delta / mandated_skills "ref not wired" branches below).
+	// the cedar_delta "engine not wired" branch below).
 	mcpCatalog *recipes.MergedCatalog
 
 	// auditEmitter is wired at SetAuditEmitter time (fleet-org-config-
@@ -661,13 +667,12 @@ func (a *API) retryPendingTelemetryOptInPush(ctx context.Context) {
 }
 
 // SetSkillRefs wires the fleet-skill store and slash registry into the fleet
-// state so that the compositeConfigApplier can call fleet.ApplyMandatedSkills
-// when a config bundle carries a mandated_skills section.
-// (fleet-skills-sync-01NDFSEX18 WP05)
+// state so that the compositeConfigApplier can install and remove
+// kind=skill items of a bundle's mandated_items section (WP02).
 //
 // Called from rpc.New() after both the skillStore and slashRegistry are
-// constructed. Safe to skip — when nil, ApplyBundle silently skips the
-// mandated_skills section.
+// constructed. When never called, a skill item fails with a named
+// fleet.ErrMandatedConsumerUnwired error in the ACK.
 func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Registry) {
 	if a.fleet == nil {
 		a.fleet = newFleetState()
@@ -676,6 +681,18 @@ func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Regist
 	defer a.fleet.mu.Unlock()
 	a.fleet.skillStore = store
 	a.fleet.skillRegistry = registry
+}
+
+// SetMandatedWorkflows wires the kind=workflow mandated-item consumer
+// (owner ruling 2026-10-06, WP02). Called from rpc.New() once the workflows
+// view exists.
+func (a *API) SetMandatedWorkflows(w fleet.MandatedWorkflows) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.mandatedWorkflows = w
 }
 
 // SetMCPCatalog wires the shared *recipes.MergedCatalog into the fleet
@@ -1536,8 +1553,18 @@ type compositeConfigApplier struct {
 	state *fleetState
 }
 
+// ApplyBundle implements fleet.ConfigApplier for callers that do not need
+// per-item statuses.
 func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundle) []error {
+	errs, _ := a.ApplyBundleItems(ctx, b)
+	return errs
+}
+
+// ApplyBundleItems implements fleet.ConfigItemApplier: every section, plus
+// the mandated items' per-item statuses for the ACK (WP02).
+func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.Bundle) ([]error, []fleet.MandatedItemStatus) {
 	var errs []error
+	var itemStatuses []fleet.MandatedItemStatus
 	// provisionedRecipeIDs accumulates the bundle's declared provisioned_mcp
 	// recipe_ids for the closing audit event (WP05, FR-010) — populated in
 	// the Provisioned MCP block below regardless of whether mcpCatalog is
@@ -1592,7 +1619,7 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 
 	// Provisioned MCP (fleet-org-config-inheritance-01NORGX01 WP02).
 	//
-	// Unlike cedar_delta/mandated_skills above, this section is applied
+	// Unlike cedar_delta above, this section is applied
 	// UNCONDITIONALLY on every ApplyBundle call, even when b.ProvisionedMCP
 	// is empty/nil — Bundle.ProvisionedMCP's own doc records that nil, an
 	// empty slice, and an absent key are all equivalent ("no org-
@@ -1605,8 +1632,7 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	// applies" shape this mission exists to close.
 	//
 	// A nil mcpCatalog (SetMCPCatalog never called) turns a NON-empty
-	// section into a named apply error, same posture as cedar_delta/
-	// mandated_skills above — but an EMPTY section with no catalog wired is
+	// section into a named apply error, same posture as cedar_delta above — but an EMPTY section with no catalog wired is
 	// not an error: there is nothing to apply either way, and erroring on
 	// every bundle for a fleet-disabled/test harness that never carries
 	// provisioned_mcp would fail every apply for no operational reason.
@@ -1638,26 +1664,30 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 		errs = append(errs, fmt.Errorf("fleet/config: provisioned_mcp present but no MCP catalog wired (SetMCPCatalog never called)"))
 	}
 
-	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
-	// FR-012: all section errors are collected and returned so the ACK
-	// carries the full set and the caller can decide not to advance lastAppliedID.
+	// Mandated items (owner wire-contract ruling 2026-10-06, WP02).
 	//
-	// fleet-enforcement-truth-01PMZ505 WP02: same fix as cedar_delta — a
-	// bundle carrying mandated_skills that this device cannot apply (refs
-	// not wired) must not ack clean.
-	if len(b.MandatedSkills) > 0 {
+	// Runs on EVERY bundle, including one with no mandated_items: an empty
+	// section means "nothing is mandated any more", so everything applied
+	// from an earlier bundle is removed (reconciliation). Dispatch by kind:
+	// skill → slash store, workflow → workflows InstallDocument (provenance
+	// mandated), pack/bundle → refused with fleet.ErrMandatedKindUnsupported.
+	// Every refusal / failure is an apply error AND a per-item ACK status —
+	// a bundle carrying an item this device cannot honour must not ack
+	// applied:true (same posture as cedar_delta above).
+	{
 		a.state.mu.RLock()
-		skillStore := a.state.skillStore
-		skillRegistry := a.state.skillRegistry
+		m := &fleet.MandatedApplier{
+			Skills:    a.state.skillStore,
+			Registry:  a.state.skillRegistry,
+			Workflows: a.state.mandatedWorkflows,
+			DataDir:   a.state.dataDir,
+		}
 		a.state.mu.RUnlock()
-		if skillStore != nil && skillRegistry != nil {
-			skillErrs := fleet.ApplyMandatedSkills(skillStore, skillRegistry, b.MandatedSkills)
-			for _, se := range skillErrs {
-				logging.L().Warn("fleet.config.mandated_skills.apply_error", "err", se.Error())
-				errs = append(errs, se)
-			}
-		} else {
-			errs = append(errs, fmt.Errorf("fleet/config: mandated_skills present but skill refs not wired (SetSkillRefs never called)"))
+		statuses, mErrs := m.Apply(ctx, b.MandatedItems)
+		itemStatuses = statuses
+		for _, me := range mErrs {
+			logging.L().Warn("fleet.config.mandated_items.apply_error", "err", me.Error())
+			errs = append(errs, me)
 		}
 	}
 
@@ -1684,7 +1714,7 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	//     but has a nil Apply: this is a real wiring gap (the kind
 	//     promised org support the code doesn't back), not a forward-
 	//     compat gap, so it gets the same error-not-skip treatment as
-	//     cedar_delta/mandated_skills above — an ACK must not read
+	//     cedar_delta/mandated_items — an ACK must not read
 	//     "applied:true" for a section this device cannot actually apply.
 	if len(b.OrgConfig) > 0 {
 		a.state.mu.RLock()
@@ -1758,7 +1788,7 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	}
 
 	// Return all errors (FR-012). An empty slice means full success.
-	return errs
+	return errs, itemStatuses
 }
 
 // emitConfigApplied records KindFleetConfigApplied for a fully-clean
@@ -1795,8 +1825,8 @@ func (a *compositeConfigApplier) emitConfigApplied(ctx context.Context, b *fleet
 	if len(b.ProvisionedMCP) > 0 {
 		sections = append(sections, "provisioned_mcp")
 	}
-	if len(b.MandatedSkills) > 0 {
-		sections = append(sections, "mandated_skills")
+	if len(b.MandatedItems) > 0 {
+		sections = append(sections, "mandated_items")
 	}
 	if len(b.OrgConfig) > 0 {
 		sections = append(sections, "org_config")

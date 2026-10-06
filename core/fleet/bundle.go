@@ -35,7 +35,7 @@ import (
 //	  "mcp_allowlist":     ["github", "slack", ...],
 //	  "model_prefs":       {"default_model": "...", "provider_allowlist": [...]},
 //	  "kameas_ml_weight_urls": ["https://..."],
-//	  "mandated_skills":   [{...}],
+//	  "mandated_items":    [{"catalog_id": "<uuid>", "kind": "skill", "version": "1.0.0", "payload": {...}}],
 //	  "provisioned_mcp":   [{"recipe_id": "slack", "primary_auth": "oauth", ...}],
 //	  "provider_setups":   [{"provider": "anthropic", "access_mode": "org_shared_key", ...}],
 //	  "signature":         "<base64 ed25519>"
@@ -86,14 +86,29 @@ type Bundle struct {
 	// Persisted to disk for the kameas-ml consumer; not applied in-process.
 	KameasMLWeightURLs []string `json:"kameas_ml_weight_urls,omitempty"`
 
-	// MandatedSkills is the push-down section for org-admin-required skills
-	// (fleet-skills-sync-01NDFSEX18 WP05). Each entry is an opaque JSON
-	// object containing the skill payload that will be installed read-only
-	// on every org member's device (FR-301).
+	// MandatedItems is the push-down section for org-admin-REQUIRED catalog
+	// items of every kind (owner wire-contract ruling 2026-10-06, WP02). It
+	// REPLACES mandated_skills, which carried every mandated kind as a raw
+	// payload with no kind or catalog id, so the harness installed mandated
+	// workflows as broken "skills" (audit §0-F). There is no compat field:
+	// nothing was ever delivered on mandated_skills.
 	//
-	// The field is omitted from bundles that carry no mandated skills so
-	// the signing payload stays minimal for orgs that don't use this feature.
-	MandatedSkills []json.RawMessage `json:"mandated_skills,omitempty"`
+	// Each envelope names its catalog_id, kind (skill|workflow|pack|bundle),
+	// version and raw payload; the applier dispatches by kind and reconciles
+	// against the previously applied set (mandated.go). Fleet sorts items by
+	// (kind, catalog_id) so the signed bytes are stable.
+	//
+	// Wire contract: kenaz-fleet PR #178 (service/config_bundle.go
+	// BundleMandatedItem / Bundle.MandatedItems) — json tag, item field
+	// order, and the slot directly after kameas_ml_weight_urls (fleet's
+	// bundle has no provisioned_mcp/provider_setups/org_config after it;
+	// those harness-only fields are omitempty and absent from fleet bundles).
+	// Payload bytes are OPAQUE: never re-marshalled on the apply path.
+	//
+	// omitempty: a bundle without mandated items keeps the signing payload
+	// minimal — and an absent section means "nothing is mandated", so the
+	// applier removes everything previously mandated.
+	MandatedItems []BundleMandatedItem `json:"mandated_items,omitempty"`
 
 	// ProvisionedMCP is the push-down section for org-provisioned MCP
 	// servers (fleet-org-config-inheritance-01NORGX01 §3.1). Each entry
@@ -237,6 +252,22 @@ type ProviderSetup struct {
 	Default bool `json:"default,omitempty"`
 }
 
+// BundleMandatedItem is one org-mandated catalog item envelope inside the
+// signed bundle (Bundle.MandatedItems). NO omitempty on any field: the item
+// shape is fixed so the signed bytes are identical on both sides. Mirrors
+// kenaz-fleet PR #178 service/config_bundle.go BundleMandatedItem.
+type BundleMandatedItem struct {
+	// CatalogID is the fleet catalog item UUID — the stable reconciliation key.
+	CatalogID string `json:"catalog_id"`
+	// Kind is skill | workflow | pack | bundle (fleet's catalog kind set).
+	Kind string `json:"kind"`
+	// Version is the catalog item version mandated.
+	Version string `json:"version"`
+	// Payload is the catalog item's raw payload (a slashcmd.Skill JSON for a
+	// skill, a workflow document for a workflow).
+	Payload json.RawMessage `json:"payload"`
+}
+
 // BundleModelPrefs is the model-preferences section of a config bundle.
 type BundleModelPrefs struct {
 	// DefaultModel is the fleet-preferred default model identifier.
@@ -263,7 +294,7 @@ type bundleSigningPayload struct {
 	MCPAllowlist       []string                   `json:"mcp_allowlist"`
 	ModelPrefs         *BundleModelPrefs          `json:"model_prefs,omitempty"`
 	KameasMLWeightURLs []string                   `json:"kameas_ml_weight_urls,omitempty"`
-	MandatedSkills     []json.RawMessage          `json:"mandated_skills,omitempty"`
+	MandatedItems      []BundleMandatedItem       `json:"mandated_items,omitempty"` // slot: fleet PR #178
 	ProvisionedMCP     []ProvisionedMCP           `json:"provisioned_mcp,omitempty"`
 	ProviderSetups     []ProviderSetup            `json:"provider_setups,omitempty"`
 	OrgConfig          map[string]json.RawMessage `json:"org_config,omitempty"`
@@ -281,7 +312,7 @@ func (b *Bundle) signingPayload() ([]byte, error) {
 		MCPAllowlist:       b.MCPAllowlist,
 		ModelPrefs:         b.ModelPrefs,
 		KameasMLWeightURLs: b.KameasMLWeightURLs,
-		MandatedSkills:     b.MandatedSkills,
+		MandatedItems:      b.MandatedItems,
 		ProvisionedMCP:     b.ProvisionedMCP,
 		ProviderSetups:     b.ProviderSetups,
 		OrgConfig:          b.OrgConfig,

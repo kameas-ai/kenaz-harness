@@ -481,9 +481,10 @@ catalog key and never will be. Org-MANDATED items ship inside the
 ed25519-signed config bundle and verify against the build-time-pinned
 fleet key — `core/fleet/config_pull.go` `VerifyWithKeySet` (hard-reject
 before apply) → `compositeConfigApplier.ApplyBundle`
-(`core/rpc/views/settings/fleet.go`) → `fleet.ApplyMandatedSkills`
-(`core/fleet/skills_sync.go`); that is the ONLY mandated-skill write path
-(no other `ApplyMandatedSkills` / `ApplyBundle` caller). Non-mandated
+(`core/rpc/views/settings/fleet.go`) → `fleet.MandatedApplier.Apply`
+(`core/fleet/mandated.go`, which replaced `ApplyMandatedSkills` with the
+`mandated_items` envelope on 2026-10-06); that is the ONLY mandated-item
+write path. Non-mandated
 catalog installs carry no fleet signature today; a possible future design
 signs item payloads with the bundle key (fleet-owner decision pending).
 So the verifier reports `verified=false` with the C-2 reason (since
