@@ -235,7 +235,8 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   build:
     name: Build ${{ matrix.label }}
-    needs: [derive-version]
+    # resolve-env: target_env selects the per-env fleet signing pins below.
+    needs: [resolve-env, derive-version]
     strategy:
       fail-fast: false
       matrix:
@@ -388,8 +389,8 @@ jobs:
       #        -X github.com/kameas-ai/kenaz-harness/core/mlsidecar.releaseSigningPubKeyHex=${{ vars.KENAZ_ML_RELEASE_PUBKEY }}
       #      to the -ldflags of BOTH wails build steps below.
       #   3. A first signed engine is published (its index.json exists).
-      # Enabling it also needs `resolve-env` added to this job's `needs:`
-      # (for cdn_base) and a KENAZ_ML_ENGINE_VERSION repo variable naming
+      # Enabling it reads `resolve-env` (already in this job's `needs:`
+      # since bundle-key-rotation WP03) for cdn_base and a KENAZ_ML_ENGINE_VERSION repo variable naming
       # the engine release this harness build pins. pin-gen validates every
       # field and fails the build on a bad pin; until this step runs, the
       # checked-in zero-value pin keeps Settings honestly reporting the
@@ -450,6 +451,66 @@ jobs:
       #       echo "::notice::$KEY_FILE holds no key line — the env-key (-ldflags releaseSigningPubKeyHex) route is in use; skipping the file-based signature verify and key_id assert"
       #     fi
 
+      # ── Fleet config-bundle signing pins (bundle-key-rotation WP03) ──────
+      # The harness pins a SET of ed25519 PUBLIC keys
+      # (core/fleet.fleetSigningPublicKeys: comma-separated, each entry 64
+      # hex chars = the raw 32-byte public key) and routes each bundle's
+      # signed key_id to one of them. Selected per env from repo Actions
+      # VARIABLES — public keys, deliberately variables and not secrets:
+      #   dev → FLEET_SIGNING_PUBKEYS_DEV   stage → FLEET_SIGNING_PUBKEYS_STAGE
+      #   prod → FLEET_SIGNING_PUBKEYS_PROD
+      # During a rotation the variable carries current+next (see
+      # docs/fleet-key-rotation.md). An EMPTY/unset variable does not fail
+      # the build: the binary ships with config distribution disabled (the
+      # pre-existing default) and this step emits a ::warning naming it.
+      # A MALFORMED entry fails the build — the harness would reject the
+      # whole set at runtime anyway, so catch it here.
+      #
+      # DATED (2026-10-06, owner: alec): secrets.FLEET_SIGNING_PUBKEY (the
+      # legacy single-key pin) is merged in as a fallback for ONE release.
+      # Drop it — and core/fleet.fleetSigningPublicKeyBytes — in the first
+      # release after the one that ships the per-env variables.
+      - name: resolve fleet signing pins
+        id: fleet-pins
+        shell: bash
+        env:
+          TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
+          PINS_DEV: ${{ vars.FLEET_SIGNING_PUBKEYS_DEV }}
+          PINS_STAGE: ${{ vars.FLEET_SIGNING_PUBKEYS_STAGE }}
+          PINS_PROD: ${{ vars.FLEET_SIGNING_PUBKEYS_PROD }}
+          LEGACY_PIN: ${{ secrets.FLEET_SIGNING_PUBKEY }}
+        run: |
+          set -euo pipefail
+          case "$TARGET_ENV" in
+            dev)   VAR=FLEET_SIGNING_PUBKEYS_DEV;   PINS="$PINS_DEV" ;;
+            stage) VAR=FLEET_SIGNING_PUBKEYS_STAGE; PINS="$PINS_STAGE" ;;
+            prod)  VAR=FLEET_SIGNING_PUBKEYS_PROD;  PINS="$PINS_PROD" ;;
+            *) echo "::error::unknown target env '$TARGET_ENV'"; exit 1 ;;
+          esac
+          # Whitespace is stripped so the value can never split the -ldflags
+          # argument; empty entries are dropped (the harness skips them too).
+          PINS="$(printf '%s' "$PINS" | tr -d '[:space:]')"
+          LEGACY="$(printf '%s' "$LEGACY_PIN" | tr -d '[:space:]')"
+          if [ -n "$LEGACY" ]; then
+            PINS="${PINS:+$PINS,}$LEGACY"
+          fi
+          CLEAN=""
+          IFS=',' read -r -a ENTRIES <<< "$PINS"
+          for e in "${ENTRIES[@]}"; do
+            [ -z "$e" ] && continue
+            if ! [[ "$e" =~ ^[0-9a-fA-F]{64}$ ]]; then
+              echo "::error::$VAR (or the legacy FLEET_SIGNING_PUBKEY secret) holds an entry that is not exactly 64 hex characters (${#e} chars) — the harness would reject the whole pin set"
+              exit 1
+            fi
+            CLEAN="${CLEAN:+$CLEAN,}$e"
+          done
+          if [ -z "$CLEAN" ]; then
+            echo "::warning::$VAR is empty/unset — this $TARGET_ENV build pins no fleet signing key, so fleet config distribution is DISABLED in it"
+          else
+            echo "fleet signing pins for $TARGET_ENV: $(tr ',' '\n' <<< "$CLEAN" | grep -c .) key(s) from $VAR"
+          fi
+          echo "pubkeys=$CLEAN" >> "$GITHUB_OUTPUT"
+
       - name: wails build
         shell: bash
         run: |
@@ -461,7 +522,7 @@ jobs:
           # platforms that don't need one.
           ARGS=(
             -platform "${{ matrix.wails_platform }}"
-            -ldflags "-X main.Version=${VERSION} -X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeyBytes=${{ secrets.FLEET_SIGNING_PUBKEY }}"
+            -ldflags "-X main.Version=${VERSION} -X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeys=${{ steps.fleet-pins.outputs.pubkeys }}"
             -trimpath
           )
           if [ "${{ runner.os }}" = "Linux" ]; then
@@ -577,7 +638,7 @@ jobs:
           set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
           wails build -platform ${{ matrix.wails_platform }} -nsis \
-            -ldflags "-X main.Version=${VERSION} -X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeyBytes=${{ secrets.FLEET_SIGNING_PUBKEY }}" \
+            -ldflags "-X main.Version=${VERSION} -X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeys=${{ steps.fleet-pins.outputs.pubkeys }}" \
             -trimpath
 
       - name: rename NSIS installer for clean asset name (windows-amd64 only)
