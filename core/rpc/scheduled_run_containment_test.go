@@ -41,6 +41,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/policy/blockedrequests"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
@@ -144,6 +145,7 @@ func (a *containmentAudit) blocked(t *testing.T) []contextaudit.BlockedPermissio
 }
 
 type containmentFixture struct {
+	runner   *chat.ChatRunner
 	store    scheduler.ScheduledChatStore
 	engine   *scheduler.ChatCronEngine
 	pool     *containmentPool
@@ -157,6 +159,13 @@ type containmentFixture struct {
 // buildContainmentFixture wires the production fire path over dataDir
 // (which may already hold a materialised upgrade snapshot).
 func buildContainmentFixture(t *testing.T, dataDir string) *containmentFixture {
+	t.Helper()
+	return buildContainmentFixtureWith(t, dataDir, nil, 10*time.Second)
+}
+
+// buildContainmentFixtureWith is buildContainmentFixture with the model
+// (nil = the default containmentModel) and dispatcher timeout exposed.
+func buildContainmentFixtureWith(t *testing.T, dataDir string, llm coreag.LLMProvider, timeout time.Duration) *containmentFixture {
 	t.Helper()
 	c, err := core.New(core.Options{DataDir: dataDir})
 	if err != nil {
@@ -187,6 +196,9 @@ func buildContainmentFixture(t *testing.T, dataDir string) *containmentFixture {
 
 	pool := &containmentPool{}
 	model := &containmentModel{}
+	if llm == nil {
+		llm = model
+	}
 	// A fresh graph per run: the runner's dials mutate the loaded graph,
 	// and two runs sharing one value race (production's loader parses per
 	// call too).
@@ -212,7 +224,7 @@ func buildContainmentFixture(t *testing.T, dataDir string) *containmentFixture {
 		MaxTurns:      func() int { return 25 },
 		Pool:          pool,
 		Perms:         chatPermsAdapter{inner: perms},
-		EnvDefaults:   func(env *coreag.Env) { env.LLM = model },
+		EnvDefaults:   func(env *coreag.Env) { env.LLM = llm },
 	})
 	if err != nil {
 		t.Fatalf("chat.New: %v", err)
@@ -227,7 +239,7 @@ func buildContainmentFixture(t *testing.T, dataDir string) *containmentFixture {
 		Bus:            bus,
 		DefaultProfile: func() string { return "test-profile" },
 		Containment:    registry,
-		Timeout:        10 * time.Second,
+		Timeout:        timeout,
 	})
 	cron, err := scheduler.NewChatCronEngine(context.Background(), scheduler.ChatCronEngineConfig{Store: store, Cedar: engine})
 	if err != nil {
@@ -237,7 +249,7 @@ func buildContainmentFixture(t *testing.T, dataDir string) *containmentFixture {
 	cron.Start()
 	t.Cleanup(cron.Stop)
 
-	return &containmentFixture{store: store, engine: cron, pool: pool, model: model, audit: audit, blocked: blocked, registry: registry, db: dataDir}
+	return &containmentFixture{runner: runner, store: store, engine: cron, pool: pool, model: model, audit: audit, blocked: blocked, registry: registry, db: dataDir}
 }
 
 // fireOnce creates a one-shot row due now, arms it through the engine's
@@ -659,5 +671,79 @@ func TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins(t *testing.
 	}
 	if rows := toolBlockedRows(t, blockedrequests.NewSQLiteStore(c.Storage())); len(rows) != 0 {
 		t.Fatalf("listing recorded blocked rows: %+v", rows)
+	}
+}
+
+// authThenToolsModel: turn 1 fails provider auth (the run pauses for key
+// rotation and never closes); after RedriveLastTurn it asks for
+// kenaz__alpha + kenaz__beta, then answers. Race-safe.
+type authThenToolsModel struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (m *authThenToolsModel) Generate(ctx context.Context, _ coreag.LLMRequest) (coreag.LLMResponse, error) {
+	m.mu.Lock()
+	m.calls++
+	n := m.calls
+	m.mu.Unlock()
+	switch n {
+	case 1:
+		return coreag.LLMResponse{}, &corellm.ErrProviderAuthFailed{Provider: "anthropic", ProfileID: "test-profile", ModelID: "m", Reason: "bad key"}
+	case 2:
+		return coreag.LLMResponse{
+			FinishReason: "tool_use",
+			ToolCalls: []coreag.ToolCallRequest{
+				{ID: "tu-a", Name: "kenaz__alpha", Arguments: `{}`},
+				{ID: "tu-b", Name: "kenaz__beta", Arguments: `{}`},
+			},
+		}, nil
+	}
+	if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+		sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: "done"})
+	}
+	return coreag.LLMResponse{Content: "done", FinishReason: "stop"}, nil
+}
+
+// TestScheduledRunContainment_RedriveAfterKeyRotationStaysContained (review
+// L4, pinned BEFORE the release fix): a contained model-created run pauses
+// on a provider auth failure (no terminal event), the dispatcher times out,
+// the user rotates the key and RedriveLastTurn re-runs the turn in the SAME
+// session — the redrive is still contained: alpha dispatches, beta does not.
+func TestScheduledRunContainment_RedriveAfterKeyRotationStaysContained(t *testing.T) {
+	sandboxUserConfigDir(t)
+	f := buildContainmentFixtureWith(t, t.TempDir(), &authThenToolsModel{}, 500*time.Millisecond)
+
+	hist := f.fireOnce(t, scheduler.ChatRunRecord{
+		ID:            "cr-redrive",
+		CreatedBy:     scheduler.ScheduledRunCreatedByModel,
+		ToolAllowlist: []string{"kenaz__alpha"},
+	})
+	if hist.Status != "failed" || hist.SessionID == "" {
+		t.Fatalf("history = %+v, want a timed-out failed run with a session", hist)
+	}
+	if !f.registry.Contained(hist.SessionID) {
+		t.Fatal("timed-out (auth-paused) run's session was released while its turn can still be redriven")
+	}
+
+	if _, err := f.runner.RedriveLastTurn(context.Background(), "test-profile"); err != nil {
+		t.Fatalf("RedriveLastTurn: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for len(f.pool.snapshot()) == 0 && len(toolBlockedRows(t, f.blocked)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("redrive never reached tool dispatch")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Wait for both calls to resolve one way or the other.
+	for len(f.pool.snapshot())+len(toolBlockedRows(t, f.blocked)) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("calls=%v blocked=%d", f.pool.snapshot(), len(toolBlockedRows(t, f.blocked)))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := f.pool.snapshot(); len(got) != 1 || got[0] != "kenaz__alpha" {
+		t.Fatalf("redriven turn dispatched %v, want only [kenaz__alpha] — the redrive escaped containment", got)
 	}
 }
