@@ -1816,6 +1816,7 @@ export namespace contextbootstrap {
 	    total_nodes_written: number;
 	    coverage_report?: CoverageEntry[];
 	    error_summary?: string;
+	    sharing_skipped?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new RunStatus(source);
@@ -1830,6 +1831,7 @@ export namespace contextbootstrap {
 	        this.total_nodes_written = source["total_nodes_written"];
 	        this.coverage_report = this.convertValues(source["coverage_report"], CoverageEntry);
 	        this.error_summary = source["error_summary"];
+	        this.sharing_skipped = source["sharing_skipped"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

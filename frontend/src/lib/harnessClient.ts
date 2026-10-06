@@ -3422,6 +3422,12 @@ export interface ContextBootstrapRunStatus {
     budget_limit: number;
   }>;
   error_summary?: string;
+  /**
+   * Why extracted nodes were not shared beyond this device — today always
+   * "personal_requires_share_consent": bootstrap context stays local until
+   * the user shares an entry from Knowledge › Curated (fleet contract WP04).
+   */
+  sharing_skipped?: string;
 }
 
 /** A user-declared trusted person, weighted higher in the confidence model. */

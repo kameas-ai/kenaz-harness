@@ -330,6 +330,9 @@ func (e *Engine) ApplyClarifications(ctx context.Context, items []ClarificationI
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 func (e *Engine) setStatus(s RunStatus) {
+	if r, ok := e.cfg.Writer.(SharingStatusReporter); ok && s.SharingSkipped == "" && s.RunID != "" {
+		s.SharingSkipped = r.SharingSkipReason()
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.status = s

@@ -1,5 +1,5 @@
 // skills_sync_test.go — httptest round-trip tests for PublishSkill,
-// InstallSkill, UninstallSkill, and ApplyMandatedSkills.
+// InstallSkill, UninstallSkill, and mandated skills via MandatedApplier.
 //
 // (fleet-skills-sync-01NDFSEX18 WP07)
 package fleet

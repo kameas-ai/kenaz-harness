@@ -20,7 +20,7 @@ import (
 
 func TestCatalogInstall_RefusesUnconsumedKinds(t *testing.T) {
 	for _, kind := range []corefleet.CatalogItemKind{
-		corefleet.CatalogKindWorkflow, corefleet.CatalogKindAgentPack, corefleet.CatalogKindBundle,
+		corefleet.CatalogKindWorkflow, corefleet.CatalogKindPack, corefleet.CatalogKindBundle,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

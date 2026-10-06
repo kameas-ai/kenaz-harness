@@ -27,15 +27,44 @@ import (
 type CatalogItemKind string
 
 const (
-	CatalogKindWorkflow  CatalogItemKind = "workflow"
-	CatalogKindAgentPack CatalogItemKind = "agent_pack"
-	CatalogKindBundle    CatalogItemKind = "bundle"
+	CatalogKindWorkflow CatalogItemKind = "workflow"
+	// CatalogKindPack is fleet's catalog kind for an agent pack. The wire
+	// string is "pack" (fleet service/handlers_catalog.go catalogKinds; DB
+	// CHECK in migration 0061); the harness's capability kind stays
+	// "agent_pack" (install.KindAgentPack, the UI's "Agent packs") and is
+	// translated at the catalog boundary (CatalogKindForCapability /
+	// CapabilityKindForCatalog). Sending "agent_pack" got 400 invalid_kind.
+	CatalogKindPack   CatalogItemKind = "pack"
+	CatalogKindBundle CatalogItemKind = "bundle"
 	// CatalogKindSkill is the catalog kind for user slash-command skills
 	// (fleet-skills-sync-01NDFSEX18). The wire contract is identical to
 	// other catalog kinds (§2a + §3 of contract-harness-sync.md); only
 	// the payload encoding differs (slashcmd.Skill JSON, ≤ 256KB).
 	CatalogKindSkill CatalogItemKind = "skill"
 )
+
+// capabilityKindAgentPack is the harness capability kind for an agent pack
+// (install.KindAgentPack — not imported to keep core/fleet free of
+// core/install).
+const capabilityKindAgentPack = "agent_pack"
+
+// CatalogKindForCapability maps a harness capability kind to fleet's catalog
+// kind ("agent_pack" → "pack"; the others are identical strings).
+func CatalogKindForCapability(kind string) CatalogItemKind {
+	if kind == capabilityKindAgentPack {
+		return CatalogKindPack
+	}
+	return CatalogItemKind(kind)
+}
+
+// CapabilityKindForCatalog maps fleet's catalog kind to the harness
+// capability kind ("pack" → "agent_pack").
+func CapabilityKindForCatalog(kind CatalogItemKind) string {
+	if kind == CatalogKindPack {
+		return capabilityKindAgentPack
+	}
+	return string(kind)
+}
 
 // CatalogVisibility controls who can see a catalog item.
 type CatalogVisibility string
@@ -46,13 +75,19 @@ const (
 	CatalogVisOrgPublic CatalogVisibility = "org_public"
 )
 
-// CatalogItem is one published item returned by List or used in publish
-// round-trips. PayloadBytes is the raw (opaque) content; Signature is the
-// base64-encoded ed25519 signature produced by the publishing device's
+// CatalogItem is one published item returned by List or fetch, or used in
+// publish round-trips. PayloadBytes is the raw (opaque) content; Signature is
+// the base64-encoded ed25519 signature produced by the publishing device's
 // DeviceSigner. Both fields may be empty on List responses (metadata-only
 // variant).
+//
+// Decoded from fleet's CatalogItemMetaAPI (list items) and
+// CatalogFetchResponse (fetch), which key the id as "id"
+// (service/handlers_catalog.go:115-157). "catalog_id" is ONLY the publish
+// response's key (publishResponse below) — reading it here left every
+// listed / fetched item with an empty ID (audit §0-C).
 type CatalogItem struct {
-	ID          string            `json:"catalog_id"`
+	ID          string            `json:"id"`
 	Kind        CatalogItemKind   `json:"kind"`
 	Slug        string            `json:"slug"`
 	Version     string            `json:"version"`
@@ -183,6 +218,13 @@ func (c *Client) Publish(
 	}, nil
 }
 
+// catalogListResponse is fleet's CatalogListResponse envelope
+// (service/handlers_catalog.go:110-112) — {"items": [...]}, never a bare
+// array.
+type catalogListResponse struct {
+	Items []CatalogItem `json:"items"`
+}
+
 // List fetches catalog metadata from GET /api/v1/catalog/list.
 // Only metadata is returned (no PayloadBytes).
 func (c *Client) List(ctx context.Context, filters CatalogFilter) ([]CatalogItem, error) {
@@ -212,11 +254,14 @@ func (c *Client) List(ctx context.Context, filters CatalogFilter) ([]CatalogItem
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("fleet/catalog: list: status %d: %s", resp.StatusCode, body)
 	}
-	var items []CatalogItem
-	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+	var lr catalogListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil {
 		return nil, fmt.Errorf("fleet/catalog: list: decode: %w", err)
 	}
-	return items, nil
+	if lr.Items == nil {
+		lr.Items = []CatalogItem{}
+	}
+	return lr.Items, nil
 }
 
 // Unpublish removes a catalog item via DELETE /api/v1/catalog/{id}.

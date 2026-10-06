@@ -12,8 +12,8 @@
 // Every adapter is nil-safe and degrades gracefully when fleet is disabled:
 //   - RecipeSource: fleet recipe when signed-in + CapContextBootstrap, else
 //     the embedded LocalRecipeSource.
-//   - ContextWriter: always writes nodes to the local Library; the fleet
-//     /context/push + run-PATCH legs no-op when the fleet client is unavailable.
+//   - ContextWriter: writes nodes to the local Library only (no fleet push —
+//     WP04, see WriteNodes); the run-PATCH leg no-ops when fleet is unavailable.
 //   - ProgressSink: always emits to the Wails broker; the fleet run-PATCH leg
 //     no-ops when fleet is unavailable.
 //
@@ -28,7 +28,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"time"
@@ -123,28 +122,21 @@ func mapFleetRecipe(w *corefleet.BootstrapRecipeWire) *contextbootstrap.Bootstra
 // ─── WP03: ContextWriter adapter ──────────────────────────────────────────────
 
 // bootstrapContextWriter persists extracted nodes to the LOCAL Context Library
-// AND (best-effort) pushes them to fleet's /context/push with
-// source_kind + provenance + confidence. Sync() PATCHes run progress.
+// (never to fleet's /context/push — WP04). Sync() PATCHes run progress.
 //
 // The active fleet run id is set by the RPC layer before each run via
 // SetRunID so the Sync leg PATCHes the right run.
 type bootstrapContextWriter struct {
-	lib          *corecontexts.Library
-	fleetClient  *corefleet.Client
-	fleetBoot    *corefleet.BootstrapClient
-	auditEmitter contextaudit.Emitter
+	lib       *corecontexts.Library
+	fleetBoot *corefleet.BootstrapClient
 
 	mu    sync.RWMutex // guards runID; write on SetRunID, read during dispatch/Sync
 	runID string       // current fleet run id; empty when fleet path is disabled
 
-	// contextSyncedOnce guards the one-time PATCH /me/onboarding {context_synced:true}
-	// fired after the first successful fleet push (mirrors the ContextGraphSyncer
-	// first-push hook, which does not fire for bootstrap's direct /context/push).
-	contextSyncedOnce sync.Once
 }
 
-func newBootstrapContextWriter(lib *corecontexts.Library, fleetClient *corefleet.Client, fleetBoot *corefleet.BootstrapClient, auditEmitter contextaudit.Emitter) *bootstrapContextWriter {
-	return &bootstrapContextWriter{lib: lib, fleetClient: fleetClient, fleetBoot: fleetBoot, auditEmitter: auditEmitter}
+func newBootstrapContextWriter(lib *corecontexts.Library, fleetBoot *corefleet.BootstrapClient) *bootstrapContextWriter {
+	return &bootstrapContextWriter{lib: lib, fleetBoot: fleetBoot}
 }
 
 // SetRunID records the fleet run id for subsequent Sync PATCH calls.
@@ -156,16 +148,24 @@ func (w *bootstrapContextWriter) SetRunID(runID string) {
 
 // WriteNodes implements contextbootstrap.ContextWriter. It writes each node to
 // the local Context Library as a markdown file with YAML frontmatter carrying
-// provenance (source_kind, source_ref, confidence, corroborations), then
-// best-effort pushes each node to fleet /context/push.
+// provenance (source_kind, source_ref, confidence, corroborations).
+//
+// There is NO fleet push leg (owner wire-contract ruling 2026-10-06, WP04).
+// The old best-effort /context/push sent every extracted node with
+// classification "personal", which fleet refuses for the whole batch
+// (personal content never leaves the device), so it could not succeed — and
+// bootstrap has no consent surface that could make a team/org share
+// legitimate. Bootstrap-extracted context therefore stays local; a user
+// shares an entry the same way as any other Curated file (Knowledge ›
+// Curated › Share, with its per-entry confirm). The run status says so
+// (SharingSkipped = BootstrapShareSkippedReason).
 //
 // Privacy: node bodies/titles are never logged; only counts.
-func (w *bootstrapContextWriter) WriteNodes(ctx context.Context, nodes []contextbootstrap.ExtractedNode) error {
+func (w *bootstrapContextWriter) WriteNodes(_ context.Context, nodes []contextbootstrap.ExtractedNode) error {
 	if len(nodes) == 0 {
 		return nil
 	}
 	localWritten := 0
-	pushed := 0
 	for _, n := range nodes {
 		if w.lib != nil {
 			if err := w.lib.Save(bootstrapNodePath(n), renderNodeMarkdown(n)); err != nil {
@@ -175,120 +175,21 @@ func (w *bootstrapContextWriter) WriteNodes(ctx context.Context, nodes []context
 				localWritten++
 			}
 		}
-		// Fleet push leg — best-effort, gated on the bootstrap capability.
-		if w.pushNodeToFleet(ctx, n) {
-			pushed++
-		}
 	}
-	logging.L().Info("contextbootstrap.write.done", "local_written", localWritten, "fleet_pushed", pushed, "total", len(nodes))
+	logging.L().Info("contextbootstrap.write.done", "local_written", localWritten, "fleet_pushed", 0,
+		"fleet_share_skipped", BootstrapShareSkippedReason, "total", len(nodes))
 	return nil
 }
 
-// pushNodeToFleet pushes one node to fleet /context/push with source_kind +
-// provenance + confidence in metadata. Returns true on a successful push.
-// Personal-classification is used (bootstrap-extracted context is personal by
-// default — FR-008). Never includes credentials.
-func (w *bootstrapContextWriter) pushNodeToFleet(ctx context.Context, n contextbootstrap.ExtractedNode) bool {
-	if w.fleetBoot == nil || !w.fleetBoot.Enabled() || w.fleetClient == nil || w.fleetClient.IsNop() {
-		return false
-	}
-	meta := bootstrapNodeMetadata(n)
-	body := struct {
-		Nodes []bootstrapPushNode `json:"nodes"`
-	}{
-		Nodes: []bootstrapPushNode{{
-			ID:             bootstrapNodeID(n),
-			Kind:           n.Kind,
-			Title:          n.Title,
-			Body:           n.Body,
-			Metadata:       meta,
-			Classification: "personal",
-			SourceKind:     n.SourceKind,
-			Provenance:     n.ConnectorID,
-			Confidence:     n.Confidence,
-			Version:        1,
-		}},
-	}
-	resp, err := w.fleetClient.PostJSON(ctx, "/api/v1/context/push", body)
-	if err != nil {
-		logging.L().Warn("contextbootstrap.push.failed", "err_class", classifyWiringErr(err))
-		return false
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode/100 != 2 {
-		logging.L().Warn("contextbootstrap.push.non2xx", "status", resp.StatusCode)
-		return false
-	}
-	// kenaz-fleet PR #173: a 200 may still reject the node per-item
-	// (`rejected[]`, reason not_permitted — the id belongs to another user
-	// or org). A rejected node is a failure: record a rejection, never a
-	// publish, and don't count it toward onboarding's context_synced.
-	// Absent field (current server) = accepted, as before.
-	var pushRes corefleet.ContextPushResult
-	if raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20)); rerr == nil && len(raw) > 0 {
-		_ = json.Unmarshal(raw, &pushRes) // unparseable body: keep the prior "2xx = accepted" reading
-	}
-	nodeID := bootstrapNodeID(n)
-	for _, r := range pushRes.Rejected {
-		if r.Kind == "node" && r.ID == nodeID {
-			logging.L().Warn("contextbootstrap.push.rejected", "reason", r.Reason)
-			contextaudit.MustEmit(ctx, w.auditEmitter, contextaudit.KindFleetContextPushRejected,
-				contextaudit.FleetContextPushRejectedPayload{
-					NodeID:         nodeID,
-					Classification: "personal",
-					Reason:         r.Reason,
-					Version:        1,
-				}, time.Now())
-			return false
-		}
-	}
-	// Audit: reuse KindFleetContextPublished (no title/body — only id + class).
-	contextaudit.MustEmit(ctx, w.auditEmitter, contextaudit.KindFleetContextPublished,
-		contextaudit.FleetContextPublishedPayload{
-			NodeID:         bootstrapNodeID(n),
-			Classification: "personal",
-			Version:        1,
-		}, time.Now())
+// BootstrapShareSkippedReason names why bootstrap never pushes to fleet:
+// extracted context is personal, and only an explicit per-entry Share (the
+// Curated consent flow) may make it team/org shared.
+const BootstrapShareSkippedReason = "personal_requires_share_consent"
 
-	// After the FIRST successful push, PATCH /me/onboarding {context_synced:true}
-	// exactly once. The ContextGraphSyncer first-push hook does not fire for the
-	// bootstrap engine's direct /context/push calls, so we own the signal here.
-	//
-	// NOTE: a second PATCH /me/onboarding {context_synced:true} may also fire
-	// from ContextGraphSyncer.SetFirstPushHook (api.go ~2043) when the regular
-	// context-graph sync path runs its first push. Fleet treats context_synced as
-	// advance-only/idempotent, so the double-PATCH is harmless.
-	w.contextSyncedOnce.Do(func() {
-		client := w.fleetClient
-		go func() {
-			if client == nil || client.IsNop() {
-				return
-			}
-			if perr := client.PatchOnboardingState(context.Background(),
-				corefleet.OnboardingStateWire{Schema: 1, ContextSynced: true}); perr != nil {
-				logging.L().Warn("contextbootstrap.context_synced.patch_failed", "err_class", classifyWiringErr(perr))
-			} else {
-				logging.L().Info("contextbootstrap.context_synced.patch_ok")
-			}
-		}()
-	})
-	return true
-}
-
-// bootstrapPushNode is the /context/push node shape with the migration-0094
-// provenance fields (source_kind, provenance, confidence). Kept local so the
-// engine never sees a fleet type.
-type bootstrapPushNode struct {
-	ID             string          `json:"id"`
-	Kind           string          `json:"kind"`
-	Title          string          `json:"title"`
-	Body           string          `json:"body"`
-	Metadata       json.RawMessage `json:"metadata,omitempty"`
-	Classification string          `json:"classification"`
-	SourceKind     string          `json:"source_kind,omitempty"`
-	Provenance     string          `json:"provenance,omitempty"`
-	Confidence     float64         `json:"confidence,omitempty"`
-	Version        int             `json:"version"`
+// SharingSkipReason implements contextbootstrap.SharingStatusReporter: the
+// run status carries the named reason no extracted node was shared.
+func (w *bootstrapContextWriter) SharingSkipReason() string {
+	return BootstrapShareSkippedReason
 }
 
 // Sync implements contextbootstrap.ContextWriter. It PATCHes the fleet run's
@@ -606,7 +507,7 @@ func newContextBootstrapAPI(d contextBootstrapDeps) *contextBootstrapImpl {
 
 	fleetBoot := corefleet.NewBootstrapClient(d.fleetClient, d.caps)
 	recipe := newBootstrapRecipeSource(fleetBoot)
-	writer := newBootstrapContextWriter(d.lib, d.fleetClient, fleetBoot, d.audit)
+	writer := newBootstrapContextWriter(d.lib, fleetBoot)
 	progress := newBootstrapProgressSink(d.broker, fleetBoot)
 	pool := newBootstrapMCPPool(d.pool)
 	model := newBootstrapModelCaller(d.model)
@@ -901,16 +802,6 @@ func (a *contextBootstrapImpl) Health(ctx context.Context) (corefleet.ContextHea
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-// bootstrapNodeID derives a stable-ish id for an extracted node from its
-// connector + source-ref + title. Never a credential.
-func bootstrapNodeID(n contextbootstrap.ExtractedNode) string {
-	ref := n.SourceRef
-	if ref == "" {
-		ref = n.Title
-	}
-	return "ctxb-" + sanitizeSlug(n.ConnectorID) + "-" + sanitizeSlug(ref)
-}
-
 // bootstrapNodePath is the local Library path for a node: bootstrap/<kind>/<slug>.md.
 func bootstrapNodePath(n contextbootstrap.ExtractedNode) string {
 	kind := sanitizeSlug(n.Kind)
@@ -950,26 +841,6 @@ func renderNodeMarkdown(n contextbootstrap.ExtractedNode) string {
 	b.WriteString(n.Body)
 	b.WriteString("\n")
 	return b.String()
-}
-
-// bootstrapNodeMetadata builds the /context/push metadata blob (provenance).
-func bootstrapNodeMetadata(n contextbootstrap.ExtractedNode) json.RawMessage {
-	m := map[string]any{
-		"source_kind":    n.SourceKind,
-		"connector":      n.ConnectorID,
-		"confidence":     n.Confidence,
-		"corroborations": n.Corroborations,
-		"asserted":       n.IsAsserted,
-		"extracted_by":   "context_bootstrap",
-	}
-	if n.SourceRef != "" {
-		m["source_ref"] = n.SourceRef
-	}
-	raw, err := json.Marshal(m)
-	if err != nil {
-		return nil
-	}
-	return raw
 }
 
 // yamlScalar quotes a YAML scalar defensively (single-line values only).

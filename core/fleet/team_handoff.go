@@ -87,12 +87,19 @@ func (h *HandoffHandler) ListTeam(ctx context.Context) ([]TeamMember, error) {
 		return nil, ErrFleetDisabled
 	}
 
-	resp, err := h.client.Get(ctx, "/api/v1/team/members")
+	if err := h.client.endpointUnsupported(FeatureTeamMembers); err != nil {
+		return nil, err
+	}
+	const teamMembersPath = "/api/v1/team/members"
+	resp, err := h.client.Get(ctx, teamMembersPath)
 	if err != nil {
 		return nil, fmt.Errorf("fleet: list team: %w", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), body) {
+		return nil, h.client.markEndpointUnsupported(FeatureTeamMembers, teamMembersPath)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fleet: list team: status %d", resp.StatusCode)
 	}
@@ -294,12 +301,21 @@ type publicKeyResponse struct {
 
 // fetchRecipientPublicKey retrieves the recipient's X25519 public key from fleet.
 func (h *HandoffHandler) fetchRecipientPublicKey(ctx context.Context, recipientUserID string) ([]byte, error) {
-	resp, err := h.client.Get(ctx, "/api/v1/identity/public-key?user_id="+recipientUserID)
+	if err := h.client.endpointUnsupported(FeatureIdentityPublicKey); err != nil {
+		return nil, err
+	}
+	const publicKeyPath = "/api/v1/identity/public-key"
+	resp, err := h.client.Get(ctx, publicKeyPath+"?user_id="+recipientUserID)
 	if err != nil {
 		return nil, fmt.Errorf("fleet: fetch public key: %w", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	// A plain mux 404 means the ROUTE does not exist (latch); a JSON 404
+	// is the application saying this recipient has no key.
+	if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), body) {
+		return nil, h.client.markEndpointUnsupported(FeatureIdentityPublicKey, publicKeyPath)
+	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, ErrHandoffRecipientNotFound
 	}

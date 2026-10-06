@@ -1742,7 +1742,7 @@ type FleetPolicyPublishedPayload struct {
 type FleetCatalogPublishedPayload struct {
 	// CatalogID is the server-assigned catalog item ID.
 	CatalogID string `json:"catalog_id"`
-	// Kind is the item kind (workflow, agent_pack, bundle).
+	// Kind is the fleet catalog item kind (workflow, pack, bundle, skill).
 	Kind string `json:"kind"`
 	// Slug is the human-readable catalog slug.
 	Slug string `json:"slug,omitempty"`

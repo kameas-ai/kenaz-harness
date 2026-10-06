@@ -250,7 +250,7 @@ func (a *AuditArchiver) ArchiveNow(ctx context.Context) error {
 	if a.chainErr.Load() {
 		return errors.New("fleet/audit_archive: archive halted due to chain-break; operator action required")
 	}
-	if a.unsupported.Load() {
+	if a.isUnsupported() {
 		return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
 	}
 	if !a.running.Load() {
@@ -463,8 +463,18 @@ func (a *AuditArchiver) poster() AuditHTTPPoster {
 }
 
 // post signs and POSTs the batch JSON body to the fleet endpoint.
-func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
+// isUnsupported reports the audit_append latch: the archiver's own flag OR
+// the Client's resettable feature latch (WP04 — so a sign-in reset that
+// clears the client latch is honoured by a new archiver run too).
+func (a *AuditArchiver) isUnsupported() bool {
 	if a.unsupported.Load() {
+		return true
+	}
+	return a.cfg.Client != nil && a.cfg.Client.endpointUnsupported(FeatureAuditAppend) != nil
+}
+
+func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
+	if a.isUnsupported() {
 		return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
 	}
 	resp, err := a.poster().Post(ctx, auditArchiveEndpoint, "application/json", bytes.NewReader(body))
@@ -478,11 +488,16 @@ func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
 	if resp.StatusCode == http.StatusNotFound {
 		peek, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), peek) {
-			if a.unsupported.CompareAndSwap(false, true) {
+			if a.unsupported.CompareAndSwap(false, true) && a.cfg.Client == nil {
 				logging.L().Info("fleet.endpoint.unsupported",
 					"feature", FeatureAuditAppend,
 					"endpoint", auditArchiveEndpoint,
 					"action", "stop_retrying_keep_local")
+			}
+			if a.cfg.Client != nil {
+				// Latch on the Client too (logs once there), so every
+				// audit_append caller shares one resettable latch.
+				return a.cfg.Client.markEndpointUnsupported(FeatureAuditAppend, auditArchiveEndpoint)
 			}
 			return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
 		}

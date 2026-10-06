@@ -30,7 +30,8 @@ func listServer(t *testing.T, items []corefleet.CatalogItem) *corefleet.Client {
 			http.NotFound(w, r)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(items)
+		// Fleet's real list shape: {"items":[...]} (handlers_catalog.go:110).
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
 	}))
 	t.Cleanup(srv.Close)
 	corefleet.SeedFleetConfigForTesting(srv.URL, corefleet.FleetConfig{
@@ -138,5 +139,33 @@ func TestCatalogList_NonSkillResidueStillReported(t *testing.T) {
 	}
 	if !byID(t, views)["wf-1"].Installed {
 		t.Error("workflow residue not reported; Uninstall (residue cleanup) would be unreachable")
+	}
+}
+
+// WP04: fleet's catalog kind for an agent pack is "pack"; the frontend's
+// capability kind stays "agent_pack". The view translates both ways, and
+// Uninstall removes residue under either spelling.
+func TestCatalogList_PackKindTranslatedAtTheBoundary(t *testing.T) {
+	client := listServer(t, []corefleet.CatalogItem{
+		{ID: "p-1", Kind: corefleet.CatalogKindPack, Slug: "my-pack", Version: "1.0.0"},
+	})
+	dataDir := t.TempDir()
+	api := NewAPI(client, nil, dataDir)
+	views, err := api.Catalog_List(context.Background(), CatalogFilter{})
+	if err != nil {
+		t.Fatalf("Catalog_List: %v", err)
+	}
+	if got := byID(t, views)["p-1"].Kind; got != "agent_pack" {
+		t.Fatalf("view kind = %q, want agent_pack", got)
+	}
+	seedResidue(t, dataDir, corefleet.CatalogKindPack, "p-1", "1.0.0")
+	seedResidue(t, dataDir, corefleet.CatalogItemKind("agent_pack"), "p-1", "1.0.0")
+	if err := api.Catalog_Uninstall(context.Background(), "agent_pack", "p-1", "1.0.0"); err != nil {
+		t.Fatalf("Catalog_Uninstall: %v", err)
+	}
+	for _, k := range []string{"pack", "agent_pack"} {
+		if _, err := os.Stat(filepath.Join(dataDir, "installed", k, "p-1@1.0.0")); !os.IsNotExist(err) {
+			t.Errorf("residue under %s/ survived uninstall", k)
+		}
 	}
 }

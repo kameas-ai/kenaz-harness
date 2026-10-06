@@ -42,8 +42,8 @@ func catalogInstallRefusal(kind CatalogItemKind) error {
 	switch kind {
 	case CatalogKindWorkflow:
 		return fmt.Errorf("%w: workflow — nothing on this device would load the download; install the workflow from Capabilities (Workflows), which installs org-catalog workflows and shipped templates through the install framework", ErrCatalogKindNotInstallable)
-	case CatalogKindAgentPack:
-		return fmt.Errorf("%w: agent_pack — nothing on this device would load the download; add agent profiles to the agents folder in your profile directory instead", ErrCatalogKindNotInstallable)
+	case CatalogKindPack:
+		return fmt.Errorf("%w: agent pack — nothing on this device would load the download; add agent profiles to the agents folder in your profile directory instead", ErrCatalogKindNotInstallable)
 	case CatalogKindBundle:
 		return fmt.Errorf("%w: bundle — nothing on this device would load the download; install a bundle from Settings › Integrations › Bundles instead", ErrCatalogKindNotInstallable)
 	case CatalogKindSkill:

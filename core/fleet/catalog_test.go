@@ -16,6 +16,48 @@ import (
 )
 
 // ── fake fleet catalog server ─────────────────────────────────────────────────
+//
+// The fake speaks fleet's REAL wire shapes (WP04): before, it encoded the
+// harness's own CatalogItem as a bare array — exactly the shape the harness
+// decoded — which hid that fleet sends {"items":[...]} keyed "id" (audit
+// §0-C). The structs below mirror kenaz-fleet service/handlers_catalog.go.
+
+// fleetCatalogKinds mirrors handlers_catalog.go:66-71 catalogKinds; publish
+// of any other kind is 400 invalid_kind.
+var fleetCatalogKinds = map[string]bool{"workflow": true, "pack": true, "bundle": true, "skill": true}
+
+// fleetCatalogListResponse mirrors handlers_catalog.go:110-112.
+type fleetCatalogListResponse struct {
+	Items []fleetCatalogItemMeta `json:"items"`
+}
+
+// fleetCatalogItemMeta mirrors handlers_catalog.go:115-133 CatalogItemMetaAPI.
+type fleetCatalogItemMeta struct {
+	ID          string    `json:"id"`
+	OwnerUserID string    `json:"owner_user_id"`
+	Kind        string    `json:"kind"`
+	Slug        string    `json:"slug"`
+	Version     string    `json:"version"`
+	Visibility  string    `json:"visibility"`
+	Description string    `json:"description"`
+	Signature   string    `json:"signature"`
+	Mandated    bool      `json:"mandated"`
+	PublishedAt time.Time `json:"published_at"`
+}
+
+// fleetCatalogFetchResponse mirrors handlers_catalog.go:135-157 CatalogFetchResponse.
+type fleetCatalogFetchResponse struct {
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"`
+	Slug        string    `json:"slug"`
+	Version     string    `json:"version"`
+	Visibility  string    `json:"visibility"`
+	Description string    `json:"description"`
+	Payload     []byte    `json:"payload"`
+	Signature   string    `json:"signature"`
+	Mandated    bool      `json:"mandated"`
+	PublishedAt time.Time `json:"published_at"`
+}
 
 type fakeCatalogServer struct {
 	published []publishRequest
@@ -32,6 +74,12 @@ func (f *fakeCatalogServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var req publishRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !fleetCatalogKinds[string(req.Kind)] {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"code":"invalid_kind","message":"kind must be one of workflow, pack, bundle, skill"}`))
 			return
 		}
 		f.published = append(f.published, req)
@@ -59,11 +107,20 @@ func (f *fakeCatalogServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/catalog/list":
-		var out []CatalogItem
+		if k := r.URL.Query().Get("kind"); k != "" && !fleetCatalogKinds[k] {
+			w.WriteHeader(http.StatusBadRequest) // handlers_catalog.go: invalid kind filter
+			return
+		}
+		out := fleetCatalogListResponse{Items: []fleetCatalogItemMeta{}}
 		for _, it := range f.items {
-			cp := it
-			cp.PayloadBytes = nil // metadata only on list
-			out = append(out, cp)
+			if k := r.URL.Query().Get("kind"); k != "" && string(it.Kind) != k {
+				continue
+			}
+			out.Items = append(out.Items, fleetCatalogItemMeta{
+				ID: it.ID, Kind: string(it.Kind), Slug: it.Slug, Version: it.Version,
+				Visibility: string(it.Visibility), Description: it.Description,
+				Signature: it.Signature, PublishedAt: it.PublishedAt,
+			})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(out)
@@ -72,7 +129,11 @@ func (f *fakeCatalogServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		key := r.URL.Path[len("/api/v1/catalog/"):]
 		if it, ok := f.items[key]; ok {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(it)
+			_ = json.NewEncoder(w).Encode(fleetCatalogFetchResponse{
+				ID: it.ID, Kind: string(it.Kind), Slug: it.Slug, Version: it.Version,
+				Visibility: string(it.Visibility), Description: it.Description,
+				Payload: it.PayloadBytes, Signature: it.Signature, PublishedAt: it.PublishedAt,
+			})
 		} else {
 			http.NotFound(w, r)
 		}
@@ -147,7 +208,7 @@ func TestCatalog_ListAfterPublish(t *testing.T) {
 
 	payload := []byte("pack-content")
 	_, err := c.Publish(context.Background(), signer,
-		CatalogKindAgentPack, "test-pack", "0.1.0", "desc", CatalogVisTeam, payload)
+		CatalogKindPack, "test-pack", "0.1.0", "desc", CatalogVisTeam, payload)
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -157,7 +218,12 @@ func TestCatalog_ListAfterPublish(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	if len(items) == 0 {
-		t.Error("expected at least one item in list")
+		t.Fatal("expected at least one item in list")
+	}
+	// List items are keyed "id" on the wire; the ID must survive the decode
+	// (it arrived empty when the harness read "catalog_id").
+	if items[0].ID != "test-pack-id" || items[0].Kind != CatalogKindPack {
+		t.Errorf("list item = %+v, want id test-pack-id kind pack", items[0])
 	}
 	// Verify metadata-only: list items must not carry payload.
 	for _, it := range items {
@@ -185,7 +251,7 @@ func TestCatalog_Install_RefusesEveryKind(t *testing.T) {
 	signer, _ := NewDeviceSigner(t.TempDir())
 
 	for _, kind := range []CatalogItemKind{
-		CatalogKindWorkflow, CatalogKindAgentPack, CatalogKindBundle, CatalogKindSkill,
+		CatalogKindWorkflow, CatalogKindPack, CatalogKindBundle, CatalogKindSkill,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			item, err := c.Publish(context.Background(), signer,
@@ -460,5 +526,37 @@ func TestCatalog_Uninstall_RefusesTraversal(t *testing.T) {
 	}
 	if err := c.Uninstall("", CatalogKindWorkflow, "a", "1"); err == nil {
 		t.Error("Uninstall with empty dataDir must refuse (it would resolve against the working directory)")
+	}
+}
+
+// TestCatalog_List_DecodesFleetEnvelope pins the exact fleet list body
+// (service/handlers_catalog.go:110-133): an {"items":[...]} envelope keyed
+// "id". A bare array (the old fake's shape) is a decode error.
+func TestCatalog_List_DecodesFleetEnvelope(t *testing.T) {
+	body := `{"items":[{"id":"7e3d2c1b-0f9e-4a6c-9b8d-12a3b4c5d6e7","owner_user_id":"u","kind":"pack","slug":"p","version":"1.0.0","visibility":"team","description":"d","signature":"","mandated":false,"published_at":"2026-10-06T00:00:00Z","mandated_reviewed":false}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("kind") == "agent_pack" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
+	c := makeTestClient(t, srv.URL)
+	items, err := c.List(context.Background(), CatalogFilter{Kind: CatalogKindForCapability("agent_pack")})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "7e3d2c1b-0f9e-4a6c-9b8d-12a3b4c5d6e7" || items[0].Kind != CatalogKindPack {
+		t.Fatalf("items = %+v", items)
+	}
+	if CapabilityKindForCatalog(items[0].Kind) != "agent_pack" || CatalogKindForCapability("agent_pack") != "pack" {
+		t.Error("pack <-> agent_pack translation wrong")
+	}
+	var bare []CatalogItem
+	if err := json.Unmarshal([]byte(body), &bare); err == nil {
+		t.Error("fixture sanity: the envelope must not decode as a bare array")
 	}
 }

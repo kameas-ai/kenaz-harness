@@ -404,6 +404,14 @@ research/pull-idempotency-audit-2026-10-05.md:
 
 ### 2026-10-05 (fix/fleet-contract-truth review R3) · bootstrap node ids are not user-scoped — org-wide collisions become per-item rejections under fleet PR #173
 
+> **CLOSED 2026-10-06 (fleet wire-contract WP04):** the bootstrap fleet push
+> leg was removed — it pushed classification "personal", which fleet always
+> refuses, and bootstrap has no share-consent surface. `bootstrapNodeID` is
+> deleted; extracted context stays local (RunStatus.SharingSkipped =
+> `personal_requires_share_consent`) and is shared per entry through
+> Knowledge › Curated, whose ids are per-install UUIDv5s (core/fleet/wire_id.go).
+> The text below is historical.
+
 `bootstrapNodeID` (`core/rpc/contextbootstrap_wiring.go`) is
 `"ctxb-" + connector + "-" + sourceRef` — deterministic per source item but
 NOT scoped to the user. Two users in one org who bootstrap the same shared
