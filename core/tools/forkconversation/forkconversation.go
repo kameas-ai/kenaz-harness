@@ -130,9 +130,7 @@ type Forker interface {
 type Options struct {
 	Forker          Forker
 	SessionResolver func(ctx context.Context) string
-	// TurnSpanResolver defaults to toolloop.TurnSpanIDFromContext.
-	TurnSpanResolver func(ctx context.Context) string
-	Logger           *slog.Logger
+	Logger          *slog.Logger
 }
 
 // Tool implements kenaz__fork_conversation. Safe for concurrent use.
@@ -154,10 +152,10 @@ func New(opts Options) *Tool {
 	if resolver == nil {
 		resolver = toolloop.SessionIDFromContext
 	}
-	spanResolver := opts.TurnSpanResolver
-	if spanResolver == nil {
-		spanResolver = toolloop.TurnSpanIDFromContext
-	}
+	// The live turn span comes from the execution context only
+	// (toolloop.WithTurnSpanID, attached by the kernel adapter) — tests
+	// control it the same way, so there is no injection hook to drift.
+	spanResolver := toolloop.TurnSpanIDFromContext
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()

@@ -370,3 +370,16 @@ github.com/kameas-ai/kenaz-harness/core/workflows/scheduler.Config.Dispatcher
 # at core/workflows/scheduler/cron_scheduler.go:88: Config.Dispatcher (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
+
+github.com/kameas-ai/kenaz-harness/core/tools/forkconversation.Options.SessionResolver
+# at core/tools/forkconversation/forkconversation.go:132: Options.SessionResolver (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-10-05 test seam, same class as readcontextfile.Options.SessionResolver:
+# production relies on the nil -> toolloop.SessionIDFromContext default (the
+# security-relevant path); unit tests inject a fake resolver. Owner: the
+# model-harness-toolset WP04 foundation, which standardises tool Options.
+
+github.com/kameas-ai/kenaz-harness/core/tools/forkconversation.Options.Logger
+# at core/tools/forkconversation/forkconversation.go:133: Options.Logger (pointer) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-10-05 test seam, same class as saveartifact.Options.Logger: production
+# relies on the nil -> slog.Default() fallback; tests inject a capture
+# logger. Owner: model-harness-toolset WP04.
