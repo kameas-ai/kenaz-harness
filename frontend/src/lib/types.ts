@@ -3726,6 +3726,9 @@ export interface BranchCreateOptions {
   /**
    * creationPath is "explicit" | "edit_resend" | "unknown". Set by the
    * "Branch from this turn" menu item. Defaults to "unknown" when unset.
+   * The backend also records "auto_act" and "model_tool", but only from
+   * its own internal callers — Branches_Create coerces either to
+   * "unknown" when the client sends it.
    */
   creationPath?: string;
   title?: string;

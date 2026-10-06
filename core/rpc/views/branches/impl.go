@@ -40,6 +40,25 @@ var ErrHandoffSeedFailed = errors.New("branches: branch created but handoff seed
 // human "Branch from this turn" click ("explicit").
 const CreationPathModelTool = "model_tool"
 
+// ClientCreationPath restricts a CreationPath received from the frontend
+// (Bindings.Branches_Create) to the human paths: "explicit" ("Branch from
+// this turn"), "edit_resend" and "unknown" (the "+ Fork" modal, which
+// sends none). Empty stays empty so each CreateBranch arm applies its own
+// default. Anything else — notably the internal "model_tool" and
+// "auto_act" — is coerced to "unknown": provenance the client cannot
+// prove is recorded as unknown rather than refused, so a stale or
+// malformed client still forks.
+func ClientCreationPath(p string) string {
+	switch strings.TrimSpace(p) {
+	case "":
+		return ""
+	case "explicit", "edit_resend", "unknown":
+		return strings.TrimSpace(p)
+	default:
+		return "unknown"
+	}
+}
+
 // ErrCedarDenied is returned when a cedar gate explicitly denies
 // AbortSubagent / SteerSubagent / PauseSubagent / ResumeSubagent
 // (subagent-control-and-background-tasks-01PMZB11 UNIT-8). Wrapped, not

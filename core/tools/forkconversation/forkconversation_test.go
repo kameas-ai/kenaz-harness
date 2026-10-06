@@ -210,3 +210,74 @@ func TestForkConversation_NilForkerPanics(t *testing.T) {
 	}()
 	forkconversation.New(forkconversation.Options{})
 }
+
+// TestForkConversation_TurnSpanComesFromContextOnly (review M1): the live
+// turn's span reaches the Forker from the dispatch context, never from a
+// model argument.
+func TestForkConversation_TurnSpanComesFromContextOnly(t *testing.T) {
+	t.Parallel()
+	f := &fakeForker{res: forkconversation.ForkResult{BranchID: "b", BranchSessionID: "c", Title: "t"}}
+	tool := forkconversation.New(forkconversation.Options{Forker: f})
+	ctx := toolloop.WithTurnSpanID(toolloop.WithSessionID(context.Background(), "sess-A"), "span-1")
+	_ = call(t, tool, ctx, `{"title":"t"}`)
+	reqs := f.snapshot()
+	if len(reqs) != 1 || reqs[0].TurnSpanID != "span-1" {
+		t.Fatalf("forker requests = %+v, want TurnSpanID span-1", reqs)
+	}
+	out := call(t, tool, ctx, `{"title":"t","turn_span_id":"forged"}`)
+	if out["error"] != "invalid_args" || len(f.snapshot()) != 1 {
+		t.Fatalf("a turn_span_id argument must be refused; got %v (calls=%d)", out, len(f.snapshot()))
+	}
+}
+
+// TestForkConversation_TrailingJSONRefused (review L3).
+func TestForkConversation_TrailingJSONRefused(t *testing.T) {
+	t.Parallel()
+	ctx := toolloop.WithSessionID(context.Background(), "s")
+	for _, args := range []string{
+		`{"title":"x"} {"title":"y"}`,
+		`{"title":"x"}}`,
+		`{"title":"x"} garbage`,
+	} {
+		f := &fakeForker{}
+		tool := forkconversation.New(forkconversation.Options{Forker: f})
+		out := call(t, tool, ctx, args)
+		if out["error"] != "invalid_args" {
+			t.Errorf("%s: error = %v, want invalid_args", args, out["error"])
+		}
+		if len(f.snapshot()) != 0 {
+			t.Errorf("%s: forker called", args)
+		}
+	}
+	// Trailing whitespace is not content.
+	f := &fakeForker{res: forkconversation.ForkResult{BranchID: "b", BranchSessionID: "c", Title: "x"}}
+	if out := call(t, forkconversation.New(forkconversation.Options{Forker: f}), ctx, "{\"title\":\"x\"}\n  "); out["error"] != nil {
+		t.Errorf("trailing whitespace refused: %v", out)
+	}
+}
+
+// TestForkConversation_DepthLimitIsHonest (review L4): the depth cap is
+// reported as a depth limit, not as a "cycle".
+func TestForkConversation_DepthLimitIsHonest(t *testing.T) {
+	t.Parallel()
+	f := &fakeForker{err: errors.Join(forkconversation.ErrDepthLimit, errors.New("conversation: branch cycle detected"))}
+	out := call(t, forkconversation.New(forkconversation.Options{Forker: f}),
+		toolloop.WithSessionID(context.Background(), "s"), `{"title":"t"}`)
+	if out["error"] != "branch_depth_limit" {
+		t.Fatalf("error = %v, want branch_depth_limit", out["error"])
+	}
+	if msg, _ := out["message"].(string); strings.Contains(msg, "cycle") || !strings.Contains(msg, "depth") {
+		t.Errorf("message must name the depth limit, not a cycle: %q", msg)
+	}
+}
+
+// TestForkConversation_DescriptionNamesTheDefaultAnchor (review L5).
+func TestForkConversation_DescriptionNamesTheDefaultAnchor(t *testing.T) {
+	t.Parallel()
+	tool := forkconversation.New(forkconversation.Options{Forker: &fakeForker{}})
+	for _, s := range []string{tool.Description(), string(tool.InputSchema())} {
+		if !strings.Contains(s, "user or assistant message before the current turn") {
+			t.Errorf("does not state the real default anchor: %s", s)
+		}
+	}
+}

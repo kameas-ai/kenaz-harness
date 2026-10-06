@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"unicode/utf8"
@@ -44,7 +45,8 @@ const (
 	// model reading "branch" as a git branch.
 	ToolDescription = "Fork THIS chat conversation into a new conversation branch (not a git branch). " +
 		"Use when the user asks to fork, branch, or split off the conversation, or to explore a tangent " +
-		"in a separate thread. The branch copies the conversation up to the branch point and can open " +
+		"in a separate thread. The branch copies the conversation up to the branch point (by default, the " +
+		"last user or assistant message before the current turn) and can open " +
 		"with an optional handoff message. It does not run by itself: the user opens it from the " +
 		"branches sidebar (or the link on this tool call) and continues there."
 
@@ -69,7 +71,7 @@ const inputSchema = `{
     },
     "from_message_id": {
       "type": "string",
-      "description": "Optional id of a message in THIS conversation to branch from. Defaults to the latest message."
+      "description": "Optional id of a message in THIS conversation to branch from. Defaults to the latest user or assistant message before the current turn."
     }
   },
   "required": ["title"],
@@ -83,6 +85,13 @@ type ForkRequest struct {
 	Title           string
 	Handoff         string
 	FromMessageID   string
+	// TurnSpanID is the id of the user message that opened the live turn
+	// this call runs inside (toolloop.TurnSpanIDFromContext), or "" when
+	// the call is not inside a chat turn. Never a model argument. The
+	// Forker uses it to place the DEFAULT branch point before the live
+	// turn, so the branch does not end on the open "please fork this"
+	// request (and re-fork when the user continues there).
+	TurnSpanID string
 }
 
 // ForkResult is what a successful fork produced.
@@ -105,6 +114,10 @@ var ErrNothingToFork = errors.New("forkconversation: session has no messages to 
 // the branch exists but the handoff message did not land.
 var ErrSeedFailed = errors.New("forkconversation: branch created but handoff seed failed")
 
+// ErrDepthLimit is returned by a Forker when the session is already
+// nested at the maximum branch depth.
+var ErrDepthLimit = errors.New("forkconversation: branch depth limit reached")
+
 // Forker creates the branch. Production: an adapter over
 // core/rpc/views/branches.API.CreateBranch.
 type Forker interface {
@@ -117,14 +130,17 @@ type Forker interface {
 type Options struct {
 	Forker          Forker
 	SessionResolver func(ctx context.Context) string
-	Logger          *slog.Logger
+	// TurnSpanResolver defaults to toolloop.TurnSpanIDFromContext.
+	TurnSpanResolver func(ctx context.Context) string
+	Logger           *slog.Logger
 }
 
 // Tool implements kenaz__fork_conversation. Safe for concurrent use.
 type Tool struct {
-	forker   Forker
-	resolver func(ctx context.Context) string
-	logger   *slog.Logger
+	forker       Forker
+	resolver     func(ctx context.Context) string
+	spanResolver func(ctx context.Context) string
+	logger       *slog.Logger
 }
 
 // New constructs a Tool. Panics on a nil Forker — the wiring site must
@@ -138,11 +154,15 @@ func New(opts Options) *Tool {
 	if resolver == nil {
 		resolver = toolloop.SessionIDFromContext
 	}
+	spanResolver := opts.TurnSpanResolver
+	if spanResolver == nil {
+		spanResolver = toolloop.TurnSpanIDFromContext
+	}
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Tool{forker: opts.Forker, resolver: resolver, logger: logger}
+	return &Tool{forker: opts.Forker, resolver: resolver, spanResolver: spanResolver, logger: logger}
 }
 
 // Name returns the namespaced tool identifier.
@@ -185,6 +205,7 @@ const (
 	errKindNothingToFork = "nothing_to_fork"
 	errKindForkFailed    = "fork_failed"
 	errKindSeedFailed    = "handoff_not_seeded"
+	errKindDepthLimit    = "branch_depth_limit"
 )
 
 // Call parses args, scopes the fork to the dispatch session and
@@ -210,6 +231,12 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			fmt.Sprintf("parse args: %v (accepted fields: title, handoff, from_message_id; the fork is always of the current conversation)", err),
 			"", "")
 	}
+	// Exactly one JSON object: trailing content (a second object, stray
+	// tokens) is refused rather than silently ignored. dec.More() alone
+	// misses a stray closing delimiter, so require a clean EOF.
+	if _, terr := dec.Token(); dec.More() || !errors.Is(terr, io.EOF) {
+		return marshalErr(errKindInvalidArgs, "parse args: unexpected content after the arguments object", "", "")
+	}
 	args.Title = strings.TrimSpace(args.Title)
 	args.Handoff = strings.TrimSpace(args.Handoff)
 	args.FromMessageID = strings.TrimSpace(args.FromMessageID)
@@ -234,6 +261,7 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		Title:           args.Title,
 		Handoff:         args.Handoff,
 		FromMessageID:   args.FromMessageID,
+		TurnSpanID:      t.spanResolver(ctx),
 	})
 	switch {
 	case err == nil:
@@ -244,8 +272,14 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			"The conversation branch was created but the handoff message could not be written to it. "+
 				"Tell the user the branch exists without the handoff; they can open it from the branches sidebar and paste the instructions there.",
 			res.BranchID, res.BranchSessionID)
+	case errors.Is(err, ErrDepthLimit):
+		return marshalErr(errKindDepthLimit,
+			"this conversation is already nested at the maximum branch depth, so it cannot be forked further; "+
+				"suggest forking from a conversation higher up the branch chain", "", "")
 	case errors.Is(err, ErrNothingToFork):
-		return marshalErr(errKindNothingToFork, "this conversation has no messages yet, so there is nothing to branch from", "", "")
+		return marshalErr(errKindNothingToFork,
+			"there is no conversation before the current turn to branch from; ask the user to continue here, or "+
+				"pass from_message_id to branch at a specific message", "", "")
 	default:
 		t.logger.Warn("forkconversation.fork_failed", "session_id", sessionID, "err", err.Error())
 		return marshalErr(errKindForkFailed, fmt.Sprintf("fork failed: %v", err), "", "")

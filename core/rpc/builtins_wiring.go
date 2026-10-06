@@ -23,6 +23,7 @@ import (
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/conversation"
 	coredocs "github.com/kameas-ai/kenaz-harness/core/docs"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -564,7 +565,7 @@ func (f *branchForker) Fork(ctx context.Context, req coreforkconv.ForkRequest) (
 		if err != nil {
 			return coreforkconv.ForkResult{}, err
 		}
-		anchor = latestConversationalMessageID(msgs)
+		anchor = defaultForkAnchor(msgs, req.TurnSpanID)
 		if anchor == "" {
 			return coreforkconv.ForkResult{}, coreforkconv.ErrNothingToFork
 		}
@@ -587,17 +588,43 @@ func (f *branchForker) Fork(ctx context.Context, req coreforkconv.ForkRequest) (
 		if errors.Is(err, branchesview.ErrHandoffSeedFailed) {
 			return res, errors.Join(coreforkconv.ErrSeedFailed, err)
 		}
+		// conversation.ErrCycle is what CreateBranchAtMessage's ancestor
+		// walk returns past depth 32. A real cycle cannot form through
+		// any creation path, so for a caller this is the depth cap — say
+		// that, not "cycle detected".
+		if errors.Is(err, conversation.ErrCycle) {
+			return coreforkconv.ForkResult{}, errors.Join(coreforkconv.ErrDepthLimit, err)
+		}
 		return coreforkconv.ForkResult{}, err
 	}
 	return res, nil
 }
 
-// latestConversationalMessageID returns the id of the last user or
-// assistant row — the default branch point. Tool and system rows are
-// skipped: CreateBranchAtMessage replays Role+Content only, so anchoring
-// on a tool row would end the child on an orphaned tool result.
-func latestConversationalMessageID(msgs []session.Message) string {
-	for i := len(msgs) - 1; i >= 0; i-- {
+// defaultForkAnchor picks the branch point when the model names none.
+//
+// Inside a live chat turn (turnSpanID set — the id of the user message
+// that opened it), the anchor is the last user/assistant row BEFORE that
+// message: the branch carries the conversation as it stood when the user
+// asked, not the open "please fork this" request — ending on that request
+// invites the branch's model to fork again when the user continues there
+// (review M1). The handoff seed then reads as the branch's opening
+// instruction. Outside a turn, or when the span row is not in the
+// transcript, it is the last user/assistant row overall.
+//
+// Tool and system rows are never the anchor: a branch should end on a
+// conversational message, not on the middle of a tool exchange.
+// "" means there is nothing to branch from.
+func defaultForkAnchor(msgs []session.Message, turnSpanID string) string {
+	end := len(msgs)
+	if turnSpanID != "" {
+		for i, m := range msgs {
+			if m.ID == turnSpanID {
+				end = i
+				break
+			}
+		}
+	}
+	for i := end - 1; i >= 0; i-- {
 		switch msgs[i].Role {
 		case session.RoleUser, session.RoleAssistant:
 			return msgs[i].ID

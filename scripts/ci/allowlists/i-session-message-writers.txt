@@ -42,8 +42,17 @@ core/rpc/bindings.go:AppendMessage:1
 #     "SINGLE WRITER" comment). Same change deletes the runner's old
 #     chat_runner.go:AppendEntry entry — net writer count unchanged. ---
 core/rpc/api.go:AppendMessage:3
-core/conversation/manager.go:AppendMessage:1
-core/session/moves.go:AppendMessage:1
+# --- 2026-10-05 (model fork tool, review H1 — CONSOLIDATION, net zero):
+#     conversation.Manager.CreateBranchAtMessage's fork replay used to call
+#     AppendMessage itself with Role+Content only, dropping tool calls and
+#     move metadata (provider 400 on a forked tool-using session). The
+#     replay moved into session.Manager.ReplayTranscript (moves.go, the one
+#     file allowed to stamp move metadata), so the leaf write moved with
+#     it: conversation/manager.go:AppendMessage 1 -> 0 (entry deleted),
+#     session/moves.go:AppendMessage 1 -> 2 (AppendTranscriptEntry +
+#     ReplayTranscript). Same writer, same rows, one file over; the
+#     caller is now counted at the seam altitude below. Owner: alec. ---
+core/session/moves.go:AppendMessage:2
 core/session/manager.go:AppendMessage:1
 core/rpc/views/sessions/impl.go:AppendMessage:2
 core/rpc/views/agentgraph/env_deps_branch.go:AppendMessage:2
@@ -100,3 +109,11 @@ core/rpc/views/agentgraph/chat/chat_runner.go:PersistPartial:1
 core/agentgraph/exec_state.go:AppendEntry:1
 core/rpc/views/agentgraph/chat/moves.go:AppendEntry:3
 core/rpc/views/agentgraph/chat/interrupt.go:AppendEntry:2
+
+# --- ReplayTranscript: the faithful cross-session transcript replay seam
+#     (core/session/moves.go), added to SYMBOLS 2026-10-05 (model fork
+#     tool, review H1). Its ONE caller is the conversation-fork replay,
+#     reached by every anchored fork: "Branch from this turn" and
+#     kenaz__fork_conversation, both via branches.API.CreateBranch.
+#     Owner: alec. ---
+core/conversation/manager.go:ReplayTranscript:1
