@@ -5081,6 +5081,35 @@ fetches and an overall install deadline).**
      cross-check against the published index is added (the commented
      release.yml step's url/key_id asserts are a start).
 
+### 2026-10-05 (engine port lanes, owner rulings A5.2/A5.3, harness branch `fix/engine-ports`) — update-pending identity is lexical; lane fallback has two accepted costs
+
+1. **Update-pending identity is a lexical `exe_path` check in BOTH repos.**
+   A lease-aware engine answering on a lane candidate whose self-reported
+   `exe_path` is under this root's `versions/` but not `current` is
+   classified *update-pending* and adopted (`engine.port` written — the
+   agreed cross-repo contract; Kenaz mirrors it). Nothing re-hashes that
+   binary: a process that merely *claims* such a path is adopted the same
+   way. Containment in the harness (review F4): update-pending is never
+   the Manager's verified port (`Manager.DialClient`), never leased, and
+   `shutdownClient` never sends it the token — so no advice, label, or
+   shutdown traffic reaches a lexically-claimed squatter; the cost is
+   bounded to "one lane port is held and recorded". Matches kenaz PR #178's
+   recorded protocol-gap follow-up.
+   - **Owner:** that same follow-up (the engine-identity protocol gap —
+     an engine-attested identity both clients can verify). The line goes
+     when it lands.
+2. **A legacy/foreign listener on a base port now coexists with our
+   engine on the next lane** (e.g. a pre-lease engine on prod 7774 and
+   ours on 7784): extra RAM for two engines; the "update Kenaz to share
+   the ML engine" hint surfaces only when ALL lane candidates are foreign.
+   Accepted (review F6; matches the legacy = foreign ruling). sigild dials
+   prod 7774 directly and does not read `engine.port`, so a squatter on the
+   prod base still strands sigild — pre-existing, owner-acknowledged
+   (A5.3).
+3. **Observe worst case** is LaneCount × `observeProbeTimeout` (5 × 2s =
+   10s) on hanging candidates — cut from 5 × 5s by a per-probe deadline on
+   the read-only Settings scan only. Informational.
+
 ## Drained
 
 ### 2026-10-04 · CLOSED — chat run ids were a per-process counter written into a persistent log (`agentgraph-settings-linkage-01DOGF0D` WP02)

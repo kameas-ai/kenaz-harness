@@ -74,6 +74,17 @@ func (lp laneProbe) label() string {
 // probeLane runs the identity check against one candidate port. It never
 // renews a lease and never writes engine.port — callers decide.
 func (m *Manager) probeLane(ctx context.Context, port int) laneProbe {
+	return m.probeLaneWithin(ctx, port, 0)
+}
+
+// probeLaneWithin is probeLane with a per-probe deadline (0: the client's
+// own timeout only).
+func (m *Manager) probeLaneWithin(ctx context.Context, port int, within time.Duration) laneProbe {
+	if within > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, within)
+		defer cancel()
+	}
 	health, err := m.Client.at(port).Health(ctx)
 	if err != nil {
 		switch {
@@ -140,14 +151,24 @@ type laneScan struct {
 // removed — the next adopt/spawn overwrites it, and an all-foreign scan
 // leaves the file untouched. Garbage or out-of-lane records are logged
 // and treated as absent. Pure probing: no spawn, no lease, no write.
-func (m *Manager) scanLanes(ctx context.Context) laneScan {
+func (m *Manager) scanLanes(ctx context.Context) laneScan { return m.scanLanesWithin(ctx, 0) }
+
+// observeProbeTimeout bounds each candidate probe of the read-only
+// Settings Observe scan (review F6): worst case LaneCount x this (10s)
+// on hanging candidates, instead of LaneCount x the 5s client timeout.
+// Ensure keeps the full client timeout — a busy engine there must read
+// as busy, not be cut short.
+const observeProbeTimeout = 2 * time.Second
+
+// scanLanesWithin is scanLanes with a per-candidate probe deadline.
+func (m *Manager) scanLanesWithin(ctx context.Context, within time.Duration) laneScan {
 	var sc laneScan
 	rec, ok, rerr := RecordedEnginePort(m.Layout, m.BasePort)
 	if rerr != nil {
 		logging.L().Warn("mlsidecar.engine_port.ignored", "err", rerr.Error())
 	}
 	if ok {
-		lp := m.probeLane(ctx, rec)
+		lp := m.probeLaneWithin(ctx, rec, within)
 		if lp.verdict == laneOurs || lp.verdict == laneTerminal || lp.verdict == laneBusy {
 			sc.probes = []laneProbe{lp}
 			sc.found = &sc.probes[0]
@@ -158,7 +179,7 @@ func (m *Manager) scanLanes(ctx context.Context) laneScan {
 		// Stale (dead or foreign): ignored, the lane scan reruns.
 	}
 	for _, port := range CandidatePorts(m.BasePort) {
-		lp := m.probeLane(ctx, port)
+		lp := m.probeLaneWithin(ctx, port, within)
 		sc.probes = append(sc.probes, lp)
 		switch lp.verdict {
 		case laneOurs, laneTerminal:
@@ -226,7 +247,7 @@ func (m *Manager) reconcileLanes(ctx context.Context) Status {
 // spawn, no lease, no engine.port write or removal). running reports
 // whether anything relevant answered.
 func (m *Manager) observeLanes(ctx context.Context, cur Status) (Status, bool) {
-	sc := m.scanLanes(ctx)
+	sc := m.scanLanesWithin(ctx, observeProbeTimeout)
 	var st Status
 	switch {
 	case sc.found != nil:

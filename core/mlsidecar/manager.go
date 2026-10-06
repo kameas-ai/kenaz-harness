@@ -379,6 +379,10 @@ func (m *Manager) spawnLocked(ctx context.Context, port int) Status {
 		logging.L().Warn("mlsidecar.spawn.token_write_failed", "err", terr.Error())
 	}
 	if _, serr := m.Spawner.Spawn(ctx, exePath, port); serr != nil {
+		// Deliberate (review F5): a spawn that keeps failing — e.g. the
+		// engine cannot bind the chosen lane port — stays honestly
+		// installed_unhealthy/crash until the next Ensure (DemandProbe's
+		// 30s cadence) retries; there is no tight respawn loop here.
 		logging.L().Warn("mlsidecar.spawn_failed", "exe", exePath, "port", port, "err", serr.Error())
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: serr.Error(), UpdatedAt: now}
 	}
