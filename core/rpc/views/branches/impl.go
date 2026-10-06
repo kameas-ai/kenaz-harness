@@ -28,6 +28,18 @@ var ErrManagerUnavailable = errors.New("branches: manager unavailable")
 // ErrInvalidArg covers trivially invalid inputs.
 var ErrInvalidArg = errors.New("branches: invalid argument")
 
+// ErrHandoffSeedFailed is returned (wrapped, alongside the created
+// Branch) by CreateBranch's explicit path when the branch was created
+// but the requested SystemPromptOverride handoff could not be appended
+// to the child session.
+var ErrHandoffSeedFailed = errors.New("branches: branch created but handoff seed was not written")
+
+// CreationPathModelTool is the CreationPath kenaz__fork_conversation
+// stamps on the branches it creates, so the persisted row and the
+// branch.created audit record distinguish a model-initiated fork from a
+// human "Branch from this turn" click ("explicit").
+const CreationPathModelTool = "model_tool"
+
 // ErrCedarDenied is returned when a cedar gate explicitly denies
 // AbortSubagent / SteerSubagent / PauseSubagent / ResumeSubagent
 // (subagent-control-and-background-tasks-01PMZB11 UNIT-8). Wrapped, not
@@ -365,11 +377,22 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 
 	// Explicit-fork path: use CreateBranchAtMessage when ParentMessageID is set.
 	if opts.ParentMessageID != "" {
+		// CreationPath defaults to "explicit" here (the "Branch from this
+		// turn" menu item, which always sends it). A caller may name a
+		// more specific path — kenaz__fork_conversation sends
+		// CreationPathModelTool — so the persisted row and the audit
+		// record say who actually forked, instead of every anchored fork
+		// reading as a human menu click.
+		creationPath := strings.TrimSpace(opts.CreationPath)
+		if creationPath == "" || creationPath == "unknown" {
+			creationPath = "explicit"
+		}
 		br, _, err := a.cfg.Conversations.CreateBranchAtMessage(ctx, conversation.ForkAtMessageOptions{
 			ParentSessionID: opts.ParentSessionID,
 			ParentMessageID: opts.ParentMessageID,
 			Title:           opts.Title,
 			ChildName:       opts.ChildName,
+			CreationPath:    creationPath,
 		})
 		if err != nil {
 			return Branch{}, err
@@ -380,9 +403,26 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 				ParentSessionID: opts.ParentSessionID,
 				ParentMessageID: opts.ParentMessageID,
 				BranchSessionID: br.ChildSessionID,
-				CreationPath:    "explicit",
+				CreationPath:    br.CreationPath,
 			}, a.now())
 		a.publishBranchCreated(br.ChildSessionID)
+		// Optional handoff seed AFTER the replayed history. Only an
+		// explicit SystemPromptOverride seeds here — unlike the legacy
+		// path there is no TaskHint/Title fallback, because the anchored
+		// child already carries the conversation and the "Branch from
+		// this turn" menu never sends an override (its behaviour is
+		// unchanged). Written through the SAME appendHandoff seam the
+		// legacy path uses (one AppendMessage call site, see G-1).
+		//
+		// A failed seed is reported, not swallowed: the branch exists
+		// (returned alongside the error) but the caller asked for a
+		// handoff that did not land, and a tool result claiming it did
+		// would be a lie. errors.Is(err, ErrHandoffSeedFailed).
+		if seed := strings.TrimSpace(opts.SystemPromptOverride); seed != "" {
+			if err := a.appendHandoff(ctx, br.ChildSessionID, seed); err != nil {
+				return toWire(br), fmt.Errorf("%w: %v", ErrHandoffSeedFailed, err)
+			}
+		}
 		return toWire(br), nil
 	}
 
@@ -439,7 +479,7 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 	// message. v1 uses the system prompt override when non-empty; else
 	// a tiny placeholder ("<task hint or title>"). Bundle B's kernel
 	// can replace this once the compaction strategies wire in.
-	if a.cfg.Sessions != nil {
+	{
 		handoff := strings.TrimSpace(opts.SystemPromptOverride)
 		if handoff == "" {
 			handoff = strings.TrimSpace(opts.TaskHint)
@@ -448,10 +488,10 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 			handoff = strings.TrimSpace(opts.Title)
 		}
 		if handoff != "" {
-			_, _ = a.cfg.Sessions.AppendMessage(ctx, child.ID, session.Message{
-				Role:    session.RoleUser,
-				Content: handoff,
-			})
+			// Legacy behaviour preserved: a failed seed here has always
+			// been swallowed (the "+ Fork" modal has no partial-success
+			// surface). The explicit path above reports it instead.
+			_ = a.appendHandoff(ctx, child.ID, handoff)
 		}
 	}
 
@@ -482,6 +522,23 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 
 	a.publishBranchCreated(br.ChildSessionID)
 	return toWire(br), nil
+}
+
+// appendHandoff writes text as a user message on the child session — the
+// ONE branch-handoff writer in this file (G-1, scripts/ci/allowlists/
+// i-session-message-writers.txt). Both CreateBranch arms route their
+// seed through here so a new seeding caller (kenaz__fork_conversation)
+// adds no new session_messages call site. nil Sessions is a no-op, the
+// same degraded-boot posture the legacy path always had.
+func (a *API) appendHandoff(ctx context.Context, childSessionID, text string) error {
+	if a.cfg.Sessions == nil {
+		return nil
+	}
+	_, err := a.cfg.Sessions.AppendMessage(ctx, childSessionID, session.Message{
+		Role:    session.RoleUser,
+		Content: text,
+	})
+	return err
 }
 
 // ListWithBranchTree returns a flat list of sessions with parent pointers

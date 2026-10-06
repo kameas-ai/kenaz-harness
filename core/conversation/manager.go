@@ -253,6 +253,10 @@ type ForkAtMessageOptions struct {
 	// ProviderID + ModelID for the branch row.
 	ProviderID string
 	ModelID    string
+	// CreationPath is recorded on the branch row. Defaults to "explicit"
+	// (the "Branch from this turn" menu item) when empty; the model's
+	// kenaz__fork_conversation tool passes "model_tool".
+	CreationPath string
 }
 
 // CreateBranchAtMessage allocates a child session whose message history
@@ -326,6 +330,10 @@ func (m *Manager) CreateBranchAtMessage(ctx context.Context, opts ForkAtMessageO
 		return Branch{}, session.Record{}, fmt.Errorf("conversation: id gen: %w", err)
 	}
 	now := m.now()
+	creationPath := strings.TrimSpace(opts.CreationPath)
+	if creationPath == "" {
+		creationPath = "explicit"
+	}
 	br := Branch{
 		ID:                 id,
 		ParentSessionID:    opts.ParentSessionID,
@@ -337,7 +345,7 @@ func (m *Manager) CreateBranchAtMessage(ctx context.Context, opts ForkAtMessageO
 		Title:              opts.Title,
 		ParentMessageID:    opts.ParentMessageID,
 		BranchTitle:        opts.Title,
-		CreationPath:       "explicit",
+		CreationPath:       creationPath,
 		ParentSessionTitle: parent.Name,
 		CreatedAt:          now,
 		UpdatedAt:          now,

@@ -152,6 +152,8 @@ const (
 	//   "unknown"     — caller did not specify (today: the ordinary
 	//                   "+ Fork" button, which sends neither
 	//                   ParentMessageID nor CreationPath).
+	//   "model_tool"  — the model forked its own session via
+	//                   kenaz__fork_conversation.
 	KindBranchCreated Kind = "branch.created"
 
 	// KindSlashCommandRun fires when a user-defined slash command is
@@ -1373,7 +1375,8 @@ type BranchCreatedPayload struct {
 	ParentSessionID string `json:"parent_session_id"`
 	ParentMessageID string `json:"parent_message_id,omitempty"`
 	BranchSessionID string `json:"branch_session_id"`
-	// CreationPath is "explicit" | "edit_resend" | "unknown" — mirrors
+	// CreationPath is "explicit" | "edit_resend" | "unknown" |
+	// "model_tool" — mirrors
 	// conversation.Branch.CreationPath (core/conversation/types.go),
 	// which is where the value actually comes from.
 	CreationPath string `json:"creation_path"`
