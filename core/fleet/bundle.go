@@ -8,7 +8,8 @@
 // Verification pipeline (mission fleet-config-pull-01NDFSEX10 WP01):
 //  1. Canonicalize: marshal the bundle without the "signature" field → SHA-256 hash.
 //  2. Decode the base64url signature field.
-//  3. ed25519.Verify against FleetSigningKey().
+//  3. ed25519.Verify against the pinned key the signed "key_id" selects
+//     (or, for a bundle without key_id, any pinned key) — FleetSigningKeys().
 //  4. Monotonic bundle_id guard: new ID must be strictly greater than lastID.
 package fleet
 
@@ -28,6 +29,7 @@ import (
 //
 //	{
 //	  "bundle_id":         42,
+//	  "key_id":            "0123456789abcdef",
 //	  "issued_at":         "2026-05-16T12:00:00Z",
 //	  "cedar_delta":       {...},
 //	  "mcp_allowlist":     ["github", "slack", ...],
@@ -47,6 +49,21 @@ type Bundle struct {
 	// The harness tracks the last applied bundle_id on disk and rejects any bundle
 	// whose ID is not strictly greater.
 	BundleID int64 `json:"bundle_id"`
+
+	// KeyID names the key that signed this bundle: lowercase hex of the
+	// first 8 bytes of SHA-256 over the RAW 32-byte ed25519 public key
+	// (SigningKeyID; cross-repo contract with kenaz-fleet's
+	// KeyIDForPublicKey). It is INSIDE the signed payload, so it cannot be
+	// rewritten in transit to steer verification. When present,
+	// VerifyWithKeySet verifies ONLY with the pinned key of that key_id (an
+	// unmatched key_id is ErrSigningKeyUnknown); when absent, every pinned
+	// key is tried.
+	//
+	// omitempty: a bundle without key_id must marshal its signing payload
+	// exactly as a pre-key_id signer produced it. Field position (directly
+	// after bundle_id) matches kenaz-fleet's struct order — the signing
+	// payload is struct-ordered JSON, so the order is part of the contract.
+	KeyID string `json:"key_id,omitempty"`
 
 	// IssuedAt is the server-side issuance time in RFC 3339.
 	IssuedAt time.Time `json:"issued_at"`
@@ -233,9 +250,14 @@ type BundleModelPrefs struct {
 // It mirrors Bundle but omits the Signature field.
 // MCPAllowlist is NOT omitempty so an explicit empty array (block-all) is
 // included in the signature and the verify+apply path can distinguish nil
-// (no restriction) from [] (block-all). Must stay in sync with Bundle above.
+// (no restriction) from [] (block-all). Must stay in sync with Bundle above —
+// same fields, same ORDER (encoding/json emits struct order, and kenaz-fleet
+// signs its own struct with key_id directly after bundle_id).
+// TestSigningPayload_EveryBundleFieldAffectsPayload catches a missing field;
+// TestSigningPayload_KeyIDFieldOrder pins the key_id position.
 type bundleSigningPayload struct {
 	BundleID           int64                      `json:"bundle_id"`
+	KeyID              string                     `json:"key_id,omitempty"`
 	IssuedAt           time.Time                  `json:"issued_at"`
 	CedarDelta         json.RawMessage            `json:"cedar_delta,omitempty"`
 	MCPAllowlist       []string                   `json:"mcp_allowlist"`
@@ -253,6 +275,7 @@ type bundleSigningPayload struct {
 func (b *Bundle) signingPayload() ([]byte, error) {
 	p := bundleSigningPayload{
 		BundleID:           b.BundleID,
+		KeyID:              b.KeyID,
 		IssuedAt:           b.IssuedAt,
 		CedarDelta:         b.CedarDelta,
 		MCPAllowlist:       b.MCPAllowlist,
@@ -295,10 +318,12 @@ func SignBundleForTesting(b *Bundle, priv ed25519.PrivateKey) error {
 // Return values:
 //   - nil              — valid, bundle may be applied
 //   - ErrSigningKeyNotConfigured — key is nil; hard-reject
+//   - ErrSigningKeyUnknown      — bundle key_id is not key's key_id; hard-reject
 //   - ErrInvalidSignature       — signature mismatch; hard-reject
 //   - ErrBundleIDNonMonotonic   — bundle_id is not strictly > lastAppliedID
 //
-// For accept-set verification (key rotation), use VerifyWithKeySet.
+// For pinned-set verification (key rotation, key_id routing), use
+// VerifyWithKeySet.
 func Verify(b *Bundle, key ed25519.PublicKey, lastAppliedID int64) error {
 	if len(key) == 0 {
 		return fmt.Errorf("%w: cannot verify without a signing key", ErrSigningKeyNotConfigured)
@@ -306,16 +331,45 @@ func Verify(b *Bundle, key ed25519.PublicKey, lastAppliedID int64) error {
 	return VerifyWithKeySet(b, []ed25519.PublicKey{key}, lastAppliedID)
 }
 
-// VerifyWithKeySet verifies the bundle signature against any key in the
-// accept-set and enforces the monotonic bundle_id guard. An empty accept-set
-// is treated as ErrSigningKeyNotConfigured (fail-closed).
+// VerifyWithKeySet verifies the bundle signature against the pinned key set
+// and enforces the monotonic bundle_id guard. Key selection:
 //
-// FR-003: during key rotation, the accept-set contains both the outgoing and
-// the incoming key. Any bundle signed by either key is accepted. Once all
-// binaries with the old key are retired, the old key is removed from the set.
+//   - empty key set              → ErrSigningKeyNotConfigured (fail-closed)
+//   - bundle HAS key_id          → verify ONLY with the pinned key whose
+//     SigningKeyID equals it; no pinned key has that id → ErrSigningKeyUnknown
+//     (the install's pins predate the signer's key); the selected key does
+//     not verify → ErrInvalidSignature
+//   - bundle LACKS key_id        → try every pinned key; any one verifying
+//     is valid, none → ErrInvalidSignature
+//
+// key_id is covered by the signature (bundleSigningPayload), so routing on it
+// cannot be abused: a tampered key_id either selects no key (unknown) or a
+// key under which the — now changed — payload no longer verifies.
+//
+// Rotation (docs/fleet-key-rotation.md): a release pins current+next; fleet
+// flips to next; a later release drops current.
+//
+// The monotonic bundle_id guard runs only AFTER a signature verifies and is
+// identical for every key-selection path.
 func VerifyWithKeySet(b *Bundle, keys []ed25519.PublicKey, lastAppliedID int64) error {
 	if len(keys) == 0 {
 		return fmt.Errorf("%w: cannot verify without a signing key", ErrSigningKeyNotConfigured)
+	}
+
+	// Select candidate keys by the signed key_id.
+	candidates := keys
+	if b.KeyID != "" {
+		candidates = nil
+		for _, key := range keys {
+			if len(key) == ed25519.PublicKeySize && SigningKeyID(key) == b.KeyID {
+				candidates = []ed25519.PublicKey{key}
+				break
+			}
+		}
+		if candidates == nil {
+			return fmt.Errorf("%w: key_id %q matches none of the %d key(s) pinned in this build — this install's pins predate the fleet's current signing key; update the harness",
+				ErrSigningKeyUnknown, b.KeyID, len(keys))
+		}
 	}
 
 	// Decode the signature field.
@@ -340,9 +394,8 @@ func VerifyWithKeySet(b *Bundle, keys []ed25519.PublicKey, lastAppliedID int64) 
 
 	// ed25519 signs the message directly (not the hash), but to align with the
 	// server's convention we sign the 32-byte SHA-256 digest.
-	// Try each key in the accept-set; accept if any key matches.
 	verified := false
-	for _, key := range keys {
+	for _, key := range candidates {
 		if len(key) == ed25519.PublicKeySize && ed25519.Verify(key, hash[:], sig) {
 			verified = true
 			break

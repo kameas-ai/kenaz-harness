@@ -1469,6 +1469,11 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 // indicator (WP10). It combines the signing-key presence, the config source,
 // and the current session state into a single call so the header chip can
 // render without multiple sequential RPCs.
+//
+// ConfigSource values beyond the poller's own Source: "no-key" (no signing
+// key pinned in this binary — fleet.ErrSigningKeyNotConfigured) and
+// "unknown-key" (the latest bundle's signed key_id matches no pinned key —
+// fleet.ErrSigningKeyUnknown; the install must update).
 func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 	enabled := fleet.ConfigDistributionEnabled()
 
@@ -1484,7 +1489,16 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 			st := p.Status()
 			configSource = st.Source
 			configLastError = st.LastError
-			if configSource == "default-deny" && configLastError == "" {
+			switch {
+			case st.SigningKeyUnknown:
+				// Parallel to "no-key" (ErrSigningKeyNotConfigured): the
+				// latest bundle was signed with a key_id this build never
+				// pinned (fleet.ErrSigningKeyUnknown). The binary HAS keys,
+				// so distribution is enabled — but nothing new will apply
+				// until the harness is updated. ConfigLastError carries
+				// "bundle signed with an unknown key: key_id …".
+				configSource = "unknown-key"
+			case configSource == "default-deny" && configLastError == "":
 				configSource = "default-deny-degraded"
 			}
 		}

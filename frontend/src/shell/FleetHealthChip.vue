@@ -12,6 +12,8 @@
  *   stale-cache    — cached bundle being used (yellow)
  *   default-deny   — no bundle ever applied (muted)
  *   no-key         — signing key not wired in this binary (muted/hidden)
+ *   unknown-key    — latest bundle signed with a key this build never pinned;
+ *                    the install must update (warn)
  *
  * (fleet-integrity-observability WP10 / FR-010)
  */
@@ -40,7 +42,7 @@ const visible = computed(() =>
 const chipClass = computed(() => {
   const src = health.value?.configSource ?? '';
   if (src === 'fleet') return 'text-signal-ok border-signal-ok/30 bg-signal-ok/10';
-  if (src.startsWith('stale') || src === 'cache')
+  if (src.startsWith('stale') || src === 'cache' || src === 'unknown-key')
     return 'text-signal-warn border-signal-warn/30 bg-signal-warn/10';
   return 'text-ink-muted border-border-muted';
 });
@@ -51,6 +53,7 @@ const label = computed(() => {
   if (src === 'fleet') return 'fleet';
   if (src === 'stale-cache' || src === 'cache') return 'stale-cache';
   if (src === 'default-deny' || src === 'default-deny-degraded') return 'default-deny';
+  if (src === 'unknown-key') return 'unknown key — update';
   return src || 'fleet?';
 });
 

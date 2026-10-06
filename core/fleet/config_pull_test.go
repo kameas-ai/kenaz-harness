@@ -138,17 +138,11 @@ func (f *fakeFleetConfigServer) ServeHTTP(w http.ResponseWriter, r *http.Request
 	_, _ = w.Write(resp)
 }
 
-// setTestSigningKey sets fleetSigningPublicKeyBytes to the hex of pub and
-// restores the original on test cleanup.
+// setTestSigningKey pins exactly pub (via SetSigningKeyForTesting) and
+// restores the previous pin vars on test cleanup.
 func setTestSigningKey(t *testing.T, pub ed25519.PublicKey) {
 	t.Helper()
-	hexStr := ""
-	for _, by := range []byte(pub) {
-		hexStr += string([]byte{hexEncNibble2(by >> 4), hexEncNibble2(by & 0x0f)})
-	}
-	saved := fleetSigningPublicKeyBytes
-	fleetSigningPublicKeyBytes = hexStr
-	t.Cleanup(func() { fleetSigningPublicKeyBytes = saved })
+	t.Cleanup(SetSigningKeyForTesting(pub))
 }
 
 func newPollerForTest(t *testing.T, srv *httptest.Server, applier ConfigApplier, dataDir string) *ConfigPoller {
@@ -331,11 +325,4 @@ func waitUntil(t *testing.T, timeout time.Duration, fn func() bool) bool {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return fn()
-}
-
-func hexEncNibble2(b byte) byte {
-	if b < 10 {
-		return '0' + b
-	}
-	return 'a' + b - 10
 }

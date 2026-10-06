@@ -21,6 +21,7 @@ import "github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
 // an excluded profile, and profileKindAndModel seeds DefaultModel (D-3).
 func init() {
 	knobcoverage.Register[Bundle]("BundleID", "fleet.ConfigPoller monotonic replay guard + VerifyWithKeySet (core/fleet/config_pull.go, core/fleet/bundle.go) — envelope field, not a config section")
+	knobcoverage.Register[Bundle]("KeyID", "fleet.VerifyWithKeySet key_id routing — selects the one pinned key (SigningKeyID) to verify with; unmatched → ErrSigningKeyUnknown → Settings FleetHealth ConfigSource \"unknown-key\" (core/fleet/bundle.go, core/rpc/views/settings/fleet.go) — envelope field, not a config section")
 	knobcoverage.Register[Bundle]("IssuedAt", "part of the signed bundleSigningPayload (core/fleet/bundle.go) — envelope field, not a config section")
 	knobcoverage.Register[Bundle]("CedarDelta", "compositeConfigApplier.ApplyBundle -> fleet.ApplyCedarDelta -> cedarpolicy.Engine.SetTeamBundle (core/rpc/views/settings/fleet.go, fleet-enforcement-truth-01PMZ505 WP02/WP03)")
 	knobcoverage.Register[Bundle]("MCPAllowlist", "compositeConfigApplier.ApplyBundle -> recipes.ApplyFleetAllowlist -> globalAllowlist (core/mcp/recipes/allowlist.go)")

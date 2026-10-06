@@ -4723,7 +4723,9 @@ export interface FleetConfigPullStatusView {
 export interface FleetHealthView {
   /** true when a fleet signing key is wired in this binary. */
   configDistributionEnabled: boolean;
-  /** "fleet" | "stale-cache" | "default-deny-degraded" | "no-key" */
+  /** "fleet" | "stale-cache" | "default-deny-degraded" | "no-key" | "unknown-key"
+   *  ("unknown-key": the latest bundle was signed with a key this build never
+   *  pinned — the install must update; configLastError says which key_id). */
   configSource: string;
   /** Most recent error from the config poller, or empty string. */
   configLastError: string;
