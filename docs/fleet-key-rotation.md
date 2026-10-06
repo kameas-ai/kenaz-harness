@@ -17,7 +17,9 @@ public keys at build time:
 
 Each entry is exactly 64 hex characters: the raw 32-byte ed25519 public key.
 Whitespace and empty entries are ignored; **any malformed entry rejects the
-whole set** (config distribution is then disabled and the harness logs a boot
+whole set** — including a non-canonical encoding or a small-order
+(degenerate) point such as the identity, under which signatures are
+forgeable without a private key (config distribution is then disabled and the harness logs a boot
 ERROR; `release.yml` also fails the build on a malformed entry).
 
 `release.yml` picks the list per target env from repo Actions **variables**

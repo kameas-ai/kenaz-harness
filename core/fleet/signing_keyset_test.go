@@ -12,12 +12,16 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // keyIDVectorPub is the fixed key_id test vector: the 32 raw bytes
@@ -333,6 +337,50 @@ func TestSigningPayload_KeyIDFieldOrder(t *testing.T) {
 	if strings.Contains(string(p), "key_id") {
 		t.Errorf("a bundle without key_id must not emit key_id in its signing payload, got: %s", p)
 	}
+
+	// Byte equality against the PRE-key_id payload shape: a bundle with an
+	// empty KeyID must sign exactly the bytes a pre-key_id signer signed, for
+	// a minimal and a fully populated bundle.
+	type legacyBundleSigningPayload struct {
+		BundleID           int64                      `json:"bundle_id"`
+		IssuedAt           time.Time                  `json:"issued_at"`
+		CedarDelta         json.RawMessage            `json:"cedar_delta,omitempty"`
+		MCPAllowlist       []string                   `json:"mcp_allowlist"`
+		ModelPrefs         *BundleModelPrefs          `json:"model_prefs,omitempty"`
+		KameasMLWeightURLs []string                   `json:"kameas_ml_weight_urls,omitempty"`
+		MandatedSkills     []json.RawMessage          `json:"mandated_skills,omitempty"`
+		ProvisionedMCP     []ProvisionedMCP           `json:"provisioned_mcp,omitempty"`
+		ProviderSetups     []ProviderSetup            `json:"provider_setups,omitempty"`
+		OrgConfig          map[string]json.RawMessage `json:"org_config,omitempty"`
+	}
+	legacyOf := func(b *Bundle) []byte {
+		out, err := json.Marshal(legacyBundleSigningPayload{
+			BundleID: b.BundleID, IssuedAt: b.IssuedAt, CedarDelta: b.CedarDelta,
+			MCPAllowlist: b.MCPAllowlist, ModelPrefs: b.ModelPrefs,
+			KameasMLWeightURLs: b.KameasMLWeightURLs, MandatedSkills: b.MandatedSkills,
+			ProvisionedMCP: b.ProvisionedMCP, ProviderSetups: b.ProviderSetups,
+			OrgConfig: b.OrgConfig,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	populated := sampleBundle()
+	populated.KameasMLWeightURLs = []string{"https://example.invalid/w"}
+	populated.MandatedSkills = []json.RawMessage{json.RawMessage(`{"id":"s1"}`)}
+	populated.ProvisionedMCP = []ProvisionedMCP{{RecipeID: "slack", PrimaryAuth: "oauth"}}
+	populated.ProviderSetups = []ProviderSetup{{Provider: "anthropic", AccessMode: "byo_key"}}
+	populated.OrgConfig = map[string]json.RawMessage{"b": json.RawMessage(`{}`), "a": json.RawMessage(`[]`)}
+	for name, bb := range map[string]*Bundle{"minimal": {BundleID: 1}, "populated": populated} {
+		got, err := bb.signingPayload()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := legacyOf(bb); string(got) != string(want) {
+			t.Errorf("%s: empty-KeyID payload differs from the pre-key_id payload:\n got %s\nwant %s", name, got, want)
+		}
+	}
 }
 
 // TestConfigPoller_UnknownKeyID_SurfacesInStatus drives the REAL poller:
@@ -374,6 +422,31 @@ func TestConfigPoller_UnknownKeyID_SurfacesInStatus(t *testing.T) {
 		t.Errorf("applier ran %d time(s) for a bundle signed with an unknown key", n)
 	}
 
+	// A transient failure (fleet 500) must NOT flap the unknown-key state off.
+	fake.mu.Lock()
+	fake.status = http.StatusInternalServerError
+	fake.mu.Unlock()
+	if err := p.poll(context.Background()); err == nil {
+		t.Fatal("poll against a 500 should fail")
+	}
+	if st := p.Status(); !st.SigningKeyUnknown || !strings.Contains(st.LastError, "500") {
+		t.Errorf("after a transient 500: SigningKeyUnknown=%v LastError=%q, want true and the 500", st.SigningKeyUnknown, st.LastError)
+	}
+	fake.mu.Lock()
+	fake.status = 0
+	fake.mu.Unlock()
+
+	// A different hard rejection of a served body clears it.
+	fake.setResponse([]byte("{not json"))
+	_ = p.poll(context.Background())
+	if p.Status().SigningKeyUnknown {
+		t.Error("an unparseable served bundle is a different rejection; SigningKeyUnknown should clear")
+	}
+	fake.setResponse(bundleToJSON(t, foreign))
+	if err := p.poll(context.Background()); !errors.Is(err, ErrSigningKeyUnknown) || !p.Status().SigningKeyUnknown {
+		t.Fatalf("re-serving the foreign bundle: err=%v flag=%v", err, p.Status().SigningKeyUnknown)
+	}
+
 	// Next bundle is signed by the pinned key → flag clears.
 	good := sampleBundle()
 	good.BundleID = 2
@@ -385,5 +458,84 @@ func TestConfigPoller_UnknownKeyID_SurfacesInStatus(t *testing.T) {
 	}
 	if st := p.Status(); st.SigningKeyUnknown || st.LastAppliedID != 2 {
 		t.Errorf("after a pinned-key bundle: SigningKeyUnknown=%v LastAppliedID=%d, want false/2", st.SigningKeyUnknown, st.LastAppliedID)
+	}
+}
+
+// ── F2: degenerate / small-order pins are rejected at parse ────────────────
+
+// identityPointEnc is the canonical encoding of the edwards25519 identity
+// (x=0, y=1).
+func identityPointEnc() []byte {
+	b := make([]byte, 32)
+	b[0] = 1
+	return b
+}
+
+// TestParseSigningKeySet_IdentityPinRejected is the review probe: with the
+// identity point as a "public key", the forged signature (R = identity,
+// S = 0) verifies under ed25519.Verify for ANY bundle — so pinning it would
+// let anyone sign config. Parsing a set containing it must reject the whole
+// set.
+func TestParseSigningKeySet_IdentityPinRejected(t *testing.T) {
+	ident := ed25519.PublicKey(identityPointEnc())
+
+	// The hazard, demonstrated: a forged signature verifies under identity.
+	b := sampleBundle()
+	b.KeyID = SigningKeyID(ident)
+	forged := make([]byte, ed25519.SignatureSize)
+	copy(forged, identityPointEnc()) // R = identity, S = 0
+	b.Signature = base64.RawStdEncoding.EncodeToString(forged)
+	if err := VerifyWithKeySet(b, []ed25519.PublicKey{ident}, 0); err != nil {
+		t.Logf("note: forged identity signature did not verify on this Go version (%v); the parse guard is still required", err)
+	}
+
+	good, _ := newTestKeyPair(t)
+	setPinVars(t, hexOf(good)+","+hex.EncodeToString(ident), "")
+	if keys := FleetSigningKeys(); keys != nil {
+		t.Fatalf("a set pinning the identity point must be rejected whole, got %d key(s)", len(keys))
+	}
+	if err := FleetSigningKeySetError(); err == nil || !errors.Is(err, ErrSigningKeyNotConfigured) || !strings.Contains(err.Error(), "small-order") {
+		t.Fatalf("FleetSigningKeySetError = %v, want a small-order rejection wrapping ErrSigningKeyNotConfigured", err)
+	}
+	// And the forged bundle therefore cannot verify through the real path.
+	if err := VerifyWithKeySet(b, FleetSigningKeys(), 0); !errors.Is(err, ErrSigningKeyNotConfigured) {
+		t.Fatalf("forged bundle against the parsed (rejected) set: %v, want ErrSigningKeyNotConfigured", err)
+	}
+}
+
+// TestCheckPinnableEd25519Key covers the degenerate encodings and confirms
+// real keys are never falsely rejected.
+func TestCheckPinnableEd25519Key(t *testing.T) {
+	mustHex := func(s string) []byte {
+		b, err := hex.DecodeString(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	bad := map[string][]byte{
+		"identity (order 1)":           identityPointEnc(),
+		"all-zero (order 4)":           make([]byte, 32),
+		"y=-1 (order 2)":               mustHex("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
+		"order-8 point":                mustHex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"),
+		"order-8 point (other)":        mustHex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"),
+		"non-canonical identity y=p+1": mustHex("eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
+		"non-canonical -0 identity":    append(identityPointEnc()[:31:31], 0x80),
+		"all-ff (y>=p)":                mustHex(strings.Repeat("ff", 32)),
+	}
+	for name, enc := range bad {
+		if err := checkPinnableEd25519Key(enc); err == nil {
+			t.Errorf("%s: accepted, want rejection", name)
+		}
+	}
+	for i := 0; i < 200; i++ {
+		pub, _ := newTestKeyPair(t)
+		if err := checkPinnableEd25519Key(pub); err != nil {
+			t.Fatalf("real key %x falsely rejected: %v", []byte(pub), err)
+		}
+	}
+	// The ed25519 base point is a valid prime-order key.
+	if err := checkPinnableEd25519Key(mustHex("5866666666666666666666666666666666666666666666666666666666666666")); err != nil {
+		t.Errorf("base point rejected: %v", err)
 	}
 }

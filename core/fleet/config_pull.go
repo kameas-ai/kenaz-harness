@@ -76,7 +76,8 @@ type ConfigPollStatus struct {
 	// build (the install's pins predate fleet's current signing key). Settings
 	// FleetHealth projects it as ConfigSource "unknown-key", parallel to
 	// "no-key" for ErrSigningKeyNotConfigured. Cleared by the next poll that
-	// does not end in that rejection.
+	// judges a served bundle differently (a verified bundle, a 304, or a
+	// different hard rejection); transient fetch errors preserve it.
 	SigningKeyUnknown bool `json:"signingKeyUnknown"`
 }
 
@@ -280,8 +281,14 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		p.setError(fmt.Sprintf("fetch config: %v", err))
 		return err
 	}
+	// Drain-then-close keeps the connection reusable — except after an
+	// over-cap body, where draining would mean reading an unbounded hostile
+	// stream to the end; there we close without draining.
+	drain := true
 	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		if drain {
+			_, _ = io.Copy(io.Discard, resp.Body)
+		}
 		_ = resp.Body.Close()
 	}()
 
@@ -306,15 +313,16 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return e
 	}
 	if int64(len(body)) > maxConfigBundleBytes {
+		drain = false
 		e := fmt.Errorf("%w: body exceeds %d bytes — rejected unparsed, nothing applied", ErrConfigBundleTooLarge, maxConfigBundleBytes)
-		p.setError(e.Error())
+		p.setRejection(e.Error())
 		return e
 	}
 
 	var b Bundle
 	if err := json.Unmarshal(body, &b); err != nil {
 		e := fmt.Errorf("fleet: parse config bundle: %w", err)
-		p.setError(e.Error())
+		p.setRejection(e.Error())
 		return e
 	}
 
@@ -388,9 +396,22 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	return nil
 }
 
-// setError records msg and clears the unknown-key flag (every caller is a
-// non-verification failure; the verification path sets both itself).
+// setError records a TRANSIENT failure (fetch, non-200 status, body read).
+// It deliberately leaves keyUnknown alone: a network blip says nothing about
+// which key the served bundle is signed with, so an "unknown-key" state must
+// not flap off and back on across retries. keyUnknown changes only when a
+// bundle body is actually judged — setRejection, the verification path, a
+// verified bundle, or a 304 (clearError).
 func (p *ConfigPoller) setError(msg string) {
+	p.mu.Lock()
+	p.lastError = msg
+	p.mu.Unlock()
+}
+
+// setRejection records a hard rejection of a served bundle body for a reason
+// OTHER than an unknown signing key (oversized, unparseable): the served
+// bundle is no longer the unknown-key one, so the flag clears.
+func (p *ConfigPoller) setRejection(msg string) {
 	p.mu.Lock()
 	p.lastError = msg
 	p.keyUnknown = false

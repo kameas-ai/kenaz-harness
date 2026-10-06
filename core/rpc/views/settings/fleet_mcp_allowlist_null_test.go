@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
@@ -90,9 +91,14 @@ func TestBundle_MCPAllowlist_NullVsEmptyDecode(t *testing.T) {
 	if err := fleet.SignBundleForTesting(signedNull, priv); err != nil {
 		t.Fatal(err)
 	}
+	// Positive control: the untampered bundle verifies, so the rejection
+	// below cannot pass vacuously against a Verify that always fails.
+	if err := fleet.Verify(signedNull, pub, 0); err != nil {
+		t.Fatalf("positive control: untampered null-allowlist bundle must verify, got: %v", err)
+	}
 	asEmpty := *signedNull
 	asEmpty.MCPAllowlist = []string{}
-	if err := fleet.Verify(&asEmpty, pub, 0); err == nil {
-		t.Error("rewriting mcp_allowlist null → [] in transit must break the signature")
+	if err := fleet.Verify(&asEmpty, pub, 0); !errors.Is(err, fleet.ErrInvalidSignature) {
+		t.Errorf("rewriting mcp_allowlist null → [] in transit must fail with ErrInvalidSignature, got: %v", err)
 	}
 }

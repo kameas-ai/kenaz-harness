@@ -94,6 +94,10 @@ func parseSigningKeySet(s string) ([]ed25519.PublicKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("pinned signing key entry #%d: %w — the whole pin set is rejected", i+1, err)
 		}
+		if err := checkPinnableEd25519Key(b); err != nil {
+			return nil, fmt.Errorf("%w: pinned signing key entry #%d %v — the whole pin set is rejected",
+				ErrSigningKeyNotConfigured, i+1, err)
+		}
 		k := string(b)
 		if seen[k] {
 			continue

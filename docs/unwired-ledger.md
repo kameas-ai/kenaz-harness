@@ -5179,6 +5179,23 @@ fetches and an overall install deadline).**
    10s) on hanging candidates — cut from 5 × 5s by a per-probe deadline on
    the read-only Settings scan only. Informational.
 
+### 2026-10-06 (bundle-key-rotation, review F3) — `FleetHealthChip` fetches fleet health once at mount and never refreshes
+
+`frontend/src/shell/FleetHealthChip.vue` calls `client.settings.fleetHealth()`
+in `onMounted` only. Every state it renders — including the new
+`"unknown-key"` (`fleet.ErrSigningKeyUnknown`, bundle-key-rotation WP01) —
+is whatever was true at app start. The config poller runs every 5 minutes,
+so a key flip, a first-ever bundle delivery, or a recovery after an
+"unknown-key" rejection is not reflected until a restart. The chip does not
+lie about the state it fetched; it goes stale.
+
+Justified, not wired, in the key-rotation PR: the fix is a polling or
+event-driven refresh shared by the Settings fleet-health surfaces, a
+separate design question (cadence, event source) the key-rotation change
+should not settle in passing. **Blocker:** none technical — needs the refresh
+design. **Owner:** alec — the Settings-health refresh follow-up deletes this
+entry.
+
 ## Drained
 
 ### 2026-10-04 · CLOSED — chat run ids were a per-process counter written into a persistent log (`agentgraph-settings-linkage-01DOGF0D` WP02)

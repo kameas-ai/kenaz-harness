@@ -1473,9 +1473,7 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 // ConfigSource values beyond the poller's own Source: "no-key" (no signing
 // key pinned in this binary — fleet.ErrSigningKeyNotConfigured) and
 // "unknown-key" (the latest bundle's signed key_id matches no pinned key —
-// fleet.ErrSigningKeyUnknown; the install must update). Documented here, not
-// on FleetHealthView, because the bound type's declaration is hashed by
-// check-codegen.
+// fleet.ErrSigningKeyUnknown; the install must update).
 func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 	enabled := fleet.ConfigDistributionEnabled()
 
