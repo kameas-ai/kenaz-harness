@@ -286,8 +286,13 @@ func (m *Manager) spawnLocked(ctx context.Context, port int) Status {
 	// lock. Adopt it rather than starting a second engine on another lane.
 	if port > 0 {
 		if rec, ok, _ := RecordedEnginePort(m.Layout, m.BasePort); ok {
-			if lp := m.probeLane(ctx, rec); lp.verdict == laneOurs {
+			switch lp := m.probeLane(ctx, rec); lp.verdict {
+			case laneOurs:
 				m.adoptLane(lp)
+				return lp.status
+			case laneBusy, laneTerminal:
+				// Recorded port connected but did not answer, or is a
+				// refusal: never step around it into a second spawn.
 				return lp.status
 			}
 		}

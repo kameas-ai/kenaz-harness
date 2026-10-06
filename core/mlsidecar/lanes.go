@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -16,9 +17,15 @@ import (
 type laneVerdict string
 
 const (
-	// laneFree: nothing answered /health (transport failure) — a spawn
-	// target.
+	// laneFree: the TCP dial itself failed (connection refused): nothing
+	// listens — the only spawn target.
 	laneFree laneVerdict = "free"
+	// laneBusy: a connection was made but /health never completed (a
+	// timeout or reset AFTER connecting — e.g. our own engine busy past the
+	// client timeout). Occupied/unknown: NEVER a spawn target (that was a
+	// second engine on one lease dir). On the RECORDED port it stops the
+	// scan with "engine not responding"; elsewhere the scan steps past it.
+	laneBusy laneVerdict = "busy"
 	// laneForeign: something answered but is not our engine — an
 	// unreadable /health (ErrUnusableResponse), a pre-lease/legacy
 	// /health (sigild's bare {"status":"ok"} lands here), or an exe_path
@@ -69,10 +76,17 @@ func (lp laneProbe) label() string {
 func (m *Manager) probeLane(ctx context.Context, port int) laneProbe {
 	health, err := m.Client.at(port).Health(ctx)
 	if err != nil {
-		if errors.Is(err, ErrUnusableResponse) {
+		switch {
+		case errors.Is(err, ErrUnusableResponse):
 			return laneProbe{port: port, verdict: laneForeign, status: occupiedStatus(err)}
+		case isDialFailure(err):
+			return laneProbe{port: port, verdict: laneFree}
+		default:
+			return laneProbe{port: port, verdict: laneBusy, status: Status{
+				State: StateInstalledUnhealthy, Reason: ReasonCrash, UpdatedAt: time.Now(),
+				Detail: fmt.Sprintf("engine not responding on port %d (connected, /health did not complete: %v); not spawning a second engine", port, err),
+			}}
 		}
-		return laneProbe{port: port, verdict: laneFree}
 	}
 	decision, derr := EvaluateAdoption(m.Layout, health, m.tv)
 	if derr != nil {
@@ -101,6 +115,14 @@ func (m *Manager) probeLane(ctx context.Context, port int) laneProbe {
 	}
 }
 
+// isDialFailure reports whether err is a failure to establish the TCP
+// connection at all (*net.OpError with Op "dial" — connection refused on
+// loopback). Anything after the connection exists is NOT a dial failure.
+func isDialFailure(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
+}
+
 // laneScan is the outcome of probing the record and then the lane.
 type laneScan struct {
 	probes []laneProbe // every candidate probed, in lane order
@@ -126,11 +148,13 @@ func (m *Manager) scanLanes(ctx context.Context) laneScan {
 	}
 	if ok {
 		lp := m.probeLane(ctx, rec)
-		if lp.verdict == laneOurs || lp.verdict == laneTerminal {
+		if lp.verdict == laneOurs || lp.verdict == laneTerminal || lp.verdict == laneBusy {
 			sc.probes = []laneProbe{lp}
 			sc.found = &sc.probes[0]
 			return sc
 		}
+		// Busy on the RECORDED port stopped above: it is most likely our own
+		// engine under load, and stepping around it would double-spawn.
 		// Stale (dead or foreign): ignored, the lane scan reruns.
 	}
 	for _, port := range CandidatePorts(m.BasePort) {
@@ -160,7 +184,7 @@ func exhaustedStatus(probes []laneProbe) Status {
 		labels[i] = lp.label()
 	}
 	return Status{State: StateInstalledUnhealthy, Reason: ReasonPortConflict, UpdatedAt: time.Now(),
-		Detail: fmt.Sprintf("all %d engine ports are held by foreign listeners (scanned: %s)", len(probes), strings.Join(labels, ", "))}
+		Detail: fmt.Sprintf("all %d engine ports are held by foreign or unresponsive listeners (scanned: %s)", len(probes), strings.Join(labels, ", "))}
 }
 
 // adoptLane records an adopted engine's port (only when it differs) and

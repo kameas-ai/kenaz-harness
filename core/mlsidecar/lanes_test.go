@@ -387,3 +387,57 @@ func TestEnginePortFile_Contract(t *testing.T) {
 		}
 	}
 }
+
+// slowHealth accepts the connection but never completes /health within
+// any sane client timeout (until the client gives up).
+func slowHealth(d time.Duration) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(d):
+		}
+	})
+}
+
+// TestLanes_SlowEngineOnRecordedPort_NoSpawn is review F1: a listener on
+// the RECORDED port that accepts the connection but answers /health only
+// after the client timeout is occupied/unknown — never "free". Ensure
+// must not spawn a second engine (the base is free) and reports
+// installed_unhealthy "not responding".
+func TestLanes_SlowEngineOnRecordedPort_NoSpawn(t *testing.T) {
+	l, _ := installedLayout(t)
+	base := freeLaneBase(t)
+	lanes := CandidatePorts(base)
+	serveAt(t, lanes[1], slowHealth(5*time.Second))
+	if err := WriteEnginePort(l, lanes[1]); err != nil {
+		t.Fatal(err)
+	}
+	m := newLaneManager(l, base, &laneSpawner{t: t, forbid: true}, "harness")
+	m.Client.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
+	got := m.Ensure(context.Background())
+	if got.State != StateInstalledUnhealthy || !strings.Contains(got.Detail, "not responding") {
+		t.Fatalf("got %q/%q (%s), want installed_unhealthy \"not responding\"", got.State, got.Reason, got.Detail)
+	}
+	if f := readPortFile(t, l); f != strconv.Itoa(lanes[1])+"\n" {
+		t.Fatalf("engine.port = %q, want left at the recorded %d", f, lanes[1])
+	}
+}
+
+// TestLanes_SlowListenerUnrecorded_NeverASpawnTarget: a connected-but-
+// silent listener on the base with no record is stepped past, never
+// spawned onto; the engine goes to the next truly free candidate.
+func TestLanes_SlowListenerUnrecorded_NeverASpawnTarget(t *testing.T) {
+	l, health := installedLayout(t)
+	base := freeLaneBase(t)
+	lanes := CandidatePorts(base)
+	serveAt(t, lanes[0], slowHealth(5*time.Second))
+	sp := &laneSpawner{t: t, health: health}
+	m := newLaneManager(l, base, sp, "harness")
+	m.Client.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
+	if got := m.Ensure(context.Background()); got.State != StateHealthy {
+		t.Fatalf("State = %q (%s)", got.State, got.Detail)
+	}
+	if ports := sp.spawned(); len(ports) != 1 || ports[0] != lanes[1] {
+		t.Fatalf("spawned on %v, want [%d] — never on the busy base", ports, lanes[1])
+	}
+}
