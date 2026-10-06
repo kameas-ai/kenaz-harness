@@ -485,3 +485,67 @@ func TestLanes_SlowListenerUnrecorded_NeverASpawnTarget(t *testing.T) {
 		t.Fatalf("spawned on %v, want [%d] — never on the busy base", ports, lanes[1])
 	}
 }
+
+// onProbeRT is a RoundTripper that runs hook once, just before forwarding
+// the first request to triggerPort.
+type onProbeRT struct {
+	triggerPort int
+	hook        func()
+	once        sync.Once
+}
+
+func (rt *onProbeRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Port() == strconv.Itoa(rt.triggerPort) {
+		rt.once.Do(rt.hook)
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// TestLanes_PostLockRecheck_AdoptsConcurrentSpawn is review F3(1): the
+// other client spawns our engine on another lane port and records it
+// AFTER this client's scan saw that port free but BEFORE this client
+// spawns. The post-lock engine.port recheck in spawnLocked must adopt it
+// with zero spawns.
+func TestLanes_PostLockRecheck_AdoptsConcurrentSpawn(t *testing.T) {
+	l, health := installedLayout(t)
+	base := freeLaneBase(t)
+	lanes := CandidatePorts(base)
+	sp := &laneSpawner{t: t, forbid: true}
+	m := newLaneManager(l, base, sp, "harness")
+	m.Client.HTTP = &http.Client{Timeout: 5 * time.Second, Transport: &onProbeRT{
+		triggerPort: lanes[LaneCount-1], // the scan's last probe
+		hook: func() {
+			serveAt(t, lanes[2], engineAnswering(health)) // already probed: free
+			if err := WriteEnginePort(l, lanes[2]); err != nil {
+				t.Error(err)
+			}
+		},
+	}}
+	got := m.Ensure(context.Background())
+	if got.State != StateHealthy {
+		t.Fatalf("State = %q (%s), want healthy by adopting the concurrent spawn", got.State, got.Detail)
+	}
+	if n := len(sp.spawned()); n != 0 {
+		t.Fatalf("spawned %d times, want 0", n)
+	}
+	if m.VerifiedPort() != lanes[2] {
+		t.Fatalf("VerifiedPort = %d, want %d", m.VerifiedPort(), lanes[2])
+	}
+}
+
+// TestLanes_ContractUnsupportedIsTerminal is review F3(2): a lease-aware
+// engine speaking a lifecycle protocol this build cannot is a stop, not a
+// foreign listener — the scan never steps around it into a second spawn.
+func TestLanes_ContractUnsupportedIsTerminal(t *testing.T) {
+	l, health := installedLayout(t)
+	base := freeLaneBase(t)
+	health.LifecycleProtocol = SupportedContractMajor + 7
+	serveAt(t, base, engineAnswering(health))
+	got := newLaneManager(l, base, &laneSpawner{t: t, forbid: true}, "harness").Ensure(context.Background())
+	if got.State != StateContractUnsupported {
+		t.Fatalf("got %q/%q (%s), want contract_unsupported", got.State, got.Reason, got.Detail)
+	}
+	if _, err := os.Stat(l.EnginePortFile()); !os.IsNotExist(err) {
+		t.Fatalf("engine.port written for a contract-unsupported engine (stat err=%v)", err)
+	}
+}
