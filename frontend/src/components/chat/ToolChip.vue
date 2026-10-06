@@ -25,8 +25,10 @@
  */
 
 import { computed, ref } from 'vue';
+import { RouterLink } from 'vue-router';
 import { AlertTriangle, ChevronDown, ChevronRight, Wrench } from '@/shell/icons';
 import type { ToolChip } from '@/lib/transcript';
+import { forkBranchSessionId, isForkToolName } from '@/lib/forkTool';
 
 const props = defineProps<{
   chip: ToolChip;
@@ -100,6 +102,18 @@ const shellClass = computed(() => {
   return `${base} border-border-muted bg-surface-1 text-ink-muted hover:bg-surface-2`;
 });
 
+/**
+ * kenaz__fork_conversation: when the result names the branch the model
+ * created, offer it as a link (same /sessions/:id route the branches
+ * sidebar's "Open" uses). '' — no link — while running, on the live
+ * stream (which carries no tool output), and for any failed fork.
+ */
+const forkSessionId = computed(() =>
+  isForkToolName(props.chip.name) && props.chip.status !== 'running'
+    ? forkBranchSessionId(props.chip.output)
+    : '',
+);
+
 function toggle() {
   if (!hasOutput.value) return;
   expanded.value = !expanded.value;
@@ -154,6 +168,15 @@ function toggle() {
         />
       </span>
     </component>
+
+    <RouterLink
+      v-if="forkSessionId"
+      :to="`/sessions/${encodeURIComponent(forkSessionId)}`"
+      class="mt-1 inline-block font-ui text-[11px] text-ink-subtle hover:text-accent underline-offset-2 hover:underline"
+      data-testid="tool-chip-open-branch"
+    >
+      Open branch
+    </RouterLink>
 
     <!-- Output on demand. Never in the conversation flow: scrolls inside
          its own box and is capped at OUTPUT_CAP characters. -->
