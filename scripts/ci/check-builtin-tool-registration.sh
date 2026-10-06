@@ -79,6 +79,23 @@
 # valid resolution). An entry naming a package that IS now imported is
 # STALE and fails.
 #
+# SCOPE EXTENSION (model-harness-toolset-01MHTS001 WP03, finding H-2)
+# ------------------------------------------------------------------
+# §6 below: a harness-self tool whose handler nil-checks a Managers field
+# (`if m.X == nil { return nil, errNotConfigured }`) that NOTHING ever
+# assigns. harness_read_get_status and harness_write_install_mcp_recipe
+# shipped exactly like that — registered, visible to the model (get_status
+# in every chat session), and failing "not configured" on every call,
+# because core/rpc/harness_wiring.go's buildHarnessManagers never set
+# Managers.Status / Managers.RecipesWriter. §5's package-level import check
+# cannot see it (the package IS imported), and the onboarding-starter gate
+# only checks names. §6 requires every Managers field a handler nil-checks
+# to have at least one `m.X = ` assignment in the wiring file. Assignment,
+# not unconditional assignment: a field set only when its backing API is
+# non-nil is a deliberate degraded-boot posture, not a never-wired one.
+# Violations are reported as `harness-self-manager:<Field>` and use the
+# same dated allowlist.
+#
 # Usage: bash scripts/ci/check-builtin-tool-registration.sh (from anywhere).
 
 set -euo pipefail
@@ -98,11 +115,16 @@ BUILTIN_MCP_ROOT="core/mcp/builtin"
 BUILTIN_MCP_ROOT_EXCLUDE="toolserver"
 WIRING_FILE="core/rpc/builtins_wiring.go"
 ALLOW_FILE="scripts/ci/allowlists/i11-unregistered-builtin-tools.txt"
+# §6: harness-self handler managers vs. their one assignment site.
+HARNESS_SELF_PKG="core/mcp/builtin/harness"
+HARNESS_WIRING_FILE="core/rpc/harness_wiring.go"
 
 ci_require_dir "$TOOLS_ROOT" "$GATE"
 ci_require_dir "$BUILTIN_MCP_ROOT" "$GATE"
 ci_require_file "$WIRING_FILE" "$GATE"
 ci_require_file "$ALLOW_FILE" "$GATE"
+ci_require_dir "$HARNESS_SELF_PKG" "$GATE"
+ci_require_file "$HARNESS_WIRING_FILE" "$GATE"
 
 fail=0
 
@@ -175,6 +197,26 @@ while IFS= read -r pkg; do
   fi
 done <<< "$mcp_builtin_pkgs"
 
+# ---- 6. harness-self: every nil-checked Managers field is assigned ----
+# See the WP03 scope-extension note in the header. Discovery floor: the
+# harness-self handlers nil-check a dozen managers today; finding none
+# means the `if m.X == nil` convention changed, not that all is wired.
+nil_checked=$(grep -hoE 'if m\.[A-Za-z0-9_]+ == nil' \
+  $(find "$HARNESS_SELF_PKG" -maxdepth 1 -name '*.go' ! -name '*_test.go') 2>/dev/null \
+  | sed -E 's/^if m\.([A-Za-z0-9_]+) == nil$/\1/' | sort -u || true)
+if [[ -z "$nil_checked" ]]; then
+  echo "${GATE} FAIL: found no 'if m.<Field> == nil' manager checks under ${HARNESS_SELF_PKG}." >&2
+  echo "${GATE} §6 has nothing to inspect, which is indistinguishable from passing. The" >&2
+  echo "${GATE} handler nil-check convention changed — update this script in the same commit." >&2
+  exit 1
+fi
+while IFS= read -r field; do
+  [[ -z "$field" ]] && continue
+  if ! grep -qE "(^|[^A-Za-z0-9_])m\.${field}[[:space:]]*=[^=]" "$HARNESS_WIRING_FILE"; then
+    violations="${violations}harness-self-manager:${field}"$'\n'
+  fi
+done <<< "$nil_checked"
+
 violations=$(printf '%s' "$violations" | grep -v '^$' | sort -u || true)
 
 allow=$(load_allowlist "$ALLOW_FILE")
@@ -196,7 +238,12 @@ while IFS= read -r entry; do
   [[ -z "$entry" ]] && continue
   # A line naming a package that no longer exists is fine — deleting the
   # dead tool is a valid resolution and must not require a paired edit.
-  [[ -d "$entry" ]] || continue
+  # §6 entries (harness-self-manager:<Field>) are not paths: they are
+  # stale as soon as the field is no longer a violation (wired, or the
+  # handler and its nil-check deleted).
+  if [[ "$entry" != harness-self-manager:* ]]; then
+    [[ -d "$entry" ]] || continue
+  fi
   if ! printf '%s\n' "$violations" | grep -qx "$entry"; then
     echo "" >&2
     echo "${GATE} FAIL: STALE entry in ${ALLOW_FILE} — ${entry} now has a production importer. Delete the line (allow-lists shrink monotonically)." >&2
@@ -210,4 +257,4 @@ if [[ "$fail" -ne 0 ]]; then
   exit 1
 fi
 
-echo "${GATE} clean — every builtin tool package under ${TOOLS_ROOT} and ${BUILTIN_MCP_ROOT} is wired or listed in ${ALLOW_FILE}."
+echo "${GATE} clean — every builtin tool package under ${TOOLS_ROOT} and ${BUILTIN_MCP_ROOT} is wired or listed in ${ALLOW_FILE}; every harness-self handler manager is assigned in ${HARNESS_WIRING_FILE}."

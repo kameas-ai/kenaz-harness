@@ -10,8 +10,14 @@
 //     • until.exit is true and the task ends, or
 //     • until.timeout_s elapses (default 300 s).
 //
-// The tool is Cedar-gated under ActionToolTasksMonitor (tool.tasks.monitor)
-// as a default-allow passive tool that reads task state.
+// Gating: always-on at core/rpc's builtinEnabledPredicate, registered only
+// when a task registry exists, and resolved per call like every builtin
+// through the merged tool-permission resolver (Cedar use_tool on
+// "kenaz__monitor" — a user forbid on that name denies it). Cedar's
+// ActionToolTasksMonitor (tool.tasks.monitor) is DECLARED but nothing
+// evaluates it: a policy written against that action has no effect
+// (model-harness-toolset-01MHTS001 WP03, finding H-3; see
+// docs/unwired-ledger.md).
 //
 // FR references: FR-009 .. FR-013.
 package monitor

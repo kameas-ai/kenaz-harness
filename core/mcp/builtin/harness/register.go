@@ -8,10 +8,15 @@ import "encoding/json"
 // default. Write-side tools (harness_write_*) are gated to
 // kind=onboarding sessions by the default Cedar policies.
 const (
-	ToolListProviders      = "harness_read_list_providers"
-	ToolListMCPRecipes     = "harness_read_list_mcp_recipes"
-	ToolListSettings       = "harness_read_list_settings"
-	ToolGetStatus          = "harness_read_get_status"
+	ToolListProviders  = "harness_read_list_providers"
+	ToolListMCPRecipes = "harness_read_list_mcp_recipes"
+	ToolListSettings   = "harness_read_list_settings"
+	// ToolGetStatus ("harness_read_get_status") was REMOVED by
+	// model-harness-toolset-01MHTS001 WP03 (finding H-2): it was
+	// registered and visible in every session, but no StatusReporter
+	// was ever wired, so every call failed "not configured". A tool
+	// advertised to the model that always fails is a lie; see
+	// docs/unwired-ledger.md for the disposition and what replaces it.
 	ToolGetRecommendations = "harness_read_get_onboarding_recommendations"
 	ToolListSessions       = "harness_read_list_sessions"
 	ToolListModels         = "harness_read_list_models"
@@ -21,9 +26,16 @@ const (
 	// containment default, which does not restrict reads).
 	ToolMaterializeRun = "harness_read_materialize_run"
 
-	ToolAddProvider      = "harness_write_add_provider"
-	ToolRemoveProvider   = "harness_write_remove_provider"
-	ToolInstallMCPRecipe = "harness_write_install_mcp_recipe"
+	ToolAddProvider    = "harness_write_add_provider"
+	ToolRemoveProvider = "harness_write_remove_provider"
+	// ToolInstallMCPRecipe ("harness_write_install_mcp_recipe") was
+	// REMOVED by model-harness-toolset-01MHTS001 WP03 (finding H-2): no
+	// RecipeWriter was ever wired, so every call failed "not
+	// configured". Wiring it is a product decision (owner question Q8:
+	// may the model trigger installs at all?) and must route through
+	// install.Framework.Install (install-framework decision record), so
+	// it is unregistered rather than guessed at — see
+	// docs/unwired-ledger.md.
 	// ToolSetSetting ("harness_write_set_setting") was REMOVED by
 	// harness-self-attach-01PMHS01 UNIT-8 (G-4,
 	// docs/escalation-register-2026-08-19.md Part 9). See handlers.go's
@@ -96,14 +108,11 @@ func RegisterAll(srv *Server, m Managers) *Server {
 		Handler:     m.handleListSettings,
 	})
 	srv.Register(ToolSpec{
-		Name:        ToolGetStatus,
-		Description: "Counts of configured providers, MCP servers, sessions, projects, policies.",
-		InputSchema: schemaObject(`{}`),
-		Handler:     m.handleGetStatus,
-	})
-	srv.Register(ToolSpec{
-		Name:        ToolGetRecommendations,
-		Description: "Curated onboarding next-step recommendations based on current state.",
+		Name: ToolGetRecommendations,
+		// The handler returns a fixed starter list; it reads no state.
+		// The description used to say "based on current state" — a
+		// capability the handler does not have (WP03, schema honesty).
+		Description: "Curated onboarding next-step recommendations (a fixed starter list; does not inspect current state).",
 		InputSchema: schemaObject(`{}`),
 		Handler:     m.handleGetRecommendations,
 	})
@@ -146,15 +155,6 @@ func RegisterAll(srv *Server, m Managers) *Server {
 		Description: "Remove a configured provider by id.",
 		InputSchema: schemaObject(`{"id":{"type":"string"}}`, "id"),
 		Handler:     m.handleRemoveProvider,
-	})
-	srv.Register(ToolSpec{
-		Name:        ToolInstallMCPRecipe,
-		Description: "Install an MCP recipe by curated-registry id, or by inline config object.",
-		InputSchema: schemaObject(`{
-            "id":{"type":"string"},
-            "config":{"type":"object"}
-        }`, "id"),
-		Handler: m.handleInstallRecipe,
 	})
 	srv.Register(ToolSpec{
 		Name:        ToolCreateProject,

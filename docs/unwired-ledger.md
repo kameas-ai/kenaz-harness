@@ -5229,6 +5229,104 @@ question. The guard is the runtime pin (an off-list call in a really-fired
 run is denied), which is now in place; no gate extension is filed because
 none can be made non-vacuous for this class.
 
+### 2026-10-05 (model-harness-toolset-01MHTS001 WP03, findings H-2..H-6) — harness-self tools that always failed; comments naming gates nothing evaluates
+
+**H-2 — CLOSED (deleted, not wired).** `harness_read_get_status` and
+`harness_write_install_mcp_recipe` were registered on the harness-self
+server (`get_status` visible in every chat session, since reads are
+permitted for every session kind) while `buildHarnessManagers` never
+assigned `Managers.Status` / `Managers.RecipesWriter`, so every call
+returned "not configured". No ledger entry existed; the gap was recorded
+only in a code comment. Both tools, their handlers, the two Managers
+fields and the `StatusReporter`/`StatusSnapshot`/`RecipeWriter` types are
+deleted; tests that used `get_status` only as a representative read tool
+now use `harness_read_list_providers`. Pin:
+`TestRegisterAll_NoAlwaysFailingTools`; harness-self count is 13.
+- `get_status` — **class: not trivially wireable; substitutes exist or are
+  slotted.** It needs five unrelated sources (providers, installed MCP
+  servers, sessions, projects, policies); the policy count has no source
+  on this path. Providers and sessions are already readable
+  (`harness_read_list_providers`, `harness_read_list_sessions`); projects
+  and capabilities are slotted as `kenaz__list_projects` /
+  `kenaz__list_capabilities` (this mission, WP06/WP08). **Owner:** WP08 —
+  if a status summary is still wanted, it is a catalog tool over the
+  WP06/WP08 reads, not a revival of this one.
+- `install_mcp_recipe` — **class: product decision, escalated not
+  guessed.** Wiring it means a model-triggered install, which is owner
+  question **Q8** (spec §7, default "forbid until ruled"); the
+  install-framework decision record also requires it to route through
+  `install.Framework.Install` (consumer-confirmed), which its
+  `{id, config}` schema (an inline config object) cannot. **Owner:** WP15
+  (`kenaz__install_capability`, shares `Framework.Install`).
+  **Blocker:** the Q8 ruling.
+- Also corrected: `harness_read_get_onboarding_recommendations` described
+  itself as "based on current state"; its handler returns a fixed list.
+
+**Gate extended (I11, `check-builtin-tool-registration.sh` §6):** every
+`Managers` field a harness-self handler nil-checks must have an `m.X =`
+assignment in `core/rpc/harness_wiring.go`. It would have caught both H-2
+tools. Planted proof:
+`builtin-tool-registration/harness-self-manager-never-assigned`. It cannot
+see a field assigned only on a branch that never runs in production — that
+is a runtime question.
+
+**H-3 — CLOSED for the comments; the four actions stay declared.** Four
+Cedar actions were named in code comments as the gate for a builtin, and
+nothing evaluates any of them. Comments rewritten to say "declared, not
+evaluated" and name the real gates (the predicate dial + per-call
+`use_tool` resolution, where a user forbid on the tool name does work):
+- `ActionToolTasksMonitor` (`monitor/tool.go`, `builtins_wiring.go`
+  predicate case, `types.go`) — passive read of captured output.
+  Not evaluated, by choice: `use_tool` already gives per-call control.
+- `ActionToolTodoWrite` (`todo/todo.go` said the tool "reports" it on
+  every call; `types.go`) — session-internal state. Not evaluated, by
+  choice, same reason.
+- `ActionToolListSecrets` (`listsecrets.go`, `types.go`) — the same file
+  also claimed per-call `tool.invoked` audit records, which do not exist
+  (H-5); withdrawn. Not evaluated, by choice: the list returns reference
+  names only, and secret *resolution* is separately gated and audited
+  (`secret_reference.resolve`). **Owner if that changes:** alec.
+- `ActionArtifactUpdate` (`types.go`, `posture.go`) — **this one SHOULD
+  bind by its own design**: it sits in `PlanModeDeniedActions`, i.e. plan
+  mode is meant to deny `kenaz__update_artifact`, and does not. Not wired
+  drive-by: the plan-mode wrapper only reaches the agentgraph
+  `env.Policy`, so evaluating the action at the tool would still not be
+  plan-mode-aware (that is H-4). **Owner:** the H-4 follow-up mission
+  (spec Q12). **Blocker:** Q12's ruling on widening plan mode to builtins.
+  Dated 2026-10-05.
+- Not touched (already listed as declared-not-evaluated, inventory §2.1):
+  `ToolSkillInvoke`, `ToolSubagentMerge`, `ToolTasksCancel`,
+  `ElicitDeferred`.
+
+**H-4 — OPEN (filed, not fixed).** Plan mode does not bind builtin
+`kenaz__*` tools: `cedar.WithPostureMode` wraps only the agentgraph
+`env.Policy` (`use_tool`/`tool_exec` are not in `PlanModeDeniedActions`);
+bash, the fs gate, the workflow and scheduled-chat views and the RiskGate
+use unwrapped engines (inventory H-4), so the plan-mode deny set does not
+reach `kenaz__bash`, `kenaz__write_file` or `kenaz__update_artifact`
+through Cedar. This mission's own W-tier
+tools check posture themselves (FR-G5). **Owner:** a follow-up mission per
+spec Q12 (behaviour change for current users, so it needs the ruling).
+**Blocker:** Q12. Dated 2026-10-05.
+
+**H-5 — OPEN, deferred to WP04.** Builtin `kenaz__*` calls have no
+per-call audit record; the only tool-dispatch record is
+`KindToolConfirmDecision`, written only on the confirm-each ladder,
+which builtins (auto_allow by default) never reach. Spec FR-A1 adds
+`harness.tool.called` for this mission's W-tier tools in WP04 (the kind
+does not exist yet). That will NOT cover the pre-existing builtins (bash,
+write_file, …); that wider gap stays open. **Owner:** WP04 for the
+harness toolset; alec for the existing builtins. Dated 2026-10-05.
+
+**H-6 — OPEN, deferred to WP05.** The builtin registration tripwire walks
+registered → predicate only (`TestBuiltinEnabledPredicate_AllRegistered
+ToolsHaveExplicitCase`); predicate case → registration site is unchecked.
+Spec FR-S1(d) puts it in WP05's new `check-harness-toolset-catalog.sh`
+with planted proof `harness-toolset/predicate-case-without-registration`.
+Not done here: case labels are package constants, so the check needs the
+same const resolution WP05's gate builds. **Owner:** WP05. Dated
+2026-10-05.
+
 ## Drained
 
 ### 2026-10-04 · CLOSED — chat run ids were a per-process counter written into a persistent log (`agentgraph-settings-linkage-01DOGF0D` WP02)

@@ -410,6 +410,18 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package zzgateprobe\n\nconst ToolName = \"zz_gate_probe\"\n",
 		},
 		{
+			name: "builtin-tool-registration/harness-self-manager-never-assigned",
+			gate: "check-builtin-tool-registration.sh",
+			// model-harness-toolset-01MHTS001 WP03 (H-2): the
+			// harness_read_get_status / harness_write_install_mcp_recipe
+			// class — a registered harness-self handler nil-checks a
+			// Managers field that buildHarnessManagers never assigns, so
+			// the tool is advertised and always fails "not configured".
+			file:       "core/mcp/builtin/harness/handlers.go",
+			append:     "\nfunc (m Managers) handleZzGateProbe() (any, error) {\n\tif m.ZzGateProbe == nil {\n\t\treturn nil, errNotConfigured\n\t}\n\treturn nil, nil\n}\n",
+			wantOutput: "harness-self-manager:ZzGateProbe",
+		},
+		{
 			name: "single-move-writer/second-seam-caller",
 			gate: "check-single-move-writer.sh",
 			// The convergence violation the transcript-move seam exists

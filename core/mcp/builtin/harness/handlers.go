@@ -27,7 +27,6 @@ type Managers struct {
 	Providers ProviderLister
 	Recipes   RecipeLister
 	Settings  SettingsReader
-	Status    StatusReporter
 	Sessions  SessionLister
 	Models    ModelLister
 
@@ -41,8 +40,13 @@ type Managers struct {
 	// reported success and changed nothing. The owner ruled removal
 	// rather than wiring a real writer: none of the five keys may be
 	// model-writable, so there is nothing left for this manager to do.
+	//
+	// Status (StatusReporter) and RecipesWriter (RecipeWriter) were
+	// removed with the two tools they backed — harness_read_get_status
+	// and harness_write_install_mcp_recipe — by model-harness-toolset-
+	// 01MHTS001 WP03 (H-2): neither was ever wired, so both tools always
+	// failed. See register.go's notes on the two removed constants.
 	ProvidersWriter ProviderWriter
-	RecipesWriter   RecipeWriter
 	ProjectsWriter  ProjectWriter
 	SessionsWriter  SessionCreator
 
@@ -101,12 +105,6 @@ type SettingsReader interface {
 	ListSettings(ctx context.Context) (map[string]any, error)
 }
 
-// StatusReporter returns aggregate counts (providers, MCP servers,
-// sessions, projects). Used by harness_read_get_status.
-type StatusReporter interface {
-	HarnessStatus(ctx context.Context) (StatusSnapshot, error)
-}
-
 // SessionLister returns a sanitized list of sessions.
 type SessionLister interface {
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
@@ -135,26 +133,12 @@ type ModelSummary struct {
 	DisplayName  string `json:"displayName,omitempty"`
 }
 
-type StatusSnapshot struct {
-	Providers int `json:"providers"`
-	MCPInstalled int `json:"mcpInstalled"`
-	Sessions  int `json:"sessions"`
-	Projects  int `json:"projects"`
-	Policies  int `json:"policies"`
-}
-
 // ---- Write-side interfaces (WP05 stubs) ----
 
 // ProviderWriter creates / removes provider configurations.
 type ProviderWriter interface {
 	AddProvider(ctx context.Context, kind, name, model, apiKey string) (ProviderSummary, error)
 	RemoveProvider(ctx context.Context, id string) error
-}
-
-// RecipeWriter installs MCP recipes by id (curated registry) or by raw
-// config object.
-type RecipeWriter interface {
-	InstallRecipe(ctx context.Context, idOrConfig string, config json.RawMessage) error
 }
 
 type SettingsWriter interface {
@@ -302,22 +286,6 @@ func (m Managers) handleListSettings(ctx context.Context, _ json.RawMessage) (an
 	return ToolResult{OK: true, Message: "settings snapshot", Data: out}, nil
 }
 
-func (m Managers) handleGetStatus(ctx context.Context, _ json.RawMessage) (any, error) {
-	if m.Status == nil {
-		return nil, errNotConfigured
-	}
-	out, err := m.Status.HarnessStatus(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return ToolResult{
-		OK: true,
-		Message: fmt.Sprintf("status: %d providers, %d MCP servers, %d sessions, %d projects",
-			out.Providers, out.MCPInstalled, out.Sessions, out.Projects),
-		Data: out,
-	}, nil
-}
-
 // handleGetRecommendations is a stub — WP04 lands the real curated
 // recommendation logic. Today it returns a static pointer to "configure
 // a provider first" so the agent has something to anchor on.
@@ -376,23 +344,6 @@ func (m Managers) handleRemoveProvider(ctx context.Context, args json.RawMessage
 		return nil, err
 	}
 	return ToolResult{OK: true, Message: fmt.Sprintf("Removed provider %q", p.ID)}, nil
-}
-
-func (m Managers) handleInstallRecipe(ctx context.Context, args json.RawMessage) (any, error) {
-	if m.RecipesWriter == nil {
-		return nil, errNotConfigured
-	}
-	var p struct {
-		ID     string          `json:"id"`
-		Config json.RawMessage `json:"config,omitempty"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return nil, err
-	}
-	if err := m.RecipesWriter.InstallRecipe(ctx, p.ID, p.Config); err != nil {
-		return nil, err
-	}
-	return ToolResult{OK: true, Message: fmt.Sprintf("Installed recipe %q", p.ID)}, nil
 }
 
 func (m Managers) handleCreateProject(ctx context.Context, args json.RawMessage) (any, error) {

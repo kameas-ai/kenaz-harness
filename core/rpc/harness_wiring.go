@@ -539,17 +539,10 @@ func buildHarnessManagers(
 		// resolver, already live by this point in New()).
 		m.ScheduledRunWriter = scheduledRunWriterAdapter{api: scheduledChatAPI}
 	}
-	// Managers.Status (StatusReporter) and Managers.RecipesWriter
-	// (RecipeWriter) remain unwired: no adapter exists yet for either.
-	// harness_read_get_status and harness_write_install_mcp_recipe are
-	// therefore still errNotConfigured for every caller — a real,
-	// pre-existing gap this unit's attach makes reachable (and so
-	// observable) for the first time. Not fixed here: StatusReporter
-	// needs a projects count PLUS an "installed MCP servers" count PLUS
-	// a policy count, none of which has an obvious single source on
-	// this call path yet, and RecipeWriter's idOrConfig contract (a
-	// curated-registry id OR a raw config blob, ToolsAPI.InstallRecipe
-	// wants id+env+config separately) needs a real design decision, not
-	// a guessed adapter. Flagged in the mission report as a follow-up.
+	// harness_read_get_status and harness_write_install_mcp_recipe (and
+	// their Managers.Status / Managers.RecipesWriter fields) were removed
+	// by model-harness-toolset-01MHTS001 WP03 (H-2): neither ever had an
+	// adapter here, so both were advertised to the model and always
+	// failed "not configured". See docs/unwired-ledger.md.
 	return m
 }

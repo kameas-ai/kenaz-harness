@@ -1081,9 +1081,13 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// 01PMZB11 UNIT-5): always-on at this coarse gate, same
 			// posture as sleep/skill/read_context_file. It only reads
 			// already-captured task output (no side effects of its
-			// own); Cedar's ActionToolTasksMonitor is the per-call
-			// gate. Registration itself is already conditioned on a
-			// non-nil task registry (see registerBuiltinTools above).
+			// own). The per-call gate is the use_tool resolution every
+			// builtin gets; Cedar's ActionToolTasksMonitor is declared
+			// but NOT evaluated anywhere (model-harness-toolset-
+			// 01MHTS001 WP03, H-3 — this comment used to name it the
+			// per-call gate). Registration itself is already
+			// conditioned on a non-nil task registry (see
+			// registerBuiltinTools above).
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 		}

@@ -11,9 +11,12 @@
 // process-global Store is instantiated once at startup (same pattern as
 // core/tools/fsbuiltins.ReadSet) and shared across all concurrent sessions.
 //
-// Cedar gate: the tool reports ActionToolTodoWrite on every call so policy
-// authors can independently control todo access without touching the broader
-// filesystem write surface.
+// Gating: the TodoEnabled settings dial (core/rpc builtinEnabledPredicate)
+// and the per-call use_tool resolution every builtin gets (a Cedar forbid
+// on "kenaz__todo_write" denies it). Cedar's ActionToolTodoWrite
+// (tool.todo.write) is DECLARED but nothing evaluates it — this file used
+// to say the tool "reports" it on every call; it never did
+// (model-harness-toolset-01MHTS001 WP03, finding H-3).
 //
 // DIRECTIVE_001: backend-only; no CGo, no GUI imports.
 package todo
