@@ -342,6 +342,21 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-05 (engine-ports review residuals, fix/engine-ports) · two accepted lane-scan edges
+
+1. A slow OUR engine with NO engine.port record (failed write or garbage
+   file) still double-spawns: the scan reads its busy port as
+   unknown-occupied, steps past, and spawns on the first free candidate —
+   two engines, one lease dir. Accepted: the alternative (block spawning
+   while ANY candidate is busy) lets a hung foreign listener deny the
+   engine entirely. Trigger requires a missing record while ours runs;
+   the record is rewritten on every adopt. **Owner:** revisit with the
+   kenaz protocol-gap follow-up (kenaz #178 "Known gap").
+2. Uninstall no longer sends the shutdown token to an engine that fails
+   verification (tampered/refuse-unverified) before removing the root —
+   correct for the token (never send to the unverified), but a behaviour
+   change: such an engine keeps running until it idle-exits. Same owner.
+
 ### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event; the two pull surfaces are count-only stubs
 
 Three linked findings from kitty-specs/fleet-session-truth-01DOGF0A/

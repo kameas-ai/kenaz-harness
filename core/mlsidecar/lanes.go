@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -129,9 +130,15 @@ func (m *Manager) probeLaneWithin(ctx context.Context, port int, within time.Dur
 // isDialFailure reports whether err is a failure to establish the TCP
 // connection at all (*net.OpError with Op "dial" — connection refused on
 // loopback). Anything after the connection exists is NOT a dial failure.
+// isDialFailure reports a CONNECTION-REFUSED dial — the only signal that a
+// lane port is free (byte-identical to the kenaz client, A5.3 parity: it
+// keys on ECONNREFUSED/WSAECONNREFUSED). A dial-stage error with any other
+// errno (unreachable, timeout — impossible on loopback but cheap to
+// exclude) classifies as busy, the safe direction.
 func isDialFailure(err error) bool {
 	var op *net.OpError
-	return errors.As(err, &op) && op.Op == "dial"
+	return errors.As(err, &op) && op.Op == "dial" &&
+		errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // laneScan is the outcome of probing the record and then the lane.
