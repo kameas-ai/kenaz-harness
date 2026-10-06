@@ -196,6 +196,7 @@ func (m *Manager) adoptLane(lp laneProbe) {
 		}
 	}
 	if lp.healthy {
+		m.pinVerified(lp.port)
 		m.renewLease()
 	}
 }
@@ -240,5 +241,8 @@ func (m *Manager) observeLanes(ctx context.Context, cur Status) (Status, bool) {
 		return m.Status(), true
 	}
 	defer m.mu.Unlock()
+	if sc.found != nil && sc.found.healthy {
+		m.pinVerified(sc.found.port) // in-memory only; Observe still writes nothing
+	}
 	return m.setStatus(st), true
 }

@@ -169,18 +169,19 @@ func TestSidecarWiring_RealManagerUnderDataDir(t *testing.T) {
 	}
 	env := mlsidecar.EngineEnv()
 	if got, want := api.sidecarMgr.Client.URL(), mlsidecar.BaseURLForEnv(env); got != want {
-		t.Fatalf("client dials %q with no engine.port, want the env-mapped base %q (Amendment A5(1))", got, want)
+		t.Fatalf("manager client base = %q, want the env-mapped base %q (Amendment A5(1))", got, want)
 	}
 	if got, want := api.sidecarMgr.BasePort, mlsidecar.EnginePort(env); got != want {
 		t.Fatalf("Manager.BasePort = %d, want the env's lane base %d (lane mode, owner ruling A5.2)", got, want)
 	}
-	// The client follows engine.port (the lane port the Manager verified).
+	// The advice/label dial client routes to the Manager's VERIFIED port
+	// only — a recorded engine.port never redirects it (review F2).
 	lane := mlsidecar.CandidatePorts(mlsidecar.EnginePort(env))[2]
 	if err := mlsidecar.WriteEnginePort(api.sidecarMgr.Layout, lane); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := api.sidecarMgr.Client.URL(), mlsidecar.LoopbackURL(lane); got != want {
-		t.Fatalf("client dials %q with engine.port recorded, want %q", got, want)
+	if got := sidecarDialClient(api.sidecarMgr).URL(); got == mlsidecar.LoopbackURL(lane) || got == mlsidecar.BaseURLForEnv(env) {
+		t.Fatalf("unverified dial client dials %q; it must fail closed, never follow engine.port or the base", got)
 	}
 	if err := os.RemoveAll(api.sidecarMgr.Layout.Root); err != nil {
 		t.Fatal(err)

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 )
 
@@ -19,27 +18,15 @@ import (
 //
 // This is the PROD engine's BASE-lane address; the port is mapped per env
 // (prod 7774, dev 7785, test 7786 — owner rulings A5.2/A5.3) and each env
-// falls back along a lane recorded in engine.port (engineport.go).
-// Production wiring dials through NewEngineClient, which follows that
-// record.
+// falls back along a lane (engineport.go). Production wiring dials
+// through Manager.DialClient, which follows the Manager's verified port.
 const DefaultBaseURL = "http://127.0.0.1:7774"
 
-// DefaultEngineBaseURL is this process's env's loopback engine URL for the
-// standard shared root (~/.kenaz/ml/<env>): the lane port recorded in that
-// root's engine.port when present and in-lane, else the env's base port.
-// It is a point-in-time read; long-lived callers use NewEngineClient,
-// which re-reads the record per request.
-func DefaultEngineBaseURL() string {
-	env := EngineEnv()
-	if home, err := os.UserHomeDir(); err == nil {
-		if root, rerr := DefaultRootFor(home, env); rerr == nil {
-			if p, ok, _ := RecordedEnginePort(NewLayout(root), EnginePort(env)); ok {
-				return LoopbackURL(p)
-			}
-		}
-	}
-	return BaseURLForEnv(env)
-}
+// DefaultEngineBaseURL is this process's env's BASE-lane loopback engine
+// URL. It deliberately does NOT read engine.port (review F2: the file is
+// discovery only, never a routing source); production dial paths use
+// Manager.DialClient. It remains only as the nil-Manager fallback.
+func DefaultEngineBaseURL() string { return BaseURLForEnv(EngineEnv()) }
 
 // Client speaks the wire shapes design §3.3 specifies. It has no
 // knowledge of whether the far end is the real kenaz-ml sidecar or the
@@ -49,9 +36,8 @@ type Client struct {
 	BaseURL string
 	HTTP    *http.Client
 	// Endpoint, when non-nil, is consulted on every request; a non-empty
-	// result overrides BaseURL. NewEngineClient sets it to the engine.port
-	// lane record so every dial path follows the port the Manager last
-	// verified.
+	// result overrides BaseURL. Manager.DialClient sets it to the
+	// Manager's in-memory verified port.
 	Endpoint func() string
 }
 

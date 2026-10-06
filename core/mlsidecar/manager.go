@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/bundle/channels"
@@ -77,9 +78,9 @@ type Manager struct {
 	// BasePort switches the Manager into LANE mode (owner ruling A5.2,
 	// engineport.go): the engine may live on any of CandidatePorts(
 	// BasePort), the identity check arbitrates each candidate, and the
-	// port settled on is recorded in engine.port. Production always sets
-	// it (EnginePort(env)) and gives Client an Endpoint that follows the
-	// record (NewEngineClient), so every dial path agrees with the scan.
+	// port settled on is recorded in engine.port (cross-client discovery).
+	// Production always sets it (EnginePort(env)); its dial paths use
+	// DialClient, which routes to the in-memory VERIFIED port only.
 	//
 	// 0 is FIXED-ENDPOINT mode: Client is dialed exactly as configured, no
 	// scan, no engine.port, and the spawner is passed port 0. Package
@@ -99,13 +100,80 @@ type Manager struct {
 	mu     sync.Mutex
 	smu    sync.RWMutex
 	status Status
+
+	// verifiedPort (lane mode) is the port whose engine last passed the
+	// identity check as a USABLE engine — AdoptAccept, or a spawn that
+	// passed it — and 0 otherwise (review F2). It is cleared whenever the
+	// status leaves healthy and is never set for an update-pending
+	// adoption (F4). DialClient routes every advice / label request to it;
+	// engine.port is never read for routing.
+	verifiedPort atomic.Int32
 }
 
 func (m *Manager) setStatus(s Status) Status {
 	m.smu.Lock()
+	if s.State != StateHealthy {
+		m.verifiedPort.Store(0)
+	}
 	m.status = s
 	m.smu.Unlock()
 	return s
+}
+
+// pinVerified records port as the verified engine port. Call it only
+// immediately before setting a healthy status for that port.
+func (m *Manager) pinVerified(port int) { m.verifiedPort.Store(int32(port)) }
+
+// unpinnedURL is what a lane-mode DialClient dials when no engine is
+// verified: port 0 never connects, so nothing (advice, labels) can leak
+// to whatever squats the base port. Callers are Healthy()-gated anyway.
+const unpinnedURL = "http://127.0.0.1:0"
+
+// DialClient is the client the advice engine and the label pusher dial
+// (review F2). Lane mode: it routes every request to the Manager's
+// in-memory verified port, re-read per request, and fails closed while
+// none is verified — engine.port is never consulted. Fixed-endpoint mode:
+// a client on Client.BaseURL. Each call returns a fresh *Client with its
+// own default http.Client.
+func (m *Manager) DialClient() *Client {
+	if m.BasePort == 0 {
+		base := ""
+		if m.Client != nil {
+			base = m.Client.BaseURL
+		}
+		return NewClient(base, nil)
+	}
+	c := NewClient(unpinnedURL, nil)
+	c.Endpoint = func() string {
+		if p := m.verifiedPort.Load(); p > 0 {
+			return LoopbackURL(int(p))
+		}
+		return ""
+	}
+	return c
+}
+
+// VerifiedPort is the lane port DialClient currently routes to (0: none).
+func (m *Manager) VerifiedPort() int { return int(m.verifiedPort.Load()) }
+
+// shutdownClient is the client a token-authorized shutdown goes to (review
+// F2): in lane mode, the port where a scan RIGHT NOW verifies our usable
+// engine (AdoptAccept) — never the ambient engine.port, never an
+// update-pending or foreign listener, so the shutdown token is never sent
+// to a process that merely claims our exe path. nil: nothing verified to
+// stop. Call it while `current` still names the running engine (before an
+// update flips it).
+func (m *Manager) shutdownClient(ctx context.Context) *Client {
+	if m.Client == nil {
+		return nil
+	}
+	if m.BasePort == 0 {
+		return m.Client
+	}
+	if sc := m.scanLanes(ctx); sc.found != nil && sc.found.healthy {
+		return m.Client.at(sc.found.port)
+	}
+	return nil
 }
 
 // NewManager constructs a Manager with an initial not_installed status.
@@ -336,6 +404,7 @@ func (m *Manager) spawnLocked(ctx context.Context, port int) Status {
 		if werr := WriteEnginePort(m.Layout, port); werr != nil {
 			logging.L().Warn("mlsidecar.engine_port.write_failed", "port", port, "err", werr.Error())
 		}
+		m.pinVerified(port)
 		m.renewLease()
 		return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.LifecycleProtocol, Detail: fmt.Sprintf("spawned on port %d", port), UpdatedAt: time.Now()}
 	}
@@ -473,7 +542,9 @@ func (m *Manager) UpdateAndActivate(ctx context.Context, req InstallRequest) (Up
 		st := m.setStatus(Status{State: StateInstalledUnhealthy, Reason: ReasonUpdatePending, Detail: "update failed, old version still current: " + verr.Error(), UpdatedAt: time.Now()})
 		return UpdateResult{}, st
 	}
-	res := Update(ctx, m.Layout, m.Registry, m.Creds, verifier, m.Client, req)
+	// Resolve the shutdown target BEFORE Update's Install flips `current`
+	// (after the flip the running engine no longer verifies as ours).
+	res := Update(ctx, m.Layout, m.Registry, m.Creds, verifier, m.shutdownClient(ctx), req)
 
 	if res.Install.Record.Version == "" {
 		detail := "update failed, old version still current"
@@ -634,9 +705,9 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 	// ensureLocalToken (v0.86.0 unwired sweep): no production code
 	// wrote the token before, so this used to skip the stop entirely and
 	// remove the root out from under a still-running engine.
-	if m.Client != nil {
+	if target := m.shutdownClient(ctx); target != nil {
 		if token, terr := ensureLocalToken(m.Layout); terr == nil {
-			_ = m.Client.Shutdown(ctx, token)
+			_ = target.Shutdown(ctx, token)
 		}
 	}
 

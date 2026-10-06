@@ -182,10 +182,10 @@ func TestCandidatePorts_LanesPerEnv(t *testing.T) {
 	}
 }
 
-// TestDefaultEngineBaseURL_HonorsEnginePort: with engine.port recorded in
-// the standard shared root, DefaultEngineBaseURL dials the recorded lane
-// port, not the base; an out-of-lane or malformed record is ignored.
-func TestDefaultEngineBaseURL_HonorsEnginePort(t *testing.T) {
+// TestDefaultEngineBaseURL_IgnoresEnginePort (review F2): engine.port is
+// discovery only, never a routing source — DefaultEngineBaseURL stays on
+// the base even when the standard root records a lane port.
+func TestDefaultEngineBaseURL_IgnoresEnginePort(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("KENAZ_HARNESS_ENV", "dev")
@@ -193,18 +193,11 @@ func TestDefaultEngineBaseURL_HonorsEnginePort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := NewLayout(root)
 	lanes := CandidatePorts(EnginePort(EngineEnvDev))
-	if err := WriteEnginePort(l, lanes[3]); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := DefaultEngineBaseURL(), LoopbackURL(lanes[3]); got != want {
-		t.Errorf("DefaultEngineBaseURL = %s, want the recorded %s", got, want)
-	}
-	if err := WriteEnginePort(l, lanes[0]+1); err != nil { // not a dev lane port
+	if err := WriteEnginePort(NewLayout(root), lanes[3]); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := DefaultEngineBaseURL(), LoopbackURL(lanes[0]); got != want {
-		t.Errorf("out-of-lane record: DefaultEngineBaseURL = %s, want the base %s", got, want)
+		t.Errorf("DefaultEngineBaseURL = %s, want the base %s (the file must not route)", got, want)
 	}
 }

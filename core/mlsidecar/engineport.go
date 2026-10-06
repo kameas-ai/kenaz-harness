@@ -2,12 +2,9 @@ package mlsidecar
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
-
-	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // Lane fallback (owner ruling A5.2, 2026-10-05; bases per A5.3). A fixed
@@ -61,8 +58,14 @@ func inLane(base, port int) bool {
 //     Ensure — a dead or foreign listener makes it stale, the lane scan
 //     reruns, and the file is rewritten when the scan adopts or spawns.
 //     It is never written (nor removed) when every candidate is foreign;
-//   - absent (ok=false, no error): dial the base lane port / scan from
-//     the base.
+//   - absent (ok=false, no error): scan from the base.
+//
+// engine.port is cross-client DISCOVERY only (review F2, 2026-10-05): it
+// is the scan's first candidate, nothing more. No request is ever routed
+// by reading it — a same-user writer could otherwise redirect advice,
+// label and shutdown-token traffic to any in-lane port. Dial paths use the
+// Manager's in-memory verified port (Manager.DialClient), set only after
+// the identity check passed on that port.
 const EnginePortFilename = "engine.port"
 
 // EnginePortFile is engine.port's location.
@@ -152,34 +155,4 @@ func RemoveEnginePort(l Layout) error {
 		return err
 	}
 	return nil
-}
-
-// NewEngineClient is the production dial client for env's engine under
-// layout: its BaseURL is the env's base lane port, and its Endpoint
-// resolves engine.port (lane-checked) on EVERY request, so the Manager,
-// the advice engine and the label pusher all follow the port the Manager
-// last verified without sharing mutable state. A stale record only ever
-// points a request at a dead or foreign port — the advice ladder and the
-// label pusher are gated on the Manager's Healthy(), which is true only
-// after the Manager verified the engine's identity on that port.
-func NewEngineClient(layout Layout, env string, httpClient *http.Client) *Client {
-	return newLaneClient(layout, EnginePort(env), httpClient)
-}
-
-// newLaneClient is NewEngineClient for an explicit lane base.
-func newLaneClient(layout Layout, base int, httpClient *http.Client) *Client {
-	c := NewClient(LoopbackURL(base), httpClient)
-	c.Endpoint = func() string {
-		p, ok, err := RecordedEnginePort(layout, base)
-		if err != nil {
-			// Per-request path: Debug only (the Manager logs it at Warn
-			// on every Ensure).
-			logging.L().Debug("mlsidecar.engine_port.ignored", "err", err.Error())
-		}
-		if ok {
-			return LoopbackURL(p)
-		}
-		return ""
-	}
-	return c
 }

@@ -114,7 +114,7 @@ func (s *laneSpawner) spawned() []int {
 }
 
 func newLaneManager(l Layout, base int, sp Spawner, clientID string) *Manager {
-	m := NewManager(l, newLaneClient(l, base, nil), sp, clientID, "0.89.1")
+	m := NewManager(l, NewClient(LoopbackURL(base), nil), sp, clientID, "0.89.1")
 	m.BasePort = base
 	return m
 }
@@ -313,28 +313,72 @@ func TestLanes_ObserveForeignBaseWithFreeLane_IsIdleNotLegacy(t *testing.T) {
 	}
 }
 
-// TestEngineClient_DialHonorsEnginePortOverBase: the production dial
-// client follows engine.port — with a foreign listener on the base and
-// our engine on a recorded lane port, Health reaches ours.
-func TestEngineClient_DialHonorsEnginePortOverBase(t *testing.T) {
+// TestDialClient_FollowsVerifiedPortNotFile is review F2: engine.port is
+// discovery, not routing. Healthy on lane A; a same-user writer rewrites
+// the file to a foreign listener on B -> the next advice-path request
+// still dials A; the next Ensure corrects the file back to A. Before any
+// verification the dial client fails closed (never reaches the base).
+func TestDialClient_FollowsVerifiedPortNotFile(t *testing.T) {
 	l, health := installedLayout(t)
 	base := freeLaneBase(t)
 	lanes := CandidatePorts(base)
 	serveAt(t, lanes[0], sigildLike())
-	serveAt(t, lanes[4], engineAnswering(health))
-	c := newLaneClient(l, base, nil)
-	if got, err := c.Health(context.Background()); err != nil || got.ExePath != "" {
-		t.Fatalf("no engine.port: Health = %+v, %v; want the base's identity-less answer", got, err)
+	serveAt(t, lanes[3], sigildLike())
+	sp := &laneSpawner{t: t, health: health}
+	m := newLaneManager(l, base, sp, "harness")
+	dial := m.DialClient()
+	if _, err := dial.Health(context.Background()); err == nil {
+		t.Fatal("unverified DialClient reached a listener; it must fail closed")
 	}
-	if err := WriteEnginePort(l, lanes[4]); err != nil {
+	if got := m.Ensure(context.Background()); got.State != StateHealthy {
+		t.Fatalf("State = %q (%s)", got.State, got.Detail)
+	}
+	a := lanes[1]
+	if m.VerifiedPort() != a {
+		t.Fatalf("VerifiedPort = %d, want %d", m.VerifiedPort(), a)
+	}
+	if err := WriteEnginePort(l, lanes[3]); err != nil { // the redirect attempt
 		t.Fatal(err)
 	}
-	if c.URL() != LoopbackURL(lanes[4]) {
-		t.Fatalf("URL() = %s, want %s", c.URL(), LoopbackURL(lanes[4]))
+	if dial.URL() != LoopbackURL(a) {
+		t.Fatalf("DialClient URL = %s after the file was rewritten, want the verified %s", dial.URL(), LoopbackURL(a))
 	}
-	got, err := c.Health(context.Background())
-	if err != nil || got.ExePath != health.ExePath {
-		t.Fatalf("Health = %+v, %v; want our engine on the recorded port", got, err)
+	if got, err := dial.Health(context.Background()); err != nil || got.ExePath != health.ExePath {
+		t.Fatalf("Health = %+v, %v; want our engine on the verified port", got, err)
+	}
+	if got := m.Ensure(context.Background()); got.State != StateHealthy {
+		t.Fatalf("second Ensure State = %q (%s)", got.State, got.Detail)
+	}
+	if f := readPortFile(t, l); f != strconv.Itoa(a)+"\n" {
+		t.Fatalf("engine.port = %q, want corrected to %d", f, a)
+	}
+	if n := len(sp.spawned()); n != 1 {
+		t.Fatalf("spawned %d times, want 1", n)
+	}
+	// Leaving healthy clears the pin.
+	m.setStatus(Status{State: StateInstalledUnhealthy})
+	if m.VerifiedPort() != 0 || dial.URL() != unpinnedURL {
+		t.Fatalf("pin survived a non-healthy status: port %d url %s", m.VerifiedPort(), dial.URL())
+	}
+}
+
+// TestLanes_UpdatePendingNeverPinned is ruling F4: an update-pending
+// adoption records engine.port (cross-repo contract) but is never the
+// verified port — no advice or label request can reach it.
+func TestLanes_UpdatePendingNeverPinned(t *testing.T) {
+	l, health := installedLayout(t)
+	base := freeLaneBase(t)
+	health.ExePath = filepath.Join(l.VersionDir("1.1.0"), "kameas-ml", EngineExecutableName(""))
+	serveAt(t, base, engineAnswering(health))
+	m := newLaneManager(l, base, &laneSpawner{t: t, forbid: true}, "harness")
+	if got := m.Ensure(context.Background()); got.Reason != ReasonUpdatePending {
+		t.Fatalf("got %q/%q", got.State, got.Reason)
+	}
+	if m.VerifiedPort() != 0 || m.DialClient().URL() != unpinnedURL {
+		t.Fatalf("update-pending engine pinned: port %d", m.VerifiedPort())
+	}
+	if m.shutdownClient(context.Background()) != nil {
+		t.Fatal("shutdown token would be sent to an update-pending (lexically claimed) engine")
 	}
 }
 
