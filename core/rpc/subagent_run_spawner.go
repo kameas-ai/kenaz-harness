@@ -162,6 +162,15 @@ type SubagentRunSpawnerDeps struct {
 	// prompt from its first turn — what hooks.SubagentStartEvent's doc
 	// has always promised. nil logs the drop (nil-core chassis).
 	AttachHookContext hookContextAttacher
+
+	// Containment is the scheduled-run tool-allowlist registry
+	// (model-harness-toolset-01MHTS001 WP02, finding H-1). When the
+	// DISPATCHING session is contained to a scheduled run's allowlist, the
+	// child is bound to the same list before its first turn — otherwise a
+	// contained run whose allowlist names kenaz__subagent_dispatch could
+	// widen itself to the full catalogue through a child session. nil
+	// (degraded boot) contains nothing, matching every other nil dep here.
+	Containment *ScheduledRunContainmentRegistry
 }
 
 // NewSubagentRunSpawner constructs the production graphview.RunSpawner.
@@ -228,6 +237,15 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 
 		if deps.UsageParent != nil {
 			deps.UsageParent(childSessionID, req.ParentSessionID)
+		}
+
+		// WP02 (H-1): before StartStream, so the child's first tool call
+		// is already contained. Never released — see
+		// ScheduledRunContainmentRegistry's "Lifetime".
+		if deps.Containment.Inherit(childSessionID, req.ParentSessionID) {
+			log.Info("rpc.subagent_run_spawner.containment_inherited",
+				"branch_id", branchID, "child_session_id", childSessionID,
+				"parent_session_id", req.ParentSessionID)
 		}
 
 		// UNIT-7 (FR-007, AC-08): subagent_start fires here — after the

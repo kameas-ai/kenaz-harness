@@ -220,6 +220,67 @@ func (m *Manager) AppendTranscriptEntry(ctx context.Context, sessionID string,
 	return m.AppendMessage(ctx, sessionID, msg)
 }
 
+// ReplayTranscript copies src — rows read from ANOTHER session, in
+// sequence order — into sessionID FAITHFULLY: role, content, content
+// blocks, tool calls, move kind/index, and the model-layer tool args all
+// survive, so the destination's model-visible history composes exactly
+// as the source's did up to the last copied row.
+//
+// It exists for conversation forks (conversation.Manager.
+// CreateBranchAtMessage). The previous replay copied Role+Content only,
+// which turned every tool_call/tool_result move into a classic role:"tool"
+// row with no tool-call id — pairIntegritySweep only drops orphans that
+// HAVE an id, so the branch's first request carried a tool_result with
+// no tool_use_id (provider 400), leaked the display layer's args summary
+// into model content, and resurrected assistant_move rows the classic
+// composition drops. Living here, in the one file allowed to stamp move
+// metadata, the copy needs no exported back door to the move fields.
+//
+// Ids are fresh (session_messages.id is global). A move's TurnSpanID
+// names the user row that opened its turn, so it is remapped to that
+// row's NEW id; a span whose opening row was not part of src keeps its
+// original value (the move stays a coherent move rather than being
+// demoted to classic). Per-row compaction/streaming-failure columns are
+// not copied — AppendMessage never writes them — which leaves the model
+// history unchanged, since composition reads every row regardless.
+//
+// Writes go through AppendMessage, one call site, so G-1
+// (check-session-message-writers.sh) counts this as one writer and
+// ReplayTranscript's own callers as the seam's.
+func (m *Manager) ReplayTranscript(ctx context.Context, sessionID string, src []Message) ([]Message, error) {
+	idMap := make(map[string]string, len(src))
+	out := make([]Message, 0, len(src))
+	for _, s := range src {
+		msg := Message{
+			Role:          s.Role,
+			Content:       s.Content,
+			ContentBlocks: s.ContentBlocks,
+			ToolCalls:     s.ToolCalls,
+		}
+		if s.moveKind != "" {
+			msg.moveKind = s.moveKind
+			if s.moveIndex != nil {
+				idx := *s.moveIndex
+				msg.moveIndex = &idx
+			}
+			msg.moveTurnSpanID = s.moveTurnSpanID
+			if mapped, ok := idMap[s.moveTurnSpanID]; ok {
+				msg.moveTurnSpanID = mapped
+			}
+			msg.modelToolArgs = cloneModelLayerToolArgs(s.modelToolArgs)
+		}
+		stored, err := m.AppendMessage(ctx, sessionID, msg)
+		if err != nil {
+			return out, fmt.Errorf("session: replay message %s: %w", s.ID, err)
+		}
+		if s.ID != "" {
+			idMap[s.ID] = stored.ID
+		}
+		out = append(out, stored)
+	}
+	return out, nil
+}
+
 // ---- read accessors ----------------------------------------------------
 
 // MoveKind returns the entry's move classification, or the empty

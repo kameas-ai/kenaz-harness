@@ -59,6 +59,7 @@ var knownBuiltinTools = map[string]bool{
 	"kenaz__edit_file":                 true,
 	"kenaz__enter_plan_mode":           true,
 	"kenaz__exit_plan_mode":            true,
+	"kenaz__fork_conversation":         true,
 	"kenaz__glob":                      true,
 	"kenaz__grep":                      true,
 	"kenaz__list_dir":                  true,

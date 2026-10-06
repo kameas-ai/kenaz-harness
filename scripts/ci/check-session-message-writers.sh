@@ -140,7 +140,13 @@ ALLOWLIST="scripts/ci/allowlists/i-session-message-writers.txt"
 ci_require_dir "$SCAN_ROOT" "$GATE"
 ci_require_file "$ALLOWLIST" "$GATE"
 
-SYMBOLS=(AppendMessage AppendContinuation ApplyCompaction PersistPartial AppendEntry)
+# 2026-10-05 (model fork tool, review H1): ReplayTranscript added. It is
+# session.Manager's faithful cross-session row replay (core/session/
+# moves.go), the seam conversation forks now copy history through. Its
+# one leaf AppendMessage line in moves.go does not move when a new caller
+# starts replaying, so — exactly the F2 reasoning above — the seam itself
+# must be enumerated or a second replaying caller would land unseen.
+SYMBOLS=(AppendMessage AppendContinuation ApplyCompaction PersistPartial AppendEntry ReplayTranscript)
 
 mapfile -t GO_FILES < <(find "$SCAN_ROOT" -name '*.go' ! -name '*_test.go' | sort)
 

@@ -64,9 +64,12 @@ type CreateBranchOptions struct {
 	// (branching-ux-polish-01KQ8TD7 WP02). When non-empty, CreateBranch
 	// delegates to CreateBranchAtMessage internally.
 	ParentMessageID string `json:"parentMessageId,omitempty"`
-	// CreationPath is "explicit" | "edit_resend" | "unknown". Defaults to
-	// "unknown" when unset; "explicit" is set by the "Branch from this
-	// turn" menu item.
+	// CreationPath is "explicit" | "edit_resend" | "unknown" | "auto_act"
+	// | "model_tool". Defaults to "unknown" when unset; "explicit" is set
+	// by the "Branch from this turn" menu item. "auto_act" (advice hook)
+	// and "model_tool" (kenaz__fork_conversation) are internal-only:
+	// Bindings.Branches_Create coerces them to "unknown" via
+	// ClientCreationPath.
 	CreationPath string `json:"creationPath,omitempty"`
 	// Title is a short user-facing branch title.
 	Title string `json:"title,omitempty"`

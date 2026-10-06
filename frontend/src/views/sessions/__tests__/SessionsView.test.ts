@@ -176,6 +176,7 @@ describe('SessionsView (chat-ui)', () => {
   // footer starts at the zero-state and updates once a usage snapshot
   // for the active session arrives.
   it('composer footer reflects live session usage instead of a static zero', async () => {
+    let usageFetches = 0;
     const messages: Message[] = [
       makeMessage({ id: 'q', role: 'user', content: 'How are you?' }),
       makeMessage({ id: 'a', role: 'assistant', content: 'I am well.' }),
@@ -203,7 +204,14 @@ describe('SessionsView (chat-ui)', () => {
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
         moveToProject: async () => undefined,
-        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
+        // Stateful: the load-time aggregate is zero (no turns yet); the
+        // post-event refetch returns the cumulative total the footer now
+        // renders (fix/cumulative-cost — the footer is cumulative, not
+        // per-turn).
+        getUsage: async () =>
+          usageFetches++ === 0
+            ? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }
+            : { promptTokens: 1234, completionTokens: 567, totalTokens: 1801, costUsd: 0.0456, costSource: 'provider' as const, messageCount: 1, pricingDataDate: '2026-10-01' },
         saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
       } as any,
       llm: {

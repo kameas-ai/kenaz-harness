@@ -41,7 +41,7 @@ import { isServedMode } from "./useServedMode";
 import { useConnectionState } from "./useConnectionState";
 import { friendly } from "./errors";
 import { liveSpanId } from "./transcript";
-import type { ContentBlock, Message, Session } from "./types";
+import type { ContentBlock, Message, Session, SessionUsage } from "./types";
 
 /**
  * SessionUsagePayload is the wire shape emitted on `session.usage.updated`
@@ -151,6 +151,9 @@ export interface UseSessionResult {
   streamingTimedOut: Ref<boolean>;
   /** Two-way draft buffer; debounced-saved automatically. */
   draft: Ref<string>;
+  /** Cumulative session token+cost aggregate (Sessions_GetUsage),
+   *  loaded with the session and refreshed after every turn. */
+  cumulativeUsage: Ref<SessionUsage | null>;
   /**
    * Per-session UI state for the compaction-strategy-ui WP07 "Show
    * full history" toggle. Two-way; flipping it triggers a refetch
@@ -259,6 +262,12 @@ export function useSession(id: Ref<string>): UseSessionResult {
   const showFullHistory = ref(false);
   const sweptCount = ref(0);
   const lastUsage = ref<SessionUsagePayload | null>(null);
+  // Cumulative session aggregate (Sessions_GetUsage): summed tokens +
+  // cost across every turn. The composer footer reads THIS — the
+  // per-turn lastUsage above legitimately goes up AND down with caching
+  // and prompt size, which read as "the cost readout is broken"
+  // (dogfood 2026-10-05). The context meter keeps using lastUsage.
+  const cumulativeUsage = ref<SessionUsage | null>(null);
   const streamTruncated = ref<StreamTruncatedPayload | null>(null);
   const overflowRecovery = ref<OverflowRecoveryPayload | null>(null);
 
@@ -354,10 +363,16 @@ export function useSession(id: Ref<string>): UseSessionResult {
     error.value = null;
     errorKind.value = null;
     try {
-      const [s, msgsResult, d] = await Promise.all([
+      const [s, msgsResult, d, cu] = await Promise.all([
         client.sessions.get(sessionId),
         fetchMessages(sessionId, showFullHistory.value),
         client.sessions.loadDraft(sessionId).catch(() => ""),
+        // Optional-chained: older fakes/partial clients may not stub
+        // getUsage; a missing method means "no aggregate", never a
+        // failed load.
+        (client.sessions.getUsage?.(sessionId) ?? Promise.resolve(null)).catch(
+          () => null,
+        ),
       ]);
       session.value = s;
       // chat-turn-integrity-01PMZ606 WP11 (task #37, C-5): repopulate the
@@ -378,6 +393,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
         : null;
       messages.value = msgsResult.messages;
       sweptCount.value = msgsResult.sweptCount;
+      cumulativeUsage.value = cu;
       // Dogfood 2026-10-05: the persisted draft is adopted ONCE per
       // session open — a mid-session reload must never touch the
       // composer. Reloads fire on stream start/end, and the persisted
@@ -429,6 +445,14 @@ export function useSession(id: Ref<string>): UseSessionResult {
     if (!payload) return;
     if (payload.sessionId !== id.value) return;
     lastUsage.value = payload;
+    // Refetch the cumulative aggregate (fires once per turn; the
+    // backend sum is authoritative — no client-side accumulation drift).
+    const sid = payload.sessionId;
+    void (client.sessions.getUsage?.(sid) ?? Promise.resolve(null))
+      .then((u) => {
+        if (u && id.value === sid) cumulativeUsage.value = u;
+      })
+      .catch(() => {});
   });
 
   // Wire-shape payload from core/rpc/views/llm.StreamChunkPayload:
@@ -1080,6 +1104,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       streamingMoves.value = [];
       openMoveSlot = -1;
       draftAdopted = false;
+      cumulativeUsage.value = null;
       streamSubscriptionId.value = null;
       streamingTimedOut.value = false;
       lastUsage.value = null;
@@ -1133,6 +1158,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
 
   return {
     session,
+    cumulativeUsage,
     messages: computed(() => messages.value) as Ref<readonly Message[]>,
     loading,
     error,

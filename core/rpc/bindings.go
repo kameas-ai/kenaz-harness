@@ -2674,6 +2674,11 @@ func (b *Bindings) Branches_List(parentSessionID string) ([]branchesview.Branch,
 }
 func (b *Bindings) Branches_Create(opts branchesview.CreateBranchOptions) (branchesview.Branch, error) {
 	defer sentry.WrapBinding("Branches_Create")()
+	// The frontend may only stamp the human creation paths. "model_tool"
+	// (kenaz__fork_conversation's adapter) and "auto_act" (the advice
+	// hook) are internal provenance; a client-supplied value claiming
+	// either would forge the audit record's answer to "who forked this".
+	opts.CreationPath = branchesview.ClientCreationPath(opts.CreationPath)
 	return b.api.Branches().CreateBranch(b.ctx(), opts)
 }
 func (b *Bindings) Branches_GetStatus(branchID string) (branchesview.BranchStatus, error) {

@@ -9,15 +9,21 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	coremonitor "github.com/kameas-ai/kenaz-harness/core/tools/monitor"
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
+	coreforkconv "github.com/kameas-ai/kenaz-harness/core/tools/forkconversation"
+	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/conversation"
 	coredocs "github.com/kameas-ai/kenaz-harness/core/docs"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -493,6 +499,138 @@ func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegist
 	})
 	registry.Register(subagentTool)
 	logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
+}
+
+// registerForkConversationTool registers kenaz__fork_conversation — the
+// model's surface for forking the conversation it is running in.
+//
+// Called from New() right after a.branchesAPI is constructed (like
+// registerDocumentTools, late registration onto the live registry is
+// visible to the next catalog read). Registered ONLY when the branches
+// view has a real conversation manager and session manager behind it:
+// a fork tool over the nil-manager surface would return
+// ErrManagerUnavailable on every call, and a tool that always fails is
+// never advertised (crash-recovery-tool-gating-0XQTC4RK FR-007).
+//
+// Reuse, not reimplementation: the adapter below calls
+// branchesview.BranchesAPI.CreateBranch — the SAME entry point as the
+// "+ Fork" modal, the Branch Advisor accept flow (both via
+// Branches_Create) and "Branch from this turn" (createExplicit). The
+// handoff seed lands through that method's own appendHandoff writer, so
+// this tool adds no session_messages call site (G-1).
+//
+// Gating parity: human branch creation (Bindings.Branches_Create) has no
+// Settings dial and no dedicated Cedar action; the model's call goes
+// through the generic per-call Cedar arm every tool call takes
+// (cedar.ActionUseTool via newCedarSessionKindResolver) plus the
+// always-on predicate case in builtinEnabledPredicate below.
+func registerForkConversationTool(registry *toolloop.BuiltinRegistry, branches branchesview.BranchesAPI, sessions *session.Manager, convReady bool) {
+	if registry == nil || branches == nil || sessions == nil || !convReady {
+		logging.L().Info("rpc.builtins.fork_conversation_skipped",
+			"reason", "branches view has no conversation/session manager — tool omitted from model catalog (FR-007)")
+		return
+	}
+	tool := coreforkconv.New(coreforkconv.Options{
+		Forker: &branchForker{branches: branches, sessions: sessions},
+	})
+	registry.Register(tool)
+	logging.L().Info("rpc.builtins.register", "tool", tool.Name())
+}
+
+// branchMessageLister is the one session.Manager method branchForker
+// needs to resolve the default branch point.
+type branchMessageLister interface {
+	ListMessages(ctx context.Context, sessionID string) ([]session.Message, error)
+}
+
+// branchForker adapts kenaz__fork_conversation onto the branches view.
+type branchForker struct {
+	branches branchesview.BranchesAPI
+	sessions branchMessageLister
+}
+
+// Fork resolves the branch point (the named message, or the latest
+// user/assistant message of the session) and calls CreateBranch's
+// anchored (explicit) arm, which copies history up to the anchor and —
+// when a handoff is given — appends it after.
+//
+// A named from_message_id that does not belong to req.ParentSessionID is
+// refused by conversation.Manager.CreateBranchAtMessage ("not found in
+// parent session"), so a message id from another conversation cannot be
+// used to reach across sessions.
+func (f *branchForker) Fork(ctx context.Context, req coreforkconv.ForkRequest) (coreforkconv.ForkResult, error) {
+	anchor := strings.TrimSpace(req.FromMessageID)
+	if anchor == "" {
+		msgs, err := f.sessions.ListMessages(ctx, req.ParentSessionID)
+		if err != nil {
+			return coreforkconv.ForkResult{}, err
+		}
+		anchor = defaultForkAnchor(msgs, req.TurnSpanID)
+		if anchor == "" {
+			return coreforkconv.ForkResult{}, coreforkconv.ErrNothingToFork
+		}
+	}
+	br, err := f.branches.CreateBranch(ctx, branchesview.CreateBranchOptions{
+		ParentSessionID:      req.ParentSessionID,
+		ParentMessageID:      anchor,
+		Title:                req.Title,
+		SystemPromptOverride: req.Handoff,
+		CreationPath:         branchesview.CreationPathModelTool,
+	})
+	res := coreforkconv.ForkResult{
+		BranchID:        br.ID,
+		BranchSessionID: br.ChildSessionID,
+		Title:           req.Title,
+		FromMessageID:   anchor,
+		HandoffSeeded:   err == nil && req.Handoff != "",
+	}
+	if err != nil {
+		if errors.Is(err, branchesview.ErrHandoffSeedFailed) {
+			return res, errors.Join(coreforkconv.ErrSeedFailed, err)
+		}
+		// conversation.ErrCycle is what CreateBranchAtMessage's ancestor
+		// walk returns past depth 32. A real cycle cannot form through
+		// any creation path, so for a caller this is the depth cap — say
+		// that, not "cycle detected".
+		if errors.Is(err, conversation.ErrCycle) {
+			return coreforkconv.ForkResult{}, errors.Join(coreforkconv.ErrDepthLimit, err)
+		}
+		return coreforkconv.ForkResult{}, err
+	}
+	return res, nil
+}
+
+// defaultForkAnchor picks the branch point when the model names none.
+//
+// Inside a live chat turn (turnSpanID set — the id of the user message
+// that opened it), the anchor is the last user/assistant row BEFORE that
+// message: the branch carries the conversation as it stood when the user
+// asked, not the open "please fork this" request — ending on that request
+// invites the branch's model to fork again when the user continues there
+// (review M1). The handoff seed then reads as the branch's opening
+// instruction. Outside a turn, or when the span row is not in the
+// transcript, it is the last user/assistant row overall.
+//
+// Tool and system rows are never the anchor: a branch should end on a
+// conversational message, not on the middle of a tool exchange.
+// "" means there is nothing to branch from.
+func defaultForkAnchor(msgs []session.Message, turnSpanID string) string {
+	end := len(msgs)
+	if turnSpanID != "" {
+		for i, m := range msgs {
+			if m.ID == turnSpanID {
+				end = i
+				break
+			}
+		}
+	}
+	for i := end - 1; i >= 0; i-- {
+		switch msgs[i].Role {
+		case session.RoleUser, session.RoleAssistant:
+			return msgs[i].ID
+		}
+	}
+	return ""
 }
 
 // webFetchEnabledLookup returns a closure kenaz__web_fetch consults inside Call
@@ -1076,14 +1214,30 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
+		case coreforkconv.ToolName:
+			// kenaz__fork_conversation (dogfood finding 2026-10-05):
+			// always-on at this coarse gate — parity with human branch
+			// creation (Branches_Create), which has no Settings dial.
+			// Registration is conditioned on a real conversation +
+			// session manager (registerForkConversationTool), and the
+			// per-call Cedar arm every tool call takes still applies. The
+			// tool only creates a dormant branch of its own session; it
+			// starts no run and touches no other conversation.
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
+
 		case coremonitor.ToolName:
 			// kenaz__monitor (subagent-control-and-background-tasks-
 			// 01PMZB11 UNIT-5): always-on at this coarse gate, same
 			// posture as sleep/skill/read_context_file. It only reads
 			// already-captured task output (no side effects of its
-			// own); Cedar's ActionToolTasksMonitor is the per-call
-			// gate. Registration itself is already conditioned on a
-			// non-nil task registry (see registerBuiltinTools above).
+			// own). The per-call gate is the use_tool resolution every
+			// builtin gets; Cedar's ActionToolTasksMonitor is declared
+			// but NOT evaluated anywhere (model-harness-toolset-
+			// 01MHTS001 WP03, H-3 — this comment used to name it the
+			// per-call gate). Registration itself is already
+			// conditioned on a non-nil task registry (see
+			// registerBuiltinTools above).
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 		}

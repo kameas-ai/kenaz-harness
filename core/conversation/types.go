@@ -89,7 +89,8 @@ type Branch struct {
 	// sidebar tree renders this instead of the parent-derived label.
 	BranchTitle string
 	// CreationPath discriminates how the branch was created:
-	// "edit_resend" | "explicit" | "unknown".
+	// "explicit" | "edit_resend" | "unknown" | "auto_act" (advice hook)
+	// | "model_tool" (kenaz__fork_conversation).
 	CreationPath string
 	// ParentSessionTitle is a snapshot of the parent session's display
 	// name at fork time. Used by the breadcrumb when the parent session

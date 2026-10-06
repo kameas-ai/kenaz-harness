@@ -320,6 +320,10 @@ func (a *API) RunNow(ctx context.Context, id string) (RunSummary, error) {
 			PromptTemplate: rec.PromptTemplate,
 			Model:          rec.Model,
 			OutputSink:     rec.OutputSink,
+			// model-harness-toolset-01MHTS001 WP02 (H-1): the run is
+			// contained to the allowlist the gate above evaluated.
+			CreatedBy:     createdBy,
+			ToolAllowlist: append([]string(nil), rec.ToolAllowlist...),
 		},
 		Trigger: scheduler.Trigger{Cron: rec.Cron, TZ: rec.Timezone},
 	}

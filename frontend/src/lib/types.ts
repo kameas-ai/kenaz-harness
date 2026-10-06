@@ -3726,6 +3726,9 @@ export interface BranchCreateOptions {
   /**
    * creationPath is "explicit" | "edit_resend" | "unknown". Set by the
    * "Branch from this turn" menu item. Defaults to "unknown" when unset.
+   * The backend also records "auto_act" and "model_tool", but only from
+   * its own internal callers — Branches_Create coerces either to
+   * "unknown" when the client sends it.
    */
   creationPath?: string;
   title?: string;
@@ -4720,7 +4723,9 @@ export interface FleetConfigPullStatusView {
 export interface FleetHealthView {
   /** true when a fleet signing key is wired in this binary. */
   configDistributionEnabled: boolean;
-  /** "fleet" | "stale-cache" | "default-deny-degraded" | "no-key" */
+  /** "fleet" | "stale-cache" | "default-deny-degraded" | "no-key" | "unknown-key"
+   *  ("unknown-key": the latest bundle was signed with a key this build never
+   *  pinned — the install must update; configLastError says which key_id). */
   configSource: string;
   /** Most recent error from the config poller, or empty string. */
   configLastError: string;

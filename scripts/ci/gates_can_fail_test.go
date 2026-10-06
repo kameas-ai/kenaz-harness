@@ -410,6 +410,61 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package zzgateprobe\n\nconst ToolName = \"zz_gate_probe\"\n",
 		},
 		{
+			name: "builtin-tool-registration/harness-self-manager-never-assigned",
+			gate: "check-builtin-tool-registration.sh",
+			// model-harness-toolset-01MHTS001 WP03 (H-2): the
+			// harness_read_get_status / harness_write_install_mcp_recipe
+			// class — a registered harness-self handler nil-checks a
+			// Managers field that buildHarnessManagers never assigns, so
+			// the tool is advertised and always fails "not configured".
+			file:       "core/mcp/builtin/harness/handlers.go",
+			append:     "\nfunc (m Managers) handleZzGateProbe() (any, error) {\n\tif m.ZzGateProbe == nil {\n\t\treturn nil, errNotConfigured\n\t}\n\treturn nil, nil\n}\n",
+			wantOutput: "harness-self-manager:ZzGateProbe",
+		},
+		{
+			// Security review L5: a compound nil-check used to yield only
+			// its FIRST field (m.Providers, which is wired), so the second
+			// — never assigned — slipped through.
+			name:       "builtin-tool-registration/harness-self-manager-compound-nil-check",
+			gate:       "check-builtin-tool-registration.sh",
+			file:       "core/mcp/builtin/harness/handlers.go",
+			append:     "\nfunc (m Managers) handleZzGateProbeCompound() (any, error) {\n\tif m.Providers == nil || nil == m.ZzGateProbeCompound {\n\t\treturn nil, errNotConfigured\n\t}\n\treturn nil, nil\n}\n",
+			wantOutput: "harness-self-manager:ZzGateProbeCompound",
+		},
+		{
+			// Security review L5: a commented-out assignment in the wiring
+			// file used to count as wiring.
+			name:       "builtin-tool-registration/harness-self-manager-comment-assignment",
+			gate:       "check-builtin-tool-registration.sh",
+			file:       "core/mcp/builtin/harness/handlers.go",
+			append:     "\nfunc (m Managers) handleZzGateProbeComment() (any, error) {\n\tif m.ZzGateProbeComment == nil {\n\t\treturn nil, errNotConfigured\n\t}\n\treturn nil, nil\n}\n",
+			file2:      "core/rpc/harness_wiring.go",
+			append2:    "\n// m.ZzGateProbeComment = notWiredYet{}\n",
+			wantOutput: "harness-self-manager:ZzGateProbeComment",
+		},
+		{
+			// WP02 re-review: a TRAILING comment that contains an
+			// assignment used to count as wiring.
+			name:       "builtin-tool-registration/harness-self-manager-trailing-comment-assignment",
+			gate:       "check-builtin-tool-registration.sh",
+			file:       "core/mcp/builtin/harness/handlers.go",
+			append:     "\nfunc (m Managers) handleZzGateProbeTrailing() (any, error) {\n\tif m.ZzGateProbeTrailing == nil {\n\t\treturn nil, errNotConfigured\n\t}\n\treturn nil, nil\n}\n",
+			file2:      "core/rpc/harness_wiring.go",
+			append2:    "\nvar _ = 0 // m.ZzGateProbeTrailing = later\n",
+			wantOutput: "harness-self-manager:ZzGateProbeTrailing",
+		},
+		{
+			// WP02 re-review: an assignment inside a /* */ block used to
+			// count as wiring.
+			name:       "builtin-tool-registration/harness-self-manager-block-comment-assignment",
+			gate:       "check-builtin-tool-registration.sh",
+			file:       "core/mcp/builtin/harness/handlers.go",
+			append:     "\nfunc (m Managers) handleZzGateProbeBlock() (any, error) {\n\tif m.ZzGateProbeBlock == nil {\n\t\treturn nil, errNotConfigured\n\t}\n\treturn nil, nil\n}\n",
+			file2:      "core/rpc/harness_wiring.go",
+			append2:    "\n/*\n\tm.ZzGateProbeBlock = notYet{}\n*/\n",
+			wantOutput: "harness-self-manager:ZzGateProbeBlock",
+		},
+		{
 			name: "single-move-writer/second-seam-caller",
 			gate: "check-single-move-writer.sh",
 			// The convergence violation the transcript-move seam exists
@@ -1492,6 +1547,22 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			file: "core/rpc/views/agentgraph/chat/partial_flush.go",
 			append: "\nfunc zzGateProbeIndirectPartialPersistCaller(p PartialPersister, ctx context.Context, sessionID, text string) {\n" +
 				"\t_, _ = p.PersistPartial(ctx, sessionID, text, \"transient\", true)\n" +
+				"}\n",
+		},
+		{
+			// 2026-10-05 (model fork tool, review H1): ReplayTranscript
+			// joined SYMBOLS when the fork replay was consolidated into
+			// session.Manager. Same F2 shape as the case above: a second
+			// caller replaying rows through the seam changes no leaf
+			// AppendMessage line, so only the seam symbol can see it.
+			// Planted in the seam's one sanctioned caller file.
+			name: "session-message-writers/second-replay-transcript-caller",
+			wantOutput: "core/conversation/manager.go calls .ReplayTranscript( 2 time(s); " +
+				"allowlist permits 1",
+			gate: "check-session-message-writers.sh",
+			file: "core/conversation/manager.go",
+			append: "\nfunc zzGateProbeSecondReplayCaller(m *Manager, ctx context.Context, sessionID string, msgs []session.Message) {\n" +
+				"\t_, _ = m.sessions.ReplayTranscript(ctx, sessionID, msgs)\n" +
 				"}\n",
 		},
 		// ---- 2026-09-11: closing finding #48 (10 of 51 gates had no

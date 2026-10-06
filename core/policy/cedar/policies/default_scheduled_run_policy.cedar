@@ -9,11 +9,15 @@
 // removes the human review moment that would otherwise gate it — but
 // ONLY when its row carries a non-empty tool allowlist declared at
 // creation time (context.has_tool_allowlist == true, sourced from
-// scheduled_chat_runs.tool_allowlist, migration sessions/0340). Per-run
-// enforcement of that allowlist against the live tool catalogue is a
-// separate seam (harness-self-attach-01PMHS01's merged
-// PermissionResolver); this rule is the policy-level half of the
-// fail-safe, not the whole of it.
+// scheduled_chat_runs.tool_allowlist, migration sessions/0340). This
+// rule decides only WHETHER the run may start. What the started run may
+// call is enforced per tool call, not here: the dispatcher binds the
+// run's session to the allowlist (scheduler.ResolveRunContainment) and
+// the session arm of the merged tool-permission resolver
+// (core/rpc/harness_session_kind_resolver.go, via
+// ScheduledRunContainmentRegistry) denies and records every off-list
+// call (model-harness-toolset-01MHTS001 WP02, finding H-1 — until that
+// WP nothing enforced it, although this comment said a seam did).
 //
 // THIS FILE'S PRESENCE IS WHAT MAKES THE FAIL-SAFE NON-VACUOUS.
 // core/policy/cedar/hooks.go's GateScheduledChatExecute does NOT use
