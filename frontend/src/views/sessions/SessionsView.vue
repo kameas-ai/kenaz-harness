@@ -563,18 +563,16 @@ const contextBarTone = computed<'ok' | 'warn' | 'danger'>(() => {
   return 'ok';
 });
 
-// composerUsageEstimate: the ChatInput footer's token/cost readout
-// ("N tok · $M"). Reads from the SAME session.lastUsage snapshot the
-// context-window meter above already consumes (populated in near-real-time
-// via the `session.usage.updated` broker event after each LLM turn —
-// backend-context-window-length-01KQ8TD3 WP03). Previously this was a
-// hardcoded `{ tokens: 0, usd: 0 }` stub (a documented placeholder that
-// never got wired to real accounting), which is why the footer always
-// read "0 tok · $0.0000" during and after every turn even though the
-// backend usage pipeline (OpenRouter usage SSE frame → LLMProviderAdapter
-// → UsageHook → session.usage.updated) was already delivering real
-// numbers — the same numbers the context meter renders correctly.
+// Dogfood 2026-10-05: the footer is CUMULATIVE for the conversation
+// (Sessions_GetUsage aggregate, refreshed per turn). It previously read
+// the per-turn lastUsage snapshot, whose cost legitimately rises and
+// falls with caching and prompt size — which read as "the cost readout
+// is broken". The context meter still reads lastUsage (per-turn prompt
+// size is the right numerator there). Falls back to the per-turn
+// snapshot only while the aggregate has not loaded yet.
 const composerUsageEstimate = computed<CostEstimate>(() => {
+  const cu = session.cumulativeUsage.value;
+  if (cu) return { tokens: cu.totalTokens ?? 0, usd: cu.costUsd ?? 0 };
   const usage = session.lastUsage.value;
   if (!usage) return { tokens: 0, usd: 0 };
   return { tokens: usage.totalTokens ?? 0, usd: usage.costUsd ?? 0 };
