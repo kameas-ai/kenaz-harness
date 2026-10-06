@@ -236,12 +236,42 @@ func (sessionWriteExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 			}
 		}
 	}
-	if !ok || text == "" {
+	if !ok {
+		// NO readable value on the port is a graph-wiring defect (nothing
+		// feeds it, or it carries a type we cannot read text from) and
+		// stays a hard error — silently persisting nothing here is exactly
+		// the "built but not reached" lie the unwired sweep exists to catch.
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
-			"err":  "missing or empty text input",
+			"err":  "missing text input",
 			"port": port,
 		})
 		return res, fmt.Errorf("session_write: node %q: missing text on port %q", node.ID, port)
+	}
+	if text == "" {
+		// A value IS present but its text is empty: a legitimate runtime
+		// state, not a wiring bug. The common case is a tool-only turn —
+		// the model's last fire ended the loop with no trailing prose
+		// (providers routinely return empty content after tool calls).
+		// Every earlier assistant segment of the turn has already been
+		// persisted as its own assistant_move by the chat runner's turn
+		// journal (core/rpc/views/agentgraph/chat/moves.go: flushHeld,
+		// driven by RecordToolCall / RecordAssistantMove / Finish), so
+		// there is nothing left for this node to write. Skip softly so the
+		// run completes instead of failing the send after the work was done.
+		//
+		// A []Message whose LAST message is empty skips too, rather than
+		// reaching back for an earlier non-empty message: that earlier
+		// text is one the journal already flushed, and writing it again
+		// here would duplicate it as a `final` row.
+		res.Outputs["message_id"] = ""
+		res.Outputs["appended"] = false
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventSessionWrite, map[string]any{
+			"role":    role,
+			"port":    port,
+			"skipped": true,
+			"reason":  "empty_text",
+		})
+		return res, nil
 	}
 	if env.SessionID == "" {
 		// No session — best-effort no-op so a graph that runs outside
