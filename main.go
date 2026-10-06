@@ -138,11 +138,19 @@ func main() {
 	// FR-002: assert fleet signing-key presence at boot. A shipped binary
 	// without a key logs exactly one WARN so the absence is never silent.
 	// Dev builds (Version == "dev") skip this so local development is unaffected.
-	if !fleet.ConfigDistributionEnabled() {
+	if err := fleet.FleetSigningKeySetError(); err != nil {
+		// A malformed pin list is rejected WHOLE (never a silent skip of the
+		// bad entry) — say so loudly, in every build, not as the quiet
+		// "no key" WARN a deliberately unkeyed build gets.
+		logging.L().Error("fleet.config_distribution.disabled",
+			"reason", "pinned signing key set is malformed and was rejected",
+			"error", err.Error(),
+			"action", "fix the FLEET_SIGNING_PUBKEYS_<ENV> Actions variable (comma-separated 64-hex raw ed25519 public keys) and rebuild")
+	} else if !fleet.ConfigDistributionEnabled() {
 		if Version != "dev" {
 			logging.L().Warn("fleet.config_distribution.disabled",
 				"reason", "signing key not injected at build time",
-				"action", "fleet config bundles will not be applied; contact ops to provision FLEET_SIGNING_PUBKEY")
+				"action", "fleet config bundles will not be applied; contact ops to set the FLEET_SIGNING_PUBKEYS_<ENV> Actions variable")
 		} else {
 			logging.L().Debug("fleet.config_distribution.disabled",
 				"reason", "dev build — signing key absent by design")

@@ -1484,7 +1484,16 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 			st := p.Status()
 			configSource = st.Source
 			configLastError = st.LastError
-			if configSource == "default-deny" && configLastError == "" {
+			switch {
+			case st.SigningKeyUnknown:
+				// Parallel to "no-key" (ErrSigningKeyNotConfigured): the
+				// latest bundle was signed with a key_id this build never
+				// pinned (fleet.ErrSigningKeyUnknown). The binary HAS keys,
+				// so distribution is enabled — but nothing new will apply
+				// until the harness is updated. ConfigLastError carries
+				// "bundle signed with an unknown key: key_id …".
+				configSource = "unknown-key"
+			case configSource == "default-deny" && configLastError == "":
 				configSource = "default-deny-degraded"
 			}
 		}

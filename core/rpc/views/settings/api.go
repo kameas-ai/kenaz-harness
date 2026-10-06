@@ -1818,7 +1818,10 @@ type FleetHealthView struct {
 	// in this binary. false means fleet config bundles can never be applied.
 	ConfigDistributionEnabled bool `json:"configDistributionEnabled"`
 	// ConfigSource is the last-known config source: "fleet", "stale-cache",
-	// "default-deny-degraded", or "no-key".
+	// "default-deny-degraded", "no-key" (no signing key pinned in this
+	// binary — fleet.ErrSigningKeyNotConfigured), or "unknown-key" (the
+	// latest bundle's signed key_id matches no pinned key —
+	// fleet.ErrSigningKeyUnknown; the install must update).
 	ConfigSource string `json:"configSource"`
 	// ConfigLastError is the most recent error string from the config poller.
 	ConfigLastError string `json:"configLastError"`

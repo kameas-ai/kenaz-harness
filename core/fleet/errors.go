@@ -24,10 +24,20 @@ var (
 	// empty key fields — the build pipeline has not populated the ldflag vars.
 	ErrProfileNotConfigured = errors.New("fleet: env profile not populated at build time")
 
-	// ErrSigningKeyNotConfigured is returned when FleetSigningKey() returns nil
-	// because the build-time ldflags were not populated. All bundle verification
-	// fails hard in this case — no config is applied.
+	// ErrSigningKeyNotConfigured is returned when FleetSigningKeys() is empty
+	// because the build-time ldflags were not populated (or the pin list was
+	// malformed and rejected whole). All bundle verification fails hard in
+	// this case — no config is applied.
 	ErrSigningKeyNotConfigured = errors.New("fleet: config bundle signing key not configured at build time")
+
+	// ErrSigningKeyUnknown is returned by VerifyWithKeySet when a bundle names
+	// its signer via the signed "key_id" field and NO pinned key in this
+	// binary has that key_id. Operationally this means the install's pins
+	// predate the newest fleet signing key (fleet was flipped to a key this
+	// release never pinned) — the remedy is updating the harness, not
+	// retrying. Distinct from ErrInvalidSignature (a pinned key was selected
+	// and the signature did not verify) so Settings can say which happened.
+	ErrSigningKeyUnknown = errors.New("fleet: bundle signed with an unknown key")
 
 	// ErrInvalidSignature is returned by Verify when the ed25519 signature in a
 	// config bundle does not match the canonical JSON payload.

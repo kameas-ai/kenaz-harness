@@ -65,6 +65,13 @@ type ConfigPollStatus struct {
 	// BundleChecksum is the last-seen bundle checksum (SHA-256, hex), used for
 	// 304 Not-Modified gating on the next poll.
 	BundleChecksum string `json:"bundleChecksum"`
+	// SigningKeyUnknown is true when the most recent bundle was rejected with
+	// ErrSigningKeyUnknown: its signed key_id names no key pinned in this
+	// build (the install's pins predate fleet's current signing key). Settings
+	// FleetHealth projects it as ConfigSource "unknown-key", parallel to
+	// "no-key" for ErrSigningKeyNotConfigured. Cleared by the next poll that
+	// does not end in that rejection.
+	SigningKeyUnknown bool `json:"signingKeyUnknown"`
 }
 
 // ConfigPoller polls the fleet config endpoint, verifies bundles, and drives
@@ -82,6 +89,7 @@ type ConfigPoller struct {
 	lastError     string
 	checksum      string // SHA-256 hex of last-seen bundle JSON (for 304)
 	source        string
+	keyUnknown    bool // last rejection was ErrSigningKeyUnknown
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -228,10 +236,11 @@ func (p *ConfigPoller) Status() ConfigPollStatus {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	s := ConfigPollStatus{
-		LastAppliedID:  p.lastAppliedID,
-		LastError:      p.lastError,
-		Source:         p.source,
-		BundleChecksum: p.checksum,
+		LastAppliedID:     p.lastAppliedID,
+		LastError:         p.lastError,
+		Source:            p.source,
+		BundleChecksum:    p.checksum,
+		SigningKeyUnknown: p.keyUnknown,
 	}
 	if !p.lastAppliedAt.IsZero() {
 		s.LastAppliedAt = p.lastAppliedAt.UTC().Format(time.RFC3339)
@@ -304,7 +313,12 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 
 	if err := VerifyWithKeySet(&b, keys, lastID); err != nil {
 		// Hard-reject: do NOT apply; do NOT advance bundle_id; DO set error.
-		p.setError(fmt.Sprintf("bundle verification failed (hard-reject): %v", err))
+		// Error text and the unknown-key flag are set under ONE lock so a
+		// concurrent Status() never sees one without the other.
+		p.mu.Lock()
+		p.lastError = fmt.Sprintf("bundle verification failed (hard-reject): %v", err)
+		p.keyUnknown = errors.Is(err, ErrSigningKeyUnknown)
+		p.mu.Unlock()
 		return err // also triggers backoff
 	}
 
@@ -320,6 +334,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	// re-attempted on the next poll. The checksum is also NOT advanced so
 	// the next GET returns the same bundle (no 304 short-circuit).
 	p.mu.Lock()
+	p.keyUnknown = false // the bundle verified under a pinned key
 	if len(applyErrs) == 0 {
 		p.lastAppliedID = b.BundleID
 		p.lastAppliedAt = time.Now()
@@ -360,15 +375,19 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	return nil
 }
 
+// setError records msg and clears the unknown-key flag (every caller is a
+// non-verification failure; the verification path sets both itself).
 func (p *ConfigPoller) setError(msg string) {
 	p.mu.Lock()
 	p.lastError = msg
+	p.keyUnknown = false
 	p.mu.Unlock()
 }
 
 func (p *ConfigPoller) clearError() {
 	p.mu.Lock()
 	p.lastError = ""
+	p.keyUnknown = false
 	p.mu.Unlock()
 }
 
