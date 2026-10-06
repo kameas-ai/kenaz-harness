@@ -83,6 +83,9 @@ type UnitSyncer struct {
 	mapper  *UnitMapper
 	caps    *CapabilityPoller
 	dataDir string
+	// ids derives wire UUIDs for units that have never synced (WP01,
+	// wire_id.go). Immutable after construction.
+	ids *WireIDs
 
 	mu          sync.RWMutex
 	cursor      string
@@ -119,6 +122,7 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 		mapper:  mapper,
 		caps:    caps,
 		dataDir: dataDir,
+		ids:     NewWireIDs(dataDir),
 		stopCh:  make(chan struct{}),
 	}
 	if c, err := loadUnitCursor(dataDir); err == nil {
@@ -186,6 +190,10 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 
 	nodes := make([]contextNodeInput, 0, len(dirty))
 	pushed := make([]units.Unit, 0, len(dirty))
+	// wireOf maps a pushed unit id to the wire UUID it was sent as, so the
+	// response's conflicts / rejections (keyed by wire id) and the sidecar
+	// write resolve back to the local unit.
+	wireOf := make(map[string]string, len(dirty))
 	seenEdge := map[string]bool{}
 	edges := make([]contextEdgeInput, 0)
 
@@ -197,6 +205,8 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 		if !ok {
 			continue // personal — defensively skipped (ListDirty already filters)
 		}
+		node.ID = s.WireNodeID(ctx, u.ID)
+		wireOf[u.ID] = node.ID
 		nodes = append(nodes, node)
 		pushed = append(pushed, u)
 
@@ -213,6 +223,9 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 			if !ok {
 				continue
 			}
+			wire.ID = s.ids.For(WireLaneUnitEdge, e.ID)
+			wire.FromNodeID = s.WireNodeID(ctx, e.FromID)
+			wire.ToNodeID = s.WireNodeID(ctx, e.ToID)
 			seenEdge[e.ID] = true
 			edges = append(edges, wire)
 		}
@@ -267,7 +280,7 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 	}
 	now := time.Now().UTC()
 	for _, u := range pushed {
-		if conflicted[u.ID] {
+		if conflicted[wireOf[u.ID]] {
 			continue // conflicted or rejected — leave sidecar untouched (stays dirty)
 		}
 		// After a successful push-ack both baselines advance to the pushed
@@ -276,7 +289,7 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 		// = u.Version immediately after a push.
 		if _, err := s.store.UpsertSyncState(ctx, units.SyncState{
 			UnitID:              u.ID,
-			NodeID:              u.ID, // harness reuses unit id as node id on push
+			NodeID:              wireOf[u.ID], // the wire UUID (WP01) — pull resolves it back via GetSyncStateByNodeID
 			SyncedServerVersion: u.Version,
 			SyncedLocalVersion:  u.Version,
 			Classification:      classStr,
@@ -286,6 +299,25 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 		}
 	}
 	return result.AcceptedNodes, nil
+}
+
+// WireNodeID resolves the fleet node UUID for a local unit id (WP01). A unit
+// that has synced before keeps the NodeID its sidecar recorded — for a
+// pulled unit that is the server's id, for a pushed one the id it was pushed
+// under — so the mapping is durable in the units store, not just derivable.
+// A never-synced unit (or a legacy sidecar row whose NodeID is the raw ULID
+// from before UUIDs, which fleet never accepted) gets the deterministic
+// per-install UUIDv5 (wire_id.go).
+func (s *UnitSyncer) WireNodeID(ctx context.Context, unitID string) string {
+	if unitID == "" {
+		return ""
+	}
+	if s.store != nil {
+		if st, err := s.store.GetSyncState(ctx, unitID); err == nil && IsWireUUID(st.NodeID) {
+			return st.NodeID
+		}
+	}
+	return s.ids.For(WireLaneUnit, unitID)
 }
 
 // ── Pull-down (read-down-auto) ───────────────────────────────────────────────

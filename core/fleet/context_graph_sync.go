@@ -155,6 +155,9 @@ type ContextPushResult struct {
 	// user or org. Absent on the current server = everything accepted.
 	// Distinct from Conflicts (your own stale version).
 	Rejected []ContextPushRejection `json:"rejected,omitempty"`
+	// WireNodeID is the fleet node UUID the pushed entry was stored under
+	// (harness-side, never decoded from the response — `json:"-"`).
+	WireNodeID string `json:"-"`
 }
 
 // ContextPulledNode is a single node from GET /api/v1/context/pull.
@@ -278,6 +281,9 @@ type ContextGraphSyncer struct {
 	client  *Client
 	dataDir string
 	caps    *CapabilityPoller
+	// ids maps local ids (library paths) to fleet wire UUIDs (WP01,
+	// wire_id.go). Immutable after construction.
+	ids *WireIDs
 
 	mu      sync.RWMutex
 	// pulled is the in-memory cache of team/org entries received from fleet.
@@ -338,6 +344,7 @@ func NewContextGraphSyncer(client *Client, dataDir string, caps *CapabilityPolle
 		client:  client,
 		dataDir: dataDir,
 		caps:    caps,
+		ids:     NewWireIDs(dataDir),
 	}
 	// Restore cursor from disk.
 	if c, err := loadContextCursor(dataDir); err == nil {
@@ -392,6 +399,11 @@ func (s *ContextGraphSyncer) canPull() error {
 // fleet context graph. The entry must have layer = team or org. Personal
 // entries are rejected with ErrPersonalLayerNotSyncable.
 //
+// entry.ID (and edge ids / endpoints) are LOCAL ids — for Knowledge ›
+// Curated, the library path. They are mapped to fleet wire UUIDs here, in
+// the sync layer (WireNodeID); a value that already is a UUID passes
+// through. The result's WireNodeID reports the id fleet stored.
+//
 // Cap gate: team_shared requires CapSharedTeamGraph.
 // Idempotent: re-pushing with the same version is a no-op on the server.
 //
@@ -418,8 +430,12 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		}
 	}
 
+	wireID := s.WireNodeID(entry.ID)
+	if wireID == "" {
+		return nil, fmt.Errorf("fleet: context push: empty node id")
+	}
 	node := contextNodeInput{
-		ID:             entry.ID,
+		ID:             wireID,
 		Kind:           entry.Kind,
 		Title:          entry.Title,
 		Body:           entry.Body,
@@ -433,9 +449,9 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	edgeInputs := make([]contextEdgeInput, 0, len(edges))
 	for _, e := range edges {
 		ei := contextEdgeInput{
-			ID:             e.ID,
-			FromNodeID:     e.FromNodeID,
-			ToNodeID:       e.ToNodeID,
+			ID:             s.ids.For(WireLaneCuratedEdge, e.ID),
+			FromNodeID:     s.WireNodeID(e.FromNodeID),
+			ToNodeID:       s.WireNodeID(e.ToNodeID),
 			Kind:           e.Kind,
 			Classification: e.Classification,
 			TeamID:         e.TeamID,
@@ -458,7 +474,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	const pushEndpoint = "/api/v1/context/push"
 	logging.L().Info("fleet.context.push.http.start",
 		"endpoint", pushEndpoint,
-		"node_id", entry.ID,
+		"node_id", wireID,
 		"classification", string(classification),
 		"team_id_present", entry.TeamID != nil,
 		"title_len", len(entry.Title),
@@ -473,7 +489,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		s.mu.Unlock()
 		logging.L().Error("fleet.context.push.http.error",
 			"endpoint", pushEndpoint,
-			"node_id", entry.ID,
+			"node_id", wireID,
 			"err", err.Error(),
 		)
 		return nil, fmt.Errorf("fleet: context push: %w", err)
@@ -500,7 +516,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		s.mu.Unlock()
 		logging.L().Warn("fleet.context.push.http.response",
 			"endpoint", pushEndpoint,
-			"node_id", entry.ID,
+			"node_id", wireID,
 			"status", resp.StatusCode,
 			"code", pe.Code,
 		)
@@ -511,7 +527,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	if err != nil {
 		logging.L().Error("fleet.context.push.http.error",
 			"endpoint", pushEndpoint,
-			"node_id", entry.ID,
+			"node_id", wireID,
 			"err", err.Error(),
 		)
 		return nil, fmt.Errorf("fleet: context push read body: %w", err)
@@ -519,7 +535,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 
 	logging.L().Info("fleet.context.push.http.response",
 		"endpoint", pushEndpoint,
-		"node_id", entry.ID,
+		"node_id", wireID,
 		"status", resp.StatusCode,
 		"body_bytes", len(body),
 	)
@@ -527,7 +543,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	var result ContextPushResult
 	if err := json.Unmarshal(body, &result); err != nil {
 		logging.L().Error("fleet.context.push.parse_error",
-			"node_id", entry.ID,
+			"node_id", wireID,
 			"err", err.Error(),
 		)
 		return nil, fmt.Errorf("fleet: context push parse response: %w", err)
@@ -538,16 +554,16 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	// rejections leave the node published but are recorded as the push
 	// error so Context_SyncStatus shows them.
 	for _, r := range result.Rejected {
-		if r.Kind == "node" && r.ID == entry.ID {
+		if r.Kind == "node" && r.ID == wireID {
 			s.mu.Lock()
 			s.lastPushErr = describeRejections(result.Rejected)
 			s.mu.Unlock()
 			logging.L().Warn("fleet.context.push.rejected",
-				"node_id", entry.ID,
+				"node_id", wireID,
 				"reason", r.Reason,
 				"rejected_count", len(result.Rejected),
 			)
-			return nil, &ContextPushRejectedError{NodeID: entry.ID, Reason: r.Reason}
+			return nil, &ContextPushRejectedError{NodeID: wireID, Reason: r.Reason}
 		}
 	}
 
@@ -556,7 +572,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	if len(result.Rejected) > 0 {
 		s.lastPushErr = describeRejections(result.Rejected)
 		logging.L().Warn("fleet.context.push.rejected",
-			"node_id", entry.ID,
+			"node_id", wireID,
 			"rejected_count", len(result.Rejected),
 		)
 	}
@@ -586,11 +602,12 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	// Privacy invariant: no title, body, or metadata in the payload.
 	contextaudit.MustEmit(ctx, s.auditEmitter, contextaudit.KindFleetContextPublished,
 		contextaudit.FleetContextPublishedPayload{
-			NodeID:         entry.ID,
+			NodeID:         wireID,
 			Classification: string(classification),
 			Version:        entry.Version,
 		}, time.Now())
 
+	result.WireNodeID = wireID
 	return &result, nil
 }
 
@@ -758,6 +775,15 @@ func (s *ContextGraphSyncer) upsertPulledEdgeLocked(edge ContextEdgeEntry) {
 	s.pulledEdges = append(s.pulledEdges, edge)
 }
 
+// WireNodeID maps a Curated local id (library path, or an already-wire
+// UUID / "<layer>/_fleet/<uuid>" synthetic path) to its fleet node UUID.
+func (s *ContextGraphSyncer) WireNodeID(localID string) string {
+	if s == nil || s.ids == nil {
+		return ""
+	}
+	return s.ids.For(WireLaneCurated, localID)
+}
+
 // teamIDPtr returns a *string for a non-empty team_id string.
 func teamIDPtr(s string) *string {
 	if s == "" {
@@ -772,10 +798,13 @@ func teamIDPtr(s string) *string {
 // Promote elevates a team_shared entry to org_shared.
 // Requires CapSharedTeamGraph (server enforces org-graph separately).
 // FR-201, FR-202.
-func (s *ContextGraphSyncer) Promote(ctx context.Context, nodeID string) (*ContextPromoteResult, error) {
+func (s *ContextGraphSyncer) Promote(ctx context.Context, localID string) (*ContextPromoteResult, error) {
 	if err := s.canPushOrg(); err != nil {
 		return nil, err
 	}
+	// The caller passes the same LOCAL id it published with; promote the
+	// wire node that publish created (WP01).
+	nodeID := s.WireNodeID(localID)
 
 	req := contextPromoteRequest{
 		NodeID:           nodeID,

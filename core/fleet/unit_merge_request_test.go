@@ -5,8 +5,9 @@ package fleet
 // Covers:
 //   - personal→team promotion opens a merge request (and the PERSONAL source
 //     unit is never pushed as a node — only the reviewed proposal travels).
-//   - the merge-request wire body matches the fleet merge_requests object
-//     (unit_node_id, from/to_classification, proposed_version, title, body).
+//   - the merge-request wire body matches fleet's MergeRequestCreateRequest
+//     (unit_node_id as a UUID, to_classification, proposed_title/body) and the
+//     response is decoded from fleet's {"merge_request": …} envelope.
 //   - non-upward targets are rejected with ErrPromoteNotUp.
 //   - team→org promotion maps the from/to classes to the sync vocabulary.
 
@@ -42,17 +43,18 @@ func (s *mrFakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(MergeRequest{
+		// Fleet's MergeRequestResponse envelope (service/api_types.go).
+		_ = json.NewEncoder(w).Encode(map[string]any{"merge_request": MergeRequest{
 			ID:                 "mr-1",
 			UnitNodeID:         in.UnitNodeID,
-			FromClassification: in.FromClassification,
+			FromClassification: "personal",
 			ToClassification:   in.ToClassification,
-			ProposedVersion:    in.ProposedVersion,
-			Title:              in.Title,
-			Body:               in.Body,
+			ProposedVersion:    3,
+			Title:              in.ProposedTitle,
+			Body:               in.ProposedBody,
 			Status:             "open",
 			CreatedAt:          time.Now().UTC().Format(time.RFC3339),
-		})
+		}})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/context/push":
 		var req contextPushRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -101,8 +103,8 @@ func TestCreateMergeRequestForPromote_PersonalToTeam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMergeRequestForPromote: %v", err)
 	}
-	if mr.ID == "" || mr.Status != "open" {
-		t.Fatalf("unexpected MR: %+v", mr)
+	if mr.ID == "" || mr.Status != "open" || mr.Title != "Promote my note" {
+		t.Fatalf("unexpected MR (envelope not decoded?): %+v", mr)
 	}
 
 	fake.mu.Lock()
@@ -112,20 +114,18 @@ func TestCreateMergeRequestForPromote_PersonalToTeam(t *testing.T) {
 	}
 	got := fake.requests[0]
 	// Field shapes must match the fleet merge_requests object.
-	if got.UnitNodeID != src.ID {
-		t.Errorf("unit_node_id = %q, want %q", got.UnitNodeID, src.ID)
+	// unit_node_id is the unit's wire UUID, never its local ULID (WP01).
+	if !IsWireUUID(got.UnitNodeID) || got.UnitNodeID == src.ID {
+		t.Errorf("unit_node_id = %q, want a UUID distinct from local id %q", got.UnitNodeID, src.ID)
 	}
-	if got.FromClassification != "personal" {
-		t.Errorf("from_classification = %q, want personal", got.FromClassification)
+	if want := syncer.WireNodeID(ctx, src.ID); got.UnitNodeID != want {
+		t.Errorf("unit_node_id = %q, want the unit's wire id %q", got.UnitNodeID, want)
 	}
 	if got.ToClassification != string(ClassTeamShared) {
 		t.Errorf("to_classification = %q, want %q", got.ToClassification, ClassTeamShared)
 	}
-	if got.ProposedVersion != src.Version {
-		t.Errorf("proposed_version = %d, want %d", got.ProposedVersion, src.Version)
-	}
-	if got.Title != "Promote my note" || got.Body != "please review" {
-		t.Errorf("title/body = %q/%q", got.Title, got.Body)
+	if got.ProposedTitle != "Promote my note" || got.ProposedBody != "please review" {
+		t.Errorf("proposed_title/body = %q/%q", got.ProposedTitle, got.ProposedBody)
 	}
 	// The personal source was NEVER pushed as a node.
 	if len(fake.pushNodes) != 0 {
@@ -149,15 +149,12 @@ func TestCreateMergeRequestForPromote_TeamToOrg(t *testing.T) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	got := fake.requests[0]
-	if got.FromClassification != string(ClassTeamShared) {
-		t.Errorf("from = %q, want team_shared", got.FromClassification)
-	}
 	if got.ToClassification != string(ClassOrgShared) {
 		t.Errorf("to = %q, want org_shared", got.ToClassification)
 	}
 	// Empty title/body default to the source's.
-	if got.Title != "team doc" || got.Body != "shared" {
-		t.Errorf("defaulted title/body = %q/%q, want team doc/shared", got.Title, got.Body)
+	if got.ProposedTitle != "team doc" || got.ProposedBody != "shared" {
+		t.Errorf("defaulted title/body = %q/%q, want team doc/shared", got.ProposedTitle, got.ProposedBody)
 	}
 }
 

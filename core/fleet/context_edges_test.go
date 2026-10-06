@@ -75,8 +75,12 @@ func TestEdgePush_TwoPhase(t *testing.T) {
 	if len(req.Edges) != 1 {
 		t.Errorf("server edges=%d, want 1", len(req.Edges))
 	}
-	if req.Edges[0].FromNodeID != "node-from" {
-		t.Errorf("edge.from=%q, want node-from", req.Edges[0].FromNodeID)
+	// Edge endpoints are mapped to the SAME wire ids their nodes get (WP01).
+	if want := syncer.WireNodeID("node-from"); req.Edges[0].FromNodeID != want || !IsWireUUID(want) {
+		t.Errorf("edge.from=%q, want wire id %q", req.Edges[0].FromNodeID, want)
+	}
+	if !IsWireUUID(req.Edges[0].ID) || !IsWireUUID(req.Edges[0].ToNodeID) {
+		t.Errorf("edge id/to = %q/%q, want UUIDs", req.Edges[0].ID, req.Edges[0].ToNodeID)
 	}
 	if req.Edges[0].Kind != "references" {
 		t.Errorf("edge.kind=%q, want references", req.Edges[0].Kind)

@@ -178,7 +178,7 @@ func TestContextE2E_PromoteWithAudit(t *testing.T) {
 	// Pre-seed a team entry in the local cache.
 	syncer.mu.Lock()
 	syncer.pulled = append(syncer.pulled, ContextNodeEntry{
-		ID:             "node-e2e-promote",
+		ID:             "6b2f6f0e-1c1a-4a57-9a51-0d6b1a9e0002",
 		Layer:          contextpack.LayerTeam,
 		Classification: ClassTeamShared,
 		Kind:           "guidance",
@@ -190,7 +190,7 @@ func TestContextE2E_PromoteWithAudit(t *testing.T) {
 	syncer.mu.Unlock()
 
 	ctx := context.Background()
-	result, err := syncer.Promote(ctx, "node-e2e-promote")
+	result, err := syncer.Promote(ctx, "6b2f6f0e-1c1a-4a57-9a51-0d6b1a9e0002")
 	if err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestContextE2E_PromoteWithAudit(t *testing.T) {
 	// Verify local cache is updated to org layer.
 	entries := syncer.PulledEntries()
 	for _, e := range entries {
-		if e.ID == "node-e2e-promote" {
+		if e.ID == "6b2f6f0e-1c1a-4a57-9a51-0d6b1a9e0002" {
 			if e.Layer != contextpack.LayerOrg {
 				t.Errorf("local cache layer=%q, want org after promote", e.Layer)
 			}

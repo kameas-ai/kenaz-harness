@@ -297,8 +297,10 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		fellBackToOrg = true
 	}
 
+	// Log the wire id, never the local id (a library path is user content).
+	wireID := a.syncer.WireNodeID(req.NodeID)
 	logging.L().Info("contexts.publish.start",
-		"node_id", req.NodeID,
+		"node_id", wireID,
 		"requested_layer", req.Layer,
 		"effective_layer", string(layer),
 		"team_fallback_to_org", fellBackToOrg,
@@ -320,7 +322,7 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 	result, err := a.syncer.PushEntry(ctx, entry, nil)
 	if err != nil {
 		logging.L().Warn("contexts.publish.failed",
-			"node_id", req.NodeID,
+			"node_id", wireID,
 			"effective_layer", string(layer),
 			// Never err.Error(): a lint_blocked refusal carries excerpts of
 			// the body; they belong in the returned (UI) error only.
@@ -329,7 +331,7 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		return ContextPublishResult{}, fmt.Errorf("contexts: publish: %w", err)
 	}
 	logging.L().Info("contexts.publish.done",
-		"node_id", req.NodeID,
+		"node_id", wireID,
 		"effective_layer", string(layer),
 		"accepted_nodes", result.AcceptedNodes,
 		"accepted_edges", result.AcceptedEdges,
@@ -350,18 +352,18 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 		return ContextPromoteResult{}, fleet.ErrFleetDisabled
 	}
 
-	logging.L().Info("contexts.promote.start", "node_id", nodeID)
+	logging.L().Info("contexts.promote.start", "node_id", a.syncer.WireNodeID(nodeID))
 
 	result, err := a.syncer.Promote(ctx, nodeID)
 	if err != nil {
 		logging.L().Warn("contexts.promote.failed",
-			"node_id", nodeID,
+			"node_id", a.syncer.WireNodeID(nodeID),
 			"err", fleet.LogSafeErr(err),
 		)
 		return ContextPromoteResult{}, fmt.Errorf("contexts: promote: %w", err)
 	}
 	logging.L().Info("contexts.promote.done",
-		"node_id", nodeID,
+		"node_id", result.Node.ID,
 		"new_classification", string(result.Node.Classification),
 	)
 	return ContextPromoteResult{
