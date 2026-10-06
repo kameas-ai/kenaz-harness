@@ -746,4 +746,56 @@ func TestScheduledRunContainment_RedriveAfterKeyRotationStaysContained(t *testin
 	if got := f.pool.snapshot(); len(got) != 1 || got[0] != "kenaz__alpha" {
 		t.Fatalf("redriven turn dispatched %v, want only [kenaz__alpha] — the redrive escaped containment", got)
 	}
+	// Other side (L4 fix): once the redriven stream terminates, the run is
+	// over and the session is released.
+	waitReleased(t, f.registry, hist.SessionID)
+}
+
+func waitReleased(t *testing.T, reg *ScheduledRunContainmentRegistry, sessionID string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for reg.Contained(sessionID) {
+		if time.Now().After(deadline) {
+			t.Fatalf("session %s still contained after its run's streams terminated", sessionID)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// slowModel answers after a delay longer than the dispatcher's timeout.
+type slowModel struct{ delay time.Duration }
+
+func (m slowModel) Generate(ctx context.Context, _ coreag.LLMRequest) (coreag.LLMResponse, error) {
+	select {
+	case <-time.After(m.delay):
+	case <-ctx.Done():
+		return coreag.LLMResponse{}, ctx.Err()
+	}
+	if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+		sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: "late"})
+	}
+	return coreag.LLMResponse{Content: "late", FinishReason: "stop"}, nil
+}
+
+// TestScheduledRunContainment_TimedOutRunReleasedWhenItsStreamEnds (review
+// L4): a run whose dispatcher times out stays contained while its stream
+// may still be executing, and is released once that stream terminates — a
+// user who later opens the "Scheduled:" session is not left contained.
+// Mutation: drop releaseOnSessionTerminal from the timeout branch -> the
+// session stays contained forever and this test fails.
+func TestScheduledRunContainment_TimedOutRunReleasedWhenItsStreamEnds(t *testing.T) {
+	sandboxUserConfigDir(t)
+	f := buildContainmentFixtureWith(t, t.TempDir(), slowModel{delay: 1500 * time.Millisecond}, 300*time.Millisecond)
+	hist := f.fireOnce(t, scheduler.ChatRunRecord{
+		ID:            "cr-slow",
+		CreatedBy:     scheduler.ScheduledRunCreatedByModel,
+		ToolAllowlist: []string{"kenaz__alpha"},
+	})
+	if hist.Status != "failed" || !strings.Contains(hist.Error, "timed out") {
+		t.Fatalf("history = %+v, want a timeout", hist)
+	}
+	if !f.registry.Contained(hist.SessionID) {
+		t.Fatal("released at timeout, while the stream was still running")
+	}
+	waitReleased(t, f.registry, hist.SessionID)
 }

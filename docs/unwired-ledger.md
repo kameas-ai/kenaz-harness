@@ -5214,9 +5214,15 @@ above is superseded (it has a production caller now).
 **Accepted residuals:** (1) ~~builtin `kenaz__*` tools are still LISTED to
 a contained run~~ — closed by security review M2 (2026-10-05): the
 discoverer now filters builtins through the same probe-marked resolver
-path as pool tools (`TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins`). (2) An entry is released only on
-the run's terminal stream event; a timed-out run's session stays contained
-for the process lifetime, deliberately. Owner of both: WP16
+path as pool tools (`TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins`). (2) ~~a timed-out run's session
+stays contained for the process lifetime~~ — superseded by security review
+L4 (2026-10-05). Release now happens on the terminal event of ANY stream in
+the session. A key-rotation redrive therefore stays contained while it runs
+(pinned first), and a timed-out session is released once its stream ends,
+instead of staying contained for a user who opens it later. A turn that is
+never redriven keeps its containment for up to 24h (`containmentWatchMax`);
+the watcher then stops and the session stays contained (fail-safe). Owner of
+both: WP16
 (`kenaz__schedule_chat`), which must re-read this seam before shipping.
 
 **Gate question (tasks.md WP02): can any file-level gate see "a persisted

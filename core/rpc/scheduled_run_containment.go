@@ -31,12 +31,15 @@ package rpc
 //     blockedRequestSink the fs gate uses. A failed record never changes
 //     the deny.
 //
-// Lifetime: an entry is released only when the run's stream reports a
-// terminal event (the run is genuinely over). A run that times out or is
-// cancelled keeps its entry for the life of the process — its stream may
-// still be executing, and releasing it then would hand that stream the
-// full catalogue. Entries are a few strings each and the session id is
-// never reused.
+// Lifetime (security review L4): an entry is released when ANY stream in
+// the session reports a terminal event — the run's own stream, or a
+// key-rotation redrive (RedriveLastTurn re-runs the turn under a new sub id
+// in the same session and stays contained while it runs). A run that
+// times out or is cancelled keeps its entry until such an event arrives
+// (LiveChatRunDispatcher.releaseOnSessionTerminal), since its stream may
+// still be executing; if none arrives within containmentWatchMax the
+// entry is kept (fail-safe). A stream that never started releases
+// immediately.
 //
 // Safe for concurrent use.
 

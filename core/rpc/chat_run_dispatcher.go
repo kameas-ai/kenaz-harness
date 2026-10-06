@@ -219,10 +219,11 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		d.deps.Origins.Set(sess.ID, id)
 		defer d.deps.Origins.Clear(sess.ID)
 	}
-	// WP02 (H-1): contain the session before its first turn. Released
-	// only on a terminal stream event (below) — a timed-out or cancelled
-	// run's stream may still be executing, and releasing then would hand
-	// it the full catalogue (see ScheduledRunContainmentRegistry's doc).
+	// WP02 (H-1): contain the session before its first turn. Released on
+	// the terminal event of any stream in the session (below, and
+	// releaseOnSessionTerminal after a timeout) — never at the timeout
+	// itself, since the stream may still be executing (see
+	// ScheduledRunContainmentRegistry's doc).
 	if containment.Contained {
 		d.deps.Containment.Contain(sess.ID, id, containment.Allow)
 	}
@@ -264,6 +265,10 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 
 	subID, serr := d.deps.LLM.StartStream(ctx, profileID, sess.ID, rec.Model)
 	if serr != nil {
+		// No stream started, so nothing can run under the containment.
+		if containment.Contained {
+			d.deps.Containment.Release(sess.ID)
+		}
 		return failedRecord2(sess.ID, now, fmt.Sprintf("start stream: %v", serr)), nil
 	}
 
@@ -286,11 +291,16 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 				// waiting rather than misreport.
 				continue
 			}
-			if payload.SubID != subID {
-				continue // another run's terminal event; keep waiting.
-			}
-			if containment.Contained {
+			// Security review L4: containment is released on the terminal
+			// event of ANY stream in this session, not only ours — a
+			// key-rotation redrive (RedriveLastTurn) runs the turn under a
+			// NEW sub id in the same session, stays contained while it
+			// runs, and its end is the run's end.
+			if containment.Contained && payload.SessionID == sess.ID {
 				d.deps.Containment.Release(sess.ID)
+			}
+			if payload.SubID != subID {
+				continue // another stream's terminal event; keep waiting.
 			}
 			histRec := d.buildRecord(ctx, sess.ID, now, payload)
 			if sinkKind == "banner" {
@@ -298,12 +308,18 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			}
 			return histRec, nil
 		case <-deadline.C:
+			if containment.Contained {
+				d.releaseOnSessionTerminal(sess.ID, subCh)
+			}
 			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("timed out after %s waiting for the run to finish", d.deps.Timeout))
 			if sinkKind == "banner" {
 				d.deliverBanner(id, rec.Name, sess.ID, histRec)
 			}
 			return histRec, nil
 		case <-ctx.Done():
+			if containment.Contained {
+				d.releaseOnSessionTerminal(sess.ID, subCh)
+			}
 			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("context cancelled while awaiting completion: %v", ctx.Err()))
 			if sinkKind == "banner" {
 				d.deliverBanner(id, rec.Name, sess.ID, histRec)
@@ -311,6 +327,64 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			return histRec, nil
 		}
 	}
+}
+
+// containmentWatchMax bounds how long releaseOnSessionTerminal waits. A
+// session whose stream never terminates (an auth-paused turn nobody
+// redrives) stays contained when the watch gives up — the fail-safe
+// direction — and the watcher goroutine does not leak.
+const containmentWatchMax = 24 * time.Hour
+
+// releaseOnSessionTerminal is security review L4's fix for a run that
+// timed out or was cancelled while its stream may still be executing: the
+// containment stays in place NOW, and is released when ANY stream in the
+// session terminates — the original stream finishing late, or a
+// key-rotation redrive finishing. A user who later opens a timed-out
+// "Scheduled:" session is therefore not left contained once the run is
+// over, while anything still running as the scheduled run stays bound.
+//
+// The new subscription is taken BEFORE pending is drained, so a terminal
+// event delivered between the caller's last read and this subscription is
+// seen on pending, and one delivered afterwards is seen on the watcher.
+func (d *LiveChatRunDispatcher) releaseOnSessionTerminal(sessionID string, pending <-chan BusEvent) {
+	ch, cancel := d.deps.Bus.Subscribe(64, "llm:stream-closed")
+	isTerminal := func(ev BusEvent) bool {
+		p, ok := ev.Payload.(chat.StreamClosedPayload)
+		return ok && p.SessionID == sessionID
+	}
+	for drained := false; !drained; {
+		select {
+		case ev, ok := <-pending:
+			if !ok {
+				drained = true
+			} else if isTerminal(ev) {
+				cancel()
+				d.deps.Containment.Release(sessionID)
+				return
+			}
+		default:
+			drained = true
+		}
+	}
+	go func() {
+		defer cancel()
+		timer := time.NewTimer(containmentWatchMax)
+		defer timer.Stop()
+		for {
+			select {
+			case ev, ok := <-ch:
+				if !ok {
+					return
+				}
+				if isTerminal(ev) {
+					d.deps.Containment.Release(sessionID)
+					return
+				}
+			case <-timer.C:
+				return
+			}
+		}
+	}()
 }
 
 // deliverBanner publishes TopicScheduledChatBanner with this run's
