@@ -228,11 +228,12 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 	}
 	defer drain(resp)
 
-	if resp.StatusCode == http.StatusForbidden {
-		return 0, fmt.Errorf("%w: server refused unit push", ErrCapabilityNotInTier)
-	}
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("fleet: unit push status %d", resp.StatusCode)
+		// Map by the envelope's code (not_team_member,
+		// load_policy_requires_admin, capability_not_in_tier, lint_blocked,
+		// …) — not every 403 is a tier problem (context_push_errors.go).
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return 0, parseContextPushError("unit push", resp.StatusCode, errBody)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -244,10 +245,20 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 		return 0, fmt.Errorf("fleet: unit push parse: %w", err)
 	}
 
-	// Index conflicts so we don't advance the sidecar for conflicted nodes.
+	// Index conflicts AND per-item rejections (kenaz-fleet PR #173) so we
+	// don't advance the sidecar for either: a rejected unit was not stored
+	// server-side and must stay dirty.
 	conflicted := map[string]bool{}
 	for _, c := range result.Conflicts {
 		conflicted[c.NodeID] = true
+	}
+	for _, r := range result.Rejected {
+		if r.Kind == "node" {
+			conflicted[r.ID] = true
+		}
+	}
+	if len(result.Rejected) > 0 {
+		logging.L().Warn("fleet.unit.push.rejected", "rejected_count", len(result.Rejected))
 	}
 
 	classStr := ""
@@ -257,7 +268,7 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 	now := time.Now().UTC()
 	for _, u := range pushed {
 		if conflicted[u.ID] {
-			continue // server rejected this version — leave sidecar untouched
+			continue // conflicted or rejected — leave sidecar untouched (stays dirty)
 		}
 		// After a successful push-ack both baselines advance to the pushed
 		// unit's local version. The server echoes back the same version we

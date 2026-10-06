@@ -65,17 +65,17 @@ describe('fleet capability gates share one truth (FR-8)', () => {
     expect(w.find('[data-testid=context-sync-status-strip]').exists()).toBe(false);
     expect(w.find('[data-testid=nav-sites]').exists()).toBe(false);
 
-    dispatchServedEvent('fleet:session-changed', session({ shared_team_graph: true, sites_hosting: true }));
+    dispatchServedEvent('fleet:session-changed', session({ team_graph_sharing: true, sites_hosting: true }));
     await nextTick();
 
     expect(w.find('[data-testid=context-sync-status-strip]').exists()).toBe(true);
     expect(w.find('[data-testid=nav-sites]').exists()).toBe(true);
-    expect(capability('shared_team_graph')).toBe(true);
+    expect(capability('team_graph_sharing')).toBe(true);
   });
 
   it('a capability leaving closes both in the same tick', async () => {
     const w = await mountBoth();
-    dispatchServedEvent('fleet:session-changed', session({ shared_team_graph: true, sites_hosting: true }));
+    dispatchServedEvent('fleet:session-changed', session({ team_graph_sharing: true, sites_hosting: true }));
     await nextTick();
     dispatchServedEvent('fleet:session-changed', session({}));
     await nextTick();

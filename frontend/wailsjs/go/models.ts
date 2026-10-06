@@ -1743,6 +1743,7 @@ export namespace compliance {
 	    retentionDays: number;
 	    enabled: boolean;
 	    archiverRunning: boolean;
+	    stoppedReason?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ComplianceStatus(source);
@@ -1756,6 +1757,7 @@ export namespace compliance {
 	        this.retentionDays = source["retentionDays"];
 	        this.enabled = source["enabled"];
 	        this.archiverRunning = source["archiverRunning"];
+	        this.stoppedReason = source["stoppedReason"];
 	    }
 	}
 

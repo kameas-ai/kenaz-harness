@@ -40,10 +40,10 @@ const publishing = ref(false);
 
 /**
  * canPublishToTeam returns true when the user is signed in and has the
- * shared_team_graph capability (Team+ tier, FR-102).
+ * team_graph_sharing capability (Team+ tier, FR-102).
  */
 const canPublishToTeam = computed(
-  () => signedIn.value && capability('shared_team_graph'),
+  () => signedIn.value && capability('team_graph_sharing'),
 );
 
 async function handlePublishToTeam(): Promise<void> {

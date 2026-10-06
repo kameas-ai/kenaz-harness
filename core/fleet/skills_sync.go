@@ -120,15 +120,22 @@ func FetchCatalogItem(ctx context.Context, client *Client, catalogID, version st
 }
 
 // CatalogSignatureVerdict is the fleet half of install-framework-01DOGF0B's
-// single SignatureVerifier hook — the one place register C-2's per-device
-// catalog key lands, for every install kind. With no key configured it
-// reports verified=false and the C-2 reason (the install proceeds,
-// recorded as unverified — unchanged behaviour, now visible on the
+// single SignatureVerifier hook, for every install kind.
+//
+// Signing design (confirmed by the kenaz-fleet owner, 2026-10-05; register
+// C-2): there is NO per-org or per-device catalog key, and there never will
+// be. Org-MANDATED items ship inside the ed25519-signed config bundle,
+// verified against the build-time-pinned fleet key (config_pull.go
+// VerifyWithKeySet → ApplyMandatedSkills). Non-mandated catalog installs
+// carry no fleet signature today. A possible future design signs item
+// payloads with the bundle key (fleet owner decision pending); pubKeyBase64
+// is the seam that would carry it. With no key it reports verified=false and
+// the C-2 reason (the install proceeds, recorded as unverified on the
 // capability:installed event); with a key, a mismatch is an error and the
 // install is refused.
 func CatalogSignatureVerdict(pubKeyBase64 string, payload []byte, sigBase64 string) (verified bool, reason string, err error) {
 	if pubKeyBase64 == "" {
-		return false, "not signature-verified: no per-device catalog signing key source exists yet (register C-2)", verifyCatalogSignature("", payload, sigBase64)
+		return false, "not signature-verified: fleet signs only the org config bundle; catalog installs carry no fleet signature (register C-2)", verifyCatalogSignature("", payload, sigBase64)
 	}
 	if err := verifyCatalogSignature(pubKeyBase64, payload, sigBase64); err != nil {
 		return false, "", err

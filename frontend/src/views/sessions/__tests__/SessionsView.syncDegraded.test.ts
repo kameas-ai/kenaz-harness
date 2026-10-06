@@ -92,3 +92,43 @@ describe('SessionsView — "Not syncing" badge (FR-6)', () => {
     w.unmount();
   });
 });
+
+function unsupported() {
+  const lane = { status: 'unknown', consecutiveFailures: 0 };
+  return fakeFleetSession({
+    state: 'signed_in',
+    sync: {
+      // What the backend publishes once a plain 404 latches the session-sync
+      // route unsupported (core/fleet/append_breaker.go markUnsupported):
+      // lane Off, the reason, and NO per-session breaker rows.
+      contextSync: { status: 'off', reason: 'fleet_endpoint_unsupported', consecutiveFailures: 0 },
+      unitPoll: { ...lane },
+      telemetry: { ...lane },
+    },
+  });
+}
+
+describe('SessionsView — fleet server without session sync (latched unsupported)', () => {
+  beforeEach(() => {
+    _resetFleetSessionForTest();
+    setConnectionState('ready');
+  });
+  afterEach(() => _resetFleetSessionForTest());
+
+  it('once latched, the toolbar says events stay local and does not offer to enable sync', async () => {
+    const w = await mountView();
+    expect(w.find('[data-testid="session-sync-degraded"]').exists()).toBe(false);
+    expect(w.find('[data-testid="session-sync-toggle"]').text()).toContain('Sync to fleet');
+
+    applyFleetSession(unsupported());
+    await flushPromises();
+    const badge = w.find('[data-testid="session-sync-degraded"]');
+    expect(badge.exists()).toBe(true);
+    expect(badge.text()).toContain("this fleet server doesn't support session sync — events stay local");
+    const toggle = w.find('[data-testid="session-sync-toggle"]');
+    expect(toggle.text()).toContain('Sync unavailable');
+    expect(toggle.text()).not.toContain('Synced to fleet');
+    expect(toggle.attributes('disabled')).toBeDefined();
+    w.unmount();
+  });
+});

@@ -68,11 +68,12 @@ func (f *fakeFleetCatalog) fetchCount() int {
 	return f.fetches
 }
 
-// c2Verifier is the production verdict today: no per-device key, so every
-// fleet payload installs recorded as unverified with the register C-2
+// c2Verifier is the production verdict today: catalog payloads carry no fleet
+// signature (only the org config bundle is signed), so every fleet payload
+// installs recorded as unverified with the register C-2
 // reason (fleet.CatalogSignatureVerdict("", …)).
 func c2Verifier(context.Context, install.Ref, []byte, string) (bool, string, error) {
-	return false, "no per-device catalog signing key (register C-2)", nil
+	return false, "not signature-verified: fleet signs only the org config bundle; catalog installs carry no fleet signature (register C-2)", nil
 }
 
 type skillFixture struct {

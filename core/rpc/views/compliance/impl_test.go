@@ -267,3 +267,58 @@ func testTailEvent(id string, prevHash [32]byte) contextaudit.TailEvent {
 		PrevHash:    prevHash,
 	}
 }
+
+// notFoundPoster answers every audit POST with the Go mux's plain 404 —
+// kenaz-fleet has no /api/v1/audit/append route (verified 2026-10-05).
+type notFoundPoster struct{}
+
+func (notFoundPoster) Post(_ context.Context, _, _ string, body io.Reader) (*http.Response, error) {
+	_, _ = io.Copy(io.Discard, body)
+	return &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
+		Body:       io.NopCloser(stringsReader("404 page not found\n")),
+	}, nil
+}
+
+func stringsReader(s string) io.Reader { return &onceReader{s: s} }
+
+type onceReader struct{ s string }
+
+func (r *onceReader) Read(p []byte) (int, error) {
+	if r.s == "" {
+		return 0, io.EOF
+	}
+	n := copy(p, r.s)
+	r.s = r.s[n:]
+	return n, nil
+}
+
+// TestComplianceAPI_Status_StoppedReason_EndpointUnsupported (review R6):
+// an archiver that exited because fleet has no audit-append route reports
+// why, so the panel can say "not supported by this fleet server" instead of
+// a bare "Stopped".
+func TestComplianceAPI_Status_StoppedReason_EndpointUnsupported(t *testing.T) {
+	tr := &contextaudit.MemoryTailReader{}
+	tr.Append(contextaudit.TailEvent{ID: "EV1", PayloadHash: sha256.Sum256([]byte("x"))})
+	archiver := fleet.NewAuditArchiver(fleet.AuditArchiverConfig{
+		Poster: notFoundPoster{}, DataDir: t.TempDir(), Tail: tr, BatchInterval: 5 * time.Millisecond,
+	})
+	api := NewAPI(archiver, nil, func() bool { return true })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	archiver.Start(ctx)
+	defer archiver.Stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for archiver.IsRunning() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	st, err := api.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.ArchiverRunning || st.StoppedReason != StoppedReasonEndpointUnsupported {
+		t.Fatalf("status = %+v, want stopped with reason %q", st, StoppedReasonEndpointUnsupported)
+	}
+}

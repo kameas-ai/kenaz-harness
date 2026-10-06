@@ -73,7 +73,7 @@ func (s *fakePushServer) snapshot() pushedRequest {
 }
 
 // setupPublishTest wires a contextsview.API with a real ContextGraphSyncer
-// pointed at an httptest server, with the shared_team_graph capability
+// pointed at an httptest server, with the team_graph_sharing capability
 // forced on (mirrors setupUnpublishTest in core/rpc/views/catalog/impl_test.go).
 func setupPublishTest(t *testing.T) (*contextsview.API, *fakePushServer) {
 	t.Helper()

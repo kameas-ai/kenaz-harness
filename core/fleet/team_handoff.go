@@ -116,6 +116,11 @@ func (h *HandoffHandler) ShareSession(ctx context.Context, sessionID, recipientU
 	if h.caps != nil && !h.caps.Has(CapTeamSessionHandoff) {
 		return ErrTeamHandoffCapabilityRequired
 	}
+	// Fleet registers no /api/v1/handoff/* routes (verified 2026-10-05);
+	// once a plain 404 has latched that, don't re-encrypt or re-post.
+	if err := h.client.endpointUnsupported(FeatureTeamHandoff); err != nil {
+		return err
+	}
 
 	// Fetch recipient's public key from the identity service.
 	recipientPubKey, err := h.fetchRecipientPublicKey(ctx, recipientUserID)
@@ -155,12 +160,17 @@ func (h *HandoffHandler) ShareSession(ctx context.Context, sessionID, recipientU
 		return fmt.Errorf("fleet: share session: marshal: %w", err)
 	}
 
-	resp, err := h.client.Post(ctx, "/api/v1/handoff/send", "application/json", bytes.NewReader(data))
+	const sendPath = "/api/v1/handoff/send"
+	resp, err := h.client.Post(ctx, sendPath, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("fleet: share session: POST: %w", err)
 	}
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+	if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), respBody) {
+		return h.client.markEndpointUnsupported(FeatureTeamHandoff, sendPath)
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("fleet: share session: status %d", resp.StatusCode)
 	}
@@ -182,12 +192,19 @@ func (h *HandoffHandler) Inbox(ctx context.Context) ([]InboxItem, error) {
 		return nil, ErrFleetDisabled
 	}
 
-	resp, err := h.client.Get(ctx, "/api/v1/handoff/inbox")
+	if err := h.client.endpointUnsupported(FeatureTeamHandoff); err != nil {
+		return nil, err
+	}
+	const inboxPath = "/api/v1/handoff/inbox"
+	resp, err := h.client.Get(ctx, inboxPath)
 	if err != nil {
 		return nil, fmt.Errorf("fleet: inbox: %w", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), body) {
+		return nil, h.client.markEndpointUnsupported(FeatureTeamHandoff, inboxPath)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fleet: inbox: status %d", resp.StatusCode)
 	}
@@ -216,12 +233,18 @@ func (h *HandoffHandler) AcceptShare(ctx context.Context, inboxItemID string) ([
 		return nil, ErrFleetDisabled
 	}
 
+	if err := h.client.endpointUnsupported(FeatureTeamHandoff); err != nil {
+		return nil, err
+	}
 	resp, err := h.client.Get(ctx, "/api/v1/handoff/"+inboxItemID)
 	if err != nil {
 		return nil, fmt.Errorf("fleet: accept share: GET: %w", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), body) {
+		return nil, h.client.markEndpointUnsupported(FeatureTeamHandoff, "/api/v1/handoff/{id}")
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fleet: accept share: status %d", resp.StatusCode)
 	}

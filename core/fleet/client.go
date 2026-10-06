@@ -60,6 +60,11 @@ type Client struct {
 	// always share one result.
 	enrollSF singleflight.Group
 
+	// support latches features the connected fleet server answers with a
+	// route-level (plain, non-JSON) 404 — unsupported for this Client's
+	// lifetime, never retried (unsupported_endpoint.go).
+	support endpointSupport
+
 	// authOK is the SetAuthOKHook callback (fleet-session-truth-01DOGF0A).
 	authOK atomic.Pointer[func()]
 }

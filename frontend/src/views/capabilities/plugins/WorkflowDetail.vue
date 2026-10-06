@@ -120,8 +120,8 @@ function openInWorkflows() {
       class="font-ui text-[11px] text-ink-muted"
       data-testid="workflow-detail-unverified"
     >
-      From your org's catalog. Fleet catalog installs are not signature-verified yet — the
-      workflow is installed as published, without a cryptographic check.
+      From your org's catalog. Fleet catalog installs are not signature-verified; fleet signs only
+      the org config bundle — the workflow is installed as published, without a cryptographic check.
     </p>
 
     <div v-if="loading" class="font-ui text-[12px] text-ink-muted">Loading preview…</div>

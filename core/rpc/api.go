@@ -4301,9 +4301,11 @@ func New(c *core.Core, opts ...Option) *API {
 				// fleet-enforcement-truth-01PMZ505 WP10, register C-2
 				// (2026-08-19, owner alec): SHIP THE HONESTY CHANGE; the
 				// key source is a separate, later decision. This is not
-				// a settled "empty means skip" configuration — it is a
-				// standing blocker: no per-device catalog signing key
-				// source exists in or out of this repo. See
+				// a settled "empty means skip" configuration. Design truth
+				// (kenaz-fleet owner, 2026-10-05): no per-device / per-org
+				// catalog key will exist; mandated skills verify via the
+				// pinned config-bundle signature, non-mandated catalog
+				// payloads are unsigned today. See
 				// docs/unwired-ledger.md's catalog/skill pubkey entry
 				// and core/rpc/views/catalog/impl.go's pubKeyBase64 doc.
 				// The install-verification key now lives in ONE place:
@@ -4376,6 +4378,12 @@ func New(c *core.Core, opts ...Option) *API {
 			}
 			appendBreaker := corefleet.NewAppendBreaker(appendLanes)
 			if a.settingsImpl != nil {
+				// Sign-in / sign-out clears the unsupported-endpoint latch
+				// (core/fleet/unsupported_endpoint.go) on the client AND
+				// the breaker, so a fleet that has since shipped the
+				// session-sync route is re-probed without a restart.
+				// Client first: the breaker's reset republishes the lane.
+				a.settingsImpl.OnFleetSessionReset(flCl.ResetUnsupportedEndpoints)
 				a.settingsImpl.OnFleetSessionReset(appendBreaker.ResetAll)
 			}
 
@@ -4484,6 +4492,11 @@ func New(c *core.Core, opts ...Option) *API {
 				CapCheck: capCheck,
 			})
 			a.auditArchiver = archiver
+			// A loop that exited because fleet has no audit-append route
+			// restarts on the next fleet sign-in / sign-out (review R4).
+			if a.settingsImpl != nil {
+				a.settingsImpl.OnFleetSessionReset(archiver.ResetUnsupported)
+			}
 
 			// AuditRetentionSweeper: runs hourly, deletes ACK'd + aged
 			// rows. Backend is now the event-log SQL backend, adapted

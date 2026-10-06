@@ -7,7 +7,7 @@
 export const CAPABILITY_KEYS = [
   'launcher_updates',
   'iso_distribution',
-  'shared_team_graph',
+  'team_graph_sharing',
   'cross_team_graph_isolation',
   'opa_preset_policies',
   'opa_custom_rego',
@@ -30,6 +30,7 @@ export const CAPABILITY_KEYS = [
   'context_sync',
   'team_session_handoff',
   'context_bootstrap',
+  'org_graph_sharing',
 ] as const;
 
 export type Capability = (typeof CAPABILITY_KEYS)[number];

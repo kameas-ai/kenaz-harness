@@ -19,9 +19,15 @@ type Capability string
 // when the fleet-hosted-LLM surface was removed
 // (harness-fleet-sync-activation-01NSYNC01, dead-code cleanup).
 const (
-	CapLauncherUpdates             Capability = "launcher_updates"
-	CapISODistribution             Capability = "iso_distribution"
-	CapSharedTeamGraph             Capability = "shared_team_graph"
+	CapLauncherUpdates Capability = "launcher_updates"
+	CapISODistribution Capability = "iso_distribution"
+	// CapSharedTeamGraph gates team-scoped graph sharing. Its wire value
+	// is "team_graph_sharing" — the key kenaz-fleet actually serves in
+	// GET /api/v1/me/capabilities (Team and Enterprise tiers). It was
+	// "shared_team_graph" until 2026-10-05, a key the server never
+	// emitted, so every share gate was permanently disabled for everyone.
+	// The Go identifier is kept to avoid churning every call site.
+	CapSharedTeamGraph             Capability = "team_graph_sharing"
 	CapCrossTeamGraphIsolation     Capability = "cross_team_graph_isolation"
 	CapOPAPresetPolicies           Capability = "opa_preset_policies"
 	CapOPACustomRego               Capability = "opa_custom_rego"
@@ -63,6 +69,21 @@ const (
 	// gracefully offline / on the OSS tier.
 	// Mission: context-bootstrap-harness-integration.
 	CapContextBootstrap Capability = "context_bootstrap"
+
+	// CapOrgGraphSharing is the org-scoped graph-sharing key fleet serves
+	// (Enterprise only; Team tier has CapSharedTeamGraph alone). Wire
+	// value: "org_graph_sharing".
+	//
+	// Wiring note (2026-10-05): no harness gate branches on this yet —
+	// context_graph_sync.go's CapForClassification still gates org_shared on
+	// CapSharedTeamGraph ("same cap for v0"), which the current server
+	// accepts. Consumer: kenaz-fleet PR #173 makes the server require
+	// org_graph_sharing for org_shared pushes (403 capability_not_in_tier
+	// otherwise); when #173 merges, CapForClassification(org_shared) moves to
+	// this constant. Owner: the harness change that lands against #173.
+	// Until then it is decoded, cached and surfaced in the capability
+	// snapshot / CAPABILITY_KEYS like every other key.
+	CapOrgGraphSharing Capability = "org_graph_sharing"
 )
 
 // AllCapabilities returns every known Capability constant in declaration
@@ -94,6 +115,7 @@ func AllCapabilities() []Capability {
 		CapContextSync,
 		CapTeamSessionHandoff,
 		CapContextBootstrap,
+		CapOrgGraphSharing,
 	}
 }
 

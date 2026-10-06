@@ -332,6 +332,14 @@ const (
 	// Privacy invariant: body, title, and metadata are NEVER included.
 	KindFleetContextPublished Kind = "fleet.context_published"
 
+	// KindFleetContextPushRejected fires when fleet answered a context push
+	// 200 but rejected a pushed node per-item (kenaz-fleet PR #173
+	// `rejected[]`, reason "not_permitted": the id belongs to another user
+	// or org). The failure counterpart of KindFleetContextPublished — a
+	// rejected node must never be recorded as published. Payload: id,
+	// classification, reason — no title/body.
+	KindFleetContextPushRejected Kind = "fleet.context_push_rejected"
+
 	// KindFleetContextPulled fires once per successful PullDelta call that
 	// returns at least one node. The payload is a batch summary (node count,
 	// cursor) — no individual entry contents.
@@ -1793,6 +1801,15 @@ type FleetContextPublishedPayload struct {
 	Classification string `json:"classification"`
 	// Version is the version sent to the server.
 	Version int `json:"version"`
+}
+
+// FleetContextPushRejectedPayload is the audit payload for
+// KindFleetContextPushRejected.
+type FleetContextPushRejectedPayload struct {
+	NodeID         string `json:"node_id"`
+	Classification string `json:"classification"`
+	Reason         string `json:"reason"`
+	Version        int    `json:"version"`
 }
 
 // FleetContextPulledPayload is the audit payload for KindFleetContextPulled.

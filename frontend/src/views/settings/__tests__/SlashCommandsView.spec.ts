@@ -234,8 +234,8 @@ describe('SlashCommandsView', () => {
   // ── "Publish to team" (fleet-skills-sync-01NDFSEX18 WP03, FR-101/102) ──
 
   describe('Publish to team (FR-101/102)', () => {
-    it('shows "Publish to team" button when editing an existing command and user has shared_team_graph', async () => {
-      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+    it('shows "Publish to team" button when editing an existing command and user has team_graph_sharing', async () => {
+      initFeatureFlags(makeAppInfo({ team_graph_sharing: true }));
       const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL });
       await flushPromises();
 
@@ -245,7 +245,7 @@ describe('SlashCommandsView', () => {
       expect(wrapper.find('[data-testid="publish-to-team-btn"]').exists()).toBe(true);
     });
 
-    it('shows "Team+ required" note when user lacks shared_team_graph capability', async () => {
+    it('shows "Team+ required" note when user lacks team_graph_sharing capability', async () => {
       initFeatureFlags(makeAppInfo({}));
       const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL });
       await flushPromises();
@@ -258,7 +258,7 @@ describe('SlashCommandsView', () => {
     });
 
     it('does not show publish section when creating a new command', async () => {
-      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+      initFeatureFlags(makeAppInfo({ team_graph_sharing: true }));
       const { wrapper } = mountView({ list: [] });
       await flushPromises();
 
@@ -270,7 +270,7 @@ describe('SlashCommandsView', () => {
     });
 
     it('calls slashcmd.skillPublish with confirmed dialog', async () => {
-      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+      initFeatureFlags(makeAppInfo({ team_graph_sharing: true }));
       const skillPublishFn = vi.fn(async () => undefined);
       const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL, skillPublishFn });
       await flushPromises();
@@ -293,7 +293,7 @@ describe('SlashCommandsView', () => {
     });
 
     it('does not call skillPublish when confirm dialog is cancelled', async () => {
-      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+      initFeatureFlags(makeAppInfo({ team_graph_sharing: true }));
       const skillPublishFn = vi.fn(async () => undefined);
       const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL, skillPublishFn });
       await flushPromises();

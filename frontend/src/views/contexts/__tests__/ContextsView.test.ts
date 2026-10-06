@@ -47,7 +47,7 @@ function provide(opts: {
   const client = createFakeHarnessClient({
     // fleet-session-truth-01DOGF0A WP05: the team gate reads the shared
     // fleet-session capability set. Model the backend: syncStatus's
-    // team_cap_enabled and the session's shared_team_graph come from the
+    // team_cap_enabled and the session's team_graph_sharing come from the
     // same capability poller.
     settings: {
       ...base.settings,
@@ -56,7 +56,7 @@ function provide(opts: {
           state: 'signed_in',
           capabilities: {
             tier: 'enterprise',
-            enabled: { shared_team_graph: syncStatus.team_cap_enabled },
+            enabled: { team_graph_sharing: syncStatus.team_cap_enabled },
             fetchedAt: '',
             source: 'fleet',
           },

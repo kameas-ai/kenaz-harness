@@ -21,7 +21,12 @@ import CanvasHead from '@/shell/CanvasHead.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import SessionHeader from '@/components/chat/SessionHeader.vue';
-import { describeSyncReason, fleetSessionSyncFailure } from '@/lib/fleetSession';
+import {
+  SYNC_UNSUPPORTED_REASON,
+  describeSyncReason,
+  fleetSessionSyncFailure,
+  fleetSessionSyncUnsupported,
+} from '@/lib/fleetSession';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ComposerError from '@/components/chat/ComposerError.vue';
 import ReasoningControl from '@/components/chat/ReasoningControl.vue';
@@ -1598,12 +1603,28 @@ const isSyncEnabled = computed(() => syncStatus.value?.enabled ?? false);
  * breaker reports per-session state into it); null when syncing fine.
  */
 const syncFailure = computed(() => fleetSessionSyncFailure(sessionId.value));
-const syncFailureText = computed(() =>
-  syncFailure.value ? `Not syncing — ${describeSyncReason(syncFailure.value.reason)}` : '',
-);
+/**
+ * The fleet server has no session-sync route (latched by the backend after a
+ * plain 404). The toggle may have persisted "enabled", but nothing leaves the
+ * device — say so instead of "Synced to fleet", and don't offer to enable.
+ */
+const syncUnsupported = computed(() => fleetSessionSyncUnsupported.value);
+const syncFailureText = computed(() => {
+  if (syncFailure.value) return `Not syncing — ${describeSyncReason(syncFailure.value.reason)}`;
+  if (syncUnsupported.value) return `Not syncing — ${describeSyncReason(SYNC_UNSUPPORTED_REASON)}`;
+  return '';
+});
+const syncToggleLabel = computed(() => {
+  if (syncUnsupported.value) return isSyncEnabled.value ? 'Sync on — kept local' : 'Sync unavailable';
+  return isSyncEnabled.value ? 'Synced to fleet' : 'Sync to fleet';
+});
 const syncFailureTitle = computed(() => {
   const f = syncFailure.value;
-  if (!f) return '';
+  if (!f) {
+    return syncUnsupported.value
+      ? 'The connected fleet server has no session-sync endpoint. Sign in again after fleet ships it to retry.'
+      : '';
+  }
   const parts = [f.lastError ?? ''];
   if (f.open) parts.push('Automatic retries stopped; toggle sync off and on to retry.');
   if (f.dropped > 0) parts.push(`${f.dropped} message(s) were not synced.`);
@@ -1707,8 +1728,9 @@ async function onShared() {
           :class="isSyncEnabled
             ? 'bg-accent/15 text-accent border border-accent/40'
             : 'bg-surface-2 text-ink-muted border border-border-muted hover:bg-surface-3'"
-          :disabled="syncToggling"
+          :disabled="syncToggling || (syncUnsupported && !isSyncEnabled)"
           :aria-pressed="isSyncEnabled"
+          :title="syncUnsupported ? describeSyncReason(SYNC_UNSUPPORTED_REASON) : undefined"
           data-testid="session-sync-toggle"
           @click="onToggleSync"
         >
@@ -1716,11 +1738,11 @@ async function onShared() {
             class="inline-block w-1.5 h-1.5 rounded-full"
             :class="isSyncEnabled ? 'bg-accent' : 'bg-ink-subtle'"
           />
-          {{ isSyncEnabled ? 'Synced to fleet' : 'Sync to fleet' }}
+          {{ syncToggleLabel }}
         </button>
         <!-- Context-sync failure badge (fleet-session-truth-01DOGF0A FR-6) -->
         <span
-          v-if="syncFailure"
+          v-if="syncFailure || syncUnsupported"
           class="rounded px-2 py-0.5 font-ui text-[11px] text-signal-warn border border-signal-warn/40 bg-surface-2"
           role="status"
           :title="syncFailureTitle"

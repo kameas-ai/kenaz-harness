@@ -246,6 +246,11 @@ func TestCatalogSignatureVerdict(t *testing.T) {
 	if ok || err != nil || !strings.Contains(reason, "C-2") {
 		t.Fatalf("no key: got (%v, %q, %v)", ok, reason, err)
 	}
+	// The reason states the real design (fleet owner, 2026-10-05): only the
+	// config bundle is signed; no per-device/per-org catalog key is coming.
+	if !strings.Contains(reason, "config bundle") || strings.Contains(reason, "per-device") {
+		t.Fatalf("no key: reason %q must say only the config bundle is signed, not promise a per-device key", reason)
+	}
 
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	pubB64 := base64.StdEncoding.EncodeToString(pub)

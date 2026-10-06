@@ -62,9 +62,10 @@ func installBasePath(dataDir string, kind CatalogItemKind, catalogID, version st
 // Install fetches the item to learn its kind, then refuses it with
 // catalogInstallRefusal — it writes nothing (install-framework-01DOGF0B
 // WP02). dataDir and pubKeyBase64 are unread for now: they are kept so the
-// per-kind providers that replace this method (WP05–WP07) and the C-2
-// per-device key (catalog/impl.go's pubKeyBase64, WithPubKey) plug into the
-// existing call chain rather than re-threading it.
+// per-kind providers that replace this method (WP05–WP07) and any future
+// bundle-key payload signature (register C-2; catalog/impl.go's
+// pubKeyBase64, WithPubKey) plug into the existing call chain rather than
+// re-threading it.
 func (c *Client) Install(ctx context.Context, _ string, _ string, catalogID, version string) error {
 	if c == nil || c.isNop {
 		return ErrFleetDisabled
@@ -186,12 +187,12 @@ func verifyCatalogSignature(pubKeyBase64 string, payload []byte, sigBase64 strin
 	if pubKeyBase64 == "" {
 		// fleet-enforcement-truth-01PMZ505 WP10 (register C-2,
 		// 2026-08-19): logged at warn, not silently, because this skip
-		// means the install about to proceed is UNVERIFIED — no
-		// per-device catalog signing key source exists in or out of
-		// this repo (justify: blocker as above, owner alec). Behaviour
-		// unchanged; the skip is now observable instead of invisible.
+		// means the install about to proceed is UNVERIFIED. Design truth
+		// (kenaz-fleet owner, 2026-10-05): fleet signs only the config
+		// bundle (mandated items); non-mandated catalog payloads carry no
+		// fleet signature and no per-org/per-device catalog key will exist.
 		logging.L().Warn("fleet.catalog_install.signature_verification_skipped",
-			"reason", "no pubkey configured — no per-device catalog signing key source exists yet")
+			"reason", "no pubkey configured — fleet signs only the config bundle; catalog payloads are unsigned")
 		return nil
 	}
 	pubBytes, err := base64.StdEncoding.DecodeString(pubKeyBase64)

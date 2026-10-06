@@ -129,7 +129,7 @@ func TestFleetSessionEvents_CapabilityChange_EmitsWithoutDeadlock(t *testing.T) 
 		t.Fatalf("capability change emitted %d events, want exactly 1", len(ev)-before)
 	}
 	if !ev[len(ev)-1].Capabilities.Enabled[string(fleet.CapSharedTeamGraph)] {
-		t.Fatalf("event capabilities = %+v, want shared_team_graph", ev[len(ev)-1].Capabilities)
+		t.Fatalf("event capabilities = %+v, want team_graph_sharing", ev[len(ev)-1].Capabilities)
 	}
 }
 

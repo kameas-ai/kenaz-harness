@@ -25,7 +25,7 @@
  *   - Sync status strip in the tree panel header (team cap, pull count,
  *     cursor). Hidden when fleet is not signed in / team cap absent.
  *   - "Share to team" affordance in the preview panel for files. Usable
- *     when the fleet-session store's `shared_team_graph` capability is on
+ *     when the fleet-session store's `team_graph_sharing` capability is on
  *     (fleet-session-truth-01DOGF0A FR-8 — the D5 switch-over); otherwise
  *     rendered disabled with `sharingDisabledReason`
  *     (knowledge-home-01DOGF0E WP04 — it used to be hidden, contradicting
@@ -187,7 +187,7 @@ const publishLoading = ref(false);
  * syncStatus still feeds the strip's cursor / pull count / errors.
  */
 const fleetSessionStore = useFleetSession(client);
-const teamCapEnabled = computed(() => fleetSessionStore.capability('shared_team_graph'));
+const teamCapEnabled = computed(() => fleetSessionStore.capability('team_graph_sharing'));
 
 /**
  * sharingDisabledReason — why Share… / Promote are disabled, or null when
