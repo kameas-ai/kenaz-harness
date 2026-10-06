@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestSpawnEnv_ForcesInstallRoot(t *testing.T) {
 
 func TestProcessSpawner_RefusesWithoutLeaseDir(t *testing.T) {
 	l := NewLayout(t.TempDir())
-	if _, err := (ProcessSpawner{Layout: l}).Spawn(context.Background(), "/bin/true"); err == nil {
+	if _, err := (ProcessSpawner{Layout: l}).Spawn(context.Background(), "/bin/true", 0); err == nil {
 		t.Fatal("spawner must refuse to start an engine into a root with no lease/ dir")
 	}
 }
@@ -55,7 +56,8 @@ func TestProcessSpawner_RealProcessSeesRootAndLeaseDir(t *testing.T) {
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	pid, err := (ProcessSpawner{Layout: l, Port: 7775}).Spawn(context.Background(), script)
+	port := CandidatePorts(EnginePort(EngineEnvDev))[1] // a fallback lane port, passed per spawn
+	pid, err := (ProcessSpawner{Layout: l}).Spawn(context.Background(), script, port)
 	if err != nil || pid <= 0 {
 		t.Fatalf("Spawn: pid=%d err=%v", pid, err)
 	}
@@ -70,8 +72,8 @@ func TestProcessSpawner_RealProcessSeesRootAndLeaseDir(t *testing.T) {
 	if !strings.Contains(string(got), "root="+root) || !strings.Contains(string(got), "leasedir=yes") {
 		t.Fatalf("child saw %q, want root=%s and leasedir=yes", got, root)
 	}
-	if !strings.Contains(string(got), "args=serve --port 7775") {
-		t.Fatalf("child saw %q, want the engine started as `serve --port 7775` (A5 per-env port)", got)
+	if want := "args=serve --port " + strconv.Itoa(port); !strings.Contains(string(got), want) {
+		t.Fatalf("child saw %q, want %q (the Manager-chosen lane port, passed explicitly)", got, want)
 	}
 	if _, err := os.Stat(filepath.Join(root, "engine.log")); err != nil {
 		t.Errorf("engine.log not created: %v", err)

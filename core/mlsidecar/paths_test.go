@@ -125,6 +125,10 @@ func TestDefaultRootFor(t *testing.T) {
 }
 
 func TestEngineEnvAndPorts_A5(t *testing.T) {
+	// Base ports are a cross-repo contract (owner rulings A5.2/A5.3,
+	// 2026-10-05): prod STAYS 7774 (sigild/sigilctl dial it directly), dev
+	// and test moved off 7775/7776 (sigild's plugin-ingest listener holds
+	// 7775). The literals are the contract, so they are pinned here.
 	cases := map[string]struct {
 		env  string
 		port int
@@ -132,10 +136,10 @@ func TestEngineEnvAndPorts_A5(t *testing.T) {
 		"":      {"prod", 7774},
 		"prod":  {"prod", 7774},
 		"stage": {"prod", 7774},
-		"dev":   {"dev", 7775},
-		"local": {"dev", 7775},
-		"test":  {"test", 7776},
-		"TEST ": {"test", 7776},
+		"dev":   {"dev", 7785},
+		"local": {"dev", 7785},
+		"test":  {"test", 7786},
+		"TEST ": {"test", 7786},
 		"bogus": {"prod", 7774},
 	}
 	for raw, want := range cases {
@@ -147,8 +151,60 @@ func TestEngineEnvAndPorts_A5(t *testing.T) {
 			t.Errorf("BaseURLForEnv(%q) = %s", env, got)
 		}
 	}
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("KENAZ_HARNESS_ENV", "dev")
-	if got := DefaultEngineBaseURL(); got != "http://127.0.0.1:7775" {
-		t.Errorf("DefaultEngineBaseURL under dev = %s", got)
+	if got, want := DefaultEngineBaseURL(), LoopbackURL(EnginePort(EngineEnvDev)); got != want {
+		t.Errorf("DefaultEngineBaseURL under dev with no engine.port = %s, want the base %s", got, want)
+	}
+}
+
+// TestCandidatePorts_LanesPerEnv pins the lane shape (A5.2): base +
+// k*LaneStride for k < LaneCount, each env in its own units column, and
+// no two env lanes overlap.
+func TestCandidatePorts_LanesPerEnv(t *testing.T) {
+	want := map[string][]int{
+		EngineEnvProd: {7774, 7784, 7794, 7804, 7814},
+		EngineEnvDev:  {7785, 7795, 7805, 7815, 7825},
+		EngineEnvTest: {7786, 7796, 7806, 7816, 7826},
+	}
+	seen := map[int]string{}
+	for env, w := range want {
+		got := CandidatePorts(EnginePort(env))
+		if fmt.Sprint(got) != fmt.Sprint(w) {
+			t.Errorf("CandidatePorts(%s) = %v, want %v", env, got, w)
+		}
+		for _, p := range got {
+			if other, dup := seen[p]; dup {
+				t.Errorf("port %d is in both the %s and %s lanes", p, other, env)
+			}
+			seen[p] = env
+		}
+	}
+}
+
+// TestDefaultEngineBaseURL_HonorsEnginePort: with engine.port recorded in
+// the standard shared root, DefaultEngineBaseURL dials the recorded lane
+// port, not the base; an out-of-lane or malformed record is ignored.
+func TestDefaultEngineBaseURL_HonorsEnginePort(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KENAZ_HARNESS_ENV", "dev")
+	root, err := DefaultRootFor(home, EngineEnvDev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := NewLayout(root)
+	lanes := CandidatePorts(EnginePort(EngineEnvDev))
+	if err := WriteEnginePort(l, lanes[3]); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := DefaultEngineBaseURL(), LoopbackURL(lanes[3]); got != want {
+		t.Errorf("DefaultEngineBaseURL = %s, want the recorded %s", got, want)
+	}
+	if err := WriteEnginePort(l, lanes[0]+1); err != nil { // not a dev lane port
+		t.Fatal(err)
+	}
+	if got, want := DefaultEngineBaseURL(), LoopbackURL(lanes[0]); got != want {
+		t.Errorf("out-of-lane record: DefaultEngineBaseURL = %s, want the base %s", got, want)
 	}
 }

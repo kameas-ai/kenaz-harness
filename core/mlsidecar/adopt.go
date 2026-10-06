@@ -30,7 +30,7 @@ const (
 	// could not verify it runs from a client-verified shared-root
 	// install (design F2/§3.7 R2). Never adopted; never killed.
 	AdoptRefuseUnverified AdoptAction = "refuse_unverified"
-	// AdoptPortConflict: a process is listening at :7774 that does not
+	// AdoptPortConflict: a process is listening on the engine port that does not
 	// resolve to any install this client recognizes at all (foreign
 	// process, or no `current` exists yet). Never killed.
 	AdoptPortConflict AdoptAction = "port_conflict"
@@ -127,7 +127,7 @@ func EvaluateAdoption(layout Layout, health HealthPayload, tv *TreeVerifier) (Ad
 
 	currentDir, err := layout.CurrentVersionDir()
 	if err != nil {
-		// No `current` this client recognizes: whatever is on :7774 is
+		// No `current` this client recognizes: whatever is on the port is
 		// not an install this client can vouch for.
 		return AdoptDecision{Action: AdoptPortConflict, Health: health, Detail: "no verified `current` install to compare against: " + err.Error()}, nil
 	}

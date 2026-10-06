@@ -14,7 +14,7 @@ import (
 )
 
 // unreachableBaseURL points nowhere real — a Client built on it always
-// fails to connect, simulating "no process is answering :7774" without
+// fails to connect, simulating "no process is answering the engine port" without
 // ever touching the network (loopback connection refused is immediate
 // and local). NO real sidecar, no Python — per the WP12 brief.
 const unreachableBaseURL = "http://127.0.0.1:1"
@@ -27,16 +27,24 @@ const unreachableBaseURL = "http://127.0.0.1:1"
 type fakeSpawner struct {
 	called  bool
 	exePath string
+	port    int // the port the Manager told the engine to bind
 	pid     int
 	err     error
 	onSpawn func()
+	// onSpawnAt, when set, runs with the port the engine was told to bind
+	// (lane-mode tests start their stub engine on exactly that port).
+	onSpawnAt func(port int)
 }
 
-func (f *fakeSpawner) Spawn(_ context.Context, exePath string) (int, error) {
+func (f *fakeSpawner) Spawn(_ context.Context, exePath string, port int) (int, error) {
 	f.called = true
 	f.exePath = exePath
+	f.port = port
 	if f.onSpawn != nil {
 		f.onSpawn()
+	}
+	if f.onSpawnAt != nil {
+		f.onSpawnAt(port)
 	}
 	if f.err != nil {
 		return 0, f.err

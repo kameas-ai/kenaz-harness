@@ -16,6 +16,7 @@ import (
 //	  current -> versions/<semver>     # atomic symlink, rename-swap
 //	  lease/                           # lease files + spawn lock + local token
 //	  install.json                     # who installed what, when, from which manifest
+//	  engine.port                      # "<port>\n": the lane port the engine was verified on
 //
 // Root is always caller-supplied. Production wiring (a later WP, not
 // this one) resolves the real per-OS path via DefaultRootFor; every test
@@ -29,7 +30,7 @@ type Layout struct {
 	// root: an engine a developer built locally and seeded with
 	// SeedDeveloperBuild (cmd/mlsidecar-devseed, scripts/dev-ml.sh). The
 	// production wiring sets it ONLY for the dev engine env
-	// (KENAZ_HARNESS_ENV=dev, root ~/.kenaz/ml/dev, port 7775); a prod or
+	// (KENAZ_HARNESS_ENV=dev, root ~/.kenaz/ml/dev, base port 7785); a prod or
 	// test root refuses such a record exactly as it refuses any unknown
 	// provenance, so a developer seed can never be adopted by a release
 	// build. Everything else about adoption is unchanged: the on-disk
@@ -77,12 +78,29 @@ func EngineEnvFor(raw string) string {
 // EngineEnv is EngineEnvFor(KENAZ_HARNESS_ENV) for this process.
 func EngineEnv() string { return EngineEnvFor(os.Getenv("KENAZ_HARNESS_ENV")) }
 
-// enginePorts is design Amendment A5(1)'s env -> loopback port map: one
-// engine per env per machine. The spawning client passes the port to the
-// engine (`serve --port`) and dials the same.
-var enginePorts = map[string]int{EngineEnvProd: 7774, EngineEnvDev: 7775, EngineEnvTest: 7776}
+// enginePorts is the env -> BASE loopback port map (design Amendment
+// A5(1), re-based by owner rulings A5.2/A5.3, 2026-10-05): one engine per
+// env per machine. The base is only the first candidate of the env's lane
+// (CandidatePorts: base + k*LaneStride, k < LaneCount) — when a foreign
+// listener holds it, the Manager falls back along the lane and records
+// the port it settled on in <root>/engine.port (engineport.go).
+//
+//   - prod 7774 STAYS 7774 (A5.3): sigild and sigilctl are consumers of
+//     the prod engine and dial :7774 directly ("7774 must remain
+//     functional"). sigild does NOT read engine.port, so prod-lane
+//     fallback serves the harness and Kenaz only — a squatter on the prod
+//     base still strands sigild. That is the pre-existing posture,
+//     acknowledged by the owner; the fallback does not make it worse.
+//   - dev 7785 / test 7786 (A5.2; was 7775/7776): dev 7775 collided with
+//     sigild's plugin-ingest listener on 127.0.0.1:7775, whose bare
+//     {"status":"ok"} /health classified as a legacy engine, so the dev
+//     engine was never spawned on any machine running sigild. Dev and
+//     test defaults deliberately differ from prod's column.
+var enginePorts = map[string]int{EngineEnvProd: 7774, EngineEnvDev: 7785, EngineEnvTest: 7786}
 
-// EnginePort returns env's loopback engine port (prod's for an unknown env).
+// EnginePort returns env's BASE loopback engine port (prod's for an
+// unknown env) — the first lane candidate, not necessarily where the
+// engine runs (see RecordedEnginePort / CandidatePorts).
 func EnginePort(env string) int {
 	if p, ok := enginePorts[env]; ok {
 		return p
@@ -90,10 +108,11 @@ func EnginePort(env string) int {
 	return enginePorts[EngineEnvProd]
 }
 
-// BaseURLForEnv is env's loopback engine URL.
-func BaseURLForEnv(env string) string {
-	return fmt.Sprintf("http://127.0.0.1:%d", EnginePort(env))
-}
+// BaseURLForEnv is env's BASE-lane loopback engine URL.
+func BaseURLForEnv(env string) string { return LoopbackURL(EnginePort(env)) }
+
+// LoopbackURL is the engine URL for a loopback port.
+func LoopbackURL(port int) string { return fmt.Sprintf("http://127.0.0.1:%d", port) }
 
 // DefaultRootFor returns the shared install root for env:
 // <home>/.kenaz/ml/<env> — RATIFIED by design Amendment A5(2) (the ~/.kenaz

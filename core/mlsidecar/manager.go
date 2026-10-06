@@ -15,7 +15,9 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
-// Spawner launches the verified engine executable at exePath, detached
+// Spawner launches the verified engine executable at exePath, telling it
+// to bind loopback port (`serve --port <port>`; 0 = the spawner's/engine's
+// own default — only the fixed-endpoint test mode passes 0), detached
 // in its own process group (design §3.5: "spawn detached (own process
 // group) from `current`; supervisor sets LAYA_THREADS <= physical
 // cores"), and returns its pid. Production wiring (a later WP, once a
@@ -24,14 +26,16 @@ import (
 // execs anything — the brief's hard constraint is "NO real sidecar
 // spawn in tests (no Python anywhere)".
 type Spawner interface {
-	Spawn(ctx context.Context, exePath string) (pid int, err error)
+	Spawn(ctx context.Context, exePath string, port int) (pid int, err error)
 }
 
 // SpawnerFunc adapts a function to Spawner.
-type SpawnerFunc func(ctx context.Context, exePath string) (int, error)
+type SpawnerFunc func(ctx context.Context, exePath string, port int) (int, error)
 
 // Spawn implements Spawner.
-func (f SpawnerFunc) Spawn(ctx context.Context, exePath string) (int, error) { return f(ctx, exePath) }
+func (f SpawnerFunc) Spawn(ctx context.Context, exePath string, port int) (int, error) {
+	return f(ctx, exePath, port)
+}
 
 // Manager is the harness-side lifecycle orchestrator: adopt-or-spawn,
 // the health/state machine, lease heartbeats, and uninstall. One Manager
@@ -69,6 +73,19 @@ type Manager struct {
 	// tests use. StartupPoll is the poll interval (default 250ms).
 	StartupWait time.Duration
 	StartupPoll time.Duration
+
+	// BasePort switches the Manager into LANE mode (owner ruling A5.2,
+	// engineport.go): the engine may live on any of CandidatePorts(
+	// BasePort), the identity check arbitrates each candidate, and the
+	// port settled on is recorded in engine.port. Production always sets
+	// it (EnginePort(env)) and gives Client an Endpoint that follows the
+	// record (NewEngineClient), so every dial path agrees with the scan.
+	//
+	// 0 is FIXED-ENDPOINT mode: Client is dialed exactly as configured, no
+	// scan, no engine.port, and the spawner is passed port 0. Package
+	// tests that point a Client at an httptest server use it; production
+	// never does.
+	BasePort int
 
 	// tv caches whole-tree verifications for this process (design A5(3)):
 	// the first adoption or spawn per boot is a full re-hash.
@@ -140,6 +157,10 @@ func (m *Manager) reconcileLocked(ctx context.Context) Status {
 		return m.setStatus(Status{State: StateNotInstalled, Detail: "no client configured", UpdatedAt: time.Now()})
 	}
 
+	if m.BasePort > 0 {
+		return m.setStatus(m.reconcileLanes(ctx))
+	}
+
 	health, err := m.Client.Health(ctx)
 	if err == nil {
 		return m.setStatus(m.evaluateRunning(health))
@@ -156,7 +177,7 @@ func (m *Manager) reconcileLocked(ctx context.Context) Status {
 	// Nothing answered /health: either nothing is installed, or an
 	// installed engine is not currently running and this client should
 	// spawn it (adopt-or-spawn, design §3.5).
-	return m.setStatus(m.spawnLocked(ctx))
+	return m.setStatus(m.spawnLocked(ctx, 0))
 }
 
 // evaluateRunning handles the "something answered /health" branch via
@@ -180,12 +201,17 @@ func (m *Manager) evaluate(health HealthPayload, renew bool) Status {
 	if err != nil {
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: err.Error(), UpdatedAt: time.Now()}
 	}
+	if decision.Action == AdoptAccept && renew {
+		m.renewLease()
+	}
+	return statusForDecision(decision, health)
+}
+
+// statusForDecision maps an adoption verdict onto the state machine.
+func statusForDecision(decision AdoptDecision, health HealthPayload) Status {
 	now := time.Now()
 	switch decision.Action {
 	case AdoptAccept:
-		if renew {
-			m.renewLease()
-		}
 		return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.LifecycleProtocol, Detail: decision.Detail, UpdatedAt: now}
 	case AdoptLegacyUnverified:
 		// Never healthy, never leased: adopt-only in the narrow sense of
@@ -205,13 +231,20 @@ func (m *Manager) evaluate(health HealthPayload, renew bool) Status {
 }
 
 // spawnLocked handles the "/health is unreachable" branch: nothing is
-// currently listening on :7774. If nothing is installed at all, that is
+// currently listening on the engine port (in lane mode: on the free lane
+// candidate `port` the scan chose). If nothing is installed at all, that is
 // simply StateNotInstalled (installation is a distinct, explicit user
 // action — design §6.2 — never triggered implicitly by a failed health
 // probe). If an engine IS installed, this client spawns it under the
 // O_EXCL spawn lock (design §3.5), then health-checks (polling up to
 // StartupWait — a real engine needs seconds to bind its port).
-func (m *Manager) spawnLocked(ctx context.Context) Status {
+//
+// Lane mode (port > 0): the spawner is told to bind `port`, health is
+// polled THERE, and the spawned engine must pass the same identity check
+// adoption applies before engine.port records it — a process that
+// answers on the port but fails identity is reported by its verdict,
+// never recorded, never called healthy. port == 0 is fixed-endpoint mode.
+func (m *Manager) spawnLocked(ctx context.Context, port int) Status {
 	now := time.Now()
 	if _, ok := m.Installed(); !ok {
 		return Status{State: StateNotInstalled, UpdatedAt: now}
@@ -248,6 +281,18 @@ func (m *Manager) spawnLocked(ctx context.Context) Status {
 	}
 	defer lock.Release()
 
+	// Lane mode: another client (Kenaz shares this root and this scheme)
+	// may have spawned and recorded an engine between our scan and our
+	// lock. Adopt it rather than starting a second engine on another lane.
+	if port > 0 {
+		if rec, ok, _ := RecordedEnginePort(m.Layout, m.BasePort); ok {
+			if lp := m.probeLane(ctx, rec); lp.verdict == laneOurs {
+				m.adoptLane(lp)
+				return lp.status
+			}
+		}
+	}
+
 	if m.Spawner == nil {
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: "no spawner configured", UpdatedAt: now}
 	}
@@ -260,14 +305,34 @@ func (m *Manager) spawnLocked(ctx context.Context) Status {
 	if _, terr := WriteLocalToken(m.Layout); terr != nil {
 		logging.L().Warn("mlsidecar.spawn.token_write_failed", "err", terr.Error())
 	}
-	if _, serr := m.Spawner.Spawn(ctx, exePath); serr != nil {
-		logging.L().Warn("mlsidecar.spawn_failed", "exe", exePath, "err", serr.Error())
+	if _, serr := m.Spawner.Spawn(ctx, exePath, port); serr != nil {
+		logging.L().Warn("mlsidecar.spawn_failed", "exe", exePath, "port", port, "err", serr.Error())
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: serr.Error(), UpdatedAt: now}
 	}
 
-	health, herr := m.awaitHealth(ctx)
+	client := m.Client
+	if port > 0 {
+		client = m.Client.at(port)
+	}
+	health, herr := m.awaitHealth(ctx, client)
 	if herr != nil {
 		return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: "spawned but did not become healthy: " + herr.Error(), UpdatedAt: now}
+	}
+	if port > 0 {
+		decision, derr := EvaluateAdoption(m.Layout, health, m.tv)
+		if derr != nil {
+			return Status{State: StateInstalledUnhealthy, Reason: ReasonCrash, Detail: derr.Error(), UpdatedAt: time.Now()}
+		}
+		if decision.Action != AdoptAccept {
+			st := statusForDecision(decision, health)
+			st.Detail = fmt.Sprintf("spawned engine on port %d failed the identity check: %s", port, st.Detail)
+			return st
+		}
+		if werr := WriteEnginePort(m.Layout, port); werr != nil {
+			logging.L().Warn("mlsidecar.engine_port.write_failed", "port", port, "err", werr.Error())
+		}
+		m.renewLease()
+		return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.LifecycleProtocol, Detail: fmt.Sprintf("spawned on port %d", port), UpdatedAt: time.Now()}
 	}
 	m.renewLease()
 	return Status{State: StateHealthy, EngineVersion: health.SidecarVersion, ContractVersion: health.LifecycleProtocol, Detail: "spawned", UpdatedAt: time.Now()}
@@ -275,8 +340,8 @@ func (m *Manager) spawnLocked(ctx context.Context) Status {
 
 // awaitHealth probes /health once, then keeps polling every StartupPoll
 // (default 250ms) until StartupWait elapses or ctx ends.
-func (m *Manager) awaitHealth(ctx context.Context) (HealthPayload, error) {
-	health, err := m.Client.Health(ctx)
+func (m *Manager) awaitHealth(ctx context.Context, client *Client) (HealthPayload, error) {
+	health, err := client.Health(ctx)
 	if err == nil || m.StartupWait <= 0 {
 		return health, err
 	}
@@ -295,7 +360,7 @@ func (m *Manager) awaitHealth(ctx context.Context) (HealthPayload, error) {
 		case <-deadline.C:
 			return HealthPayload{}, err
 		case <-tick.C:
-			if h, herr := m.Client.Health(ctx); herr == nil {
+			if h, herr := client.Health(ctx); herr == nil {
 				return h, nil
 			} else {
 				err = herr
@@ -579,6 +644,9 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 		return err
 	}
 	if err := os.Remove(m.Layout.InstallJSONPath()); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := RemoveEnginePort(m.Layout); err != nil {
 		return err
 	}
 	if hadKnownInstall && ownsWholeRoot(m.Layout.Root) {

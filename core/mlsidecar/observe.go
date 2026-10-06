@@ -15,7 +15,7 @@ import (
 //   - /health answers: the answer goes through the same adoption
 //     verdict Reconcile uses (healthy / legacy_unverified / unverified /
 //     contract_unsupported / port conflict), cached, running=true. (A
-//     Kenaz-owned legacy engine on :7774 surfaces here even when this
+//     Kenaz-owned legacy engine on the port surfaces here even when this
 //     client installed nothing — that is the "update Kenaz to share the
 //     ML engine" case.)
 //   - /health answers with something unusable (ErrUnusableResponse: a
@@ -35,6 +35,13 @@ func (m *Manager) Observe(ctx context.Context) (Status, bool) {
 	cur := m.Status()
 	if cur.State == StateInstalling || m.Client == nil {
 		return cur, false
+	}
+	if m.BasePort > 0 {
+		// Lane mode: the same per-candidate identity scan Reconcile runs
+		// (lanes.go), read-only. A foreign listener on the base port (e.g.
+		// sigild) is not "our engine is legacy" while a lane is free — it
+		// is only reported when every candidate is foreign.
+		return m.observeLanes(ctx, cur)
 	}
 	health, err := m.Client.Health(ctx)
 	if err == nil {
@@ -56,13 +63,20 @@ func (m *Manager) Observe(ctx context.Context) (Status, bool) {
 		defer m.mu.Unlock()
 		return m.setStatus(occupiedStatus(err)), true
 	}
+	return m.demoteIfHealthy(cur), false
+}
+
+// demoteIfHealthy is Observe's "nothing is answering" outcome: a cached
+// healthy claim is demoted (the engine stopped itself when idle), any
+// other cached status is left alone.
+func (m *Manager) demoteIfHealthy(cur Status) Status {
 	if cur.State == StateHealthy {
 		return m.setStatus(Status{
 			State:         StateInstalledUnhealthy,
 			EngineVersion: cur.EngineVersion,
 			Detail:        "engine is not running (it stops itself when idle and starts again when needed)",
 			UpdatedAt:     time.Now(),
-		}), false
+		})
 	}
-	return cur, false
+	return cur
 }

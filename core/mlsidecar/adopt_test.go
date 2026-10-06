@@ -170,7 +170,7 @@ func TestEvaluateAdoption_TamperedOnDiskArtifact_NeverAdopted(t *testing.T) {
 }
 
 // TestEvaluateAdoption_PortConflict_NoCurrentInstall covers the case
-// where something answers :7774 but this client has never installed
+// where something answers on the engine port but this client has never installed
 // anything at all — never adopted, never treated as "ours".
 func TestEvaluateAdoption_PortConflict_NoCurrentInstall(t *testing.T) {
 	l := NewLayout(t.TempDir())

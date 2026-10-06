@@ -103,7 +103,7 @@ func TestInterop_ShutdownTokenIsTheEnginesFilename(t *testing.T) {
 }
 
 // TestManager_UnusableHealth_IsPortConflict_NeverSpawns: something answers
-// :7774 but not with a decodable /health (a foreign process, or a shape
+// the engine port but not with a decodable /health (a foreign process, or a shape
 // drift like the one this review found). Before the fix a decode error
 // took the "nothing is listening" branch and spawned a second engine onto
 // the occupied port on every reconcile.

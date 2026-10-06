@@ -126,7 +126,7 @@ func newFixture(t *testing.T) *fixture {
 	mgr.Verifier = mlsidecar.DefaultEngineVerifier(okTrust{}, nil)
 	// The "process": starting it makes the double answer health with the
 	// identity of whatever is installed at `current`.
-	mgr.Spawner = mlsidecar.SpawnerFunc(func(_ context.Context, exe string) (int, error) {
+	mgr.Spawner = mlsidecar.SpawnerFunc(func(_ context.Context, exe string, _ int) (int, error) {
 		rec, _, _ := mlsidecar.ReadInstallJSON(mgr.Layout)
 		eng.set(func(h *mlsidecar.HealthPayload, down *bool) {
 			*down = false
@@ -279,7 +279,7 @@ func TestStatus_FailedSpawn_IsInstalledUnhealthyNotIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.eng.set(func(_ *mlsidecar.HealthPayload, down *bool) { *down = true })
-	f.mgr.Spawner = mlsidecar.SpawnerFunc(func(context.Context, string) (int, error) { return 0, errors.New("exec format error") })
+	f.mgr.Spawner = mlsidecar.SpawnerFunc(func(context.Context, string, int) (int, error) { return 0, errors.New("exec format error") })
 	v, _ := f.impl.Repair(context.Background())
 	if v.State != "installed_unhealthy" || v.Reason != "crash" || v.Detail == "" {
 		t.Fatalf("view = %+v", v)
