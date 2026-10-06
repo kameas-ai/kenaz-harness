@@ -201,18 +201,28 @@ done <<< "$mcp_builtin_pkgs"
 # See the WP03 scope-extension note in the header. Discovery floor: the
 # harness-self handlers nil-check a dozen managers today; finding none
 # means the `if m.X == nil` convention changed, not that all is wired.
-nil_checked=$(grep -hoE 'if m\.[A-Za-z0-9_]+ == nil' \
-  $(find "$HARNESS_SELF_PKG" -maxdepth 1 -name '*.go' ! -name '*_test.go') 2>/dev/null \
-  | sed -E 's/^if m\.([A-Za-z0-9_]+) == nil$/\1/' | sort -u || true)
+# Comment lines are stripped first (a commented-out check is not a check),
+# and BOTH operand orders are matched anywhere on a line — so a compound
+# `if m.A == nil || m.B == nil` yields A and B, and `nil == m.X` counts
+# (security review L5: the first version matched only `if m.X == nil`, one
+# field per line).
+nil_checked=$(find "$HARNESS_SELF_PKG" -maxdepth 1 -name '*.go' ! -name '*_test.go' -exec cat {} + 2>/dev/null \
+  | grep -vE '^[[:space:]]*//' \
+  | grep -oE '(m\.[A-Za-z0-9_]+[[:space:]]*==[[:space:]]*nil|nil[[:space:]]*==[[:space:]]*m\.[A-Za-z0-9_]+)' \
+  | grep -oE 'm\.[A-Za-z0-9_]+' | sed 's/^m\.//' | sort -u || true)
 if [[ -z "$nil_checked" ]]; then
   echo "${GATE} FAIL: found no 'if m.<Field> == nil' manager checks under ${HARNESS_SELF_PKG}." >&2
   echo "${GATE} §6 has nothing to inspect, which is indistinguishable from passing. The" >&2
   echo "${GATE} handler nil-check convention changed — update this script in the same commit." >&2
   exit 1
 fi
+# Comment lines do not count as assignments (security review L5). Read
+# once into a variable rather than piped per field: under pipefail a
+# `grep -v | grep -q` pipeline can fail on SIGPIPE after a match.
+wiring_code=$(grep -vE '^[[:space:]]*//' "$HARNESS_WIRING_FILE" || true)
 while IFS= read -r field; do
   [[ -z "$field" ]] && continue
-  if ! grep -qE "(^|[^A-Za-z0-9_])m\.${field}[[:space:]]*=[^=]" "$HARNESS_WIRING_FILE"; then
+  if ! grep -qE "(^|[^A-Za-z0-9_])m\.${field}[[:space:]]*=[^=]" <<< "$wiring_code"; then
     violations="${violations}harness-self-manager:${field}"$'\n'
   fi
 done <<< "$nil_checked"

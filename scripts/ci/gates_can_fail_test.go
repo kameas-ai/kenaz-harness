@@ -422,6 +422,27 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			wantOutput: "harness-self-manager:ZzGateProbe",
 		},
 		{
+			// Security review L5: a compound nil-check used to yield only
+			// its FIRST field (m.Providers, which is wired), so the second
+			// — never assigned — slipped through.
+			name:       "builtin-tool-registration/harness-self-manager-compound-nil-check",
+			gate:       "check-builtin-tool-registration.sh",
+			file:       "core/mcp/builtin/harness/handlers.go",
+			append:     "\nfunc (m Managers) handleZzGateProbeCompound() (any, error) {\n\tif m.Providers == nil || nil == m.ZzGateProbeCompound {\n\t\treturn nil, errNotConfigured\n\t}\n\treturn nil, nil\n}\n",
+			wantOutput: "harness-self-manager:ZzGateProbeCompound",
+		},
+		{
+			// Security review L5: a commented-out assignment in the wiring
+			// file used to count as wiring.
+			name:       "builtin-tool-registration/harness-self-manager-comment-assignment",
+			gate:       "check-builtin-tool-registration.sh",
+			file:       "core/mcp/builtin/harness/handlers.go",
+			append:     "\nfunc (m Managers) handleZzGateProbeComment() (any, error) {\n\tif m.ZzGateProbeComment == nil {\n\t\treturn nil, errNotConfigured\n\t}\n\treturn nil, nil\n}\n",
+			file2:      "core/rpc/harness_wiring.go",
+			append2:    "\n// m.ZzGateProbeComment = notWiredYet{}\n",
+			wantOutput: "harness-self-manager:ZzGateProbeComment",
+		},
+		{
 			name: "single-move-writer/second-seam-caller",
 			gate: "check-single-move-writer.sh",
 			// The convergence violation the transcript-move seam exists
