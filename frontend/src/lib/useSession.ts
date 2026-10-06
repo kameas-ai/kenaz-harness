@@ -265,6 +265,9 @@ export function useSession(id: Ref<string>): UseSessionResult {
   let streamTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let draftDebounceHandle: ReturnType<typeof setTimeout> | null = null;
   let lastSavedDraft = "";
+  // True once this session's persisted draft has been adopted into the
+  // composer; reset on session switch. See load()'s adoption comment.
+  let draftAdopted = false;
 
   // ── served-mode Sessions_Stream wiring (FR-007) ─────────────────────────
   //
@@ -375,8 +378,18 @@ export function useSession(id: Ref<string>): UseSessionResult {
         : null;
       messages.value = msgsResult.messages;
       sweptCount.value = msgsResult.sweptCount;
-      draft.value = d;
-      lastSavedDraft = d;
+      // Dogfood 2026-10-05: the persisted draft is adopted ONCE per
+      // session open — a mid-session reload must never touch the
+      // composer. Reloads fire on stream start/end, and the persisted
+      // copy is stale the moment the user types or sends (the save is
+      // debounced and async): a reload right after send used to
+      // resurrect the just-sent text into the input. The local buffer
+      // is always at least as new as the store mid-session.
+      if (!draftAdopted) {
+        draftAdopted = true;
+        draft.value = d;
+        lastSavedDraft = d;
+      }
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       error.value = e.message;
@@ -1038,6 +1051,16 @@ export function useSession(id: Ref<string>): UseSessionResult {
     if (draftDebounceHandle) clearTimeout(draftDebounceHandle);
     const sid = id.value;
     if (!sid) return;
+    // A clear (the send path) flushes IMMEDIATELY: the debounce window is
+    // exactly where a post-send load() used to resurrect the stale
+    // persisted draft (dogfood 2026-10-05). Typing keeps the debounce.
+    if (next === "") {
+      lastSavedDraft = next;
+      void client.sessions.saveDraft(sid, next).catch(() => {
+        // Soft-fail: drafts are best-effort.
+      });
+      return;
+    }
     draftDebounceHandle = setTimeout(() => {
       lastSavedDraft = next;
       void client.sessions.saveDraft(sid, next).catch(() => {
@@ -1056,6 +1079,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     (next) => {
       streamingMoves.value = [];
       openMoveSlot = -1;
+      draftAdopted = false;
       streamSubscriptionId.value = null;
       streamingTimedOut.value = false;
       lastUsage.value = null;
