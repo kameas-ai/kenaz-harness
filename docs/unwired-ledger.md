@@ -5375,6 +5375,42 @@ command lookup and the `{{cwd}}` template, not permission resolution.
   (`InScopeArtifact`) rather than copy this tool's posture. **Owner:**
   WP04 (ownership.go) / WP10.
 
+**L6 — deliberate deviation from tasks.md, recorded.** tasks.md WP02
+said "User-created rows are unchanged". Two classes of user-created rows
+now behave differently. This is deliberate:
+- A **user row WITH a declared allowlist** is now contained to it. The
+  view's own `CreateInput.ToolAllowlist` doc already said the list is
+  "enforced against this schedule's runs"; before WP02 it was not. No
+  shipped UI writes the field (`frontend/src` has no `toolAllowlist`
+  writer), so no existing user row is affected in practice.
+- A **user row whose allowlist column is corrupt** (non-empty but not
+  decodable to at least one name) now runs with every tool denied, where
+  before it ran unrestricted. A declared but unreadable boundary must not
+  read as "unrestricted".
+User rows with NO allowlist, which is every pre-0340 row and every row the
+UI creates, are unchanged. That case is pinned by
+`TestScheduledRunContainment_UserRow_NoAllowlistUnchanged` and on the
+v0.89.2 snapshot by `..._UpgradedUserRowStillRuns`.
+
+**Forward warning for WP17 (`kenaz__set_workflow_schedule`), from the
+reviewer.** `ScheduledRunContainmentRegistry` is keyed by session, and
+scheduled **workflow** runs have no session (`wf_sched_dispatcher.go`
+dispatches through the workflow runner, not a chat session). This seam
+therefore does **NOT** contain model-armed workflow schedules. WP17 must
+not claim it does. It needs its own boundary on the workflow tool path:
+`wfToolGate.authorize` / `wfMCPCallerAdapter`, which resolve with the
+step's `ParentSessionID`, are empty for a scheduled workflow. Until it
+has one, a model-armed workflow schedule is uncontained. tasks.md's
+"through the WP02 seam" wording for WP17 is wrong as written.
+**Owner:** WP17. Dated 2026-10-05.
+
+**Known behavior (from the security review): user hooks are blocked in
+contained scheduled sessions.** The hooks-kind-builtin path resolves
+through the same per-session containment, so in a contained run a user
+hook is refused unless what it dispatches is on the run's allowlist.
+This is intended, not a defect: hooks are not a way around the boundary.
+A schedule that relies on a hook must list what the hook dispatches.
+
 ## Drained
 
 ### 2026-10-04 · CLOSED — chat run ids were a per-process counter written into a persistent log (`agentgraph-settings-linkage-01DOGF0D` WP02)
