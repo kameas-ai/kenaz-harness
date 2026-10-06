@@ -39,6 +39,12 @@ var (
 	// and the signature did not verify) so Settings can say which happened.
 	ErrSigningKeyUnknown = errors.New("fleet: bundle signed with an unknown key")
 
+	// ErrConfigBundleTooLarge is returned by the config poller when the
+	// GET /api/v1/configs body exceeds maxConfigBundleBytes (4 MiB). The
+	// body is rejected unparsed and unverified; nothing is applied and the
+	// config-pull status carries this error.
+	ErrConfigBundleTooLarge = errors.New("fleet: config bundle too large")
+
 	// ErrInvalidSignature is returned by Verify when the ed25519 signature in a
 	// config bundle does not match the canonical JSON payload.
 	ErrInvalidSignature = errors.New("fleet: config bundle signature invalid")

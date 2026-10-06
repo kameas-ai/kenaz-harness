@@ -37,6 +37,12 @@ import (
 // configPollInterval is the normal interval between config bundle fetches.
 const configPollInterval = 5 * time.Minute
 
+// maxConfigBundleBytes caps the config bundle body the poller will read
+// (4 MiB). A real bundle is a few KiB; the cap keeps a misbehaving or hostile
+// endpoint from making the harness buffer an unbounded body before the
+// signature check can reject it. Over the cap → ErrConfigBundleTooLarge.
+const maxConfigBundleBytes int64 = 4 << 20
+
 // configBackoffSteps mirrors capability_poller.go: 5, 15, 60 minutes.
 var configBackoffSteps = []time.Duration{5 * time.Minute, 15 * time.Minute, 60 * time.Minute}
 
@@ -291,9 +297,16 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return e
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Bounded read: one byte past the cap distinguishes "exactly at the
+	// limit" from "over it" without buffering an unbounded body.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigBundleBytes+1))
 	if err != nil {
 		e := fmt.Errorf("fleet: read config body: %w", err)
+		p.setError(e.Error())
+		return e
+	}
+	if int64(len(body)) > maxConfigBundleBytes {
+		e := fmt.Errorf("%w: body exceeds %d bytes — rejected unparsed, nothing applied", ErrConfigBundleTooLarge, maxConfigBundleBytes)
 		p.setError(e.Error())
 		return e
 	}
