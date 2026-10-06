@@ -206,8 +206,46 @@ done <<< "$mcp_builtin_pkgs"
 # `if m.A == nil || m.B == nil` yields A and B, and `nil == m.X` counts
 # (security review L5: the first version matched only `if m.X == nil`, one
 # field per line).
+# strip_go_comments removes Go comments — // line comments (whole-line AND
+# trailing) and /* */ blocks (single- or multi-line) — and blanks the
+# contents of string, raw-string and rune literals, so neither commented
+# nor quoted text is ever read as code (WP02 re-review: `var _ = 0 //
+# m.X = later` and a block-commented assignment both used to count as
+# wiring). A small per-character state machine: a naive strip got
+# "cedar/*.cedar" inside a string wrong and swallowed the rest of the
+# package, which the discovery floor below caught.
+strip_go_comments() {
+  awk '
+  BEGIN { st = 0 }   # 0 code, 1 "string", 2 `raw`, 3 /* block */, 4 rune
+  {
+    line = $0; out = ""; n = length(line)
+    for (i = 1; i <= n; i++) {
+      c = substr(line, i, 1); nx = substr(line, i + 1, 1)
+      if (st == 0) {
+        if (c == "/" && nx == "/") break
+        if (c == "/" && nx == "*") { st = 3; i++; continue }
+        if (c == "\"") { st = 1; out = out c; continue }
+        if (c == "`")  { st = 2; out = out c; continue }
+        if (c == "\047") { st = 4; out = out c; continue }
+        out = out c
+      } else if (st == 1) {
+        if (c == "\\") { i++; continue }
+        if (c == "\"") { st = 0; out = out c }
+      } else if (st == 2) {
+        if (c == "`") { st = 0; out = out c }
+      } else if (st == 3) {
+        if (c == "*" && nx == "/") { st = 0; i++ }
+      } else if (st == 4) {
+        if (c == "\\") { i++; continue }
+        if (c == "\047") { st = 0; out = out c }
+      }
+    }
+    if (st == 1 || st == 4) st = 0
+    print out
+  }'
+}
 nil_checked=$(find "$HARNESS_SELF_PKG" -maxdepth 1 -name '*.go' ! -name '*_test.go' -exec cat {} + 2>/dev/null \
-  | grep -vE '^[[:space:]]*//' \
+  | strip_go_comments \
   | grep -oE '(m\.[A-Za-z0-9_]+[[:space:]]*==[[:space:]]*nil|nil[[:space:]]*==[[:space:]]*m\.[A-Za-z0-9_]+)' \
   | grep -oE 'm\.[A-Za-z0-9_]+' | sed 's/^m\.//' | sort -u || true)
 if [[ -z "$nil_checked" ]]; then
@@ -219,7 +257,7 @@ fi
 # Comment lines do not count as assignments (security review L5). Read
 # once into a variable rather than piped per field: under pipefail a
 # `grep -v | grep -q` pipeline can fail on SIGPIPE after a match.
-wiring_code=$(grep -vE '^[[:space:]]*//' "$HARNESS_WIRING_FILE" || true)
+wiring_code=$(strip_go_comments < "$HARNESS_WIRING_FILE" || true)
 while IFS= read -r field; do
   [[ -z "$field" ]] && continue
   if ! grep -qE "(^|[^A-Za-z0-9_])m\.${field}[[:space:]]*=[^=]" <<< "$wiring_code"; then

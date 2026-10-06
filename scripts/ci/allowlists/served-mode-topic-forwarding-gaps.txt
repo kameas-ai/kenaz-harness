@@ -73,3 +73,14 @@
 # Blocker: the ScheduledChat_* family (8 bindings incl. ScheduledChat_RunNow,
 # which is the banner's only action) has no serve dispatch. Owner: alec.
 "scheduled-chat:banner"
+
+# 2026-10-06 — github.com/kameas-ai/kenaz-harness/core/rpc.topicAuthResumed
+# Pre-existing gap surfaced, not created: the topic has been emitted by
+# chat.ChatRunner.RedriveLastTurn and subscribed by useSession.ts /
+# AuthFailureToast.vue / useEventToasts.ts all along, but was only a
+# string literal until model-harness-toolset-01MHTS001 WP02 (re-review)
+# named it as a const for the scheduled-run dispatcher's redrive tracking.
+# Its sibling "provider:auth-failed" is not forwarded either.
+# Blocker: no decision on whether served mode supports the key-rotation
+# redrive flow at all (forward the pair together, or neither). Owner: alec.
+"provider:auth-resumed"

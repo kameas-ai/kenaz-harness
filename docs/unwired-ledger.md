@@ -5216,10 +5216,19 @@ a contained run~~ — closed by security review M2 (2026-10-05): the
 discoverer now filters builtins through the same probe-marked resolver
 path as pool tools (`TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins`). (2) ~~a timed-out run's session
 stays contained for the process lifetime~~ — superseded by security review
-L4 (2026-10-05). Release now happens on the terminal event of ANY stream in
-the session. A key-rotation redrive therefore stays contained while it runs
-(pinned first), and a timed-out session is released once its stream ends,
-instead of staying contained for a user who opens it later. A turn that is
+L4 (2026-10-05). The re-review (same date) narrowed it further.
+Containment is released only when one of the run's OWN streams ends: the
+dispatched stream, or a key-rotation redrive of it, which is linked through
+`chat.AuthResumedPayload.PausedSubID`. Before that, ANY stream ending in the
+session released it. That was a proven hole: a user opening the "Scheduled:"
+session mid-run and finishing a turn freed the still-running scheduled
+stream. A redrive stays contained while it runs and releases when it ends,
+whether it starts before or after the dispatcher's timeout. A timed-out
+session is released once its own stream ends. Pins:
+`..._UnrelatedStreamInSessionDoesNotRelease`,
+`..._RedriveBeforeTimeoutStaysContainedThenReleases`,
+`..._RedriveAfterKeyRotationStaysContained`,
+`..._TimedOutRunReleasedWhenItsStreamEnds`. A turn that is
 never redriven keeps its containment for up to 24h (`containmentWatchMax`);
 the watcher then stops and the session stays contained (fail-safe). Owner of
 both: WP16
@@ -5374,6 +5383,17 @@ command lookup and the `{{cwd}}` template, not permission resolution.
   W-session wrapper over artifacts must add the FR-G6 ownership check
   (`InScopeArtifact`) rather than copy this tool's posture. **Owner:**
   WP04 (ownership.go) / WP10.
+
+**Re-review fold-ins (2026-10-05):**
+- I11 §6 now strips trailing `//` comments, `/* */` blocks and string/rune
+  literal contents (string-aware) before matching. Two more degenerate
+  passes are closed: an assignment in a trailing comment, and one inside a
+  block comment. Each has a planted proof.
+- `core/workflows/runners.go` (model_turn and mcp_call) now uses
+  `WithSessionIDChecked`. A run's `ParentSessionID` can no longer override
+  a session already on the context. This path is not model-reachable today;
+  WP17 would make it reachable, so it is closed now. Pin:
+  `TestMCPCallRunner_ParentSessionCannotOverrideCtxSession`.
 
 **L6 — deliberate deviation from tasks.md, recorded.** tasks.md WP02
 said "User-created rows are unchanged". Two classes of user-created rows

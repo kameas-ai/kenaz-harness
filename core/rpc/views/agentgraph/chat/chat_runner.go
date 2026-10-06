@@ -834,6 +834,13 @@ type AuthFailedPayload struct {
 type AuthResumedPayload struct {
 	ProfileID string `json:"profile_id"`
 	NewSubID  string `json:"new_sub_id"`
+	// PausedSubID and SessionID identify the turn this redrive resumes,
+	// so a consumer that owns that turn can recognise NewSubID as the
+	// same run continuing (model-harness-toolset-01MHTS001 WP02 re-review:
+	// the scheduled-run dispatcher keeps its containment until the run's
+	// OWN streams end, redrives included).
+	PausedSubID string `json:"paused_sub_id,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
 }
 
 // RetryAfterRotationFailedPayload is the broker payload emitted on the
@@ -1776,8 +1783,10 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 	// useSession clears its streamingError when the profile matches.
 	if r.cfg.Broker != nil {
 		r.cfg.Broker.Emit("provider:auth-resumed", AuthResumedPayload{
-			ProfileID: pt.profileID,
-			NewSubID:  newSubID,
+			ProfileID:   pt.profileID,
+			NewSubID:    newSubID,
+			PausedSubID: pt.subID,
+			SessionID:   pt.sessionID,
 		})
 	}
 	return newSubID, nil

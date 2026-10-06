@@ -443,6 +443,28 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			wantOutput: "harness-self-manager:ZzGateProbeComment",
 		},
 		{
+			// WP02 re-review: a TRAILING comment that contains an
+			// assignment used to count as wiring.
+			name:       "builtin-tool-registration/harness-self-manager-trailing-comment-assignment",
+			gate:       "check-builtin-tool-registration.sh",
+			file:       "core/mcp/builtin/harness/handlers.go",
+			append:     "\nfunc (m Managers) handleZzGateProbeTrailing() (any, error) {\n\tif m.ZzGateProbeTrailing == nil {\n\t\treturn nil, errNotConfigured\n\t}\n\treturn nil, nil\n}\n",
+			file2:      "core/rpc/harness_wiring.go",
+			append2:    "\nvar _ = 0 // m.ZzGateProbeTrailing = later\n",
+			wantOutput: "harness-self-manager:ZzGateProbeTrailing",
+		},
+		{
+			// WP02 re-review: an assignment inside a /* */ block used to
+			// count as wiring.
+			name:       "builtin-tool-registration/harness-self-manager-block-comment-assignment",
+			gate:       "check-builtin-tool-registration.sh",
+			file:       "core/mcp/builtin/harness/handlers.go",
+			append:     "\nfunc (m Managers) handleZzGateProbeBlock() (any, error) {\n\tif m.ZzGateProbeBlock == nil {\n\t\treturn nil, errNotConfigured\n\t}\n\treturn nil, nil\n}\n",
+			file2:      "core/rpc/harness_wiring.go",
+			append2:    "\n/*\n\tm.ZzGateProbeBlock = notYet{}\n*/\n",
+			wantOutput: "harness-self-manager:ZzGateProbeBlock",
+		},
+		{
 			name: "single-move-writer/second-seam-caller",
 			gate: "check-single-move-writer.sh",
 			// The convergence violation the transcript-move seam exists

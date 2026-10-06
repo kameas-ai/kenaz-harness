@@ -146,6 +146,8 @@ func (a *containmentAudit) blocked(t *testing.T) []contextaudit.BlockedPermissio
 
 type containmentFixture struct {
 	runner   *chat.ChatRunner
+	sessions sessionsview.SessionsAPI
+	llm      llmview.LLMConnectorAPI
 	store    scheduler.ScheduledChatStore
 	engine   *scheduler.ChatCronEngine
 	pool     *containmentPool
@@ -249,7 +251,7 @@ func buildContainmentFixtureWith(t *testing.T, dataDir string, llm coreag.LLMPro
 	cron.Start()
 	t.Cleanup(cron.Stop)
 
-	return &containmentFixture{runner: runner, store: store, engine: cron, pool: pool, model: model, audit: audit, blocked: blocked, registry: registry, db: dataDir}
+	return &containmentFixture{runner: runner, sessions: sessionsAPI, llm: llmAPI, store: store, engine: cron, pool: pool, model: model, audit: audit, blocked: blocked, registry: registry, db: dataDir}
 }
 
 // fireOnce creates a one-shot row due now, arms it through the engine's
@@ -666,8 +668,13 @@ func TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins(t *testing.
 	if got := names(contained.ID); len(got) != 1 || got[0] != "kenaz__sleep" {
 		t.Fatalf("contained listing = %v, want exactly [kenaz__sleep]", got)
 	}
-	if got := names(other.ID); len(got) < 2 {
-		t.Fatalf("uncontained listing = %v, want the full builtin set", got)
+	var full []string
+	for _, b := range api.Builtins().List() {
+		full = append(full, b.Name())
+	}
+	sort.Strings(full)
+	if got := names(other.ID); strings.Join(got, ",") != strings.Join(full, ",") {
+		t.Fatalf("uncontained listing = %v, want exactly the full unfiltered builtin set %v", got, full)
 	}
 	if rows := toolBlockedRows(t, blockedrequests.NewSQLiteStore(c.Storage())); len(rows) != 0 {
 		t.Fatalf("listing recorded blocked rows: %+v", rows)
@@ -798,4 +805,162 @@ func TestScheduledRunContainment_TimedOutRunReleasedWhenItsStreamEnds(t *testing
 		t.Fatal("released at timeout, while the stream was still running")
 	}
 	waitReleased(t, f.registry, hist.SessionID)
+}
+
+// armOnce creates a due one-shot row and arms it WITHOUT waiting for it to
+// finish (for tests that act while the run is in flight).
+func (f *containmentFixture) armOnce(t *testing.T, rec scheduler.ChatRunRecord) {
+	t.Helper()
+	now := time.Now().UTC()
+	runAt := now.Add(-time.Second)
+	rec.Name, rec.PromptTemplate, rec.OutputSink = "containment "+rec.ID, "use your tools", "none"
+	rec.Enabled, rec.TriggerKind, rec.RunAt = true, scheduler.TriggerKindOnce, &runAt
+	rec.CreatedAt, rec.UpdatedAt = now, now
+	if err := f.store.Create(context.Background(), rec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := f.engine.Sync(context.Background(), rec.ID); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+}
+
+// scheduledSessionID waits for the fired run's "Scheduled:" session.
+func (f *containmentFixture) scheduledSessionID(t *testing.T) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		list, err := f.sessions.List(context.Background())
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		for _, s := range list {
+			if strings.HasPrefix(s.Name, "Scheduled: ") && f.registry.Contained(s.ID) {
+				return s.ID
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("scheduled run's session never appeared contained")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// gatedFirstCallModel blocks its FIRST call (the scheduled stream) until
+// release is closed; every later call (an interactive turn) answers at once.
+type gatedFirstCallModel struct {
+	mu      sync.Mutex
+	calls   int
+	release chan struct{}
+}
+
+func (m *gatedFirstCallModel) Generate(ctx context.Context, _ coreag.LLMRequest) (coreag.LLMResponse, error) {
+	m.mu.Lock()
+	m.calls++
+	n := m.calls
+	m.mu.Unlock()
+	if n == 1 {
+		select {
+		case <-m.release:
+		case <-ctx.Done():
+			return coreag.LLMResponse{}, ctx.Err()
+		}
+	}
+	if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+		sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: "ok"})
+	}
+	return coreag.LLMResponse{Content: "ok", FinishReason: "stop"}, nil
+}
+
+// TestScheduledRunContainment_UnrelatedStreamInSessionDoesNotRelease is the
+// re-review's probe, kept as a pin: while a contained scheduled stream is
+// still running, a user opens the "Scheduled:" session and completes an
+// interactive turn in it. That stream's end must NOT release containment
+// (the scheduled stream would otherwise run on with the full catalogue);
+// the scheduled stream's OWN end does.
+func TestScheduledRunContainment_UnrelatedStreamInSessionDoesNotRelease(t *testing.T) {
+	sandboxUserConfigDir(t)
+	model := &gatedFirstCallModel{release: make(chan struct{})}
+	f := buildContainmentFixtureWith(t, t.TempDir(), model, 10*time.Second)
+	f.armOnce(t, scheduler.ChatRunRecord{ID: "cr-mid", CreatedBy: scheduler.ScheduledRunCreatedByModel, ToolAllowlist: []string{"kenaz__alpha"}})
+	sid := f.scheduledSessionID(t)
+
+	// The interactive turn, through the same production surfaces the chat
+	// UI uses, in the SAME session, while the scheduled stream is blocked.
+	ctx := context.Background()
+	if _, err := f.sessions.AppendMessage(ctx, sid, "user", "hi, what are you doing?"); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if _, err := f.llm.StartStream(ctx, "test-profile", sid, ""); err != nil {
+		t.Fatalf("interactive StartStream: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		model.mu.Lock()
+		n := model.calls
+		model.mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("interactive turn never reached the model")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(500 * time.Millisecond) // let the interactive stream's terminal event land
+	if !f.registry.Contained(sid) {
+		t.Fatal("an unrelated interactive stream ending released the scheduled run's containment while the scheduled stream still runs")
+	}
+
+	close(model.release)
+	hist := f.await(t, "cr-mid")
+	if hist.Status != "completed" {
+		t.Fatalf("scheduled run = %+v, want completed", hist)
+	}
+	waitReleased(t, f.registry, sid)
+}
+
+// TestScheduledRunContainment_RedriveBeforeTimeoutStaysContainedThenReleases
+// (re-review (b), follow-up 4): the paused turn is redriven while the
+// dispatcher is still waiting. The redrive is contained (alpha only) and
+// its end releases containment from the dispatcher's own wait loop — well
+// before the dispatcher's timeout. Mutation: make the wait loop release
+// only on the dispatched sub id (ignore redrive links) -> no release before
+// the timeout and this test fails.
+func TestScheduledRunContainment_RedriveBeforeTimeoutStaysContainedThenReleases(t *testing.T) {
+	sandboxUserConfigDir(t)
+	const dispatchTimeout = 8 * time.Second
+	f := buildContainmentFixtureWith(t, t.TempDir(), &authThenToolsModel{}, dispatchTimeout)
+	start := time.Now()
+	f.armOnce(t, scheduler.ChatRunRecord{ID: "cr-early-redrive", CreatedBy: scheduler.ScheduledRunCreatedByModel, ToolAllowlist: []string{"kenaz__alpha"}})
+	sid := f.scheduledSessionID(t)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := f.runner.HasPausedSubFor("test-profile"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("scheduled turn never paused for key rotation")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := f.runner.RedriveLastTurn(context.Background(), "test-profile"); err != nil {
+		t.Fatalf("RedriveLastTurn: %v", err)
+	}
+	for len(f.pool.snapshot())+len(toolBlockedRows(t, f.blocked)) < 2 {
+		if time.Now().After(deadline.Add(5 * time.Second)) {
+			t.Fatalf("redrive calls=%v blocked=%d", f.pool.snapshot(), len(toolBlockedRows(t, f.blocked)))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := f.pool.snapshot(); len(got) != 1 || got[0] != "kenaz__alpha" {
+		t.Fatalf("redrive dispatched %v, want only [kenaz__alpha]", got)
+	}
+	for f.registry.Contained(sid) {
+		if time.Since(start) > dispatchTimeout-time.Second {
+			t.Fatal("redrive ended but containment was not released before the dispatcher timeout — the wait loop does not follow the run's own redrive")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	f.await(t, "cr-early-redrive") // the original sub never closes; the dispatcher times out
 }
