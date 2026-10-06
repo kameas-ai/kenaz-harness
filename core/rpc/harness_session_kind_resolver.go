@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	cedarlib "github.com/cedar-policy/cedar-go"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
@@ -85,6 +86,24 @@ type cedarSessionKindResolver struct {
 	// session.Manager.AddKindTransitionObserver's own registration, so
 	// existing constructor call sites do not need a signature change.
 	killSwitch harnessKillSwitchReader
+
+	// containment is the scheduled-run tool-allowlist arm
+	// (model-harness-toolset-01MHTS001 WP02, finding H-1). Checked FIRST
+	// in Resolve for every (server, tool): a session a fired scheduled run
+	// is contained to may call only the tools on that run's allowlist.
+	// Late-bound via SetScheduledRunContainment (New() builds the registry
+	// beside the dispatcher that writes it); atomic because Resolve runs on
+	// turn goroutines. nil means no session is contained.
+	containment atomic.Pointer[ScheduledRunContainmentRegistry]
+}
+
+// SetScheduledRunContainment wires the scheduled-run allowlist registry
+// this arm consults before any other evaluation. Safe with a nil receiver.
+func (r *cedarSessionKindResolver) SetScheduledRunContainment(c *ScheduledRunContainmentRegistry) {
+	if r == nil {
+		return
+	}
+	r.containment.Store(c)
 }
 
 // SetKillSwitch wires the persisted HarnessSelfMCPDisabled reader.
@@ -168,6 +187,19 @@ func (r *cedarSessionKindResolver) kindFor(ctx context.Context, sessionID string
 // Resolve implements toolloop.PermissionResolver.
 func (r *cedarSessionKindResolver) Resolve(ctx context.Context, sessionID, server, tool string) (toolloop.Resolution, error) {
 	res := toolloop.Resolution{Server: server, Tool: tool, Policy: toolloop.PolicyAutoAllow}
+
+	// model-harness-toolset-01MHTS001 WP02 (H-1): the scheduled-run
+	// allowlist. Before the kill switch and the nil-engine branch because
+	// it only ever narrows: an off-list tool in a contained session is
+	// denied whatever else would have said; an on-list tool falls through
+	// to the evaluation below exactly as for any other session. The deny
+	// carries a non-empty reason, so MergedResolver treats it as a
+	// session-arm match and it wins over the static arm.
+	if r != nil {
+		if deny, ok := r.containment.Load().Check(ctx, sessionID, server, tool); ok {
+			return deny, nil
+		}
+	}
 
 	// AC-008 completion: the kill switch denies EVERY harness-self tool —
 	// read or write — in EVERY session, including onboarding, per FR-007's

@@ -430,15 +430,15 @@ func (a *graphAuthorAdapter) MaterializeRun(ctx context.Context, runID string) (
 // (WP09) — this adapter adds no security logic of its own, it only
 // translates types.
 //
-// Sequencing this depends on, already satisfied by the time this
-// adapter's tool is reachable: harness-self-attach-01PMHS01 WP04's
-// merged, session-aware PermissionResolver
-// (core/rpc/api.go's a.toolPermsResolver) is constructed before
-// buildHarnessManagers is called in New() — see the comment at that
-// call site. Per spec.md §6.1 F2, a tool_allowlist enforced by a
-// session-blind static resolver would be indistinguishable from an
-// unenforced one at every call site; this mission's WP10 was
-// deliberately withheld until that wiring landed.
+// What enforces the allowlist this adapter persists: when the row fires,
+// LiveChatRunDispatcher binds the run's session to it
+// (scheduler.ResolveRunContainment -> ScheduledRunContainmentRegistry)
+// and the session arm of harness-self-attach-01PMHS01 WP04's merged,
+// session-aware PermissionResolver denies and records every off-list call
+// (model-harness-toolset-01MHTS001 WP02, finding H-1). Per spec.md §6.1
+// F2, a tool_allowlist enforced by a session-blind static resolver would
+// be indistinguishable from an unenforced one — and until WP02 it was
+// unenforced: the merged resolver existed but read no allowlist.
 type scheduledRunWriterAdapter struct{ api scheduledchatview.ScheduledChatAPI }
 
 var _ harness.ScheduledRunWriter = scheduledRunWriterAdapter{}

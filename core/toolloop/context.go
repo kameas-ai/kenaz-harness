@@ -41,3 +41,39 @@ func SessionIDFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(sessionIDCtxKey{}).(string)
 	return v
 }
+
+// Visibility-probe context plumbing (model-harness-toolset-01MHTS001
+// WP02).
+//
+// PermissionResolver.Resolve is asked two different questions through
+// one signature: "may this call dispatch?" (kernelToolAdapter, the slash
+// and workflow dispatchers) and "should this tool be LISTED for the
+// session?" (core/rpc/views/llm's mcpToolDiscoverer, which drops denied
+// tools so visibility matches reachability). The verdict must be the
+// same for both — that is the point of filtering the listing through the
+// resolver — but a resolver that RECORDS a denial (the scheduled-run
+// allowlist arm writes a blocked_permission_requests row plus an audit
+// record per refused call) must not record one for every off-list tool
+// each time the catalog is listed: the model never asked for those.
+//
+// The discoverer marks its ctx with WithVisibilityProbe; a recording
+// resolver checks IsVisibilityProbe and skips the record, never the
+// verdict. A listing path that forgets the mark over-records (noise),
+// it never under-denies.
+
+type visibilityProbeCtxKey struct{}
+
+// WithVisibilityProbe marks ctx as a listing-time permission probe, not
+// a dispatch.
+func WithVisibilityProbe(ctx context.Context) context.Context {
+	return context.WithValue(ctx, visibilityProbeCtxKey{}, true)
+}
+
+// IsVisibilityProbe reports whether ctx was marked by WithVisibilityProbe.
+func IsVisibilityProbe(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(visibilityProbeCtxKey{}).(bool)
+	return v
+}

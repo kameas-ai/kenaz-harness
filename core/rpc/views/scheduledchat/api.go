@@ -148,13 +148,14 @@ type ScheduledChatAPI interface {
 	// enforces the same rule again at fire time as defense in depth
 	// (a row's allowlist can be emptied by a later Update).
 	//
-	// NOT REACHABLE from any production wiring as of WP09. The model-
-	// facing entry point (harness_write_create_scheduled_run) is WP10,
-	// which is HARD-BLOCKED on harness-self-attach-01PMHS01 WP04+WP06
-	// per owner rulings B-2/B-3 (spec.md §9, §6.1). This method is the
-	// mechanism WP10 wires a tool handler onto; until then it exists,
-	// is tested, and has no caller outside this package's own tests —
-	// a dated, named gap, not a silent one. See docs/unwired-ledger.md.
+	// Production caller: harness_write_create_scheduled_run, through
+	// core/rpc/harness_wiring.go's scheduledRunWriterAdapter (onboarding
+	// sessions only, per the harness-self write policy). When such a row
+	// fires, the run is contained to its allowlist per tool call:
+	// scheduler.ResolveRunContainment decides the boundary, the chat-run
+	// dispatcher binds the run's session to it, and the merged
+	// tool-permission resolver's session arm denies (and records) every
+	// off-list call (model-harness-toolset-01MHTS001 WP02, finding H-1).
 	CreateAsModel(ctx context.Context, in CreateInput) (ChatRunEntry, error)
 
 	// Update replaces all mutable fields of an existing scheduled chat run.

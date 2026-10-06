@@ -2691,6 +2691,8 @@ and is the first record of `SkipCache` specifically (the field itself
 predates this mission).
 ### 2026-08-22 · `scheduledchat.API.CreateAsModel` has no caller (`model-scheduled-jobs-01PMSJ01` WP09)
 
+> **SUPERSEDED 2026-10-05:** `CreateAsModel` has a production caller (`harness_write_create_scheduled_run` via `scheduledRunWriterAdapter`), and the per-run containment this entry deferred is enforced as of model-harness-toolset-01MHTS001 WP02 — see that entry.
+
 WP09 built the full server-side provenance mechanism FR-005 requires — the
 `created_by`/`tool_allowlist` columns (migration `sessions/0340`), the
 `CreateAsModel` entry point that stamps `created_by="model"` and refuses an
@@ -5178,6 +5180,54 @@ fetches and an overall install deadline).**
 3. **Observe worst case** is LaneCount × `observeProbeTimeout` (5 × 2s =
    10s) on hanging candidates — cut from 5 × 5s by a per-probe deadline on
    the read-only Settings scan only. Informational.
+
+### 2026-10-05 (model-harness-toolset-01MHTS001 WP02, finding H-1) — CLOSED: the B-3 scheduled-run tool allowlist was a containment boundary asserted, not enforced
+
+**Class: containment boundary asserted, not enforced.** Owner ruling B-3
+made a model-created schedule's `tool_allowlist` "the only boundary" (no
+human review moment). The list was persisted (`sessions/0340`), required at
+create time, and named by the policy file as enforced "per run" by "a
+separate seam (harness-self-attach-01PMHS01's merged PermissionResolver)".
+At fire time `chat_cron_engine.go` and `scheduledchat.RunNow` reduced it to
+`has_tool_allowlist` for the execute gate; `ChatRunSpec` carried no list
+and no resolver read one. A fired model-created run could call every tool.
+Reachable only from onboarding sessions (the only kind that may call
+`harness_write_create_scheduled_run`), which bounded but did not remove it.
+
+**Fixed (wired, not deleted):** `ChatRunSpec` carries `CreatedBy` +
+`ToolAllowlist` from the gate; `scheduler.ResolveRunContainment` combines
+spec and re-read row, never widening (model + absent/empty/unreadable list
+= DOES NOT RUN, checked in the dispatcher as well as by the gate; a user
+row's unreadable list = every tool denied; a user row with no list =
+unchanged). `LiveChatRunDispatcher` binds the run's session in
+`ScheduledRunContainmentRegistry`; `cedarSessionKindResolver.Resolve` (the
+session arm of the one merged resolver the chat adapter, slash dispatcher
+and workflow tool gate share) checks it first and denies off-list tools,
+recording a `blocked_permission_requests` row (family `tool`) plus a
+`policy.blocked_permission_request` audit record per refused dispatch.
+Subagent children inherit the parent's containment. Pins:
+`core/rpc/scheduled_run_containment_test.go` (real cron fire path, real
+sqlite, v0.89.2 upgrade snapshot for the pre-0340 user row),
+`core/scheduler/containment_test.go`. The 2026-08-22 `CreateAsModel` entry
+above is superseded (it has a production caller now).
+
+**Accepted residuals:** (1) builtin `kenaz__*` tools are still LISTED to a
+contained run (the discoverer filters only pool tools through the
+resolver); every off-list call is denied and recorded, so this is a
+visibility cost, not a reachability hole. (2) An entry is released only on
+the run's terminal stream event; a timed-out run's session stays contained
+for the process lifetime, deliberately. Owner of both: WP16
+(`kenaz__schedule_chat`), which must re-read this seam before shipping.
+
+**Gate question (tasks.md WP02): can any file-level gate see "a persisted
+allowlist field with no runtime reader"?** No. The field HAD readers — the
+two `len(rec.ToolAllowlist) > 0` sites — and that is exactly why the gap
+survived: a reader that reduces a list's contents to its existence is
+indistinguishable, to a grep or a knob-coverage registration, from one that
+enforces it. "Is this read a decision on the contents?" is a semantic
+question. The guard is the runtime pin (an off-list call in a really-fired
+run is denied), which is now in place; no gate extension is filed because
+none can be made non-vacuous for this class.
 
 ## Drained
 

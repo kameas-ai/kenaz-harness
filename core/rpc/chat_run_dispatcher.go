@@ -85,6 +85,14 @@ type ChatRunDispatcherDeps struct {
 	// banner is a notification, not part of the run's own success/
 	// failure). *StreamBroker satisfies this trivially.
 	Broker BannerPublisher
+	// Containment binds each fired run's session to the tool allowlist
+	// scheduler.ResolveRunContainment computes from the gate-time spec and
+	// the re-read row (model-harness-toolset-01MHTS001 WP02, finding H-1).
+	// The merged tool-permission resolver's session arm reads it per call.
+	// nil is fail-closed: a run that needs containment refuses to start
+	// rather than run unrestricted; an uncontained (user, no allowlist)
+	// run is unaffected.
+	Containment *ScheduledRunContainmentRegistry
 	// Timeout overrides defaultDispatchTimeout. Zero uses the default.
 	Timeout time.Duration
 }
@@ -164,6 +172,20 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		return failedRecord(now, "rendered prompt is empty"), nil
 	}
 
+	// model-harness-toolset-01MHTS001 WP02 (H-1): resolve the tool
+	// boundary this run executes under BEFORE any session exists. Owner
+	// ruling B-3: a model-created schedule with an absent, empty or
+	// unresolvable allowlist DOES NOT RUN — checked here as well as by the
+	// Cedar execute gate upstream, so a caller that reached this
+	// dispatcher without that gate still cannot run one unrestricted.
+	containment := scheduler.ResolveRunContainment(job.ChatRun, rec)
+	if containment.Refuse != "" {
+		return failedRecord(now, containment.Refuse), nil
+	}
+	if containment.Contained && d.deps.Containment == nil {
+		return failedRecord(now, "this schedule declares a tool allowlist but no containment registry is wired; it does not run unrestricted"), nil
+	}
+
 	// Step 3: parse the output sink. First production caller
 	// (spec.md §5.2 step 3) — delivery to the parsed sink is WP07's job
 	// (FR-007); this dispatch only needs the parse to log what would be
@@ -196,6 +218,13 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	if d.deps.Origins != nil {
 		d.deps.Origins.Set(sess.ID, id)
 		defer d.deps.Origins.Clear(sess.ID)
+	}
+	// WP02 (H-1): contain the session before its first turn. Released
+	// only on a terminal stream event (below) — a timed-out or cancelled
+	// run's stream may still be executing, and releasing then would hand
+	// it the full catalogue (see ScheduledRunContainmentRegistry's doc).
+	if containment.Contained {
+		d.deps.Containment.Contain(sess.ID, id, containment.Allow)
 	}
 
 	// Step 5: append the rendered prompt as the user turn BEFORE calling
@@ -259,6 +288,9 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			}
 			if payload.SubID != subID {
 				continue // another run's terminal event; keep waiting.
+			}
+			if containment.Contained {
+				d.deps.Containment.Release(sess.ID)
 			}
 			histRec := d.buildRecord(ctx, sess.ID, now, payload)
 			if sinkKind == "banner" {

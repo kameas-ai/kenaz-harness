@@ -76,9 +76,13 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 		if err != nil {
 			return nil, err
 		}
+		// Listing is a visibility probe, not a dispatch: a resolver that
+		// records denials (the scheduled-run allowlist arm) returns the
+		// same verdict but must not record one per listed tool.
+		probeCtx := toolloop.WithVisibilityProbe(ctx)
 		for _, t := range raw {
 			if d.perms != nil {
-				res, perr := d.perms.Resolve(ctx, sessionID, t.Server, t.Name)
+				res, perr := d.perms.Resolve(probeCtx, sessionID, t.Server, t.Name)
 				// harness-self-attach-01PMHS01 UNIT-4, AC-017: a
 				// resolver error used to leave the tool listed
 				// (perr == nil was required to even consider denying).

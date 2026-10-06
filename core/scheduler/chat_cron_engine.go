@@ -510,6 +510,12 @@ func (e *ChatCronEngine) fireSync(ctx context.Context, id string) (ChatRunHistor
 				PromptTemplate: rec.PromptTemplate,
 				Model:          rec.Model,
 				OutputSink:     rec.OutputSink,
+				// model-harness-toolset-01MHTS001 WP02 (H-1): carry the
+				// provenance and allowlist the gate above just evaluated,
+				// so the dispatcher contains the run to it rather than
+				// to nothing.
+				CreatedBy:     createdBy,
+				ToolAllowlist: append([]string(nil), rec.ToolAllowlist...),
 			},
 			Trigger: Trigger{Cron: rec.Cron, TZ: rec.Timezone},
 		}
