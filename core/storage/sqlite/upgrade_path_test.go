@@ -294,9 +294,6 @@ func TestUpgradePath(t *testing.T) {
 		if !e.IsDir() {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(root, e.Name(), "dump.sql")); err != nil {
-			continue // e.g. a tag directory recorded as unreplayable, no dump.sql
-		}
 		// Only vX.Y.Z directories are snapshots. scripts/ci/upgrade-
 		// snapshot.sh also accepts the literal "HEAD" to preview an
 		// unreleased tree (docs/upgrade-snapshots.md); that output is a
@@ -304,6 +301,19 @@ func TestUpgradePath(t *testing.T) {
 		// just because someone forgot to delete it.
 		if !upgradesnap.IsSnapshotTag(e.Name()) {
 			continue
+		}
+		// A snapshot directory without dump.sql is never legitimate and
+		// FAILS, it is not skipped. This line used to `continue` ("e.g. a
+		// tag directory recorded as unreplayable") — but no such recorded
+		// case has ever existed, and the skip is what let v0.89.4 ship
+		// (PR #382) as a PROVENANCE.md-only directory: the chain silently
+		// stopped at v0.89.3 while check-upgrade-snapshot-present.sh,
+		// keying on the directory name, reported v0.89.4. Caught by the
+		// v0.90.0 release review (2026-10-06); the gate now fails on a
+		// dump-less directory too.
+		if _, err := os.Stat(filepath.Join(root, e.Name(), "dump.sql")); err != nil {
+			t.Fatalf("testdata/upgrade/%s/ exists but has no dump.sql — a provenance-only directory is not a snapshot; "+
+				"run scripts/ci/upgrade-snapshot.sh %s or delete the directory", e.Name(), e.Name())
 		}
 		tags = append(tags, e.Name())
 	}

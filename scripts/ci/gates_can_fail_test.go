@@ -1207,6 +1207,38 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			env:        map[string]string{"UPGRADE_SNAPSHOT_PRESENT_MAX_TAG": "v99.0.0"},
 		},
 		{
+			// The v0.89.4 shape (PR #382): the snapshot DIRECTORY exists,
+			// PROVENANCE.md is in it, and no dump.sql was ever committed —
+			// the ritual half-executed one step further along than the
+			// absence case above. The gate keyed on the directory NAME, so
+			// it reported the chain level at v0.89.4 while TestUpgradePath
+			// silently skipped the dump-less directory; the chain actually
+			// stopped at v0.89.3 and the newest release's upgrade path was
+			// untested with everything green. Caught by the v0.90.0
+			// release review (2026-10-06).
+			//
+			// UPGRADE_SNAPSHOT_PRESENT_MAX_TAG=v99.0.0 makes the planted
+			// directory stand for the newest shipped tag, reproducing the
+			// live defect exactly — though the completeness check
+			// deliberately fails a dump-less directory at ANY position in
+			// the chain, so the env override is framing, not a
+			// precondition.
+			name: "upgrade-snapshot-present/dump-missing",
+			// The completeness check's specific diagnosis, which names the
+			// offending directory — not the gate label, and not the
+			// sibling case's "chain is behind" message, which this plant
+			// must NOT be satisfied by (a gate that only excluded dump-
+			// less directories from the newest-snapshot computation would
+			// emit that one without ever naming the broken directory).
+			wantOutput: "v99.0.0/ has no dump.sql",
+			gate:       "check-upgrade-snapshot-present.sh",
+			env:        map[string]string{"UPGRADE_SNAPSHOT_PRESENT_MAX_TAG": "v99.0.0"},
+			file:       "core/storage/sqlite/testdata/upgrade/v99.0.0/PROVENANCE.md",
+			content: "# zzGateProbe — planted provenance-only snapshot directory\n\n" +
+				"Planted by gates_can_fail_test.go (upgrade-snapshot-present/dump-missing).\n" +
+				"If this file survives a test run, delete this directory.\n",
+		},
+		{
 			// structured-output-is-reachable-01PMZE14 WP03 (spec §7 G-1):
 			// the class is a codegen'd manifest attr, declared and
 			// authored, with no reader — ModelAttrs.JsonSchema (spec

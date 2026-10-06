@@ -75,11 +75,42 @@ if [[ -z "$MAX_TAG" ]]; then
   exit 1
 fi
 
-# --- newest committed snapshot -----------------------------------------
-MAX_SNAP="$(find "$SNAP_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'v*' -exec basename {} \; \
+# --- completeness: a snapshot directory must carry dump.sql ------------
+# A directory is not a snapshot; its dump.sql is. v0.89.4 shipped
+# (PR #382) as a PROVENANCE.md-only directory — no dump was ever
+# committed — and this gate, keying on the DIRECTORY name alone,
+# reported the chain level at v0.89.4 while TestUpgradePath silently
+# skipped the dump-less directory. The chain actually stopped at
+# v0.89.3, so the newest release's upgrade path was untested while
+# everything stayed green: exactly the failure mode this gate exists
+# for, smuggled past it by an empty-handed directory. Caught by the
+# v0.90.0 release review (2026-10-06). A dump-less directory at ANY
+# position in the chain is a half-executed ritual, so it fails
+# outright rather than merely not counting as newest.
+SNAP_NAMES="$(find "$SNAP_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'v*' -exec basename {} \; \
   | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-  | sort -V \
-  | tail -1 || true)"
+  | sort -V || true)"
+
+INCOMPLETE=0
+while IFS= read -r name; do
+  [[ -z "$name" ]] && continue
+  if [[ ! -f "$SNAP_ROOT/$name/dump.sql" ]]; then
+    echo "${GATE} FAIL: ${SNAP_ROOT}/${name}/ has no dump.sql — a provenance-only directory is not a snapshot." >&2
+    INCOMPLETE=1
+  fi
+done <<< "$SNAP_NAMES"
+if [[ "$INCOMPLETE" -ne 0 ]]; then
+  echo "${GATE}   Run: bash scripts/ci/upgrade-snapshot.sh <tag> to produce the missing dump.sql," >&2
+  echo "${GATE}   or delete the directory if the tag genuinely owes no snapshot (it does not:" >&2
+  echo "${GATE}   every stable tag owes one — see the release ritual in CLAUDE.md)." >&2
+  exit 1
+fi
+
+# --- newest committed snapshot -----------------------------------------
+# Every surviving candidate carries dump.sql (the completeness check
+# above exits otherwise), so the newest directory name is now also the
+# newest REPLAYABLE snapshot.
+MAX_SNAP="$(printf '%s\n' "$SNAP_NAMES" | tail -1 || true)"
 
 if [[ -z "$MAX_SNAP" ]]; then
   echo "${GATE} FAIL: no snapshot directories under ${SNAP_ROOT}/." >&2
