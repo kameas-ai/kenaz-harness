@@ -270,7 +270,7 @@ func (c *Client) Unpublish(ctx context.Context, catalogID string) error {
 	if c == nil || c.isNop {
 		return ErrFleetDisabled
 	}
-	resp, err := c.Delete(ctx, "/api/v1/catalog/"+catalogID)
+	resp, err := c.Delete(ctx, "/api/v1/catalog/"+url.PathEscape(catalogID))
 	if err != nil {
 		return fmt.Errorf("fleet/catalog: unpublish: %w", err)
 	}

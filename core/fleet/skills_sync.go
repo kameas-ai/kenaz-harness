@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
@@ -102,7 +103,7 @@ func FetchCatalogItem(ctx context.Context, client *Client, catalogID, version st
 	if client == nil || client.isNop {
 		return CatalogItem{}, ErrFleetDisabled
 	}
-	path := fmt.Sprintf("/api/v1/catalog/%s@%s", catalogID, version)
+	path := fmt.Sprintf("/api/v1/catalog/%s@%s", url.PathEscape(catalogID), url.PathEscape(version))
 	resp, err := client.Get(ctx, path)
 	if err != nil {
 		return CatalogItem{}, fmt.Errorf("fleet/catalog: fetch: %w", err)

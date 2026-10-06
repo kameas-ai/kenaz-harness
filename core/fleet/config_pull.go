@@ -25,6 +25,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -275,7 +276,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	cs := p.checksum
 	p.mu.RUnlock()
 
-	urlPath := fmt.Sprintf("/api/v1/configs?machine=%s&checksum=%s", nodeID, cs)
+	urlPath := fmt.Sprintf("/api/v1/configs?machine=%s&checksum=%s", url.QueryEscape(nodeID), url.QueryEscape(cs))
 
 	// We need to inspect the status code before letting the fleet http.Client
 	// discard non-2xx bodies, so we call Get directly.

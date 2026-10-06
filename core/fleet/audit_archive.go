@@ -119,6 +119,22 @@ type AuditArchiver struct {
 	// (fleet sign-in / sign-out) restarts it; events stay in the local
 	// hash-chained log (unsupported_endpoint.go).
 	unsupported atomic.Bool
+
+	// tooLarge latches when fleet answers 413 to a batch (fleet contract
+	// 2026-10-06: 413 is PERMANENT — the same batch can never be accepted;
+	// content problems come back as 200 + a per-event report instead).
+	// The loop idles without posting (events stay in the local log) until
+	// a fleet session reset clears it (ResetUnsupported).
+	tooLarge atomic.Bool
+}
+
+// ErrAuditBatchTooLarge is fleet's 413 for an audit batch: permanent for that
+// batch, so the archiver stops retrying it.
+var ErrAuditBatchTooLarge = errors.New("fleet/audit_archive: fleet refused the batch as too large (413); archival paused")
+
+// TooLarge reports whether archival is paused on a 413.
+func (a *AuditArchiver) TooLarge() bool {
+	return a.tooLarge.Load()
 }
 
 // Unsupported reports whether the loop stopped because the connected fleet
@@ -133,6 +149,7 @@ func (a *AuditArchiver) Unsupported() bool {
 // sign-out) so a fleet that ships the endpoint, or a fixed host, resumes
 // archival without an app restart. No-op after Stop or before any Start.
 func (a *AuditArchiver) ResetUnsupported() {
+	a.tooLarge.Store(false) // a new session may carry a different server cap
 	if !a.unsupported.CompareAndSwap(true, false) {
 		return
 	}
@@ -253,6 +270,9 @@ func (a *AuditArchiver) ArchiveNow(ctx context.Context) error {
 	if a.isUnsupported() {
 		return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
 	}
+	if a.tooLarge.Load() {
+		return ErrAuditBatchTooLarge
+	}
 	if !a.running.Load() {
 		return errors.New("fleet/audit_archive: archiver not running")
 	}
@@ -316,8 +336,8 @@ func (a *AuditArchiver) loop(ctx context.Context) {
 			return
 		}
 
-		// Hard-stop on chain-break.
-		if a.chainErr.Load() {
+		// Hard-stop on chain-break, or on a permanent 413.
+		if a.chainErr.Load() || a.tooLarge.Load() {
 			select {
 			case <-ctx.Done():
 				return
@@ -502,7 +522,15 @@ func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
 			return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
 		}
 	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
+		if a.tooLarge.CompareAndSwap(false, true) {
+			logging.L().Warn("fleet.audit_archive.batch_too_large",
+				"endpoint", auditArchiveEndpoint, "action", "pause_archival_keep_local")
+		}
+		return ErrAuditBatchTooLarge
+	}
+	// 200 / 201 / 204 are all success (fleet contract 2026-10-06).
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return nil

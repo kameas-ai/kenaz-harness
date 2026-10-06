@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,7 +71,7 @@ func (c *Client) Install(ctx context.Context, _ string, _ string, catalogID, ver
 	if c == nil || c.isNop {
 		return ErrFleetDisabled
 	}
-	path := fmt.Sprintf("/api/v1/catalog/%s@%s", catalogID, version)
+	path := fmt.Sprintf("/api/v1/catalog/%s@%s", url.PathEscape(catalogID), url.PathEscape(version))
 	resp, err := c.Get(ctx, path)
 	if err != nil {
 		return fmt.Errorf("fleet/catalog: install: fetch: %w", err)
