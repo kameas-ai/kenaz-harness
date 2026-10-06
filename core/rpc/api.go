@@ -527,6 +527,14 @@ type API struct {
 	// ScheduledRunOriginRegistry's doc (model-scheduled-jobs-01PMSJ01
 	// WP06).
 	scheduledRunOrigins *ScheduledRunOriginRegistry
+	// scheduledRunContainment is the per-session tool allowlist a fired
+	// scheduled run executes under (model-harness-toolset-01MHTS001 WP02,
+	// finding H-1). Writer: LiveChatRunDispatcher (ChatRunDispatcherDeps
+	// .Containment) and the subagent run spawner (Inherit). Reader: the
+	// session arm of the merged tool-permission resolver
+	// (cedarSessionKindResolver.SetScheduledRunContainment, below
+	// newLLMStack). See ScheduledRunContainmentRegistry's doc.
+	scheduledRunContainment *ScheduledRunContainmentRegistry
 	// logStore + logsAPI back the Settings → Logs panel (mission 01NLOGS01 WP01/WP04).
 	logStore     *logstore.Store
 	logsAPI      logsview.LogsAPI
@@ -2515,6 +2523,15 @@ func New(c *core.Core, opts ...Option) *API {
 		func(ctx context.Context) { a.publishPendingBlockedRequests(ctx) })
 
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions, blockedSink, a.scheduledRunOrigins.Resolve)
+	// model-harness-toolset-01MHTS001 WP02 (H-1): the scheduled-run tool
+	// allowlist arm. Bound into the SAME session arm every tool call's
+	// permission resolution already goes through (the merged resolver
+	// newLLMStack built — harness-self-attach-01PMHS01 WP04), not a second
+	// resolver: the chat kernel adapter, the slash dispatcher and the
+	// workflow tool gate all share stack.perms, so all three are contained.
+	// Refusals record through the same blockedSink the fs gate uses.
+	a.scheduledRunContainment = NewScheduledRunContainmentRegistry(blockedSink)
+	stack.sessionArm.SetScheduledRunContainment(a.scheduledRunContainment)
 	a.llmAPI = stack.api
 	// trust-surfaces-that-fire-01PMZ202 WP24 review finding: fold the
 	// static tool-permission load error (if any) into the boot-health
@@ -2626,6 +2643,11 @@ func New(c *core.Core, opts ...Option) *API {
 			// rather than reconstructing a second one — a second registry
 			// would be written into here and never read by StartStream.
 			BudgetOverrides: stack.chatRunner.SubagentBudgets(),
+			// model-harness-toolset-01MHTS001 WP02 (H-1): a child
+			// dispatched from a contained scheduled run inherits its
+			// allowlist — a contained run cannot widen itself through
+			// kenaz__subagent_dispatch.
+			Containment: a.scheduledRunContainment,
 		}))
 		logging.L().Info("rpc.subagent_run_spawner.armed")
 		registerSubagentDispatchTool(c, stack.builtins, a.branchSeam)
@@ -3796,6 +3818,12 @@ func New(c *core.Core, opts ...Option) *API {
 				// (wired above, before newLLMStack) — this dispatcher is
 				// the writer.
 				Origins: a.scheduledRunOrigins,
+				// model-harness-toolset-01MHTS001 WP02 (H-1): the
+				// dispatcher contains each fired run's session to the
+				// allowlist scheduler.ResolveRunContainment computes;
+				// the merged resolver's session arm (wired above, beside
+				// newLLMStack) enforces it per tool call.
+				Containment: a.scheduledRunContainment,
 				// model-scheduled-jobs-01PMSJ01 WP07, FR-007: deliver the
 				// "banner" output sink onto the same broker every other
 				// frontend-visible push topic in this file uses.
@@ -5828,6 +5856,12 @@ type llmStack struct {
 	// wfToolDiscovererAdapter both close over this same value — see
 	// AC-006/AC-007's "one resolver reaches both consumers" note.
 	perms toolloop.PermissionResolver
+	// sessionArm is the session arm merged into perms. Held so New() can
+	// bind the scheduled-run allowlist registry into it
+	// (model-harness-toolset-01MHTS001 WP02) without widening
+	// newLLMStack's signature. nil on the c == nil stub stack; its setter
+	// is nil-safe.
+	sessionArm *cedarSessionKindResolver
 	// confirmDeps is the EXACT chat.ConfirmDeps value buildChatRunner
 	// wires into the chat kernel tool adapter (Enabled, SessionGrants,
 	// PersistGrants, Headless, HeadlessExplicit, Audit). Held here so
@@ -6882,6 +6916,7 @@ func newLLMStack(
 		toolDiscoverer:      toolDiscoverer,
 		dispatchPool:        dispatchPool,
 		perms:               perms,
+		sessionArm:          sessionArm,
 
 		confirmBus:           confirmBus,
 		confirmSessionGrants: confirmSessionGrants,

@@ -110,14 +110,10 @@ func indexBytes(haystack, needle []byte) int {
 // the real attached server, and the project actually exists in the
 // projects store afterward — not just "OK: true" in the tool result.
 //
-// harness_read_get_status is NOT used here even though it's one of
-// AC-001's named tools in tasks.md: Managers.Status (StatusReporter)
-// has no adapter — see buildHarnessManagers' comment — so that tool
-// returns errNotConfigured for every caller today, attach or no
-// attach. That gap is pre-existing (unreachable, and so unobserved,
-// before this unit) and is called out in the mission report rather
-// than silently worked around by picking an easier assertion for a
-// tool this test doesn't actually exercise.
+// harness_read_get_status is NOT used here even though it was one of
+// AC-001's named tools in tasks.md: it never had a StatusReporter
+// adapter, always failed "not configured", and was removed by
+// model-harness-toolset-01MHTS001 WP03 (H-2).
 //
 // Mutation: revert the attach (drop the RegisterInProcess call, or
 // register under a different name than "harness-self"). Both must
@@ -245,9 +241,8 @@ func TestHarnessSelfAttach_AC002_ChatSessionWriteToolDenied(t *testing.T) {
 // (core/mcp/builtin/harness/audit.go) had zero production callers —
 // api.go built the server with harnessmcp.RegisterAll alone, so every
 // harness-self dispatch was unaudited no matter how it was reached.
-// (harness_read_get_status would exercise the same audit wrapper, but
-// see AC-001's comment on why it can't be used as a positive control
-// today.)
+// (harness_read_get_status, the tool AC-009b once named, no longer
+// exists — see AC-001's comment.)
 func TestHarnessSelfAttach_AC009b_AuditEmitted(t *testing.T) {
 	c, api := bootAPIWithCore(t, t.TempDir(), "")
 	sessionMgr := c.SessionManager()

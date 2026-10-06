@@ -49,12 +49,14 @@ import (
 // harness_write_set_setting entirely (see the doc comment above
 // harness.ProjectWriter in core/mcp/builtin/harness/handlers.go), so it
 // is absent from harnessWriteToolNames rather than merely untracked.
+// Likewise harness_read_get_status and harness_write_install_mcp_recipe,
+// removed by model-harness-toolset-01MHTS001 WP03 (H-2: never wired,
+// always failed).
 var (
 	harnessReadToolNames = []string{
 		harnessmcp.ToolListProviders,
 		harnessmcp.ToolListMCPRecipes,
 		harnessmcp.ToolListSettings,
-		harnessmcp.ToolGetStatus,
 		harnessmcp.ToolGetRecommendations,
 		harnessmcp.ToolListSessions,
 		harnessmcp.ToolListModels,
@@ -62,7 +64,6 @@ var (
 	harnessWriteToolNames = []string{
 		harnessmcp.ToolAddProvider,
 		harnessmcp.ToolRemoveProvider,
-		harnessmcp.ToolInstallMCPRecipe,
 		harnessmcp.ToolCreateProject,
 		harnessmcp.ToolCreateSession,
 	}

@@ -2691,6 +2691,8 @@ and is the first record of `SkipCache` specifically (the field itself
 predates this mission).
 ### 2026-08-22 · `scheduledchat.API.CreateAsModel` has no caller (`model-scheduled-jobs-01PMSJ01` WP09)
 
+> **SUPERSEDED 2026-10-05:** `CreateAsModel` has a production caller (`harness_write_create_scheduled_run` via `scheduledRunWriterAdapter`), and the per-run containment this entry deferred is enforced as of model-harness-toolset-01MHTS001 WP02 — see that entry.
+
 WP09 built the full server-side provenance mechanism FR-005 requires — the
 `created_by`/`tool_allowlist` columns (migration `sessions/0340`), the
 `CreateAsModel` entry point that stamps `created_by="model"` and refuses an
@@ -5178,6 +5180,256 @@ fetches and an overall install deadline).**
 3. **Observe worst case** is LaneCount × `observeProbeTimeout` (5 × 2s =
    10s) on hanging candidates — cut from 5 × 5s by a per-probe deadline on
    the read-only Settings scan only. Informational.
+
+### 2026-10-05 (model-harness-toolset-01MHTS001 WP02, finding H-1) — CLOSED: the B-3 scheduled-run tool allowlist was a containment boundary asserted, not enforced
+
+**Class: containment boundary asserted, not enforced.** Owner ruling B-3
+made a model-created schedule's `tool_allowlist` "the only boundary" (no
+human review moment). The list was persisted (`sessions/0340`), required at
+create time, and named by the policy file as enforced "per run" by "a
+separate seam (harness-self-attach-01PMHS01's merged PermissionResolver)".
+At fire time `chat_cron_engine.go` and `scheduledchat.RunNow` reduced it to
+`has_tool_allowlist` for the execute gate; `ChatRunSpec` carried no list
+and no resolver read one. A fired model-created run could call every tool.
+Reachable only from onboarding sessions (the only kind that may call
+`harness_write_create_scheduled_run`), which bounded but did not remove it.
+
+**Fixed (wired, not deleted):** `ChatRunSpec` carries `CreatedBy` +
+`ToolAllowlist` from the gate; `scheduler.ResolveRunContainment` combines
+spec and re-read row, never widening (model + absent/empty/unreadable list
+= DOES NOT RUN, checked in the dispatcher as well as by the gate; a user
+row's unreadable list = every tool denied; a user row with no list =
+unchanged). `LiveChatRunDispatcher` binds the run's session in
+`ScheduledRunContainmentRegistry`; `cedarSessionKindResolver.Resolve` (the
+session arm of the one merged resolver the chat adapter, slash dispatcher
+and workflow tool gate share) checks it first and denies off-list tools,
+recording a `blocked_permission_requests` row (family `tool`) plus a
+`policy.blocked_permission_request` audit record per refused dispatch.
+Subagent children inherit the parent's containment. Pins:
+`core/rpc/scheduled_run_containment_test.go` (real cron fire path, real
+sqlite, v0.89.2 upgrade snapshot for the pre-0340 user row),
+`core/scheduler/containment_test.go`. The 2026-08-22 `CreateAsModel` entry
+above is superseded (it has a production caller now).
+
+**Accepted residuals:** (1) ~~builtin `kenaz__*` tools are still LISTED to
+a contained run~~ — closed by security review M2 (2026-10-05): the
+discoverer now filters builtins through the same probe-marked resolver
+path as pool tools (`TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins`). (2) ~~a timed-out run's session
+stays contained for the process lifetime~~ — superseded by security review
+L4 (2026-10-05). The re-review (same date) narrowed it further.
+Containment is released only when one of the run's OWN streams ends: the
+dispatched stream, or a key-rotation redrive of it, which is linked through
+`chat.AuthResumedPayload.PausedSubID`. Before that, ANY stream ending in the
+session released it. That was a proven hole: a user opening the "Scheduled:"
+session mid-run and finishing a turn freed the still-running scheduled
+stream. A redrive stays contained while it runs and releases when it ends,
+whether it starts before or after the dispatcher's timeout. A timed-out
+session is released once its own stream ends. Pins:
+`..._UnrelatedStreamInSessionDoesNotRelease`,
+`..._RedriveBeforeTimeoutStaysContainedThenReleases`,
+`..._RedriveAfterKeyRotationStaysContained`,
+`..._TimedOutRunReleasedWhenItsStreamEnds`. A turn that is
+never redriven keeps its containment for up to 24h (`containmentWatchMax`);
+the watcher then stops and the session stays contained (fail-safe). Owner of
+both: WP16
+(`kenaz__schedule_chat`), which must re-read this seam before shipping.
+
+**Gate question (tasks.md WP02): can any file-level gate see "a persisted
+allowlist field with no runtime reader"?** No. The field HAD readers — the
+two `len(rec.ToolAllowlist) > 0` sites — and that is exactly why the gap
+survived: a reader that reduces a list's contents to its existence is
+indistinguishable, to a grep or a knob-coverage registration, from one that
+enforces it. "Is this read a decision on the contents?" is a semantic
+question. The guard is the runtime pin (an off-list call in a really-fired
+run is denied), which is now in place; no gate extension is filed because
+none can be made non-vacuous for this class.
+
+### 2026-10-05 (model-harness-toolset-01MHTS001 WP03, findings H-2..H-6) — harness-self tools that always failed; comments naming gates nothing evaluates
+
+**H-2 — CLOSED (deleted, not wired).** `harness_read_get_status` and
+`harness_write_install_mcp_recipe` were registered on the harness-self
+server (`get_status` visible in every chat session, since reads are
+permitted for every session kind) while `buildHarnessManagers` never
+assigned `Managers.Status` / `Managers.RecipesWriter`, so every call
+returned "not configured". No ledger entry existed; the gap was recorded
+only in a code comment. Both tools, their handlers, the two Managers
+fields and the `StatusReporter`/`StatusSnapshot`/`RecipeWriter` types are
+deleted; tests that used `get_status` only as a representative read tool
+now use `harness_read_list_providers`. Pin:
+`TestRegisterAll_NoAlwaysFailingTools`; harness-self count is 13.
+- `get_status` — **class: not trivially wireable; substitutes exist or are
+  slotted.** It needs five unrelated sources (providers, installed MCP
+  servers, sessions, projects, policies); the policy count has no source
+  on this path. Providers and sessions are already readable
+  (`harness_read_list_providers`, `harness_read_list_sessions`); projects
+  and capabilities are slotted as `kenaz__list_projects` /
+  `kenaz__list_capabilities` (this mission, WP06/WP08). **Owner:** WP08 —
+  if a status summary is still wanted, it is a catalog tool over the
+  WP06/WP08 reads, not a revival of this one.
+- `install_mcp_recipe` — **class: product decision, escalated not
+  guessed.** Wiring it means a model-triggered install, which is owner
+  question **Q8** (spec §7, default "forbid until ruled"); the
+  install-framework decision record also requires it to route through
+  `install.Framework.Install` (consumer-confirmed), which its
+  `{id, config}` schema (an inline config object) cannot. **Owner:** WP15
+  (`kenaz__install_capability`, shares `Framework.Install`).
+  **Blocker:** the Q8 ruling.
+- Also corrected: `harness_read_get_onboarding_recommendations` described
+  itself as "based on current state"; its handler returns a fixed list.
+
+**Gate extended (I11, `check-builtin-tool-registration.sh` §6):** every
+`Managers` field a harness-self handler nil-checks must have an `m.X =`
+assignment in `core/rpc/harness_wiring.go`. It would have caught both H-2
+tools. Planted proof:
+`builtin-tool-registration/harness-self-manager-never-assigned`. It cannot
+see a field assigned only on a branch that never runs in production — that
+is a runtime question.
+
+**H-3 — CLOSED for the comments; the four actions stay declared.** Four
+Cedar actions were named in code comments as the gate for a builtin, and
+nothing evaluates any of them. Comments rewritten to say "declared, not
+evaluated" and name the real gates (the predicate dial + per-call
+`use_tool` resolution, where a user forbid on the tool name does work):
+- `ActionToolTasksMonitor` (`monitor/tool.go`, `builtins_wiring.go`
+  predicate case, `types.go`) — passive read of captured output.
+  Not evaluated, by choice: `use_tool` already gives per-call control.
+- `ActionToolTodoWrite` (`todo/todo.go` said the tool "reports" it on
+  every call; `types.go`) — session-internal state. Not evaluated, by
+  choice, same reason.
+- `ActionToolListSecrets` (`listsecrets.go`, `types.go`) — the same file
+  also claimed per-call `tool.invoked` audit records, which do not exist
+  (H-5); withdrawn. Not evaluated, by choice: the list returns reference
+  names only, and secret *resolution* is separately gated and audited
+  (`secret_reference.resolve`). **Owner if that changes:** alec.
+- `ActionArtifactUpdate` (`types.go`, `posture.go`) — **this one SHOULD
+  bind by its own design**: it sits in `PlanModeDeniedActions`, i.e. plan
+  mode is meant to deny `kenaz__update_artifact`, and does not. Not wired
+  drive-by: the plan-mode wrapper only reaches the agentgraph
+  `env.Policy`, so evaluating the action at the tool would still not be
+  plan-mode-aware (that is H-4). **Owner:** the H-4 follow-up mission
+  (spec Q12). **Blocker:** Q12's ruling on widening plan mode to builtins.
+  Dated 2026-10-05.
+- Not touched (already listed as declared-not-evaluated, inventory §2.1):
+  `ToolSkillInvoke`, `ToolSubagentMerge`, `ToolTasksCancel`,
+  `ElicitDeferred`.
+
+**H-4 — OPEN (filed, not fixed).** Plan mode does not bind builtin
+`kenaz__*` tools: `cedar.WithPostureMode` wraps only the agentgraph
+`env.Policy` (`use_tool`/`tool_exec` are not in `PlanModeDeniedActions`);
+bash, the fs gate, the workflow and scheduled-chat views and the RiskGate
+use unwrapped engines (inventory H-4), so the plan-mode deny set does not
+reach `kenaz__bash`, `kenaz__write_file` or `kenaz__update_artifact`
+through Cedar. This mission's own W-tier
+tools check posture themselves (FR-G5). **Owner:** a follow-up mission per
+spec Q12 (behaviour change for current users, so it needs the ruling).
+**Blocker:** Q12. Dated 2026-10-05.
+
+**H-5 — OPEN, deferred to WP04.** Builtin `kenaz__*` calls have no
+per-call audit record; the only tool-dispatch record is
+`KindToolConfirmDecision`, written only on the confirm-each ladder,
+which builtins (auto_allow by default) never reach. Spec FR-A1 adds
+`harness.tool.called` for this mission's W-tier tools in WP04 (the kind
+does not exist yet). That will NOT cover the pre-existing builtins (bash,
+write_file, …); that wider gap stays open. **Owner:** WP04 for the
+harness toolset; alec for the existing builtins. Dated 2026-10-05.
+
+**H-6 — OPEN, deferred to WP05.** The builtin registration tripwire walks
+registered → predicate only (`TestBuiltinEnabledPredicate_AllRegistered
+ToolsHaveExplicitCase`); predicate case → registration site is unchecked.
+Spec FR-S1(d) puts it in WP05's new `check-harness-toolset-catalog.sh`
+with planted proof `harness-toolset/predicate-case-without-registration`.
+Not done here: case labels are package constants, so the check needs the
+same const resolution WP05's gate builds. **Owner:** WP05. Dated
+2026-10-05.
+
+### 2026-10-05 (model-harness-toolset-01MHTS001 WP02 security review) — review findings on the containment seam
+
+**H1 — CLOSED: a model-supplied session id overrode the real session.**
+`kenaz__skill` accepted `session_id` in its arguments and passed it to
+`slashcmd.Dispatch.RunModelInvoked`. Then `dispatch.go`'s kind:tool branch
+re-stamped the tool-dispatch ctx with `toolloop.WithSessionID(ctx,
+sc.SessionID)`, replacing the session the call was really running in. A run
+contained to `[kenaz__skill]` reached `kenaz__sleep` by sending a forged or
+foreign id, and a forged onboarding-kind id would also have passed the
+session-kind arm for `harness_write_*`. Two fixes:
+(1) the skill tool takes the session only from
+`toolloop.SessionIDFromContext`, and its schema is `additionalProperties:
+false` with `DisallowUnknownFields`, so a `session_id` argument is refused
+with `invalid_args` instead of being silently ignored;
+(2) the slash dispatcher uses the new `toolloop.WithSessionIDChecked`, which
+only fills an empty ctx. A different id coming from data is refused with
+`ErrSessionIDMismatch`. The human `UserRun` path, where the ctx carries no
+session, is unchanged.
+Pins: `TestSkillTool_SessionIsCtxDerived_ContainmentHolds` (the reviewer's
+probe, now permanent; red on the pre-fix code),
+`TestDispatch_KindTool_SessionContextCannotOverrideCtxSession`,
+`TestTool_Call_SessionIDArgumentRefused`, `TestWithSessionIDChecked`.
+`project_id`/`cwd` remain model-supplied skill arguments. They feed only
+command lookup and the `{{cwd}}` template, not permission resolution.
+
+**Sibling audit (as the reviewer asked):**
+- `planmode/enter.go` and `planmode/exit.go`: ctx-derived
+  (`SessionResolver` defaults to `toolloop.SessionIDFromContext`), with no
+  session argument. Nothing to change.
+- `saveartifact`: ctx-derived, with no session argument. Nothing to change.
+- `updateartifact`: the session is ctx-derived (logging only), but the
+  target is any `artifact_id`, with no ownership check against the session.
+  **Cross-session targeting is designed-in:** artifacts have been a global
+  library since `sessions/0332-artifacts-global-scope`. Writes append a new
+  `artifact_versions` row, so they are non-destructive and earlier versions
+  survive. What gates it: the `FSWriteEnabled` dial and per-call `use_tool`
+  resolution, which now includes scheduled-run containment. The H-3
+  `ActionArtifactUpdate` gap is above. **Constraint for this mission:** any
+  W-session wrapper over artifacts must add the FR-G6 ownership check
+  (`InScopeArtifact`) rather than copy this tool's posture. **Owner:**
+  WP04 (ownership.go) / WP10.
+
+**Re-review fold-ins (2026-10-05):**
+- I11 §6 now strips trailing `//` comments, `/* */` blocks and string/rune
+  literal contents (string-aware) before matching. Two more degenerate
+  passes are closed: an assignment in a trailing comment, and one inside a
+  block comment. Each has a planted proof.
+- `core/workflows/runners.go` (model_turn and mcp_call) now uses
+  `WithSessionIDChecked`. A run's `ParentSessionID` can no longer override
+  a session already on the context. This path is not model-reachable today;
+  WP17 would make it reachable, so it is closed now. Pin:
+  `TestMCPCallRunner_ParentSessionCannotOverrideCtxSession`.
+
+**L6 — deliberate deviation from tasks.md, recorded.** tasks.md WP02
+said "User-created rows are unchanged". Two classes of user-created rows
+now behave differently. This is deliberate:
+- A **user row WITH a declared allowlist** is now contained to it. The
+  view's own `CreateInput.ToolAllowlist` doc already said the list is
+  "enforced against this schedule's runs"; before WP02 it was not. No
+  shipped UI writes the field (`frontend/src` has no `toolAllowlist`
+  writer), so no existing user row is affected in practice.
+- A **user row whose allowlist column is corrupt** (non-empty but not
+  decodable to at least one name) now runs with every tool denied, where
+  before it ran unrestricted. A declared but unreadable boundary must not
+  read as "unrestricted".
+User rows with NO allowlist, which is every pre-0340 row and every row the
+UI creates, are unchanged. That case is pinned by
+`TestScheduledRunContainment_UserRow_NoAllowlistUnchanged` and on the
+v0.89.2 snapshot by `..._UpgradedUserRowStillRuns`.
+
+**Forward warning for WP17 (`kenaz__set_workflow_schedule`), from the
+reviewer.** `ScheduledRunContainmentRegistry` is keyed by session, and
+scheduled **workflow** runs have no session (`wf_sched_dispatcher.go`
+dispatches through the workflow runner, not a chat session). This seam
+therefore does **NOT** contain model-armed workflow schedules. WP17 must
+not claim it does. It needs its own boundary on the workflow tool path:
+`wfToolGate.authorize` / `wfMCPCallerAdapter`, which resolve with the
+step's `ParentSessionID`, are empty for a scheduled workflow. Until it
+has one, a model-armed workflow schedule is uncontained. tasks.md's
+"through the WP02 seam" wording for WP17 is wrong as written.
+**Owner:** WP17. Dated 2026-10-05.
+
+**Known behavior (from the security review): user hooks are blocked in
+contained scheduled sessions.** The hooks-kind-builtin path resolves
+through the same per-session containment, so in a contained run a user
+hook is refused unless what it dispatches is on the run's allowlist.
+This is intended, not a defect: hooks are not a way around the boundary.
+A schedule that relies on a hook must list what the hook dispatches.
 
 ## Drained
 

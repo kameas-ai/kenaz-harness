@@ -951,3 +951,74 @@ func TestSubagentDispatch_DepthLimitRefusesRecursion(t *testing.T) {
 		t.Errorf("a branch_id was returned (%q) even though the dispatch should have been refused", branchID)
 	}
 }
+
+// TestSubagentDispatch_ChildOfContainedRunInheritsAllowlist (security
+// review M3, model-harness-toolset-01MHTS001 WP02): a scheduled run
+// contained to [kenaz__subagent_dispatch] dispatches a sub-agent through
+// the real tool, the real BranchSeamAdapter and the production spawner;
+// the CHILD session is bound by the same allowlist, so its off-list tool
+// is DENIED by the production merged resolver. Mutation: disable the
+// spawner's Inherit call -> the child's kenaz__bash resolves allow and
+// this test fails.
+func TestSubagentDispatch_ChildOfContainedRunInheritsAllowlist(t *testing.T) {
+	stack := buildSubagentSpawnerTestStack(t, "sub-agent worker done")
+	registry := NewScheduledRunContainmentRegistry(nil)
+	inner := NewSubagentRunSpawner(SubagentRunSpawnerDeps{
+		LLM:            stack.llmAPI,
+		Bus:            stack.bus,
+		Tasks:          stack.tasks,
+		DefaultProfile: func() string { return "test-profile" },
+		Timeout:        5 * time.Second,
+		Containment:    registry,
+	})
+	var mu sync.Mutex
+	var child string
+	stack.seam.SetRunSpawner(func(ctx context.Context, branchID, childSessionID string, req coreag.ForkRequest) (graphview.SpawnedRun, error) {
+		mu.Lock()
+		child = childSessionID
+		mu.Unlock()
+		return inner(ctx, branchID, childSessionID, req)
+	})
+
+	parent, err := stack.sessionsAPI.Create(context.Background(), "Scheduled: parent")
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	registry.Contain(parent.ID, "cr-parent", []string{coresubagent.ToolName})
+
+	tool := coresubagent.New(coresubagent.Options{DataDir: t.TempDir(), Seam: stack.seam})
+	raw, err := tool.Call(toolloop.WithSessionID(context.Background(), parent.ID),
+		json.RawMessage(`{"profile":"explore","prompt":"look around","run_in_background":false}`))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	mu.Lock()
+	childID := child
+	mu.Unlock()
+	if childID == "" {
+		t.Fatalf("spawner never ran; result=%s", raw)
+	}
+
+	engine := buildCedarEngineOrNil(stack.core.DataDir(), nil)
+	if engine == nil {
+		t.Fatal("no cedar engine")
+	}
+	arm := newCedarSessionKindResolver(stack.core.SessionManager(), engine)
+	arm.SetScheduledRunContainment(registry)
+	perms := toolloop.NewMergedResolver(nil, arm)
+
+	res, err := perms.Resolve(context.Background(), childID, "kenaz", "bash")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Policy != toolloop.PolicyDeny {
+		t.Fatalf("child of a contained run: kenaz__bash = %+v, want deny (containment not inherited)", res)
+	}
+	res, err = perms.Resolve(context.Background(), childID, "kenaz", "subagent_dispatch")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Policy == toolloop.PolicyDeny {
+		t.Fatalf("child's on-list tool denied: %+v", res)
+	}
+}

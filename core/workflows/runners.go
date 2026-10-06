@@ -153,8 +153,16 @@ func (r modelTurnRunner) Run(ctx context.Context, st Step, rc *RunContext) (Type
 	// wfToolDispatcherAdapter, wired in core/rpc/api.go — can resolve
 	// session-scoped grants and Cedar's session-kind arm the same way a
 	// chat tool call does. Harmless no-op for the no-tools path.
+	//
+	// WithSessionIDChecked (WP02 re-review): rc.ParentSessionID is run
+	// data, so it may fill an empty ctx but never replace a session the
+	// ctx already carries (the H1 override class; WP17 will make this
+	// path model-reachable).
 	if rc != nil {
-		ctx = toolloop.WithSessionID(ctx, rc.ParentSessionID)
+		var sidErr error
+		if ctx, sidErr = toolloop.WithSessionIDChecked(ctx, rc.ParentSessionID); sidErr != nil {
+			return TypedValue{Type: ValueTypeError}, fmt.Errorf("model_turn step %q: %w", st.Name, sidErr)
+		}
 	}
 	if r.llm == nil {
 		// Beta fallback: keep the chassis bootable when no LLM
@@ -483,7 +491,10 @@ func (r mcpCallRunner) Run(ctx context.Context, st Step, rc *RunContext) (TypedV
 	// workflow-tool-permission-gate: see modelTurnRunner.Run's comment —
 	// same session-id threading for wfMCPCallerAdapter's gate.
 	if rc != nil {
-		ctx = toolloop.WithSessionID(ctx, rc.ParentSessionID)
+		var sidErr error
+		if ctx, sidErr = toolloop.WithSessionIDChecked(ctx, rc.ParentSessionID); sidErr != nil {
+			return TypedValue{Type: ValueTypeError}, fmt.Errorf("mcp_call step %q: %w", st.Name, sidErr)
+		}
 	}
 	args, err := expandArgs(st.ToolArgs, rc)
 	if err != nil {

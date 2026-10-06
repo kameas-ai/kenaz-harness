@@ -80,8 +80,17 @@ type ChatRunRecord struct {
 	// core/policy/cedar/hooks.go GateScheduledChatExecute and
 	// core/policy/cedar/policies/default_scheduled_run_policy.cedar.
 	ToolAllowlist []string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// ToolAllowlistUnresolvable is true when the tool_allowlist column is
+	// non-empty but does not decode to at least one tool name (malformed
+	// JSON, "[]", "null" — a hand-edited or corrupted row). It exists so
+	// the fire path can tell "no allowlist declared" (a user row runs
+	// unrestricted, exactly as before 0340) from "an allowlist WAS
+	// declared and cannot be read" (every tool is denied — never read as
+	// unrestricted; model-scheduled-jobs B-3, model-harness-toolset-
+	// 01MHTS001 WP02). ToolAllowlist is nil whenever this is true.
+	ToolAllowlistUnresolvable bool
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
 }
 
 // EffectiveTriggerKind returns r.TriggerKind, treating an empty string as
@@ -411,6 +420,7 @@ func scanChatRunRecord(row scanner) (ChatRunRecord, error) {
 	r.CreatedAt = time.Unix(createdAtRaw, 0).UTC()
 	r.UpdatedAt = time.Unix(updatedAtRaw, 0).UTC()
 	r.ToolAllowlist = decodeToolAllowlist(toolAllowlistRaw)
+	r.ToolAllowlistUnresolvable = toolAllowlistRaw != "" && len(r.ToolAllowlist) == 0
 	if runAtRaw != nil {
 		t := time.Unix(*runAtRaw, 0).UTC()
 		r.RunAt = &t

@@ -73,14 +73,14 @@ func TestHarnessSelfMCPDisabled_ActuallyGatesReachabilityAndVisibility(t *testin
 		t.Fatalf("SaveHarnessSelfMCPDisabled(true): %v", err)
 	}
 
-	// AC-008: a direct harness_read_get_status-shaped resolve must deny,
+	// AC-008: a direct harness_read_list_providers resolve must deny,
 	// for the ONBOARDING session too — "including onboarding" per FR-007.
-	res, err := api.toolPermsResolver.Resolve(context.Background(), rec.ID, harnessmcp.ServerName, harnessmcp.ToolGetStatus)
+	res, err := api.toolPermsResolver.Resolve(context.Background(), rec.ID, harnessmcp.ServerName, harnessmcp.ToolListProviders)
 	if err != nil {
 		t.Fatalf("Resolve after disable: %v", err)
 	}
 	if res.Policy != toolloop.PolicyDeny {
-		t.Fatalf("onboarding session harness_read_get_status policy = %q after disable, want %q", res.Policy, toolloop.PolicyDeny)
+		t.Fatalf("onboarding session harness_read_list_providers policy = %q after disable, want %q", res.Policy, toolloop.PolicyDeny)
 	}
 
 	specs2, err := discoverer.Tools(context.Background(), rec.ID)
@@ -95,11 +95,11 @@ func TestHarnessSelfMCPDisabled_ActuallyGatesReachabilityAndVisibility(t *testin
 	if err := store.SaveHarnessSelfMCPDisabled(false); err != nil {
 		t.Fatalf("SaveHarnessSelfMCPDisabled(false): %v", err)
 	}
-	res2, err := api.toolPermsResolver.Resolve(context.Background(), rec.ID, harnessmcp.ServerName, harnessmcp.ToolGetStatus)
+	res2, err := api.toolPermsResolver.Resolve(context.Background(), rec.ID, harnessmcp.ServerName, harnessmcp.ToolListProviders)
 	if err != nil {
 		t.Fatalf("Resolve after re-enable: %v", err)
 	}
 	if res2.Policy == toolloop.PolicyDeny {
-		t.Fatal("re-enabled: harness_read_get_status still denied for onboarding session — kill switch is not re-read live")
+		t.Fatal("re-enabled: harness_read_list_providers still denied for onboarding session — kill switch is not re-read live")
 	}
 }

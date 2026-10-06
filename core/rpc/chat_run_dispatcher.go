@@ -85,6 +85,14 @@ type ChatRunDispatcherDeps struct {
 	// banner is a notification, not part of the run's own success/
 	// failure). *StreamBroker satisfies this trivially.
 	Broker BannerPublisher
+	// Containment binds each fired run's session to the tool allowlist
+	// scheduler.ResolveRunContainment computes from the gate-time spec and
+	// the re-read row (model-harness-toolset-01MHTS001 WP02, finding H-1).
+	// The merged tool-permission resolver's session arm reads it per call.
+	// nil is fail-closed: a run that needs containment refuses to start
+	// rather than run unrestricted; an uncontained (user, no allowlist)
+	// run is unaffected.
+	Containment *ScheduledRunContainmentRegistry
 	// Timeout overrides defaultDispatchTimeout. Zero uses the default.
 	Timeout time.Duration
 }
@@ -164,6 +172,20 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		return failedRecord(now, "rendered prompt is empty"), nil
 	}
 
+	// model-harness-toolset-01MHTS001 WP02 (H-1): resolve the tool
+	// boundary this run executes under BEFORE any session exists. Owner
+	// ruling B-3: a model-created schedule with an absent, empty or
+	// unresolvable allowlist DOES NOT RUN — checked here as well as by the
+	// Cedar execute gate upstream, so a caller that reached this
+	// dispatcher without that gate still cannot run one unrestricted.
+	containment := scheduler.ResolveRunContainment(job.ChatRun, rec)
+	if containment.Refuse != "" {
+		return failedRecord(now, containment.Refuse), nil
+	}
+	if containment.Contained && d.deps.Containment == nil {
+		return failedRecord(now, "this schedule declares a tool allowlist but no containment registry is wired; it does not run unrestricted"), nil
+	}
+
 	// Step 3: parse the output sink. First production caller
 	// (spec.md §5.2 step 3) — delivery to the parsed sink is WP07's job
 	// (FR-007); this dispatch only needs the parse to log what would be
@@ -196,6 +218,14 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	if d.deps.Origins != nil {
 		d.deps.Origins.Set(sess.ID, id)
 		defer d.deps.Origins.Clear(sess.ID)
+	}
+	// WP02 (H-1): contain the session before its first turn. Released
+	// when one of the run's OWN streams ends — this sub or a key-rotation
+	// redrive of it (ownStreams, below; releaseOnOwnTerminal after a
+	// timeout) — never at the timeout itself, and never on another
+	// stream in the same session (see ScheduledRunContainmentRegistry).
+	if containment.Contained {
+		d.deps.Containment.Contain(sess.ID, id, containment.Allow)
 	}
 
 	// Step 5: append the rendered prompt as the user turn BEFORE calling
@@ -230,13 +260,22 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	// subscriber buffer, so the high-volume "llm:stream-chunk" topic
 	// cannot fill this subscriber's channel and cause the terminal event
 	// to be dropped by the bus's slow-subscriber default: arm.
-	subCh, cancel := d.deps.Bus.Subscribe(64, "llm:stream-closed")
+	subCh, cancel := d.deps.Bus.Subscribe(64, "llm:stream-closed", topicAuthResumed)
 	defer cancel()
 
 	subID, serr := d.deps.LLM.StartStream(ctx, profileID, sess.ID, rec.Model)
 	if serr != nil {
+		// No stream started, so nothing can run under the containment.
+		if containment.Contained {
+			d.deps.Containment.Release(sess.ID)
+		}
 		return failedRecord2(sess.ID, now, fmt.Sprintf("start stream: %v", serr)), nil
 	}
+
+	// WP02 re-review: the run's OWN streams — this sub plus any
+	// key-rotation redrive of it — decide when containment ends; a
+	// stream someone else runs in the same session never does.
+	own := newOwnStreams(sess.ID, subID)
 
 	log.Info("scheduler.chat_dispatch.started",
 		"chat_run_id", id, "session_id", sess.ID, "sub_id", subID,
@@ -251,14 +290,17 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			if !ok {
 				return failedRecord2(sess.ID, now, "event bus subscription closed before a terminal event arrived"), nil
 			}
+			if containment.Contained && own.observe(ev) {
+				d.deps.Containment.Release(sess.ID)
+			}
 			payload, ok := ev.Payload.(chat.StreamClosedPayload)
 			if !ok {
-				// Not our shape (should not happen on this topic) — keep
-				// waiting rather than misreport.
+				// Not a terminal event (an auth-resumed link, fed to own
+				// above) — keep waiting.
 				continue
 			}
 			if payload.SubID != subID {
-				continue // another run's terminal event; keep waiting.
+				continue // another stream's terminal event; keep waiting.
 			}
 			histRec := d.buildRecord(ctx, sess.ID, now, payload)
 			if sinkKind == "banner" {
@@ -266,12 +308,18 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			}
 			return histRec, nil
 		case <-deadline.C:
+			if containment.Contained && !own.released {
+				d.releaseOnOwnTerminal(own, subCh)
+			}
 			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("timed out after %s waiting for the run to finish", d.deps.Timeout))
 			if sinkKind == "banner" {
 				d.deliverBanner(id, rec.Name, sess.ID, histRec)
 			}
 			return histRec, nil
 		case <-ctx.Done():
+			if containment.Contained && !own.released {
+				d.releaseOnOwnTerminal(own, subCh)
+			}
 			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("context cancelled while awaiting completion: %v", ctx.Err()))
 			if sinkKind == "banner" {
 				d.deliverBanner(id, rec.Name, sess.ID, histRec)
@@ -279,6 +327,110 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			return histRec, nil
 		}
 	}
+}
+
+// containmentWatchMax bounds how long releaseOnOwnTerminal waits. A
+// session whose stream never terminates (an auth-paused turn nobody
+// redrives) stays contained when the watch gives up — the fail-safe
+// direction — and the watcher goroutine does not leak.
+const containmentWatchMax = 24 * time.Hour
+
+// topicAuthResumed is the chat runner's redrive announcement
+// (chat.AuthResumedPayload), which links a key-rotation redrive's new sub
+// id to the paused sub it continues.
+const topicAuthResumed = "provider:auth-resumed"
+
+// ownStreams tracks which streams are the scheduled run's OWN: the
+// dispatched sub plus every key-rotation redrive descended from it
+// (WP02 re-review — release on ANY stream in the session let a user who
+// opened the "Scheduled:" session mid-run end containment by finishing an
+// interactive turn while the scheduled stream still ran). A redrive's
+// terminal event can reach the bus BEFORE its auth-resumed link (the
+// runner emits auth-resumed after StartStream returns), so terminals of
+// not-yet-owned subs in the session are remembered and matched when the
+// link arrives. Not safe for concurrent use; one goroutine feeds it.
+type ownStreams struct {
+	sessionID   string
+	owned       map[string]bool
+	endedOthers map[string]bool
+	released    bool
+}
+
+func newOwnStreams(sessionID, subID string) *ownStreams {
+	return &ownStreams{sessionID: sessionID, owned: map[string]bool{subID: true}, endedOthers: map[string]bool{}}
+}
+
+// observe feeds one bus event and reports whether it is the moment the
+// run's own stream ended (true at most once).
+func (o *ownStreams) observe(ev BusEvent) bool {
+	if o.released {
+		return false
+	}
+	switch p := ev.Payload.(type) {
+	case chat.StreamClosedPayload:
+		if p.SessionID != o.sessionID {
+			return false
+		}
+		if o.owned[p.SubID] {
+			o.released = true
+			return true
+		}
+		o.endedOthers[p.SubID] = true
+	case chat.AuthResumedPayload:
+		if !o.owned[p.PausedSubID] || p.NewSubID == "" {
+			return false
+		}
+		o.owned[p.NewSubID] = true
+		if o.endedOthers[p.NewSubID] {
+			o.released = true
+			return true
+		}
+	}
+	return false
+}
+
+// releaseOnOwnTerminal handles a run that timed out or was cancelled while
+// its stream may still be executing: containment stays in place NOW and is
+// released when one of the run's OWN streams (the original, or a
+// key-rotation redrive of it) terminates — never on someone else's stream
+// in the same session. The new subscription is taken BEFORE pending is
+// drained, so nothing is lost in the hand-off. After containmentWatchMax
+// the watch stops and the session stays contained (fail-safe).
+func (d *LiveChatRunDispatcher) releaseOnOwnTerminal(own *ownStreams, pending <-chan BusEvent) {
+	ch, cancel := d.deps.Bus.Subscribe(64, "llm:stream-closed", topicAuthResumed)
+	for drained := false; !drained; {
+		select {
+		case ev, ok := <-pending:
+			if !ok {
+				drained = true
+			} else if own.observe(ev) {
+				cancel()
+				d.deps.Containment.Release(own.sessionID)
+				return
+			}
+		default:
+			drained = true
+		}
+	}
+	go func() {
+		defer cancel()
+		timer := time.NewTimer(containmentWatchMax)
+		defer timer.Stop()
+		for {
+			select {
+			case ev, ok := <-ch:
+				if !ok {
+					return
+				}
+				if own.observe(ev) {
+					d.deps.Containment.Release(own.sessionID)
+					return
+				}
+			case <-timer.C:
+				return
+			}
+		}
+	}()
 }
 
 // deliverBanner publishes TopicScheduledChatBanner with this run's

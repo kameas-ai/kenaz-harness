@@ -41,13 +41,25 @@ type ChatRunSpec struct {
 	//   "file:<path>" — write UTF-8 text to the given file path
 	//   "none"        — silent (history-only)
 	OutputSink string `json:"output_sink,omitempty"`
+	// CreatedBy and ToolAllowlist are the provenance and allowlist the
+	// fire-time Cedar gate (GateScheduledChatExecute) evaluated, carried
+	// to the dispatcher so the run executes under the boundary that was
+	// actually authorised (model-harness-toolset-01MHTS001 WP02, finding
+	// H-1: before this, the gate saw only "has an allowlist" and the run
+	// itself was never contained). The dispatcher re-reads the row and
+	// combines both through ResolveRunContainment — never widening: a
+	// spec that says "model" keeps the run model-created, and the
+	// effective allowlist is the intersection of what the gate saw and
+	// what the row holds now.
+	CreatedBy     string   `json:"created_by,omitempty"`
+	ToolAllowlist []string `json:"tool_allowlist,omitempty"`
 }
 
 type MissedPolicy string
 
 const (
-	MissedSkip             MissedPolicy = "skip"
-	MissedRunOnResume      MissedPolicy = "run_on_resume"
+	MissedSkip              MissedPolicy = "skip"
+	MissedRunOnResume       MissedPolicy = "run_on_resume"
 	MissedRunOnResumeWithin MissedPolicy = "run_on_resume_within"
 )
 
@@ -62,13 +74,13 @@ type OnMissed struct {
 }
 
 type Job struct {
-	ID       string       `json:"id"`
+	ID string `json:"id"`
 	// Kind identifies the dispatch path. Defaults to JobKindSession for
 	// backward-compatibility when the field is absent in persisted records.
-	Kind     JobKind      `json:"kind,omitempty"`
+	Kind JobKind `json:"kind,omitempty"`
 	// Spec carries the session-dispatch parameters (used when Kind ==
 	// JobKindSession or Kind == ""). Ignored when Kind == JobKindChatRun.
-	Spec     session.Spec `json:"spec"`
+	Spec session.Spec `json:"spec"`
 	// ChatRun carries chat-run dispatch parameters. Non-nil when and only
 	// when Kind == JobKindChatRun.
 	ChatRun  *ChatRunSpec `json:"chat_run,omitempty"`

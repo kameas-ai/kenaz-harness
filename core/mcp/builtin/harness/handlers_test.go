@@ -23,12 +23,14 @@ func (s *stubProviderWriter) AddProvider(_ context.Context, kind, name, model, _
 func (s *stubProviderWriter) RemoveProvider(_ context.Context, _ string) error { return nil }
 
 // TestRegisterAll_HappyPath asserts the wiring registers the canonical
-// 15 tools (13 from WP04/WP05 minus harness_write_set_setting, removed
+// 13 tools (13 from WP04/WP05 minus harness_write_set_setting, removed
 // by harness-self-attach-01PMHS01 UNIT-8, G-4 — see the doc comment
 // above harness.ProjectWriter — plus harness_read_materialize_run /
 // harness_write_draft_agent_graph from model-authored-graphs-01PMGA01
 // UNIT-7, plus harness_write_create_scheduled_run from
-// model-scheduled-jobs-01PMSJ01 WP10) and dispatches AddProvider
+// model-scheduled-jobs-01PMSJ01 WP10, minus harness_read_get_status and
+// harness_write_install_mcp_recipe, removed by model-harness-toolset-
+// 01MHTS001 WP03 — never wired, always failed) and dispatches AddProvider
 // end-to-end. The count is a registration-mechanics regression pin, not
 // a reachability claim — spec.md §11.2 (model-authored-graphs-01PMGA01)
 // is explicit that a tool count proves nothing about whether the server
@@ -41,8 +43,8 @@ func TestRegisterAll_HappyPath(t *testing.T) {
 		Providers:       stubProviderLister{items: []ProviderSummary{{ID: "p0", Kind: "anthropic"}}},
 		ProvidersWriter: w,
 	})
-	if got := len(srv.Tools()); got != 15 {
-		t.Fatalf("registered tool count = %d, want 15", got)
+	if got := len(srv.Tools()); got != 13 {
+		t.Fatalf("registered tool count = %d, want 13", got)
 	}
 
 	// Drive add_provider via the handler directly.
@@ -86,6 +88,26 @@ func TestRegisterAll_NoSetSettingTool(t *testing.T) {
 	if _, ok := srv.Lookup("harness_write_set_setting"); ok {
 		t.Fatal("harness_write_set_setting is still registered — UNIT-8 removed it; " +
 			"a tool that reports success for a write it silently discards is the class this mission exists to end")
+	}
+}
+
+// TestRegisterAll_NoAlwaysFailingTools is model-harness-toolset-01MHTS001
+// WP03's pin (finding H-2): harness_read_get_status and
+// harness_write_install_mcp_recipe were registered — get_status visible
+// in every chat session — but their managers were never wired, so every
+// call returned "not configured". A tool advertised to the model that
+// always fails is a lie; they are unregistered, not documented into
+// place. Re-adding either requires a real backend (and, for install, an
+// owner ruling on Q8 plus routing through install.Framework.Install).
+//
+// Mutation: re-add either Register call. Must fail.
+func TestRegisterAll_NoAlwaysFailingTools(t *testing.T) {
+	t.Parallel()
+	srv := RegisterAll(NewServer(), Managers{})
+	for _, name := range []string{"harness_read_get_status", "harness_write_install_mcp_recipe"} {
+		if _, ok := srv.Lookup(name); ok {
+			t.Errorf("%s is registered again — it has no backend and always fails (H-2)", name)
+		}
 	}
 }
 

@@ -84,10 +84,13 @@ const (
 	// first Go call site.
 	ActionWorkflowNetworkFetch = "workflow.network.fetch"
 
-	// ActionArtifactUpdate gates the kenaz__update_artifact builtin
-	// (update-artifact-tool-01KQ8TD4). Default-allow under FSWriteEnabled;
-	// gated by the same FSWriteDisabled toggle as the write-family fs
-	// builtins. The resource UID is Artifact::"<artifact-id>".
+	// ActionArtifactUpdate names the kenaz__update_artifact write
+	// (update-artifact-tool-01KQ8TD4). DECLARED, NOT EVALUATED: no call
+	// site evaluates it, so it gates nothing (model-harness-toolset-
+	// 01MHTS001 WP03, finding H-3). The tool's live gates are the
+	// FSWriteEnabled dial and per-call use_tool resolution. Its presence
+	// in PlanModeDeniedActions is likewise inert for the builtin — see
+	// docs/unwired-ledger.md (H-3/H-4 follow-up).
 	ActionArtifactUpdate = "artifact.update"
 
 	// ── Builtin search-and-elicitation action families ──────────────────
@@ -108,9 +111,10 @@ const (
 	// FSReadEnabled is true; gated by the same FSReadDisabled toggle.
 	ActionToolReadGrep = "tool.read.grep"
 
-	// ActionToolTodoWrite gates kenaz__todo_write (structured task list
-	// write). Resource UID: TodoList::"session" (session-scoped list).
-	// Default-allow when TodoEnabled is true; gated by TodoDisabled toggle.
+	// ActionToolTodoWrite names kenaz__todo_write (structured task list
+	// write). DECLARED, NOT EVALUATED (model-harness-toolset-01MHTS001
+	// WP03, H-3): the live gates are the TodoEnabled dial and per-call
+	// use_tool resolution; a policy on this action has no effect.
 	// The action intentionally lives in the "tool.todo" family rather than
 	// "tool.write" so policy authors can grant todo access independently of
 	// the broader filesystem write surface.
@@ -242,19 +246,20 @@ const (
 	//     exposed_secrets set; forbid for untrusted agent_kind; forbid when the
 	//     per-session resolution budget is exhausted.
 	//
-	//   ActionToolListSecrets — gates the kenaz__list_secrets builtin tool.
-	//     Resource UID: Tool::"builtin__list_secrets". Default-allow so the
-	//     model can discover what references it may use; admins can disable
-	//     per-session with an explicit forbid rule.
+	//   ActionToolListSecrets — names the kenaz__list_secrets builtin tool.
+	//     DECLARED, NOT EVALUATED (model-harness-toolset-01MHTS001 WP03,
+	//     H-3): a forbid on this action has no effect; forbid use_tool on
+	//     "kenaz__list_secrets" instead.
 	ActionSecretReferenceResolve = "secret_reference.resolve"
 	ActionToolListSecrets        = "tool.list_secrets"
 
 	// ── Background task monitor action family ─────────────────────────────
 	// Introduced by mission background-task-monitor-01KZNP3C (WP03).
 	//
-	//   ActionToolTasksMonitor  — gates kenaz__monitor (drain + watch mode).
-	//     Resource UID: Task::"<task-id>". Default-allow (passive read-only);
-	//     can be restricted per-session with an explicit forbid rule.
+	//   ActionToolTasksMonitor  — names kenaz__monitor (drain + watch mode).
+	//     DECLARED, NOT EVALUATED (model-harness-toolset-01MHTS001 WP03,
+	//     H-3): a forbid on this action has no effect; forbid use_tool on
+	//     "kenaz__monitor" instead.
 	//   ActionToolTasksCancel   — gates Tasks_Abort RPC + Abort from the Tasks
 	//     panel. Resource UID: Task::"<task-id>".
 	ActionToolTasksMonitor = "tool.tasks.monitor"
