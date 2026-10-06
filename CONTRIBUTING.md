@@ -51,8 +51,10 @@ in), then the latest CI "Frozen bundle" artifact on kenaz-ml `main` via `gh`
 (macOS arm64 only), then with `KENAZ_ML_BUILD=1` it freezes one itself — and
 seeds it into the **dev** engine root `~/.kenaz/ml/dev` with
 `go run ./cmd/mlsidecar-devseed`. The harness's normal sidecar lifecycle then
-spawns it on `:7775` the first time an advisor asks, exactly as it would a
-released engine.
+spawns it on the dev lane — base `:7785`, falling back to `:7795`, `:7805`,
+`:7815`, `:7825` past a foreign listener, with the chosen port recorded in
+`~/.kenaz/ml/dev/engine.port` — the first time an advisor asks, exactly as it
+would a released engine.
 
 The seed writes an install record with provenance `developer-local-build`,
 which only the dev engine root accepts (`mlsidecar.Layout.DeveloperBuilds`,

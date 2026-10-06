@@ -259,7 +259,7 @@ func (p *LabelPusher) PushOnce(ctx context.Context) (PushResult, error) {
 	}
 	// Gate 3: loopback-only, re-checked every call (BaseURL is a public
 	// field; a mutation after construction must not open an egress path).
-	if err := checkLoopbackURL(p.Client.BaseURL); err != nil {
+	if err := checkLoopbackURL(p.Client.URL()); err != nil {
 		return res, err
 	}
 

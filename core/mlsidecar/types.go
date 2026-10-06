@@ -15,7 +15,7 @@ type State string
 
 const (
 	// StateNotInstalled: no verified engine exists under the shared
-	// install root's current version dir, and nothing answers :7774.
+	// install root's current version dir, and nothing answers on the engine port.
 	StateNotInstalled State = "not_installed"
 	// StateInstalling: a download/verify/unpack/spawn sequence is in
 	// flight. Reason/Detail distinguish the sub-phase (see ReasonNone
@@ -29,7 +29,7 @@ const (
 	// checks, crashed, or was refused for a reason short of "never
 	// verified at all" (see Reason for which).
 	StateInstalledUnhealthy State = "installed_unhealthy"
-	// StateUnverified: a process is listening on :7774 but this client
+	// StateUnverified: a process is listening on the engine port but this client
 	// could not verify it runs from a client-verified shared-root
 	// install (design F2/§3.7 R2). Never adopted; never killed.
 	StateUnverified State = "unverified"

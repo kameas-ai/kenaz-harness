@@ -1,7 +1,9 @@
 // Command mlsidecar-devseed installs a locally built or locally fetched
 // kenaz-ml engine onedir into the DEV engine root (~/.kenaz/ml/dev) so the
-// harness's own sidecar lifecycle launches it on :7775, exactly as it would
-// a released engine. scripts/dev-ml.sh drives it before `wails dev`.
+// harness's own sidecar lifecycle launches it on the dev lane (base :7785,
+// falling back to :7795, :7805, … past a foreign listener; the chosen port
+// is recorded in <root>/engine.port), exactly as it would a released
+// engine. scripts/dev-ml.sh drives it before `wails dev`.
 //
 // It writes a ProvenanceDeveloperBuild install record, which only the dev
 // root accepts (mlsidecar.Layout.DeveloperBuilds); a prod or test root
@@ -91,6 +93,6 @@ func run(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintf(stdout, "engine %s already seeded in %s (tree %s); nothing to do\n", res.Record.Version, layout.Root, res.Record.TreeSHA256)
 		return nil
 	}
-	fmt.Fprintf(stdout, "seeded engine %s into %s (tree %s, port %d)\n", res.Record.Version, layout.Root, res.Record.TreeSHA256, mlsidecar.EnginePort(*env))
+	fmt.Fprintf(stdout, "seeded engine %s into %s (tree %s, base port %d)\n", res.Record.Version, layout.Root, res.Record.TreeSHA256, mlsidecar.EnginePort(*env))
 	return nil
 }

@@ -168,11 +168,23 @@ func TestSidecarWiring_RealManagerUnderDataDir(t *testing.T) {
 		t.Fatalf("install root = %q, want %q (custom data dir stays isolated; the standard profile resolves ~/.kenaz/ml/<env>, see TestSidecarRoot)", got, want)
 	}
 	env := mlsidecar.EngineEnv()
-	if got, want := api.sidecarMgr.Client.BaseURL, mlsidecar.BaseURLForEnv(env); got != want {
-		t.Fatalf("client dials %q, want the env-mapped %q (Amendment A5(1))", got, want)
+	if got, want := api.sidecarMgr.Client.URL(), mlsidecar.BaseURLForEnv(env); got != want {
+		t.Fatalf("manager client base = %q, want the env-mapped base %q (Amendment A5(1))", got, want)
 	}
-	if sp, ok := api.sidecarMgr.Spawner.(mlsidecar.ProcessSpawner); !ok || sp.Port != mlsidecar.EnginePort(env) {
-		t.Fatalf("spawner = %#v, want ProcessSpawner passing port %d", api.sidecarMgr.Spawner, mlsidecar.EnginePort(env))
+	if got, want := api.sidecarMgr.BasePort, mlsidecar.EnginePort(env); got != want {
+		t.Fatalf("Manager.BasePort = %d, want the env's lane base %d (lane mode, owner ruling A5.2)", got, want)
+	}
+	// The advice/label dial client routes to the Manager's VERIFIED port
+	// only — a recorded engine.port never redirects it (review F2).
+	lane := mlsidecar.CandidatePorts(mlsidecar.EnginePort(env))[2]
+	if err := mlsidecar.WriteEnginePort(api.sidecarMgr.Layout, lane); err != nil {
+		t.Fatal(err)
+	}
+	if got := sidecarDialClient(api.sidecarMgr).URL(); got == mlsidecar.LoopbackURL(lane) || got == mlsidecar.BaseURLForEnv(env) {
+		t.Fatalf("unverified dial client dials %q; it must fail closed, never follow engine.port or the base", got)
+	}
+	if err := os.RemoveAll(api.sidecarMgr.Layout.Root); err != nil {
+		t.Fatal(err)
 	}
 	if _, ok := api.sidecarProbe.(*mlsidecar.DemandProbe); !ok {
 		t.Fatalf("sidecarProbe = %T, want the demand-driven *mlsidecar.DemandProbe", api.sidecarProbe)
@@ -191,9 +203,10 @@ func TestSidecarWiring_RealManagerUnderDataDir(t *testing.T) {
 	}
 
 	// Point the client at a counting double for the read-only calls so this
-	// test never dials the real :7774.
+	// test never dials a real engine port (fixed-endpoint mode: no lane scan).
 	eng := newCountingEngineRPC(t)
 	api.sidecarMgr.Client = mlsidecar.NewClient(eng.srv.URL, nil)
+	api.sidecarMgr.BasePort = 0
 	eng.health.Store(mlsidecar.HealthPayload{}) // bare {} health -> never adopted
 	// The platform gate is device-dependent (CI runs linux/arm64, where
 	// compose's !Supported branch correctly wins) — force supported so
@@ -267,6 +280,7 @@ func TestSidecarWiring_LadderResolvesRung2ThroughProductionProbe(t *testing.T) {
 		LifecycleProtocol: 1,
 	})
 	mgr.Client = mlsidecar.NewClient(eng.srv.URL, nil)
+	mgr.BasePort = 0 // fixed-endpoint mode: dial the double, never scan real lane ports
 
 	// Boot-style resolve (cache-only) never reaches rung 2, never dials.
 	if _, _, rung, _, ok := advice.ResolveAdvisorModel(advice.AdvisorModelSetting{}, nil, mgr); ok || rung == advice.RungLocalLaya {

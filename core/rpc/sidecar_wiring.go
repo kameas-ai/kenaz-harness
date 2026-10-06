@@ -66,18 +66,25 @@ func newSidecarStack(dataDir, buildVersion string) (*mlsidecar.Manager, advice.S
 		return nil, nil
 	}
 	layout := mlsidecar.NewLayout(sidecarRoot(dataDir))
-	// One engine per env per machine (Amendment A5(1)): the client dials,
-	// and the spawner tells the engine to bind, the same env-mapped port
-	// (prod 7774, dev 7775, test 7776), so a dev build never talks to —
-	// or port-conflicts with — the prod engine.
+	// One engine per env per machine (Amendment A5(1), lanes per owner
+	// ruling A5.2): the Manager scans the env's lane (base prod 7774 / dev
+	// 7785 / test 7786, + k*10), arbitrating each candidate with the
+	// engine identity check, spawns on the first free one (the spawner is
+	// passed that port per spawn) and records it in <root>/engine.port.
+	// engine.port is cross-client discovery only; requests go to the
+	// Manager's in-memory verified port (Manager.DialClient). A dev build
+	// never talks to — or port-conflicts with — the prod engine, and a
+	// foreign listener on a base port (sigild on 7775 was the case that
+	// forced this) no longer strands the engine.
 	env := mlsidecar.EngineEnv()
 	// The dev root also adopts engines a developer seeded from a local
 	// build (scripts/dev-ml.sh); prod and test roots never do.
 	layout.DeveloperBuilds = env == mlsidecar.EngineEnvDev
 	m := mlsidecar.NewManager(layout,
 		mlsidecar.NewClient(mlsidecar.BaseURLForEnv(env), nil),
-		mlsidecar.ProcessSpawner{Layout: layout, Port: mlsidecar.EnginePort(env)},
+		mlsidecar.ProcessSpawner{Layout: layout},
 		"harness", buildVersion)
+	m.BasePort = mlsidecar.EnginePort(env)
 	// A real PyInstaller engine needs seconds to bind its port.
 	m.StartupWait = 30 * time.Second
 	return m, &mlsidecar.DemandProbe{M: m}
@@ -141,4 +148,16 @@ func seedBakedReleaseAnchor(ctx context.Context, engine coretrust.TrustEngine) c
 	}
 	slog.Info("baked ML release trust anchor", "anchor_id", anchor.AnchorID, "key_id", anchor.PublicKey.Fingerprint, "outcome", string(outcome))
 	return outcome
+}
+
+// sidecarDialClient is the client the advice engine and the label pusher
+// dial: Manager.DialClient, routed per request to the port whose engine
+// the Manager last verified (never to whatever engine.port says — review
+// F2). A nil Manager (nil-core chassis) falls back to the env's base port;
+// nothing is healthy then, so nothing is sent.
+func sidecarDialClient(m *mlsidecar.Manager) *mlsidecar.Client {
+	if m == nil {
+		return mlsidecar.NewClient(mlsidecar.DefaultEngineBaseURL(), nil)
+	}
+	return m.DialClient()
 }

@@ -342,6 +342,21 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-05 (engine-ports review residuals, fix/engine-ports) · two accepted lane-scan edges
+
+1. A slow OUR engine with NO engine.port record (failed write or garbage
+   file) still double-spawns: the scan reads its busy port as
+   unknown-occupied, steps past, and spawns on the first free candidate —
+   two engines, one lease dir. Accepted: the alternative (block spawning
+   while ANY candidate is busy) lets a hung foreign listener deny the
+   engine entirely. Trigger requires a missing record while ours runs;
+   the record is rewritten on every adopt. **Owner:** revisit with the
+   kenaz protocol-gap follow-up (kenaz #178 "Known gap").
+2. Uninstall no longer sends the shutdown token to an engine that fails
+   verification (tampered/refuse-unverified) before removing the root —
+   correct for the token (never send to the unverified), but a behaviour
+   change: such an engine keeps running until it idle-exits. Same owner.
+
 ### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event; the two pull surfaces are count-only stubs
 
 Three linked findings from kitty-specs/fleet-session-truth-01DOGF0A/
@@ -5080,6 +5095,35 @@ fetches and an overall install deadline).**
    - **Owner:** alec. Informational; resolves if a release-time
      cross-check against the published index is added (the commented
      release.yml step's url/key_id asserts are a start).
+
+### 2026-10-05 (engine port lanes, owner rulings A5.2/A5.3, harness branch `fix/engine-ports`) — update-pending identity is lexical; lane fallback has two accepted costs
+
+1. **Update-pending identity is a lexical `exe_path` check in BOTH repos.**
+   A lease-aware engine answering on a lane candidate whose self-reported
+   `exe_path` is under this root's `versions/` but not `current` is
+   classified *update-pending* and adopted (`engine.port` written — the
+   agreed cross-repo contract; Kenaz mirrors it). Nothing re-hashes that
+   binary: a process that merely *claims* such a path is adopted the same
+   way. Containment in the harness (review F4): update-pending is never
+   the Manager's verified port (`Manager.DialClient`), never leased, and
+   `shutdownClient` never sends it the token — so no advice, label, or
+   shutdown traffic reaches a lexically-claimed squatter; the cost is
+   bounded to "one lane port is held and recorded". Matches kenaz PR #178's
+   recorded protocol-gap follow-up.
+   - **Owner:** that same follow-up (the engine-identity protocol gap —
+     an engine-attested identity both clients can verify). The line goes
+     when it lands.
+2. **A legacy/foreign listener on a base port now coexists with our
+   engine on the next lane** (e.g. a pre-lease engine on prod 7774 and
+   ours on 7784): extra RAM for two engines; the "update Kenaz to share
+   the ML engine" hint surfaces only when ALL lane candidates are foreign.
+   Accepted (review F6; matches the legacy = foreign ruling). sigild dials
+   prod 7774 directly and does not read `engine.port`, so a squatter on the
+   prod base still strands sigild — pre-existing, owner-acknowledged
+   (A5.3).
+3. **Observe worst case** is LaneCount × `observeProbeTimeout` (5 × 2s =
+   10s) on hanging candidates — cut from 5 × 5s by a per-probe deadline on
+   the read-only Settings scan only. Informational.
 
 ## Drained
 

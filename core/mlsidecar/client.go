@@ -16,14 +16,16 @@ import (
 // Client at an httptest.Server URL instead — nothing in this package's
 // test suite dials the real port.
 //
-// This is the PROD engine's address; design Amendment A5(1) maps the port
-// per env (prod 7774, dev 7775, test 7776). Production wiring dials
-// DefaultEngineBaseURL(), which resolves this process's env.
+// This is the PROD engine's BASE-lane address; the port is mapped per env
+// (prod 7774, dev 7785, test 7786 — owner rulings A5.2/A5.3) and each env
+// falls back along a lane (engineport.go). Production wiring dials
+// through Manager.DialClient, which follows the Manager's verified port.
 const DefaultBaseURL = "http://127.0.0.1:7774"
 
-// DefaultEngineBaseURL is this process's env's loopback engine URL
-// (BaseURLForEnv(EngineEnv())) — what production wiring dials, so a dev
-// build never talks to (or port-conflicts with) the prod engine.
+// DefaultEngineBaseURL is this process's env's BASE-lane loopback engine
+// URL. It deliberately does NOT read engine.port (review F2: the file is
+// discovery only, never a routing source); production dial paths use
+// Manager.DialClient. It remains only as the nil-Manager fallback.
 func DefaultEngineBaseURL() string { return BaseURLForEnv(EngineEnv()) }
 
 // Client speaks the wire shapes design §3.3 specifies. It has no
@@ -33,6 +35,26 @@ func DefaultEngineBaseURL() string { return BaseURLForEnv(EngineEnv()) }
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client
+	// Endpoint, when non-nil, is consulted on every request; a non-empty
+	// result overrides BaseURL. Manager.DialClient sets it to the
+	// Manager's in-memory verified port.
+	Endpoint func() string
+}
+
+// URL is the base URL the next request dials.
+func (c *Client) URL() string {
+	if c.Endpoint != nil {
+		if u := c.Endpoint(); u != "" {
+			return u
+		}
+	}
+	return c.BaseURL
+}
+
+// at returns a client pinned to a loopback port (no Endpoint), sharing
+// the HTTP client — the Manager's per-lane-candidate probe.
+func (c *Client) at(port int) *Client {
+	return &Client{BaseURL: LoopbackURL(port), HTTP: c.HTTP}
 }
 
 // NewClient returns a Client. A nil http.Client falls back to a
@@ -102,7 +124,7 @@ func newStatusError(method, path string, resp *http.Response) *StatusError {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL()+path, nil)
 	if err != nil {
 		return 0, fmt.Errorf("mlsidecar: build request %s: %w", path, err)
 	}
@@ -134,7 +156,7 @@ func (c *Client) postJSON(ctx context.Context, path string, in, out any, headers
 			return 0, fmt.Errorf("mlsidecar: encode %s body: %w", path, err)
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL()+path, &buf)
 	if err != nil {
 		return 0, fmt.Errorf("mlsidecar: build request %s: %w", path, err)
 	}

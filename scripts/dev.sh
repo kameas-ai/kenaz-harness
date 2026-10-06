@@ -17,7 +17,8 @@
 # build into the dev engine root (~/.kenaz/ml/dev) if it can find one — an
 # explicit KENAZ_ML_ONEDIR, a frozen sibling kenaz-ml checkout, the latest
 # CI artifact (via gh), or KENAZ_ML_BUILD=1 to freeze one. The harness then
-# spawns it on :7775 on first advisor demand. Nothing there can stop this
+# spawns it on the dev lane (base :7785; engine.port records the port) on
+# first advisor demand. Nothing there can stop this
 # launch: without an engine the harness runs on its client-side heuristics.
 # KENAZ_ML_SEED=0 skips the step.
 set -euo pipefail

@@ -28,8 +28,11 @@ const RootEnvVar = "KENAZ_ML_INSTALL_ROOT"
 //     lease/ and the shutdown token under the harness's install root.
 //   - The caller (Manager.spawnLocked) has already created lease/; this
 //     type never spawns into a root without one (it re-checks).
-//   - The engine is started as `<launcher> serve --port <env port>`; it
-//     binds loopback only (the engine refuses anything else).
+//   - The engine is started as `<launcher> serve --port <port>`, port being
+//     the lane candidate the Manager chose (owner ruling A5.2: base +
+//     k*LaneStride, the first one free of foreign listeners) and passed
+//     explicitly per spawn; it binds loopback only (the engine refuses
+//     anything else).
 //   - stdout/stderr go to <root>/engine.log (append), never to the
 //     harness's own stdio.
 //
@@ -38,11 +41,6 @@ const RootEnvVar = "KENAZ_ML_INSTALL_ROOT"
 // advisor call or Settings click triggered the spawn.
 type ProcessSpawner struct {
 	Layout Layout
-	// Port is the loopback port the engine is told to bind (`serve
-	// --port N`): design Amendment A5(1) maps it per env (prod 7774, dev
-	// 7775, test 7776) via EnginePort(EngineEnv()), and the Manager's
-	// Client dials the same one. 0 omits the flag (engine default 7774).
-	Port int
 	// ExtraEnv is appended after the inherited environment (and after
 	// RootEnvVar), for tests and for LAYA_THREADS-style tuning.
 	ExtraEnv []string
@@ -65,8 +63,11 @@ func SpawnEnv(inherited []string, root string, extra ...string) []string {
 	return append(out, extra...)
 }
 
-// Spawn implements Spawner.
-func (p ProcessSpawner) Spawn(_ context.Context, exePath string) (int, error) {
+// Spawn implements Spawner. port is the loopback port the engine is told
+// to bind (`serve --port N`) — the lane port the Manager chose and will
+// dial; 0 omits the flag (the engine's own default, prod's 7774), which
+// only the Manager's fixed-endpoint mode (BasePort == 0) ever passes.
+func (p ProcessSpawner) Spawn(_ context.Context, exePath string, port int) (int, error) {
 	if info, err := os.Stat(p.Layout.LeaseDir()); err != nil || !info.IsDir() {
 		return 0, fmt.Errorf("mlsidecar: refusing to spawn: lease dir %s does not exist (the client must create it first)", p.Layout.LeaseDir())
 	}
@@ -77,8 +78,8 @@ func (p ProcessSpawner) Spawn(_ context.Context, exePath string) (int, error) {
 	defer logf.Close() // the child holds its own dup of the fd
 
 	args := []string{"serve"}
-	if p.Port > 0 {
-		args = append(args, "--port", strconv.Itoa(p.Port))
+	if port > 0 {
+		args = append(args, "--port", strconv.Itoa(port))
 	}
 	cmd := exec.Command(exePath, args...)
 	cmd.Dir = filepath.Dir(exePath)
