@@ -100,7 +100,10 @@ type MergeRequest struct {
 //     never pushed — only the proposal travels.)
 //   - When fleet is disabled / signed-out / unentitled, returns
 //     (nil, ErrFleetDisabled | ErrNotSignedIn | ErrCapabilityNotInTier) so the
-//     caller can degrade to a local-only posture without crashing. Personal
+//     caller can degrade to a local-only posture without crashing. A server
+//     refusal is a *ContextPushError mapped by its code (404 node_not_found
+//     unless owner / team member, 403 not_team_member, capability_not_in_tier,
+//     …; a bare 403 is ErrContextPushForbidden) — context_push_errors.go. Personal
 //     units never leave the machine on their own; only an explicit, reviewed
 //     proposal does (and even that carries just the proposed body, gated by the
 //     team-graph capability).
@@ -138,11 +141,11 @@ func (s *UnitSyncer) CreateMergeRequestForPromote(ctx context.Context, src units
 	}
 	defer drain(resp)
 
-	if resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("%w: server refused merge request", ErrCapabilityNotInTier)
-	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("fleet: create merge request status %d", resp.StatusCode)
+		// Map by the envelope's code (PR #173 adds 404 node_not_found and
+		// distinct 403 codes); a bare 403 stays a generic refusal.
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return nil, parseContextPushError("merge request", resp.StatusCode, errBody)
 	}
 
 	raw, err := io.ReadAll(resp.Body)

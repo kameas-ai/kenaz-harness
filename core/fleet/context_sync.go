@@ -9,6 +9,12 @@ package fleet
 // Fleet API paths:
 //   POST /api/v1/context/append  — append a batch of encrypted events
 //   GET  /api/v1/context/replay  — replay events from seq N
+//
+// NOTE (verified against kenaz-fleet main, 2026-10-05): fleet registers
+// neither route — both answer the mux's plain 404. A plain 404 latches the
+// event stream unsupported for the Client's lifetime (unsupported_endpoint.go)
+// and events stay local. A fleet session-event log is a NEW fleet feature
+// awaiting an owner spec (server-assigned seq); see docs/unwired-ledger.md.
 //   DELETE /api/v1/context/{streamID} — purge all events for a stream
 //
 // Privacy invariant: no event payload bytes appear in slog. The client only
@@ -160,6 +166,9 @@ func (es *EventStream) Backfill(ctx context.Context, events []Event) error {
 func (es *EventStream) Replay(ctx context.Context, sinceSeq uint64, apply func(Event) error) error {
 	nextSeq := sinceSeq
 	for {
+		if err := es.client.endpointUnsupported(FeatureContextEventStream); err != nil {
+			return err
+		}
 		path := fmt.Sprintf("/api/v1/context/replay?stream_id=%s&since=%d", es.streamID, nextSeq)
 		resp, err := es.client.Get(ctx, path)
 		if err != nil {
@@ -169,6 +178,9 @@ func (es *EventStream) Replay(ctx context.Context, sinceSeq uint64, apply func(E
 		_ = resp.Body.Close()
 		if readErr != nil {
 			return fmt.Errorf("fleet: context replay read body: %w", readErr)
+		}
+		if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), body) {
+			return es.client.markEndpointUnsupported(FeatureContextEventStream, endpointPath(path))
 		}
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("fleet: context replay status %d", resp.StatusCode)
@@ -264,12 +276,27 @@ func (es *EventStream) postChunk(ctx context.Context, events []wireEvent) error 
 	if err != nil {
 		return fmt.Errorf("fleet: marshal append request: %w", err)
 	}
-	resp, err := es.client.Post(ctx, "/api/v1/context/append", "application/json", bytes.NewReader(data))
+	// A server already known not to have the event stream is never asked
+	// again (unsupported_endpoint.go): events stay local.
+	if err := es.client.endpointUnsupported(FeatureContextEventStream); err != nil {
+		return err
+	}
+	const appendPath = "/api/v1/context/append"
+	resp, err := es.client.Post(ctx, appendPath, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("fleet: context append POST: %w", err)
 	}
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+	if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), respBody) {
+		return es.client.markEndpointUnsupported(FeatureContextEventStream, appendPath)
+	}
+	if isProxyNotFoundPage(resp.StatusCode, resp.Header.Get("Content-Type"), respBody) {
+		// An HTML/XML 404 page: something in front of fleet, not a
+		// verdict on the route. Transient, never latched.
+		return &AppendStatusError{Status: resp.StatusCode, ProxyPage: true}
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 		return &AppendStatusError{Status: resp.StatusCode}
 	}

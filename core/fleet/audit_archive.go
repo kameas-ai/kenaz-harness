@@ -30,6 +30,7 @@ import (
 	"time"
 
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 const (
@@ -92,10 +93,16 @@ type AuditArchiverConfig struct {
 // AuditArchiver streams local audit events to the fleet endpoint.
 // Constructed via NewAuditArchiver; started with Start.
 type AuditArchiver struct {
-	cfg      AuditArchiverConfig
-	cancel   context.CancelFunc
-	done     chan struct{}
-	running  atomic.Bool
+	cfg AuditArchiverConfig
+	// lifeMu guards cancel / done / parentCtx / stopped: Start can now run
+	// again from the fleet session-reset hook (ResetUnsupported) while Stop
+	// runs at shutdown.
+	lifeMu    sync.Mutex
+	cancel    context.CancelFunc
+	done      chan struct{}
+	parentCtx context.Context
+	stopped   bool
+	running   atomic.Bool
 	mu       sync.RWMutex
 	cursor   string
 	chainErr atomic.Bool // true after a chain-break hard-stop
@@ -103,6 +110,40 @@ type AuditArchiver struct {
 	// status fields for the Compliance RPC view.
 	lastArchivedAt atomic.Int64 // unix nano; 0 = never
 	pendingCount   atomic.Int64
+
+	// unsupported latches when POST /api/v1/audit/append answers a plain
+	// (non-JSON) 404: kenaz-fleet registers no such route (verified
+	// 2026-10-05). The loop then exits — IsRunning() reports false and
+	// Unsupported() true, so the Compliance panel says "not supported by
+	// this fleet server" — and nothing is re-posted until ResetUnsupported
+	// (fleet sign-in / sign-out) restarts it; events stay in the local
+	// hash-chained log (unsupported_endpoint.go).
+	unsupported atomic.Bool
+}
+
+// Unsupported reports whether the loop stopped because the connected fleet
+// server has no audit-append route (a plain 404 latched it).
+func (a *AuditArchiver) Unsupported() bool {
+	return a.unsupported.Load()
+}
+
+// ResetUnsupported clears the unsupported latch and, if the loop exited
+// because of it, restarts the loop under the context the last Start was
+// given. Wired to the settings view's fleet session reset (sign-in /
+// sign-out) so a fleet that ships the endpoint, or a fixed host, resumes
+// archival without an app restart. No-op after Stop or before any Start.
+func (a *AuditArchiver) ResetUnsupported() {
+	if !a.unsupported.CompareAndSwap(true, false) {
+		return
+	}
+	a.lifeMu.Lock()
+	parent, stopped := a.parentCtx, a.stopped
+	a.lifeMu.Unlock()
+	if stopped || parent == nil || parent.Err() != nil {
+		return
+	}
+	logging.L().Info("fleet.audit_archive.restart_after_unsupported_reset")
+	a.Start(parent)
 }
 
 // NewAuditArchiver constructs an Archiver from cfg.
@@ -139,24 +180,38 @@ func (a *AuditArchiver) Start(ctx context.Context) {
 	a.cursor = cur
 	a.mu.Unlock()
 
+	a.lifeMu.Lock()
+	if a.stopped {
+		a.lifeMu.Unlock()
+		a.running.Store(false)
+		return
+	}
 	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 	a.cancel = cancel
-	a.done = make(chan struct{})
+	a.done = done
+	a.parentCtx = ctx
+	a.lifeMu.Unlock()
 
 	go func() {
-		defer close(a.done)
+		defer close(done)
 		defer a.running.Store(false)
 		a.loop(loopCtx)
 	}()
 }
 
-// Stop signals the loop to stop and waits for it to exit.
+// Stop signals the loop to stop and waits for it to exit. A stopped
+// archiver is never restarted by ResetUnsupported.
 func (a *AuditArchiver) Stop() {
-	if a.cancel != nil {
-		a.cancel()
+	a.lifeMu.Lock()
+	a.stopped = true
+	cancel, done := a.cancel, a.done
+	a.lifeMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	if a.done != nil {
-		<-a.done
+	if done != nil {
+		<-done
 	}
 }
 
@@ -194,6 +249,9 @@ func (a *AuditArchiver) PendingCount() int64 {
 func (a *AuditArchiver) ArchiveNow(ctx context.Context) error {
 	if a.chainErr.Load() {
 		return errors.New("fleet/audit_archive: archive halted due to chain-break; operator action required")
+	}
+	if a.unsupported.Load() {
+		return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
 	}
 	if !a.running.Load() {
 		return errors.New("fleet/audit_archive: archiver not running")
@@ -252,6 +310,12 @@ func (a *AuditArchiver) loop(ctx context.Context) {
 			}
 		}
 
+		// The server has no audit-append route: stop for the archiver's
+		// lifetime — no posts, no backoff churn, no WARNs.
+		if a.unsupported.Load() {
+			return
+		}
+
 		// Hard-stop on chain-break.
 		if a.chainErr.Load() {
 			select {
@@ -270,6 +334,9 @@ func (a *AuditArchiver) loop(ctx context.Context) {
 		}
 
 		if err := a.flushOnce(ctx); err != nil {
+			if errors.Is(err, ErrEndpointUnsupported) {
+				return // latched: no route, nothing to retry
+			}
 			slog.Warn("fleet/audit_archive: flush error", "err", err)
 			// Exponential backoff.
 			select {
@@ -397,6 +464,9 @@ func (a *AuditArchiver) poster() AuditHTTPPoster {
 
 // post signs and POSTs the batch JSON body to the fleet endpoint.
 func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
+	if a.unsupported.Load() {
+		return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
+	}
 	resp, err := a.poster().Post(ctx, auditArchiveEndpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("http post: %w", err)
@@ -405,6 +475,18 @@ func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}()
+	if resp.StatusCode == http.StatusNotFound {
+		peek, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), peek) {
+			if a.unsupported.CompareAndSwap(false, true) {
+				logging.L().Info("fleet.endpoint.unsupported",
+					"feature", FeatureAuditAppend,
+					"endpoint", auditArchiveEndpoint,
+					"action", "stop_retrying_keep_local")
+			}
+			return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
+		}
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}

@@ -108,6 +108,19 @@ jobs:
     steps:
       - id: pick
         shell: bash
+        # IAM role ARNs come from repo Actions variables so the AWS account
+        # IDs are not committed to this public file. The six REQUIRED repo
+        # variables (Settings → Secrets and variables → Actions → Variables):
+        #   DEPLOY_ROLE_ARN_DEV      DEPLOY_ROLE_ARN_STAGE      DEPLOY_ROLE_ARN_PROD
+        #   APPDEPLOY_ROLE_ARN_DEV   APPDEPLOY_ROLE_ARN_STAGE   APPDEPLOY_ROLE_ARN_PROD
+        # No inline fallbacks: an unset variable fails this step loudly.
+        env:
+          DEPLOY_ROLE_ARN_DEV: ${{ vars.DEPLOY_ROLE_ARN_DEV }}
+          DEPLOY_ROLE_ARN_STAGE: ${{ vars.DEPLOY_ROLE_ARN_STAGE }}
+          DEPLOY_ROLE_ARN_PROD: ${{ vars.DEPLOY_ROLE_ARN_PROD }}
+          APPDEPLOY_ROLE_ARN_DEV: ${{ vars.APPDEPLOY_ROLE_ARN_DEV }}
+          APPDEPLOY_ROLE_ARN_STAGE: ${{ vars.APPDEPLOY_ROLE_ARN_STAGE }}
+          APPDEPLOY_ROLE_ARN_PROD: ${{ vars.APPDEPLOY_ROLE_ARN_PROD }}
         run: |
           set -euo pipefail
           REF="${{ github.ref }}"
@@ -132,24 +145,24 @@ jobs:
           case "$TARGET" in
             dev)
               BUCKET="kameas-ai-dev-releases-use2"
-              ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-dev"
-              APPDEPLOY_ROLE_ARN="arn:aws:iam::950858584742:role/AppDeployRole"
+              ROLE_ARN="$DEPLOY_ROLE_ARN_DEV"
+              APPDEPLOY_ROLE_ARN="$APPDEPLOY_ROLE_ARN_DEV"
               CF_DIST_ID="E1PRT6QD4VW589"
               CDN_BASE="https://dev.downloads.kameas.ai"
               GITHUB_ENV_NAME="dev"
               ;;
             stage)
               BUCKET="kameas-ai-stage-releases-use2"
-              ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-stage"
-              APPDEPLOY_ROLE_ARN="arn:aws:iam::543432151057:role/AppDeployRole"
+              ROLE_ARN="$DEPLOY_ROLE_ARN_STAGE"
+              APPDEPLOY_ROLE_ARN="$APPDEPLOY_ROLE_ARN_STAGE"
               CF_DIST_ID="E1N8AI5X4GRPWU"
               CDN_BASE="https://stage.downloads.kameas.ai"
               GITHUB_ENV_NAME="stage"
               ;;
             prod)
               BUCKET="kameas-ai-prod-releases-use2"
-              ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-prod"
-              APPDEPLOY_ROLE_ARN="arn:aws:iam::777000838085:role/AppDeployRole"
+              ROLE_ARN="$DEPLOY_ROLE_ARN_PROD"
+              APPDEPLOY_ROLE_ARN="$APPDEPLOY_ROLE_ARN_PROD"
               CF_DIST_ID="ENWB9Y4KGTPFD"
               CDN_BASE="https://downloads.kameas.ai"
               GITHUB_ENV_NAME="prod"
@@ -159,6 +172,11 @@ jobs:
               exit 1
               ;;
           esac
+
+          if [[ -z "$ROLE_ARN" || -z "$APPDEPLOY_ROLE_ARN" ]]; then
+            echo "::error::Role ARN repo variables for '$TARGET' are unset — set DEPLOY_ROLE_ARN_${TARGET^^} and APPDEPLOY_ROLE_ARN_${TARGET^^} (Settings → Secrets and variables → Actions → Variables)."
+            exit 1
+          fi
 
           echo "target_env=$TARGET"               >> "$GITHUB_OUTPUT"
           echo "bucket=$BUCKET"                   >> "$GITHUB_OUTPUT"
@@ -1181,7 +1199,7 @@ jobs:
   #
   # Prod path is identical to the pre-refactor behavior:
   #   bucket:  kameas-ai-prod-releases-use2
-  #   role:    arn:aws:iam::764395350337:role/gh-deploy-prod
+  #   role:    vars.DEPLOY_ROLE_ARN_PROD (gh-deploy-prod)
   #   cf_dist: ENWB9Y4KGTPFD
   #   prefix:  kenaz-harness/<tag>/
   #

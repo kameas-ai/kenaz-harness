@@ -254,11 +254,20 @@ func TestAppendBreaker_SuccessClears_DisabledIsNotAFailure(t *testing.T) {
 }
 
 // The real append path returns the typed status error the breaker keys on.
+//
+// The 404 here carries a JSON {code} envelope: an application answer. A
+// PLAIN (Go-mux "404 page not found") 404 is a missing route — which is
+// what kenaz-fleet actually returns for /api/v1/context/append (verified
+// 2026-10-05) — and latches the feature unsupported instead
+// (unsupported_endpoint_test.go). The original dogfood F7 "remote context
+// missing" reading of that plain 404 was a misdiagnosis.
 func TestEventStreamAppend_404_IsTypedStatusError(t *testing.T) {
 	withExternalToken(t, "tok")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/context/append") {
-			http.NotFound(w, r)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"code":"not_found","message":"no such stream"}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)

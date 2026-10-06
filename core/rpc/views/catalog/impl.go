@@ -15,15 +15,18 @@ type API struct {
 	client  *corefleet.Client
 	signer  *corefleet.DeviceSigner
 	dataDir string
-	// pubKeyBase64 is the fleet-issued signing public key for install
+	// pubKeyBase64 is the signing public key for catalog-payload install
 	// verification. Always empty today (fleet-enforcement-truth-
-	// 01PMZ505 WP10, register C-2, 2026-08-19, owner alec):
-	// justify(blocker: "no per-device catalog signing key source exists
-	// in or out of this repo", owner: alec, date: 2026-08-19). This is
-	// a standing blocker, not a settled "verification is skipped when
-	// empty" design — every catalog install and fleet skill install is
-	// unverified until it is resolved. WithPubKey (below) is the seam
-	// the eventual fix uses; it is deliberately NOT deleted.
+	// 01PMZ505 WP10, register C-2, 2026-08-19, owner alec).
+	// Design truth (kenaz-fleet owner, 2026-10-05): there is no
+	// per-org / per-device catalog key and never will be. Org-mandated
+	// items arrive in the ed25519-signed config bundle and verify against
+	// the build-time-pinned fleet key (config_pull.go VerifyWithKeySet);
+	// non-mandated catalog payloads carry no fleet signature today.
+	// justify(blocker: "fleet owner decision on signing catalog item
+	// payloads with the bundle key", owner: alec, date: 2026-10-05).
+	// WithPubKey (below) is the seam that design would use; it is
+	// deliberately NOT deleted.
 	pubKeyBase64 string
 	// emitter is optional; nil emitter means audit events are silently dropped.
 	emitter auditEmitter

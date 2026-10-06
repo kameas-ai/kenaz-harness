@@ -218,7 +218,13 @@ async function setRetention(days: number) {
       <div>
         <dt class="text-ink-muted">Archiver</dt>
         <dd class="font-medium text-ink" data-testid="compliance-archiver-running">
-          {{ status.archiverRunning ? 'Running' : 'Stopped' }}
+          {{
+            status.archiverRunning
+              ? 'Running'
+              : status.stoppedReason === 'endpoint_unsupported'
+                ? 'Stopped — not supported by this fleet server (audit stays local)'
+                : 'Stopped'
+          }}
         </dd>
       </div>
     </dl>

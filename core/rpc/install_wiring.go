@@ -120,11 +120,13 @@ func (s fleetCatalogSeam) UnavailableReason(err error) string {
 }
 
 // installSignatureVerifier is the install framework's single
-// SignatureVerifier — register C-2's per-device catalog key lands here,
-// once, for every fleet-backed kind. The key is read per call from the
-// catalog view (catalogview.API.PubKey, set via its WithPubKey seam): empty
-// today, so every fleet payload installs recorded as unverified with the
-// C-2 reason (this replaces the old SkillDeps.PubKeyBase64: "" placeholder
+// SignatureVerifier for every fleet-backed kind. The key is read per call
+// from the catalog view (catalogview.API.PubKey, set via its WithPubKey
+// seam): empty today, so every fleet payload installs recorded as
+// unverified with the C-2 reason. Register C-2's design (kenaz-fleet owner,
+// 2026-10-05): no per-org/per-device catalog key will ever exist; mandated
+// items verify via the pinned config-bundle signature instead, and a future
+// bundle-key payload signature (decision pending) would land here (this replaces the old SkillDeps.PubKeyBase64: "" placeholder
 // — fleet-enforcement-truth-01PMZ505 WP10, owner alec, 2026-08-19: a
 // standing blocker, not a settled "empty means skip" design).
 func installSignatureVerifier(pubKey func() string) install.SignatureVerifier {

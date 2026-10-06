@@ -70,6 +70,12 @@ func (ss *SessionSyncer) EnableSync(ctx context.Context, sessionID string, exist
 	if ss.caps != nil && !ss.caps.Has(CapContextSync) {
 		return ErrSessionSyncCapabilityRequired
 	}
+	// A fleet server already known not to have the event stream: refuse
+	// to turn sync on rather than persist a toggle that reports "syncing"
+	// while every event stays local (unsupported_endpoint.go).
+	if err := ss.client.endpointUnsupported(FeatureContextEventStream); err != nil {
+		return err
+	}
 
 	seed, err := SeedKey()
 	if err != nil {

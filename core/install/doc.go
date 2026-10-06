@@ -9,7 +9,8 @@
 //   - Verify runs before Install. A provider reports what verification
 //     applies to the item (builtin / local / signature); for a signed fleet
 //     payload the framework runs its single SignatureVerifier — the one hook
-//     register C-2's per-device key lookup lands in, once, for every kind.
+//     any future catalog payload signature (register C-2: a bundle-key
+//     signature, fleet owner decision pending) lands in, for every kind.
 //   - No install reports success unless the consumer sees it (FR-1, by
 //     construction). After Provider.Install returns, the framework asks
 //     Provider.InstalledState — which every provider computes from its

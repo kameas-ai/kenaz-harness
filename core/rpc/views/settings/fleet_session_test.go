@@ -28,6 +28,7 @@ type sessionFleet struct {
 	mu          sync.Mutex
 	mode        string // "ok" | "server_error" | "not_provisioned" | "expired"
 	email       string
+	name        string
 	role        string
 	enrollCalls int
 	versions    []string
@@ -49,7 +50,7 @@ func newSessionFleet(t *testing.T) *sessionFleet {
 		f.mu.Lock()
 		f.enrollCalls++
 		f.versions = append(f.versions, body.Version)
-		mode, email, role := f.mode, f.email, f.role
+		mode, email, name, role := f.mode, f.email, f.name, f.role
 		f.mu.Unlock()
 		switch mode {
 		case "server_error":
@@ -66,10 +67,20 @@ func newSessionFleet(t *testing.T) *sessionFleet {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		// The REAL kenaz-fleet enroll wire shape: user_email /
+		// user_display_name, both omitempty. `email`/`display_name` are the
+		// GET /api/v1/me keys and are deliberately NOT emitted here.
+		out := map[string]any{
 			"org_id": "org-uuid", "team_id": "t1", "org_name": "Kameas Dogfood",
-			"team_name": "Everyone", "role": role, "tier": "enterprise", "email": email,
-		})
+			"team_name": "Everyone", "role": role, "tier": "enterprise",
+		}
+		if email != "" {
+			out["user_email"] = email
+		}
+		if name != "" {
+			out["user_display_name"] = name
+		}
+		_ = json.NewEncoder(w).Encode(out)
 	})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
@@ -80,6 +91,11 @@ func (f *sessionFleet) setMode(m string) { f.mu.Lock(); f.mode = m; f.mu.Unlock(
 func (f *sessionFleet) setEmail(e string) {
 	f.mu.Lock()
 	f.email = e
+	f.mu.Unlock()
+}
+func (f *sessionFleet) setName(n string) {
+	f.mu.Lock()
+	f.name = n
 	f.mu.Unlock()
 }
 func (f *sessionFleet) calls() int { f.mu.Lock(); defer f.mu.Unlock(); return f.enrollCalls }

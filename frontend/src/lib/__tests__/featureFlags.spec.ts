@@ -64,7 +64,7 @@ describe('featureFlags', () => {
 
     it('returns false for a missing key (not present in map)', () => {
       initFeatureFlags(makeInfo({ launcher_updates: true }));
-      expect(capability('shared_team_graph')).toBe(false);
+      expect(capability('team_graph_sharing')).toBe(false);
     });
 
     it('returns false for an unknown key (no panic)', () => {
@@ -91,13 +91,13 @@ describe('featureFlags', () => {
         launcher_updates: true,
         iso_distribution: true,
         sso_saml: false,
-        shared_team_graph: true,
+        team_graph_sharing: true,
       };
       initFeatureFlags(makeInfo(caps));
       expect(capability('launcher_updates')).toBe(true);
       expect(capability('iso_distribution')).toBe(true);
       expect(capability('sso_saml')).toBe(false);
-      expect(capability('shared_team_graph')).toBe(true);
+      expect(capability('team_graph_sharing')).toBe(true);
     });
   });
 

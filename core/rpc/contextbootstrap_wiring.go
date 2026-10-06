@@ -28,6 +28,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -217,6 +218,29 @@ func (w *bootstrapContextWriter) pushNodeToFleet(ctx context.Context, n contextb
 	if resp.StatusCode/100 != 2 {
 		logging.L().Warn("contextbootstrap.push.non2xx", "status", resp.StatusCode)
 		return false
+	}
+	// kenaz-fleet PR #173: a 200 may still reject the node per-item
+	// (`rejected[]`, reason not_permitted — the id belongs to another user
+	// or org). A rejected node is a failure: record a rejection, never a
+	// publish, and don't count it toward onboarding's context_synced.
+	// Absent field (current server) = accepted, as before.
+	var pushRes corefleet.ContextPushResult
+	if raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20)); rerr == nil && len(raw) > 0 {
+		_ = json.Unmarshal(raw, &pushRes) // unparseable body: keep the prior "2xx = accepted" reading
+	}
+	nodeID := bootstrapNodeID(n)
+	for _, r := range pushRes.Rejected {
+		if r.Kind == "node" && r.ID == nodeID {
+			logging.L().Warn("contextbootstrap.push.rejected", "reason", r.Reason)
+			contextaudit.MustEmit(ctx, w.auditEmitter, contextaudit.KindFleetContextPushRejected,
+				contextaudit.FleetContextPushRejectedPayload{
+					NodeID:         nodeID,
+					Classification: "personal",
+					Reason:         r.Reason,
+					Version:        1,
+				}, time.Now())
+			return false
+		}
 	}
 	// Audit: reuse KindFleetContextPublished (no title/body — only id + class).
 	contextaudit.MustEmit(ctx, w.auditEmitter, contextaudit.KindFleetContextPublished,

@@ -96,3 +96,73 @@ func TestRefreshIdentity_500Transient_IsNotTerminal(t *testing.T) {
 		t.Fatal("expected an error for a 500 response")
 	}
 }
+
+// TestRefreshIdentity_RealFleetWireShape_SurfacesName pins the enroll
+// response shape kenaz-fleet main actually serializes: `user_email` and
+// `user_display_name` (both omitempty), a singular `role`, and NO
+// `email`/`display_name` keys (those are the GET /api/v1/me keys). Before
+// the fix the harness read only the /me keys, so every enrolled identity
+// had an empty name and the account menu fell back to the org name.
+func TestRefreshIdentity_RealFleetWireShape_SurfacesName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/enroll" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"org_id": 7,
+			"team_id": "team-1",
+			"org_name": "Acme",
+			"team_name": "Eng",
+			"role": "org_owner",
+			"user_id": "u-1",
+			"user_email": "ada@example.com",
+			"user_display_name": "Ada Lovelace"
+		}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	id, err := c.RefreshIdentity(t.Context(), "node-1", "darwin", "0.89.1")
+	if err != nil {
+		t.Fatalf("RefreshIdentity: %v", err)
+	}
+	if id.DisplayName != "Ada Lovelace" {
+		t.Errorf("DisplayName = %q, want %q (enroll serializes user_display_name)", id.DisplayName, "Ada Lovelace")
+	}
+	if id.Email != "ada@example.com" {
+		t.Errorf("Email = %q, want %q (enroll serializes user_email)", id.Email, "ada@example.com")
+	}
+	if len(id.Roles) != 1 || id.Roles[0] != "org_owner" {
+		t.Errorf("Roles = %v, want [org_owner]", id.Roles)
+	}
+}
+
+// TestRefreshIdentity_LegacyKeysStillTolerated keeps the /me-shaped keys
+// as a fallback, and both absent (omitempty) leaves the fields empty.
+func TestRefreshIdentity_LegacyKeysStillTolerated(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, wantName, wantEmail string
+	}{
+		{"legacy", `{"org_id":1,"role":"org_member","email":"l@example.com","display_name":"Legacy"}`, "Legacy", "l@example.com"},
+		{"new_wins", `{"org_id":1,"role":"org_member","user_email":"n@example.com","user_display_name":"New","email":"l@example.com","display_name":"Legacy"}`, "New", "n@example.com"},
+		{"both_absent", `{"org_id":1,"role":"org_member"}`, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			c := newTestClient(t, srv)
+			id, err := c.RefreshIdentity(t.Context(), "node-1", "darwin", "0.89.1")
+			if err != nil {
+				t.Fatalf("RefreshIdentity: %v", err)
+			}
+			if id.DisplayName != tc.wantName || id.Email != tc.wantEmail {
+				t.Errorf("got name=%q email=%q, want name=%q email=%q", id.DisplayName, id.Email, tc.wantName, tc.wantEmail)
+			}
+		})
+	}
+}

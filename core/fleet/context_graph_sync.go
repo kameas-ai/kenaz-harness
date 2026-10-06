@@ -15,7 +15,9 @@
 // Capability gating (WP04):
 //
 //	team_shared  → CapSharedTeamGraph
-//	org_shared   → CapSharedTeamGraph + org-graph awareness (same cap for v0)
+//	org_shared   → CapSharedTeamGraph + org-graph awareness (same cap for v0;
+//	               fleet serves org_graph_sharing = CapOrgGraphSharing and
+//	               PR #173 will require it server-side — see capability.go)
 //
 // Opaque payload posture (NFR-002): the wire shapes reference json.RawMessage
 // for body/metadata so the OSS client carries them without embedding the full
@@ -92,7 +94,9 @@ func LayerForClassification(c ContextClassification) (contextpack.Layer, bool) {
 // for v0; org_shared additionally signals org intent which is gated server-side.
 func CapForClassification(c ContextClassification) Capability {
 	// Both classifications use the team-graph sharing cap as the harness-side
-	// gate in v0. The server enforces the org-graph cap separately.
+	// gate in v0. The server enforces the org-graph cap (org_graph_sharing,
+	// CapOrgGraphSharing) separately once kenaz-fleet PR #173 lands; at that
+	// point org_shared should gate on CapOrgGraphSharing here.
 	return CapSharedTeamGraph
 }
 
@@ -146,6 +150,11 @@ type ContextPushResult struct {
 	AcceptedNodes int                   `json:"accepted_nodes"`
 	AcceptedEdges int                   `json:"accepted_edges"`
 	Conflicts     []ContextPushConflict `json:"conflicts"`
+	// Rejected lists per-item permission failures (kenaz-fleet PR #173,
+	// unmerged as of 2026-10-05): ids that exist but belong to another
+	// user or org. Absent on the current server = everything accepted.
+	// Distinct from Conflicts (your own stale version).
+	Rejected []ContextPushRejection `json:"rejected,omitempty"`
 }
 
 // ContextPulledNode is a single node from GET /api/v1/context/pull.
@@ -474,27 +483,28 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		_ = resp.Body.Close()
 	}()
 
-	if resp.StatusCode == http.StatusForbidden {
-		s.mu.Lock()
-		s.lastPushErr = "capability_not_in_tier"
-		s.mu.Unlock()
-		logging.L().Warn("fleet.context.push.http.response",
-			"endpoint", pushEndpoint,
-			"node_id", entry.ID,
-			"status", resp.StatusCode,
-		)
-		return nil, fmt.Errorf("%w: server refused push (likely org tier)", ErrCapabilityNotInTier)
-	}
 	if resp.StatusCode != http.StatusOK {
+		// Whole-batch refusal. Map by the envelope's code (403
+		// not_team_member / load_policy_requires_admin /
+		// capability_not_in_tier, 422 lint_blocked, 400
+		// invalid_classification / missing_node_reference) instead of
+		// collapsing every 403 into capability_not_in_tier.
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		pe := parseContextPushError("push", resp.StatusCode, errBody)
+		lastErr := pe.Code
+		if lastErr == "" {
+			lastErr = fmt.Sprintf("push status %d", resp.StatusCode)
+		}
 		s.mu.Lock()
-		s.lastPushErr = fmt.Sprintf("push status %d", resp.StatusCode)
+		s.lastPushErr = lastErr
 		s.mu.Unlock()
 		logging.L().Warn("fleet.context.push.http.response",
 			"endpoint", pushEndpoint,
 			"node_id", entry.ID,
 			"status", resp.StatusCode,
+			"code", pe.Code,
 		)
-		return nil, fmt.Errorf("fleet: context push status %d", resp.StatusCode)
+		return nil, pe
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -523,8 +533,33 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		return nil, fmt.Errorf("fleet: context push parse response: %w", err)
 	}
 
+	// Per-item rejections (PR #173) are failures, never silent success. If
+	// the entry's own node was rejected the publish failed outright; edge
+	// rejections leave the node published but are recorded as the push
+	// error so Context_SyncStatus shows them.
+	for _, r := range result.Rejected {
+		if r.Kind == "node" && r.ID == entry.ID {
+			s.mu.Lock()
+			s.lastPushErr = describeRejections(result.Rejected)
+			s.mu.Unlock()
+			logging.L().Warn("fleet.context.push.rejected",
+				"node_id", entry.ID,
+				"reason", r.Reason,
+				"rejected_count", len(result.Rejected),
+			)
+			return nil, &ContextPushRejectedError{NodeID: entry.ID, Reason: r.Reason}
+		}
+	}
+
 	s.mu.Lock()
 	s.lastPushErr = ""
+	if len(result.Rejected) > 0 {
+		s.lastPushErr = describeRejections(result.Rejected)
+		logging.L().Warn("fleet.context.push.rejected",
+			"node_id", entry.ID,
+			"rejected_count", len(result.Rejected),
+		)
+	}
 	// Surface server/client version conflicts so the Contexts view can prompt
 	// the user to reconcile (FR: surface server_version vs client_version).
 	if len(result.Conflicts) > 0 {
@@ -768,21 +803,17 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, nodeID string) (*Conte
 		_ = resp.Body.Close()
 	}()
 
-	if resp.StatusCode == http.StatusForbidden {
-		logging.L().Warn("fleet.context.promote.http.response",
-			"endpoint", promoteEndpoint,
-			"node_id", nodeID,
-			"status", resp.StatusCode,
-		)
-		return nil, fmt.Errorf("%w: server refused promote", ErrCapabilityNotInTier)
-	}
 	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		pe := parseContextPushError("promote", resp.StatusCode, errBody)
 		logging.L().Warn("fleet.context.promote.http.response",
 			"endpoint", promoteEndpoint,
 			"node_id", nodeID,
 			"status", resp.StatusCode,
+			"code", pe.Code,
 		)
-		return nil, fmt.Errorf("fleet: context promote status %d", resp.StatusCode)
+		// PR #173: 404 node_not_found unless owner / team member.
+		return nil, pe
 	}
 
 	rawBody, err := io.ReadAll(resp.Body)

@@ -357,6 +357,10 @@ export function describeSyncReason(reason: string | undefined): string {
   switch (reason) {
     case 'remote_context_missing':
       return 'remote context missing on fleet';
+    case 'fleet_api_not_routed':
+      return 'a proxy in front of fleet answered with an error page';
+    case 'fleet_endpoint_unsupported':
+      return "this fleet server doesn't support session sync — events stay local";
     case 'not_authorized':
       return 'not authorized by fleet';
     case 'server_error':
@@ -394,7 +398,10 @@ export const fleetDegradedLanes = computed<DegradedLane[]>(() => {
   const out: DegradedLane[] = [];
   const add = (key: DegradedLane['key'], label: string) => {
     const lane = sync[key];
-    if (lane?.status === 'degraded') {
+    // An Off lane is normally deliberate (consent, entitlement) and hidden —
+    // except when the backend latched the fleet route as unsupported: sync
+    // was asked for and is not happening, so it is shown like a failure.
+    if (lane?.status === 'degraded' || (lane?.status === 'off' && lane.reason === SYNC_UNSUPPORTED_REASON)) {
       out.push({
         key,
         label,
@@ -408,6 +415,21 @@ export const fleetDegradedLanes = computed<DegradedLane[]>(() => {
   add('unitPoll', 'Shared units');
   add('telemetry', 'Telemetry');
   return out;
+});
+
+/** Lane reason the backend publishes when fleet has no session-sync route. */
+export const SYNC_UNSUPPORTED_REASON = 'fleet_endpoint_unsupported';
+
+/**
+ * fleetSessionSyncUnsupported — true once the backend has latched the fleet
+ * session-sync route as absent (core/fleet/unsupported_endpoint.go): the
+ * context-sync lane is Off with reason fleet_endpoint_unsupported. Process-
+ * wide (not per session) and cleared on sign-in. Sync toggles must not claim
+ * "Synced to fleet" while it holds — events stay local.
+ */
+export const fleetSessionSyncUnsupported = computed<boolean>(() => {
+  const lane = _session.value?.sync?.contextSync;
+  return lane?.status === 'off' && lane.reason === SYNC_UNSUPPORTED_REASON;
 });
 
 /**

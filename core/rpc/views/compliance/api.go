@@ -27,7 +27,16 @@ type ComplianceStatus struct {
 	Enabled bool `json:"enabled"`
 	// ArchiverRunning is true when the background archive loop is running.
 	ArchiverRunning bool `json:"archiverRunning"`
+	// StoppedReason says why a stopped archiver is stopped, when known.
+	// "endpoint_unsupported": the connected fleet server has no audit-append
+	// route (core/fleet/unsupported_endpoint.go) — local audit is unaffected
+	// and archival resumes on the next fleet sign-in. Empty otherwise.
+	StoppedReason string `json:"stoppedReason,omitempty"`
 }
+
+// StoppedReasonEndpointUnsupported is ComplianceStatus.StoppedReason when the
+// fleet server has no audit-append route.
+const StoppedReasonEndpointUnsupported = "endpoint_unsupported"
 
 // ComplianceAPI is the view-scoped RPC surface for the Compliance panel.
 type ComplianceAPI interface {

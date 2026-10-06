@@ -359,16 +359,27 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event; the two pull surfaces are count-only stubs
 
+### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event (item 1 downgraded 2026-10-05: no fleet event-stream exists); the two pull surfaces are count-only stubs
+
 Three linked findings from kitty-specs/fleet-session-truth-01DOGF0A/
 research/pull-idempotency-audit-2026-10-05.md:
-1. **seq=1 defect (real):** SessionSyncer.AppendEvent constructs a fresh
-   EventStream per call (core/fleet/session_sync.go:201), so every pushed
-   session event leaves with seq=1; "fleet assigns the monotonic seq"
-   (api.go:4352) is an unverified server assumption. Depending on server
-   dedupe the remote stream may hold ONE event total. **Owner:** fleet
-   brief (confirm server (stream_id,seq) semantics), then either carry a
-   real monotonic seq or document renumbering. Blocks any future durable
-   replay watermark.
+1. **seq=1 — DOWNGRADED 2026-10-05 (fleet brief answered, verified
+   against kenaz-fleet main):** fleet registers NO event-stream endpoints
+   — `/api/v1/context/append` and `/api/v1/context/replay` do not exist
+   and answer the Go mux's plain 404. No remote streams exist, so nothing
+   was ever collapsed to "ONE event total"; the seq=1 construction
+   (SessionSyncer.AppendEvent builds a fresh EventStream per call) is
+   latent, not live data loss. The append 404s were never a provisioning
+   gap either — the parent mission's "remote context missing" reading
+   (dogfood F7) was a misdiagnosis of a missing route. Since
+   `fix/fleet-contract-truth` WP03 a plain 404 latches the stream
+   UNSUPPORTED for the process (`core/fleet/unsupported_endpoint.go`):
+   logged once, never retried, lane `context_sync` goes Off with reason
+   `fleet_endpoint_unsupported`, events stay local, and `EnableSync`
+   refuses once it is known. A fleet session-event log is a NEW fleet
+   feature awaiting an owner spec (server-assigned seq — which also
+   settles the seq question). **Owner:** fleet owner (spec); the harness
+   side re-opens only when that endpoint ships.
 2. **SessionSync_ResumeFrom** and **Handoff_Accept** decrypt and COUNT
    records, persisting nothing (views/contextsync/impl.go:86-89, :213-228,
    both commented as future-WP). Bindings exist; frontend never calls the
@@ -376,6 +387,35 @@ research/pull-idempotency-audit-2026-10-05.md:
    exist until it can be idempotent per the audit's fix shape — do not
    wire a naive AppendMessage loop. **Owner:** the future session-pull
    mission; the audit file is its contract.
+3. **Handoff and audit-append client stubs call endpoints that do not
+   exist server-side (2026-10-05, verified against kenaz-fleet main).**
+   `HandoffHandler.ShareSession` / `Inbox` / `AcceptShare`
+   (`core/fleet/team_handoff.go`, `/api/v1/handoff/{send,inbox,{id}}`)
+   and `AuditArchiver.post` (`core/fleet/audit_archive.go`,
+   `/api/v1/audit/append`) target routes fleet does not register. No
+   provisioning fixes it. Since WP03 (cross-ref item 1) a plain 404
+   latches each feature unsupported — handoff calls short-circuit with
+   `ErrEndpointUnsupported`, the archiver's loop exits (Compliance's
+   `archiverRunning` goes false) — and the local audit log is unaffected.
+   Still open: these surfaces (Handoff_* bindings, the Compliance
+   archive panel) remain offered to the user although the server cannot
+   serve them; a UI "not supported by your fleet" state is unbuilt.
+   **Owner:** fleet owner for the endpoints; harness copy follows them.
+
+### 2026-10-05 (fix/fleet-contract-truth review R3) · bootstrap node ids are not user-scoped — org-wide collisions become per-item rejections under fleet PR #173
+
+`bootstrapNodeID` (`core/rpc/contextbootstrap_wiring.go`) is
+`"ctxb-" + connector + "-" + sourceRef` — deterministic per source item but
+NOT scoped to the user. Two users in one org who bootstrap the same shared
+item (a team channel message, a shared ticket) push the same node id. On the
+current server that is last-writer-wins over someone else's personal node;
+once kenaz-fleet PR #173 lands, the second user's push comes back in
+`rejected[]` with `not_permitted`. Since R3 that rejection is recorded
+honestly (`fleet.context_push_rejected` audit, no publish record, no
+onboarding `context_synced`), so nothing lies — but that user's node never
+reaches fleet. **Not redesigned here** (changing ids orphans every node
+already pushed). **Owner:** contextbootstrap follow-up — scope the id by
+user (or let fleet assign it) with a migration for existing `ctxb-` ids.
 
 ### 2026-10-05 · contexts per-node publication-state read (blocker for FR-7 pre-run state display) — owner: follow-up WP on knowledge-home (needs a Contexts_NodeStatus binding returning per-node layer/version)
 
@@ -416,7 +456,7 @@ after a ledger rewind is a no-op once the tables are gone
 re-application against a database with NO artifacts table of either
 generation.
 
-### 2026-10-05 (install-framework-01DOGF0B review L2) · install consent is UI-enforced only; fleet workflows install unverified until C-2
+### 2026-10-05 (install-framework-01DOGF0B review L2) · install consent is UI-enforced only; fleet workflows install unverified (C-2)
 
 **Class:** a control that reads as enforced but is enforced only in one
 caller (consent); a verification step that reports, not refuses (C-2).
@@ -435,15 +475,28 @@ binding-signature change) belongs with Phase 3's surface consolidation.
 **(b) Fleet workflows join skills' unverified posture (owner: register
 C-2 / the FR-2 fleet payload brief).** Since WP05, org-catalog workflow
 payloads install through `WorkflowsAPI.InstallDocument`, verified by the
-same single `installSignatureVerifier` as skills. With no per-device
-catalog key (C-2) the verifier reports `verified=false` with the C-2
-reason and the install proceeds — recorded on the `capability:installed`
+same single `installSignatureVerifier` as skills. **C-2's real design
+(kenaz-fleet owner, 2026-10-05):** there is no per-org or per-device
+catalog key and never will be. Org-MANDATED items ship inside the
+ed25519-signed config bundle and verify against the build-time-pinned
+fleet key — `core/fleet/config_pull.go` `VerifyWithKeySet` (hard-reject
+before apply) → `compositeConfigApplier.ApplyBundle`
+(`core/rpc/views/settings/fleet.go`) → `fleet.ApplyMandatedSkills`
+(`core/fleet/skills_sync.go`); that is the ONLY mandated-skill write path
+(no other `ApplyMandatedSkills` / `ApplyBundle` caller). Non-mandated
+catalog installs carry no fleet signature today; a possible future design
+signs item payloads with the bundle key (fleet-owner decision pending).
+So the verifier reports `verified=false` with the C-2 reason (since
+`fix/fleet-contract-truth`: "fleet signs only the org config bundle;
+catalog installs carry no fleet signature") and the install proceeds — recorded on the `capability:installed`
 event and stated in the workflow detail pane, not refused. A workflow can
 carry shell steps and a cron schedule, so this posture is a larger trust
 surface than a text skill; the collision refusal (review H1/H2 — a payload
 can never overwrite a template, a user workflow or another item's
-workflow) bounds it to new ids. Clears when C-2's key source lands in the
-verifier.
+workflow) bounds it to new ids. Clears only if the fleet owner decides to
+sign catalog item payloads with the bundle key and that verdict lands in
+the verifier (via `WithPubKey`); otherwise it is the permanent posture for
+non-mandated items and the UI's "not signature-verified" notice stands.
 
 ### 2026-10-05 (install-framework-01DOGF0B re-review low 3) · templates installed before install provenance are never offered an update
 
@@ -562,7 +615,8 @@ why `installed/` never reaches it:
 
 **Still standing (dated-justified, 2026-10-04).** `Client.Install`'s
 `dataDir` and `pubKeyBase64` parameters are unread, kept so the per-kind
-providers and the C-2 per-device key plug into the existing call chain
+providers and any future C-2 bundle-key payload signature (no per-device
+key will exist — fleet owner, 2026-10-05) plug into the existing call chain
 (catalog/impl.go's `pubKeyBase64` / `WithPubKey`, already justified under
 register C-2). `Catalog_Installed` keeps zero `.vue` callers (pre-existing
 NARROW, `harnessClient.ts`); WP08 is its intended reader. Blocker: the
@@ -1155,7 +1209,7 @@ retention backend) already resolved more completely than the spec's own
 | §1.6 lockdown reason dropped (WP08) | store + return the reason | **Not wired — fixed this pass.** `lockdownActive` was a bare `atomic.Bool`; both write paths (`Watcher.run`, `BootstrapLockdownStatus`) parsed the reason off the wire and only logged it. | `core/fleet/lockdown.go` (new `lockdownReason atomic.Value` + `setLockdownState` single write path), `core/rpc/views/settings/fleet.go`'s `FleetLockdownStatus`. Mutation-proven: `TestBootstrapLockdownStatus` now asserts `LockdownReason()=="bootstrap-test"` after the BOOT path (no broker replay) — reverting the fix fails it. No frontend change needed: `LockdownStatusView.Reason`/`types.ts`'s `reason` field already existed on the wire type. |
 | §1.7 site env vars unsettable (WP09) | `Sites_EnvSet`/`Sites_EnvList` RPC + binding + surface | **Not wired — backend built this pass.** `SitesAPI.Sites_EnvSet`/`Sites_EnvList`, `FleetSitesClient` interface extended, `Bindings.Sites_{EnvSet,EnvList}` added. **Frontend NOT wired.** | `core/rpc/views/sites/{api,impl}.go`, `core/rpc/bindings.go`; `TestSitesEnvList_NeverReturnsAValue` mutation-proven at the JSON-wire level (a planted `Value` field is caught). No MCP tool added (spec explicitly forbids it in the same WP). |
 | §1.8 four orphans (`Client.SignOut`, `Client.Unpublish`, `SyncKind.HasScope`+friends, `applyRetentionConfig`) | delete/wire/justify per-symbol | `Client.SignOut` **deleted** this pass (D-5 — zero callers, rival to `settings.API.FleetSignOut` which additionally calls `StopFleetBackground` first). `Client.Unpublish` **wired** this pass (WP11, below). `SyncKind.HasScope`+seven siblings — **RULED (register F-2): justified, not deleted** — `fleet-org-config-inheritance-01NORGX01`'s `meta.json`/`spec.md` already carry owner `alec` + blocker "kenaz-fleet org endpoints not yet available" + date 2026-08-19; this entry cross-references it rather than duplicating. `applyRetentionConfig` **deleted** (see §1.3 row). | `core/fleet/client.go` (deletion), `core/fleet/catalog.go`+`impl.go` (WP11 wiring, below). |
-| §1.9 catalog/skill signature verification skipped (WP10, register C-2) | honesty change: comments stop reading as settled, docstrings corrected, Marketplace says installs are unverified, `WithPubKey` kept | **Not wired — fully built this pass.** Five edits: (1) `api.go`'s `PubKeyBase64: ""` comment; (2) `catalog/impl.go`'s `pubKeyBase64` doc; (3) both `harnessClient.ts` "Downloads, verifies, and live-registers" docstrings + `catalog/api.go`'s `Catalog_Install` doc; (4) `MarketplaceView.vue` gained a persistent plain-text notice (`data-testid="marketplace-unverified-notice"`) — not a modal, not a tooltip (MarketplaceView deleted in install-framework Phase 4; the notice lives in the skill / workflow detail plugins of the Capabilities surface, the only fleet-catalog install paths left); (5) `verifyCatalogSignature`'s skip now logs at warn. `WithPubKey` untouched (kept per C-2). | Frontend test suite RAN clean post-edit (`vitest run`, 261 files / 2445 tests pass); `vue-tsc --noEmit` clean. |
+| §1.9 catalog/skill signature verification skipped (WP10, register C-2) | honesty change: comments stop reading as settled, docstrings corrected, Marketplace says installs are unverified, `WithPubKey` kept | **Not wired — fully built this pass.** Five edits: (1) `api.go`'s `PubKeyBase64: ""` comment; (2) `catalog/impl.go`'s `pubKeyBase64` doc; (3) both `harnessClient.ts` "Downloads, verifies, and live-registers" docstrings + `catalog/api.go`'s `Catalog_Install` doc; (4) `MarketplaceView.vue` gained a persistent plain-text notice (`data-testid="marketplace-unverified-notice"`) — not a modal, not a tooltip (MarketplaceView deleted in install-framework Phase 4; the notice lives in the skill / workflow detail plugins of the Capabilities surface, the only fleet-catalog install paths left); (5) `verifyCatalogSignature`'s skip now logs at warn. `WithPubKey` untouched (kept per C-2). *2026-10-05: C-2's design is settled as "no per-device/per-org catalog key, ever; mandated items verify via the pinned bundle signature; payload signing with the bundle key is a pending fleet-owner decision" — the reason string and comments now say so (`fix/fleet-contract-truth`).* | Frontend test suite RAN clean post-edit (`vitest run`, 261 files / 2445 tests pass); `vue-tsc --noEmit` clean. |
 | §1.16 / task #43 `core/fleet.VerifySignature` zero callers | verify `01PMZ909` UNIT-1 rewrote the i10 allowlist entry; only touch it if that mission slipped | **Verified: `01PMZ909` UNIT-1 already landed it.** `scripts/ci/allowlists/i10-unwired-gates.txt`'s entry now reads "UPDATED 2026-08-21 by bundle-download-and-verify-01PMZ909 UNIT-1/UNIT-9... Standing verdict SUPERSEDED", exactly per that mission's own §9.2 commitment (C-14). Not touched here — touching it would have been the rival-infrastructure failure mode AC-029 warns against. | Read-verified (`grep` on the allowlist file). |
 | §7 G-1/G-2 (nil-optional-dep + uncalled-wiring-setter gates, WP10) | new gate(s), planted-violation proofs | **Already built, by a different mission, in a coordinated form.** `check-nil-optional-deps.sh` (I18, built collaboratively per its own header: "THREE MISSIONS SPECCED THIS GATE; NONE BUILT IT... this tool takes the doc-phrase design") subsumes both G-1 (nil optional dep on a Config/Options struct) and G-2 (an uncalled `Set*`/`With*` method) — its clause-3 fix is literally "a Set*-named method whose body assigns the field from its own parameter... with NO call site anywhere" (`gates_can_fail_test.go`'s `setter-defined-but-never-called-still-fires`), which is G-2 verbatim. `check-config-nil-coverage.sh` (built by `trust-surfaces-that-fire-01PMZ202` WP26) covers the sibling "declared, read, never assigned" shape with two planted-violation proofs of its own. This mission's own I13-widening design (`check-cedar-gate-arguments.sh`) was **not** the one that shipped — per CLAUDE.md's coordination rule, whoever lands first owns the gate. Building a second gate for the same class here would be rival infrastructure. | Verified only (read both scripts' headers + `gates_can_fail_test.go`'s planted cases; did not re-run the full gate suite in this pass — see "What was RUN" below for what was). |
 | §1.11/§1.12 Accent inert-and-pushed; sync push-path trace (WP12) | remove `Accent` from the wire; honest row copy; consumer-map enumeration test (G-5) | **Not wired — fully built this pass.** `Accent` removed from `uiThemePayload` (collect + apply); `SyncPanel.vue` rewritten for all four non-`installed_mcp` rows (`model_prefs` now names its real four fields, `ui_theme` claims only color, `provider_profiles`/`mcp_recipes` state "not yet syncing"). | `core/rpc/sync_categories.go` + three test files; AC-024 assertions added to `SyncPanel.spec.ts` (mutation-proven: reverting the `model_prefs` description to "Default model, provider allowlist..." fails the new test). **G-5 enumeration test (AC-022) NOT built** — see "Not done" below. |

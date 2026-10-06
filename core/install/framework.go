@@ -43,7 +43,8 @@ type Publisher interface {
 }
 
 // SignatureVerifier is the single verification hook for every signed
-// payload, for every provider (register C-2 lands here once). It returns
+// payload, for every provider (register C-2's future payload signature lands
+// here once). It returns
 // verified=true when the signature checks against a trusted key;
 // verified=false with a reason when no key is available to check against
 // (the install proceeds, recorded as unverified); and an error when the

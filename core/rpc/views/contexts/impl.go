@@ -322,7 +322,9 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		logging.L().Warn("contexts.publish.failed",
 			"node_id", req.NodeID,
 			"effective_layer", string(layer),
-			"err", err.Error(),
+			// Never err.Error(): a lint_blocked refusal carries excerpts of
+			// the body; they belong in the returned (UI) error only.
+			"err", fleet.LogSafeErr(err),
 		)
 		return ContextPublishResult{}, fmt.Errorf("contexts: publish: %w", err)
 	}
@@ -354,7 +356,7 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 	if err != nil {
 		logging.L().Warn("contexts.promote.failed",
 			"node_id", nodeID,
-			"err", err.Error(),
+			"err", fleet.LogSafeErr(err),
 		)
 		return ContextPromoteResult{}, fmt.Errorf("contexts: promote: %w", err)
 	}

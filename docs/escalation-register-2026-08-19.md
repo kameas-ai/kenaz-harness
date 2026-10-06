@@ -1609,6 +1609,16 @@ the Compliance panel, retention settings, export and BulkPurge all come out.
 > **Interacts with A-1:** the bundle-verify mission builds real signature
 > verification. Check whether its key handling can serve catalog items before
 > inventing a second scheme.
+>
+> **Update 2026-10-05 (kenaz-fleet owner, answering the fleet-session-truth
+> brief):** option 1 is closed — the control plane will **never** publish
+> per-device or per-org catalog keys. Org-mandated items already verify:
+> they ship inside the ed25519-signed config bundle checked against the
+> build-time-pinned key (`config_pull.go` `VerifyWithKeySet` →
+> `ApplyMandatedSkills`). Non-mandated catalog installs have no fleet
+> signature. Option 2 (sign item payloads with the bundle key) is the only
+> remaining path and is a pending fleet-owner decision; `WithPubKey` stays
+> as its seam.
 
 
 **Instances.** `fleet-enforcement-truth-01PMZ505` E-001 **(blocks any real

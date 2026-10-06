@@ -63,11 +63,11 @@ describe('fleetSession store', () => {
       'fleet:session-changed',
       fakeFleetSession({
         state: 'signed_in',
-        capabilities: { tier: 't', enabled: { shared_team_graph: true }, fetchedAt: '', source: 'fleet' },
+        capabilities: { tier: 't', enabled: { team_graph_sharing: true }, fetchedAt: '', source: 'fleet' },
       }),
     );
     expect(fleetSessionState.value).toBe('signed_in');
-    expect(fleetSessionCapability('shared_team_graph')).toBe(true);
+    expect(fleetSessionCapability('team_graph_sharing')).toBe(true);
   });
 
   it('a read issued before a push does not roll the store back', async () => {
@@ -132,5 +132,37 @@ describe('fleetSession store', () => {
     s.client.settings.fleetSession.mockRejectedValueOnce(new Error('bridge gone'));
     await refresh();
     expect(fleetSessionState.value).toBe('signed_in');
+  });
+});
+
+describe('fleetDegradedLanes — latched-unsupported context sync', () => {
+  afterEach(() => _resetFleetSessionForTest());
+
+  it('an Off lane is hidden, except when the fleet route was latched unsupported', async () => {
+    const { applyFleetSession, fleetDegradedLanes, fleetSessionSyncUnsupported } = await import('@/lib/fleetSession');
+    const lane = { status: 'unknown', consecutiveFailures: 0 };
+    applyFleetSession(
+      fakeFleetSession({
+        state: 'signed_in',
+        sync: { contextSync: { status: 'off', reason: 'not_entitled', consecutiveFailures: 0 }, unitPoll: { ...lane }, telemetry: { ...lane } },
+      }),
+    );
+    expect(fleetDegradedLanes.value).toEqual([]);
+    expect(fleetSessionSyncUnsupported.value).toBe(false);
+
+    applyFleetSession(
+      fakeFleetSession({
+        state: 'signed_in',
+        sync: {
+          contextSync: { status: 'off', reason: 'fleet_endpoint_unsupported', consecutiveFailures: 0 },
+          unitPoll: { ...lane },
+          telemetry: { ...lane },
+        },
+      }),
+    );
+    expect(fleetSessionSyncUnsupported.value).toBe(true);
+    expect(fleetDegradedLanes.value.map((l) => l.reason)).toEqual([
+      "this fleet server doesn't support session sync — events stay local",
+    ]);
   });
 });

@@ -81,3 +81,24 @@ func TestFleetSession_EnrollEmailWinsOverClaim(t *testing.T) {
 		t.Fatalf("email=%q source=%q, want the enroll email", v.Identity.Email, v.EmailSource)
 	}
 }
+
+// TestFleetSession_EnrollDisplayName_ReachesAccountMenu is the owner's
+// "I want to see my name" dogfood item. Fleet's enroll response carries the
+// name as `user_display_name` (not `display_name`); the snapshot the account
+// menu reads (lib/fleetSession.ts → identity.displayName) must carry it,
+// sourced from enroll rather than a token-claim fallback.
+func TestFleetSession_EnrollDisplayName_ReachesAccountMenu(t *testing.T) {
+	r := newSessionRig(t)
+	r.fleet.setName("Alec Feeman")
+	r.setToken(jwtWithProfile("sub-alice", "zitadel-org-1", "", "Claim Name"))
+	if _, err := r.api.FleetRefreshIdentity(context.Background()); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+	v := snap(t, r.api)
+	if v.Identity == nil || v.Identity.DisplayName != "Alec Feeman" || v.NameSource != "enroll" {
+		t.Fatalf("identity=%+v nameSource=%q, want the enroll user_display_name labelled enroll", v.Identity, v.NameSource)
+	}
+	if v.Identity.Email != "alice@example.com" || v.EmailSource != "enroll" {
+		t.Fatalf("email=%q source=%q, want the enroll user_email", v.Identity.Email, v.EmailSource)
+	}
+}

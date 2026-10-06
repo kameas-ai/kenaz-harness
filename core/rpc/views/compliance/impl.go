@@ -59,6 +59,9 @@ func (a *API) Status(ctx context.Context) (ComplianceStatus, error) {
 		status.PendingCount = a.archiver.PendingCount()
 		status.ChainBreak = a.archiver.ChainBreakDetected()
 		status.ArchiverRunning = a.archiver.IsRunning()
+		if !status.ArchiverRunning && a.archiver.Unsupported() {
+			status.StoppedReason = StoppedReasonEndpointUnsupported
+		}
 	}
 	if a.sweeper != nil {
 		status.RetentionDays = a.sweeper.RetentionDays()

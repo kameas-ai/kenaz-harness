@@ -18,6 +18,9 @@ import (
 // Error() keeps the historical text ("fleet: context append status N").
 type AppendStatusError struct {
 	Status int
+	// ProxyPage marks a 404 that arrived as an HTML/XML page (load
+	// balancer / CDN / SPA fallback): transient, not "remote missing".
+	ProxyPage bool
 }
 
 func (e *AppendStatusError) Error() string {
@@ -53,7 +56,18 @@ type AppendBreaker struct {
 	now      func() time.Time
 	sessions map[string]*appendState
 	anyOK    bool
+	// unsupported latches when the server has no event-stream route at all
+	// (a plain 404 — ErrEndpointUnsupported). Not a failure: the lane goes
+	// Off with reasonEndpointUnsupported, no session accrues breaker state,
+	// and nothing is retried (the client short-circuits before any HTTP).
+	// Cleared by ResetAll (sign-in / sign-out), alongside the client latch.
+	unsupported bool
 }
+
+// reasonEndpointUnsupported is the context-sync lane reason when the fleet
+// server has no /api/v1/context/append route (verified absent on kenaz-fleet
+// main, 2026-10-05). Events stay local.
+const reasonEndpointUnsupported = "fleet_endpoint_unsupported"
 
 type appendState struct {
 	failures int
@@ -99,6 +113,10 @@ func (b *AppendBreaker) Do(ctx context.Context, sessionID string, fn func(contex
 	if errors.Is(err, ErrFleetDisabled) {
 		return nil
 	}
+	if errors.Is(err, ErrEndpointUnsupported) {
+		b.markUnsupported(sessionID)
+		return nil // events stay local; not a breaker failure
+	}
 	if err != nil && ctx.Err() != nil && errors.Is(err, context.Canceled) {
 		// The CALLER cancelled (a user-stopped turn, shutdown): says nothing
 		// about fleet. Not a failure — no backoff, no circuit (review F3).
@@ -106,6 +124,20 @@ func (b *AppendBreaker) Do(ctx context.Context, sessionID string, fn func(contex
 	}
 	b.record(sessionID, err)
 	return err
+}
+
+// markUnsupported latches the whole lane unsupported (once) and drops any
+// per-session breaker state — those failures predate the discovery that the
+// route does not exist, and retrying them can never help.
+func (b *AppendBreaker) markUnsupported(sessionID string) {
+	b.mu.Lock()
+	first := !b.unsupported
+	b.unsupported = true
+	delete(b.sessions, sessionID)
+	b.mu.Unlock()
+	if first {
+		b.publish()
+	}
 }
 
 // Reset clears a session's breaker state (sync toggled, sign-in).
@@ -129,8 +161,15 @@ func (b *AppendBreaker) ResetAll() {
 	}
 	b.mu.Lock()
 	had := len(b.sessions) > 0
+	wasUnsupported := b.unsupported
 	b.sessions = map[string]*appendState{}
+	b.unsupported = false
 	b.mu.Unlock()
+	if wasUnsupported && b.lanes != nil {
+		// Back to "not yet attempted": the next append re-probes the route.
+		b.lanes.Set(LaneContextSync, LaneSnapshot{Status: LaneUnknown})
+		return
+	}
 	if had {
 		b.publish()
 	}
@@ -213,7 +252,11 @@ func classifyAppendError(err error) (reason string, permanent bool) {
 	var se *AppendStatusError
 	if errors.As(err, &se) {
 		switch {
+		case se.Status == http.StatusNotFound && se.ProxyPage:
+			return "fleet_api_not_routed", false
 		case se.Status == http.StatusNotFound:
+			// Only an enveloped (JSON {code}) 404 reaches here; a plain
+			// route-level 404 is ErrEndpointUnsupported, handled in Do.
 			return "remote_context_missing", true
 		case se.Status == http.StatusUnauthorized || se.Status == http.StatusForbidden:
 			return "not_authorized", true
@@ -243,6 +286,11 @@ func (b *AppendBreaker) publish() {
 		return
 	}
 	b.mu.Lock()
+	if b.unsupported {
+		b.mu.Unlock()
+		b.lanes.Set(LaneContextSync, LaneSnapshot{Status: LaneOff, Reason: reasonEndpointUnsupported})
+		return
+	}
 	ids := make([]string, 0, len(b.sessions))
 	for id := range b.sessions {
 		ids = append(ids, id)

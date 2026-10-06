@@ -5078,6 +5078,12 @@ export interface ComplianceStatus {
   enabled: boolean;
   /** True when the background archiver goroutine is running. */
   archiverRunning: boolean;
+  /**
+   * Why a stopped archiver is stopped, when known. "endpoint_unsupported":
+   * the connected fleet server has no audit-append route — local audit is
+   * unaffected; archival resumes on the next fleet sign-in.
+   */
+  stoppedReason?: string;
 }
 
 // ── Capabilities: the one install framework (install-framework-01DOGF0B) ───

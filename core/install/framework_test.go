@@ -301,14 +301,15 @@ func TestInstall_Signature_VerifiedPayloadReachesInstall(t *testing.T) {
 	}
 }
 
-// Register C-2 today: no per-device key exists, so the production verifier
+// Register C-2: fleet signs only the org config bundle (mandated items);
+// catalog payloads carry no fleet signature, so the production verifier
 // reports verified=false with a reason. The install proceeds and the
 // event says it was unverified — the gap is recorded, not hidden.
 func TestInstall_Signature_NoKey_ProceedsUnverifiedWithReason(t *testing.T) {
 	p := newFake(install.KindSkill)
 	p.verification = install.Verification{Method: install.VerifySignature, Payload: []byte("p"), Signature: "s"}
 	verify := func(context.Context, install.Ref, []byte, string) (bool, string, error) {
-		return false, "no per-device catalog signing key (register C-2)", nil
+		return false, "not signature-verified: fleet signs only the org config bundle; catalog installs carry no fleet signature (register C-2)", nil
 	}
 	fw, pub := newFramework(t, verify, p)
 

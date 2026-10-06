@@ -106,20 +106,47 @@ type enrollResponse struct {
 	TeamID   string `json:"team_id"`
 	OrgName  string `json:"org_name"`
 	TeamName string `json:"team_name"`
-	Role     string `json:"role"`
-	// Roles is the plural form the fleet brief asks for
-	// (kitty-specs/fleet-session-truth-01DOGF0A/research/fleet-brief.md);
-	// both are accepted while fleet migrates, merged and de-duplicated.
+	// Role is always present on the wire and is exactly one of
+	// org_owner | org_admin | org_member (verified against kenaz-fleet
+	// main, answering kitty-specs/fleet-session-truth-01DOGF0A/research/
+	// fleet-brief.md). Fleet has no plural `roles` array; the Roles field
+	// below is tolerated only so a hypothetical future plural form would
+	// merge in, and it is never populated by the current server.
+	Role  string   `json:"role"`
 	Roles []string `json:"roles,omitempty"`
 	// org_settings is opaque for now.
 	OrgSettings json.RawMessage `json:"org_settings,omitempty"`
 
-	// Fields the fleet AuthContext has but enroll-response doesn't serialize yet.
-	// Zero-values are tolerated; we will coordinate adding them in a follow-up.
-	UserID      string `json:"user_id,omitempty"`
+	UserID string `json:"user_id,omitempty"`
+	Tier   string `json:"tier,omitempty"`
+
+	// UserEmail / UserDisplayName are the keys the fleet enroll response
+	// actually serializes (both omitempty — either may be absent). Before
+	// this was fixed the harness read only `email`/`display_name`, which
+	// are the GET /api/v1/me keys, so every enrolled identity had a blank
+	// name and email and the account menu fell back to the org name.
+	UserEmail       string `json:"user_email,omitempty"`
+	UserDisplayName string `json:"user_display_name,omitempty"`
+	// Email / DisplayName are the legacy (/me-shaped) keys, tolerated as a
+	// fallback only; the enroll endpoint does not emit them.
 	Email       string `json:"email,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
-	Tier        string `json:"tier,omitempty"`
+}
+
+// email returns the enroll email, preferring the real wire key.
+func (er enrollResponse) email() string {
+	if v := strings.TrimSpace(er.UserEmail); v != "" {
+		return v
+	}
+	return strings.TrimSpace(er.Email)
+}
+
+// displayName returns the enroll display name, preferring the real wire key.
+func (er enrollResponse) displayName() string {
+	if v := strings.TrimSpace(er.UserDisplayName); v != "" {
+		return v
+	}
+	return strings.TrimSpace(er.DisplayName)
 }
 
 // enrollErrorEnvelope matches the Fleet API error response shape for
@@ -323,8 +350,8 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		TeamID:      er.TeamID,
 		OrgName:     er.OrgName,
 		TeamName:    er.TeamName,
-		Email:       er.Email,
-		DisplayName: er.DisplayName,
+		Email:       er.email(),
+		DisplayName: er.displayName(),
 		Tier:        er.Tier,
 		FetchedAt:   time.Now(),
 	}

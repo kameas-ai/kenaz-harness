@@ -720,7 +720,7 @@ interface WailsBindingsLike {
   // ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP04/WP06) ──────
   /** Returns all fleet-installed skills (catalog + mandated). */
   Slashcmd_SkillList(): Promise<SkillItem[]>;
-  /** Downloads and live-registers a skill from the catalog. NOT signature-verified today — no per-device catalog signing key source exists yet (fleet-enforcement-truth-01PMZ505, register C-2). */
+  /** Downloads and live-registers a skill from the catalog. NOT signature-verified today — fleet signs only the org config bundle (mandated items); catalog payloads carry no fleet signature (register C-2). */
   Slashcmd_SkillInstall(catalogID: string, version: string): Promise<void>;
   /** Removes and live-unregisters a skill by its store ID. */
   Slashcmd_SkillUninstall(skillID: string): Promise<void>;
@@ -2947,7 +2947,7 @@ export interface SlashcmdClient {
   // ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP04/WP06) ─────────
   /** Returns all fleet-installed skills (catalog + mandated). */
   skillList(): Promise<SkillItem[]>;
-  /** Downloads and live-registers a skill from the catalog. NOT signature-verified today — no per-device catalog signing key source exists yet (fleet-enforcement-truth-01PMZ505, register C-2). */
+  /** Downloads and live-registers a skill from the catalog. NOT signature-verified today — fleet signs only the org config bundle (mandated items); catalog payloads carry no fleet signature (register C-2). */
   skillInstall(catalogID: string, version: string): Promise<void>;
   /** Removes and live-unregisters a skill by its store ID. */
   skillUninstall(skillID: string): Promise<void>;

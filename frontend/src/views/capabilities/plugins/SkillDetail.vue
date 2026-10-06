@@ -59,8 +59,8 @@ async function install() {
     </p>
 
     <p class="font-ui text-[11px] text-ink-muted" data-testid="skill-detail-unverified">
-      Fleet catalog installs are not signature-verified yet — content comes from your org's catalog but is
-      not cryptographically checked before install.
+      Fleet catalog installs are not signature-verified; fleet signs only the org config bundle — content
+      comes from your org's catalog but is not cryptographically checked before install.
     </p>
 
     <div v-if="error" class="font-ui text-[12px] text-signal-danger" role="alert" data-testid="skill-detail-error">

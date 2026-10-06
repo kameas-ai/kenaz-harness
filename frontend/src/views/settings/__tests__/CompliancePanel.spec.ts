@@ -221,4 +221,23 @@ describe('CompliancePanel', () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="compliance-load-error"]').text()).toContain('not available');
   });
+
+  it('says "not supported by this fleet server" when the archiver stopped on an unsupported endpoint', async () => {
+    const { client } = buildClient({ archiverRunning: false, stoppedReason: 'endpoint_unsupported' });
+    const wrapper = mount(CompliancePanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const cell = wrapper.find('[data-testid="compliance-archiver-running"]');
+    expect(cell.text()).toContain('not supported by this fleet server');
+  });
+
+  it('a plain stop still reads "Stopped"', async () => {
+    const { client } = buildClient({ archiverRunning: false });
+    const wrapper = mount(CompliancePanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="compliance-archiver-running"]').text()).toBe('Stopped');
+  });
 });
