@@ -21,3 +21,16 @@ and #380, before the first snapshot PR landed).
 **Zero-delta**: byte-identical to v0.89.3's dump (diff-verified).
 No migrations on this path. The snapshot keeps the chain level with the
 newest tag.
+
+## Backfill note (2026-10-06)
+
+The `dump.sql` this file describes was never committed: PR #382 landed
+this PROVENANCE.md alone, and nothing noticed — the presence gate
+(`check-upgrade-snapshot-present.sh`) keyed on the DIRECTORY name and
+`TestUpgradePath` silently skipped dump-less directories, so the chain
+actually stopped at v0.89.3 while the gate reported v0.89.4. Caught by
+the v0.90.0 release review. The dump was backfilled 2026-10-06 by
+re-running the command above; the regenerated dump was re-verified
+byte-identical to v0.89.3's (`cmp`), confirming the zero-delta claim.
+The same PR hardens the gate and the test so a provenance-only
+directory now fails both.
