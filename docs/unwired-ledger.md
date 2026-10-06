@@ -5327,6 +5327,48 @@ Not done here: case labels are package constants, so the check needs the
 same const resolution WP05's gate builds. **Owner:** WP05. Dated
 2026-10-05.
 
+### 2026-10-05 (model-harness-toolset-01MHTS001 WP02 security review) — review findings on the containment seam
+
+**H1 — CLOSED: a model-supplied session id overrode the real session.**
+`kenaz__skill` accepted `session_id` in its arguments and passed it to
+`slashcmd.Dispatch.RunModelInvoked`. Then `dispatch.go`'s kind:tool branch
+re-stamped the tool-dispatch ctx with `toolloop.WithSessionID(ctx,
+sc.SessionID)`, replacing the session the call was really running in. A run
+contained to `[kenaz__skill]` reached `kenaz__sleep` by sending a forged or
+foreign id, and a forged onboarding-kind id would also have passed the
+session-kind arm for `harness_write_*`. Two fixes:
+(1) the skill tool takes the session only from
+`toolloop.SessionIDFromContext`, and its schema is `additionalProperties:
+false` with `DisallowUnknownFields`, so a `session_id` argument is refused
+with `invalid_args` instead of being silently ignored;
+(2) the slash dispatcher uses the new `toolloop.WithSessionIDChecked`, which
+only fills an empty ctx. A different id coming from data is refused with
+`ErrSessionIDMismatch`. The human `UserRun` path, where the ctx carries no
+session, is unchanged.
+Pins: `TestSkillTool_SessionIsCtxDerived_ContainmentHolds` (the reviewer's
+probe, now permanent; red on the pre-fix code),
+`TestDispatch_KindTool_SessionContextCannotOverrideCtxSession`,
+`TestTool_Call_SessionIDArgumentRefused`, `TestWithSessionIDChecked`.
+`project_id`/`cwd` remain model-supplied skill arguments. They feed only
+command lookup and the `{{cwd}}` template, not permission resolution.
+
+**Sibling audit (as the reviewer asked):**
+- `planmode/enter.go` and `planmode/exit.go`: ctx-derived
+  (`SessionResolver` defaults to `toolloop.SessionIDFromContext`), with no
+  session argument. Nothing to change.
+- `saveartifact`: ctx-derived, with no session argument. Nothing to change.
+- `updateartifact`: the session is ctx-derived (logging only), but the
+  target is any `artifact_id`, with no ownership check against the session.
+  **Cross-session targeting is designed-in:** artifacts have been a global
+  library since `sessions/0332-artifacts-global-scope`. Writes append a new
+  `artifact_versions` row, so they are non-destructive and earlier versions
+  survive. What gates it: the `FSWriteEnabled` dial and per-call `use_tool`
+  resolution, which now includes scheduled-run containment. The H-3
+  `ActionArtifactUpdate` gap is above. **Constraint for this mission:** any
+  W-session wrapper over artifacts must add the FR-G6 ownership check
+  (`InScopeArtifact`) rather than copy this tool's posture. **Owner:**
+  WP04 (ownership.go) / WP10.
+
 ## Drained
 
 ### 2026-10-04 · CLOSED — chat run ids were a per-process counter written into a persistent log (`agentgraph-settings-linkage-01DOGF0D` WP02)

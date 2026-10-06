@@ -16,6 +16,16 @@
 //	  "args": { ... }            // optional — map of input variable values
 //	}
 //
+// The session is NEVER an argument (model-harness-toolset-01MHTS001 WP02
+// security review, H1). It is taken exclusively from the dispatch context
+// (toolloop.SessionIDFromContext, stamped by the kernel tool adapter). The
+// schema used to accept a model-supplied "session_id" that was then
+// stamped onto the slash dispatch ctx, overriding the real session: a
+// forged or foreign id escaped the session's tool-permission resolution,
+// including a scheduled run's allowlist containment. Unknown fields —
+// session_id included — are now refused with invalid_args, never silently
+// ignored, so a caller still sending one surfaces.
+//
 // Output schema (success):
 //
 //	{ "output": "<rendered text>", "kind": "info" }
@@ -28,11 +38,13 @@
 package skill
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 const (
@@ -63,10 +75,6 @@ const inputSchema = `{
       "description": "Named argument values required by the skill. Keys match the skill's declared input names.",
       "additionalProperties": { "type": "string" }
     },
-    "session_id": {
-      "type": "string",
-      "description": "The active session ID. Passed through to the skill for session-scoped resolution."
-    },
     "project_id": {
       "type": "string",
       "description": "The active project ID. Optional; used for project-scoped command lookup."
@@ -76,7 +84,8 @@ const inputSchema = `{
       "description": "Current working directory. Optional; used as the {{cwd}} template variable."
     }
   },
-  "required": ["name"]
+  "required": ["name"],
+  "additionalProperties": false
 }`
 
 // Options bundles the Tool's dependencies.
@@ -107,10 +116,10 @@ func (t *Tool) Description() string { return ToolDescription }
 func (t *Tool) InputSchema() json.RawMessage { return json.RawMessage(inputSchema) }
 
 // input is the parsed JSON shape the model passes to this tool.
+// It deliberately has no session field: see the package doc (H1).
 type input struct {
 	Name      string            `json:"name"`
 	Args      map[string]string `json:"args"`
-	SessionID string            `json:"session_id"`
 	ProjectID string            `json:"project_id"`
 	CWD       string            `json:"cwd"`
 }
@@ -125,6 +134,9 @@ type output struct {
 type errOutput struct {
 	IsError bool   `json:"isError"`
 	Error   string `json:"error"`
+	// Kind is the closed error vocabulary ("invalid_args", "no_session");
+	// empty for the pre-existing free-text failures.
+	Kind string `json:"kind,omitempty"`
 }
 
 // Call implements toolloop.BuiltinTool.
@@ -137,8 +149,14 @@ func (t *Tool) Call(ctx context.Context, args json.RawMessage) (json.RawMessage,
 	}
 
 	var in input
-	if err := json.Unmarshal(args, &in); err != nil {
-		return marshalErr(fmt.Sprintf("skill tool: invalid arguments: %v", err))
+	dec := json.NewDecoder(bytes.NewReader(args))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		return marshalKindErr("invalid_args", fmt.Sprintf("skill tool: invalid arguments: %v (the session is taken from the conversation, never from an argument)", err))
+	}
+	sessionID := toolloop.SessionIDFromContext(ctx)
+	if sessionID == "" {
+		return marshalKindErr("no_session", "skill tool requires an active session context")
 	}
 	if in.Name == "" {
 		return marshalErr("skill tool: 'name' argument is required")
@@ -151,7 +169,7 @@ func (t *Tool) Call(ctx context.Context, args json.RawMessage) (json.RawMessage,
 	}
 
 	sc := coreslashcmd.SessionContext{
-		SessionID: in.SessionID,
+		SessionID: sessionID,
 		ProjectID: in.ProjectID,
 		CWD:       in.CWD,
 	}
@@ -169,6 +187,11 @@ func (t *Tool) Call(ctx context.Context, args json.RawMessage) (json.RawMessage,
 	if jsonErr != nil {
 		return marshalErr(fmt.Sprintf("skill tool: marshal output: %v", jsonErr))
 	}
+	return data, nil
+}
+
+func marshalKindErr(kind, msg string) (json.RawMessage, error) {
+	data, _ := json.Marshal(errOutput{IsError: true, Error: msg, Kind: kind})
 	return data, nil
 }
 

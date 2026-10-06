@@ -1,6 +1,9 @@
 package toolloop
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // Session-ID context plumbing for built-in tools.
 //
@@ -30,6 +33,29 @@ func WithSessionID(ctx context.Context, sessionID string) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, sessionIDCtxKey{}, sessionID)
+}
+
+// ErrSessionIDMismatch is returned by WithSessionIDChecked when ctx already
+// carries a session id and a DIFFERENT one is offered.
+var ErrSessionIDMismatch = errors.New("toolloop: ctx already carries a different session id")
+
+// WithSessionIDChecked is WithSessionID for call sites whose id comes from
+// data rather than from the dispatcher that owns the call (e.g. a slash
+// command's SessionContext). It only FILLS an empty ctx: if ctx already
+// carries a session id, an empty or equal id keeps it, and a different
+// one is refused with ErrSessionIDMismatch — a session id from data can
+// never override the session the call is actually running in
+// (model-harness-toolset-01MHTS001 WP02 security review, H1: that
+// override let a forged id escape per-session permission resolution).
+func WithSessionIDChecked(ctx context.Context, sessionID string) (context.Context, error) {
+	cur := SessionIDFromContext(ctx)
+	if cur == "" {
+		return WithSessionID(ctx, sessionID), nil
+	}
+	if sessionID == "" || sessionID == cur {
+		return ctx, nil
+	}
+	return ctx, ErrSessionIDMismatch
 }
 
 // SessionIDFromContext returns the session ID attached via
