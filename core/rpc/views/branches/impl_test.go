@@ -1721,3 +1721,80 @@ func TestSubagentStatusValuesAreInTSUnion(t *testing.T) {
 		})
 	}
 }
+
+// TestAPI_CreateBranch_ExplicitPathSeedsHandoffAfterReplay pins the
+// kenaz__fork_conversation contract on the shared CreateBranch entry: an
+// anchored fork with a SystemPromptOverride replays history up to the
+// anchor and then appends the handoff — through appendHandoff, the one
+// branch-handoff writer — and stamps the caller's CreationPath on both
+// the persisted row and the branch.created audit record.
+func TestAPI_CreateBranch_ExplicitPathSeedsHandoffAfterReplay(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, convMgr := newTestStack(t)
+	em := &fakeAuditEmitter{}
+	api.cfg.Audit = em
+	ctx := context.Background()
+	parent, err := sessMgr.Create(ctx, "trunk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m1, _ := sessMgr.AppendMessage(ctx, parent.ID, session.Message{Role: session.RoleUser, Content: "q1"})
+	if _, err := sessMgr.AppendMessage(ctx, parent.ID, session.Message{Role: session.RoleAssistant, Content: "a1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID:      parent.ID,
+		ParentMessageID:      m1.ID,
+		Title:                "tangent",
+		SystemPromptOverride: "  explore the tangent  ",
+		CreationPath:         CreationPathModelTool,
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	msgs, err := sessMgr.ListMessages(ctx, br.ChildSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 || msgs[0].Content != "q1" || msgs[1].Content != "explore the tangent" || msgs[1].Role != session.RoleUser {
+		t.Fatalf("child transcript = %+v, want [q1, user:'explore the tangent']", msgs)
+	}
+	row, err := convMgr.Get(ctx, br.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.CreationPath != CreationPathModelTool {
+		t.Errorf("row.CreationPath = %q, want %q", row.CreationPath, CreationPathModelTool)
+	}
+	var payload audit.BranchCreatedPayload
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindBranchCreated {
+			_ = json.Unmarshal(e.Payload, &payload)
+		}
+	}
+	if payload.CreationPath != CreationPathModelTool || payload.ParentMessageID != m1.ID {
+		t.Errorf("audit payload = %+v, want creation_path=%q parent_message_id=%q", payload, CreationPathModelTool, m1.ID)
+	}
+}
+
+// TestAPI_CreateBranch_ExplicitPathWithoutOverrideUnchanged: the "Branch
+// from this turn" menu sends no override — its child must stay an exact
+// replay (no Title/TaskHint fallback seed like the legacy path has).
+func TestAPI_CreateBranch_ExplicitPathWithoutOverrideUnchanged(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	m1, _ := sessMgr.AppendMessage(ctx, parent.ID, session.Message{Role: session.RoleUser, Content: "q1"})
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID, ParentMessageID: m1.ID, Title: "t", TaskHint: "h", CreationPath: "explicit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := sessMgr.ListMessages(ctx, br.ChildSessionID)
+	if len(msgs) != 1 || msgs[0].Content != "q1" {
+		t.Fatalf("child transcript = %+v, want exactly the replayed [q1]", msgs)
+	}
+}

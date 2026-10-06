@@ -1549,6 +1549,22 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t_, _ = p.PersistPartial(ctx, sessionID, text, \"transient\", true)\n" +
 				"}\n",
 		},
+		{
+			// 2026-10-05 (model fork tool, review H1): ReplayTranscript
+			// joined SYMBOLS when the fork replay was consolidated into
+			// session.Manager. Same F2 shape as the case above: a second
+			// caller replaying rows through the seam changes no leaf
+			// AppendMessage line, so only the seam symbol can see it.
+			// Planted in the seam's one sanctioned caller file.
+			name: "session-message-writers/second-replay-transcript-caller",
+			wantOutput: "core/conversation/manager.go calls .ReplayTranscript( 2 time(s); " +
+				"allowlist permits 1",
+			gate: "check-session-message-writers.sh",
+			file: "core/conversation/manager.go",
+			append: "\nfunc zzGateProbeSecondReplayCaller(m *Manager, ctx context.Context, sessionID string, msgs []session.Message) {\n" +
+				"\t_, _ = m.sessions.ReplayTranscript(ctx, sessionID, msgs)\n" +
+				"}\n",
+		},
 		// ---- 2026-09-11: closing finding #48 (10 of 51 gates had no
 		// planted-violation proof at all — nothing demonstrated they could
 		// fail). The seven cases below are the grep/test-shaped gates from

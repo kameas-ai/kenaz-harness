@@ -451,7 +451,15 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 	// Stuff the session ID into ctx so built-in tools that need it
 	// (kenaz__save_artifact) can pull it out without a parameter.
 	// Tools that don't read it pay nothing.
-	out, err := a.pool.Call(toolloop.WithSessionID(ctx, a.sessionID), server, tool, argsJSON)
+	dispatchCtx := toolloop.WithSessionID(ctx, a.sessionID)
+	// The live turn's span (the user message that opened it), for tools
+	// that must reason about "before this turn" — kenaz__fork_conversation's
+	// default branch point. Read-only after newTurnJournal; an inert
+	// journal (empty span) attaches nothing.
+	if a.moves != nil {
+		dispatchCtx = toolloop.WithTurnSpanID(dispatchCtx, a.moves.spanID)
+	}
+	out, err := a.pool.Call(dispatchCtx, server, tool, argsJSON)
 	if err != nil {
 		// WP02 (tool-error-legibility-01PMDL02): append a conservative
 		// environment-drift hint when the raw error signature-matches a

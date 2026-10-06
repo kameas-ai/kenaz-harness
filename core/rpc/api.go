@@ -3266,6 +3266,10 @@ func New(c *core.Core, opts ...Option) *API {
 		// not a second tracker.
 		Usage: usageMgr,
 	})
+	// kenaz__fork_conversation: the model's conversation-fork surface,
+	// bound to the branches view just built (see
+	// registerForkConversationTool for the reuse/gating contract).
+	registerForkConversationTool(a.builtins, a.branchesAPI, sessionManagerOrNil(c), a.convMgr != nil)
 
 	// Agent-graph view surface — graph manager already built above so
 	// the chat-migration ChatRunner could share its kernel.
@@ -7810,6 +7814,9 @@ func buildChatRunner(
 				"kenaz__update_artifact":           true,
 				"kenaz__todo_write":                true,
 				"kenaz__request_filesystem_access": true,
+				// Creates a session + branch row; serialised with the
+				// other writers rather than racing them.
+				"kenaz__fork_conversation": true,
 			}
 		}
 	}

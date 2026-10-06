@@ -103,3 +103,34 @@ func IsVisibilityProbe(ctx context.Context) bool {
 	v, _ := ctx.Value(visibilityProbeCtxKey{}).(bool)
 	return v
 }
+
+// Turn-span context plumbing (model fork tool, review M1, 2026-10-05).
+//
+// The turn span is the id of the user message that opened the chat turn
+// a tool call runs inside — the same value session.TranscriptEntry.
+// TurnSpanID carries. kenaz__fork_conversation reads it so its default
+// branch point lands BEFORE the live turn instead of on the still-open
+// "please fork this" request. Set by the chat path's kernel tool adapter
+// beside WithSessionID; absent everywhere else (workflows, slash
+// commands), where readers fall back to their no-span behaviour.
+
+type turnSpanCtxKey struct{}
+
+// WithTurnSpanID attaches the live turn's span id to ctx. Empty id is a
+// no-op.
+func WithTurnSpanID(ctx context.Context, spanID string) context.Context {
+	if spanID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, turnSpanCtxKey{}, spanID)
+}
+
+// TurnSpanIDFromContext returns the span id attached via WithTurnSpanID,
+// or "" if none.
+func TurnSpanIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	v, _ := ctx.Value(turnSpanCtxKey{}).(string)
+	return v
+}
