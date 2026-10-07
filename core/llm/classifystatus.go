@@ -30,7 +30,16 @@ import (
 // union shape should call this function and override the message
 // field in the returned error if the generic extraction misses detail.
 func ClassifyStatus(status int, body []byte) error {
-	msg := extractClassifyMessage(body)
+	return ClassifyStatusMessage(status, extractClassifyMessage(body))
+}
+
+// ClassifyStatusMessage is ClassifyStatus for callers that already hold
+// the provider's message rather than a raw body — e.g. an OpenRouter
+// mid-stream error frame, which carries the upstream HTTP-style status in
+// `error.code` on an HTTP 200 stream (undelivered-message-retry,
+// 2026-10-07: that frame used to be flattened to ErrTransient, so a 402
+// that arrived in-stream was auto-retried as if it were a blip).
+func ClassifyStatusMessage(status int, msg string) error {
 	if msg == "" {
 		msg = http.StatusText(status)
 	}

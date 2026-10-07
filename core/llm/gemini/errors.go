@@ -21,6 +21,7 @@ type geminiErrorEnvelope struct {
 //
 // Google API error classification by HTTP status:
 //   - 401 / 403 → ErrAuth (UNAUTHENTICATED / PERMISSION_DENIED)
+//   - 402 → ErrPaymentRequired (billing exhausted; non-retryable)
 //   - 429 → ErrTransient (RESOURCE_EXHAUSTED)
 //   - 408 / 425 → ErrTransient (timeout / too early)
 //   - 5xx → ErrTransient (server errors)
@@ -33,6 +34,10 @@ func classifyStatus(status int, body []byte) error {
 	switch {
 	case status == 401 || status == 403:
 		return &llm.ErrAuth{Status: status, Message: "gemini: " + msg}
+	case status == 402:
+		// Billing exhausted — never retryable
+		// (undelivered-message-retry, 2026-10-07).
+		return &llm.ErrPaymentRequired{Status: status, Message: "gemini: " + msg}
 	case status == 429:
 		return &llm.ErrTransient{Status: status, Message: "gemini: " + msg}
 	case status >= 500 && status < 600:

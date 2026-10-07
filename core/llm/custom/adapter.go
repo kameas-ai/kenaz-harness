@@ -300,6 +300,10 @@ func classifyStatus(status int, body []byte) error {
 	switch {
 	case status == 401 || status == 403:
 		return &llm.ErrAuth{Status: status, Message: msg}
+	case status == 402:
+		// Insufficient credits — never retryable, and never "check the
+		// request shape" (undelivered-message-retry, 2026-10-07).
+		return &llm.ErrPaymentRequired{Status: status, Message: msg}
 	case status == 429:
 		return &llm.ErrTransient{Status: status, Message: msg}
 	case status >= 500 && status < 600:
