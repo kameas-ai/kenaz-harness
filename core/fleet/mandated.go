@@ -468,8 +468,17 @@ func (m *MandatedApplier) install(ctx context.Context, it BundleMandatedItem, pr
 				rec.PriorWorkflow, rec.PriorCatalogWorkflow = prev.PriorWorkflow, prev.PriorCatalogWorkflow
 			}
 		} else if prev.LocalID != "" {
-			if _, err := m.Workflows.RemoveMandatedWorkflow(ctx, prev.LocalID, it.CatalogID, prev.PriorWorkflow, prev.legacyWorkflowRestore()); err != nil {
+			out, err := m.Workflows.RemoveMandatedWorkflow(ctx, prev.LocalID, it.CatalogID, prev.PriorWorkflow, prev.legacyWorkflowRestore())
+			if err != nil {
 				return rec, fmt.Errorf("fleet/mandated: workflow %s: remove superseded %q: %w", it.CatalogID, prev.LocalID, err)
+			}
+			if out.RestoreRefused != "" {
+				// The mandate moved to a new workflow id and policy refused
+				// to restore the user's copy at the old one: it was deleted.
+				// Fleet 0114+ cannot reach this (versions are immutable);
+				// legacy records can — never silent.
+				logging.L().Warn("fleet.mandated.restore_refused", "kind", MandatedKindWorkflow,
+					"catalog_id", it.CatalogID, "local_id", prev.LocalID, "reason", out.RestoreRefused)
 			}
 		}
 		rec.LocalID = id

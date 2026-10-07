@@ -68,6 +68,15 @@ func TestWPPI_V091MandatedAppliedFileRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A pending side file to absorb, so the file HEAD writes carries a
+	// non-empty absorbed_pending (review F2's additive field).
+	pend, _ := json.Marshal(mandatedState{Schema: 1, Items: map[string]mandatedRecord{
+		"workflow:c-keep": {CatalogID: "c-keep", Kind: "workflow", Version: "1", LocalID: "keep"},
+	}})
+	if err := os.WriteFile(filepath.Join(dir, "fleet", "mandated_applied.pending.json"), pend, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	wf := &ownerMandatedWorkflows{owner: map[string]string{"nightly": "c-wf", "keep": "c-keep"}}
 	m := &MandatedApplier{Skills: store, Registry: reg, Workflows: wf, DataDir: dir}
 
@@ -104,6 +113,12 @@ func TestWPPI_V091MandatedAppliedFileRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var head mandatedState
+	if err := json.Unmarshal(out, &head); err != nil || head.AbsorbedPending == "" {
+		t.Fatalf("HEAD's file should carry a non-empty absorbed_pending: %v\n%s", err, out)
+	}
+	// Plain Unmarshal (as v0.91 decodes — no DisallowUnknownFields): the
+	// unknown absorbed_pending key must not break the downgrade read.
 	var back v091MandatedState
 	if err := json.Unmarshal(out, &back); err != nil {
 		t.Fatalf("v0.91 cannot decode the file WP04 wrote: %v\n%s", err, out)

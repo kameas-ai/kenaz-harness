@@ -1174,6 +1174,12 @@ func (a *API) restorePriorWorkflow(ctx context.Context, id string, prior json.Ra
 	if w.ID != id {
 		return "", fmt.Errorf("workflows: restore %q: snapshot holds %q", id, w.ID)
 	}
+	// Deliberately the enforce() shape (Deny/Confirm refuse) — PARITY with
+	// the user's own Save and InstallDocument above: a chassis-restored
+	// USER workflow faces exactly the policy the user's Save faces. An
+	// explicit-Allow requirement would make strict-mode withdrawals delete
+	// non-shell user copies, stricter than Save. The gating census's "never
+	// enforce()" rule targets model-initiated/unattended writes, not this.
 	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cedarMode(), corewf.CollectStepKinds(w)); gerr != nil {
 		return gerr.Error(), nil
 	}
