@@ -342,7 +342,7 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
-### 2026-10-07 (skill-library-01SKLIB01 residuals, feat/skill-library) · three accepted, none introduced as regressions
+### 2026-10-07 (skill-library-01SKLIB01 residuals + review F4–F6, feat/skill-library) · six accepted, none introduced as regressions
 
 1. **OQ-1 — the revocation sweep covers skills + workflows only.**
    Catalog-installed packs and bundles have no consumer install record
@@ -372,6 +372,30 @@ prose and in a TS union; they do not call `MoveKinds()`.
    mandates may take over any catalog-provenance copy). **Owner:** the
    OQ-4 follow-up ("nudge toward `superseded_by`"), which needs
    entry-level grouping of versions anyway.
+4. **Review F4 — the mandated-workflow read-only guard fails OPEN on an
+   unreadable provenance file.** `isOrgMandated` reads an unreadable
+   `install_provenance.json` as "not mandated", so Save / ScheduleSet /
+   ScheduleClear are allowed while it is broken. Deliberately matches
+   the pre-existing `Delete` posture (the install-collision checks fail
+   closed on their own, and the provenance store logs the breakage at
+   WARN once). **Owner:** skill-library follow-up — decide fail-closed
+   for all four mutators together, not one at a time.
+5. **Review F5 — a FAILED v2 promote removes v1 until the retry.** When
+   v2's install fails in the same bundle that drops v1, v1 is not "seen"
+   and the reconcile removes it; the bundle error retries and v2 lands
+   on a later poll. Pre-existing since v0.91 (the applier cannot know a
+   failed item's local id when its payload did not decode). **Owner:**
+   skill-library follow-up — keep v1 when a failed item shares its
+   catalog entry (needs fleet to send the entry slug in the envelope,
+   which is a signed-wire change under the §5.4 rule).
+6. **Review F6 — the revocation sweep's skill removal is check-then-act.**
+   `uninstallLocked` re-reads the skill and then `LiveUnregister`s it; a
+   mandate landing between the two could in principle be removed. The
+   window is two local file ops inside one sweep and the config poller
+   that applies mandates runs the sweep on its own goroutine AFTER apply,
+   so the two never interleave today; the workflow side is atomic under
+   `installMu`. **Owner:** skill-library follow-up, if the sweep ever
+   moves off the config poller's goroutine.
 
 ### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
 
@@ -402,8 +426,11 @@ prose and in a TS union; they do not call `MoveKinds()`.
    > its own id), so a v1→v2 promote updates in place instead of failing
    > as a collision and deleting the workflow. Pinned by
    > `TestInstallMandatedDocument_TakeoverRestoredOnWithdrawal` (real
-   > sqlite, file provenance), `…_LegacyRecordRelabels`,
-   > `…_PromoteUpdatesInPlace`.
+   > sqlite, file provenance), `TestRemoveMandatedDocument_LegacyRecordRelabels`,
+   > `TestInstallMandatedDocument_PromoteUpdatesInPlace`. Review F3
+   > (2026-10-07): the restore now runs the Cedar save gate; a refused
+   > restore deletes the mandated copy and audits `restore_refused`
+   > (`TestRemoveMandatedDocument_RestoreRefusedByPolicyDeletes`).
 3. **R3 (P3) — a takeover while mandated_applied.json is unreadable (F5
    path) never persists PriorSkill**, so a later withdrawal deletes
    rather than restores. Needs the F5 corruption AND a takeover in the
