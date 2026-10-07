@@ -76,3 +76,19 @@ func generateNodeID() string {
 	enc := base32.NewEncoding("0123456789ABCDEFGHJKMNPQRSTVWXYZ").WithPadding(base32.NoPadding)
 	return enc.EncodeToString(combined)
 }
+
+// ClearNodeID removes <dataDir>/fleet/node_id.txt so the next NodeID call
+// mints a fresh id. Used when fleet answers 403 node_removed: an admin
+// removal blocks that (user, node_id) pair, and re-enroll only works under
+// a NEW node id (fleet contract §10.1). Wire-id-safe: wire ids derive from
+// wire_id_salt, never node_id (wire_id.go, F8) — that file is NOT touched.
+// A missing file is not an error.
+func ClearNodeID(dataDir string) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.Remove(nodeIDFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("fleet: clear node_id: %w", err)
+	}
+	return nil
+}

@@ -413,27 +413,14 @@ func deriveHandoffKey(recipientPubKeyBytes []byte) ([]byte, []byte, error) {
 // what the fleet identity service returns for this user ID; the sender fetches
 // it via fetchRecipientPublicKey, so both sides use the same key material.
 func (h *HandoffHandler) deriveReceiveKey(ephemeralPubKeyBytes []byte) ([]byte, error) {
-	// Load our seed-derived X25519 private key.
-	recipientPriv, err := LoadOwnHandoffPrivKey()
+	// Load our per-device (seed + node id) X25519 private key.
+	recipientPriv, err := LoadOwnHandoffPrivKey(h.client.dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("load own handoff private key: %w", err)
 	}
-
-	// Parse the sender's ephemeral public key.
-	curve := ecdh.X25519()
-	ephemeralPub, err := curve.NewPublicKey(ephemeralPubKeyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse ephemeral public key: %w", err)
-	}
-
-	// X25519 ECDH: recipientPriv · ephemeralPub == ephemeralPriv · recipientPub.
-	sharedSecret, err := recipientPriv.ECDH(ephemeralPub)
-	if err != nil {
-		return nil, fmt.Errorf("ECDH receive: %w", err)
-	}
-
-	// Same HKDF step as deriveHandoffKey.
-	return DeriveKey(sharedSecret[:32], LabelHandoffKey)
+	// X25519 ECDH: recipientPriv · ephemeralPub == ephemeralPriv · recipientPub,
+	// then the same HKDF step as deriveHandoffKey.
+	return deriveV1DirectKey(recipientPriv, ephemeralPubKeyBytes)
 }
 
 // ── audit helper ──────────────────────────────────────────────────────────────

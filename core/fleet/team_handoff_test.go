@@ -94,8 +94,10 @@ func TestHandoffHandler_ShareAndAccept_RoundTrip(t *testing.T) {
 		t.Fatalf("StoreContextSeed: %v", err)
 	}
 
-	// Derive the seed-based public key the server should advertise.
-	recipientPriv, err := LoadOwnHandoffPrivKey()
+	// Derive the per-device (seed + node id) public key the server should
+	// advertise.
+	dataDir := t.TempDir()
+	recipientPriv, err := LoadOwnHandoffPrivKey(dataDir)
 	if err != nil {
 		t.Fatalf("LoadOwnHandoffPrivKey: %v", err)
 	}
@@ -110,6 +112,7 @@ func TestHandoffHandler_ShareAndAccept_RoundTrip(t *testing.T) {
 		ExpiresAt:    time.Now().Add(time.Hour),
 	})
 	c := makeTestClient(t, srv.URL)
+	c.dataDir = dataDir
 	fe := &fakeEmitter{}
 	h := NewHandoffHandler(c, fe, nil)
 
