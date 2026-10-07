@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
@@ -109,42 +110,37 @@ func hkdf32(ikm []byte, info string) ([]byte, error) {
 	return out, nil
 }
 
-// SeedKey ensures a context seed exists in the OS keychain. If no seed exists,
-// it generates a fresh 32-byte random seed and persists it. Returns the seed
-// bytes. Safe to call multiple times; subsequent calls are idempotent.
-func SeedKey() ([]byte, error) {
-	svc := paths.FleetKeychainService()
-	existing, err := keyring.Get(svc, contextSeedAccount)
-	if err == nil && existing != "" {
-		seed, decErr := base64.StdEncoding.DecodeString(existing)
-		if decErr != nil {
-			return nil, fmt.Errorf("fleet: context seed decode: %w", decErr)
-		}
-		if len(seed) != seedSize {
-			return nil, fmt.Errorf("fleet: context seed bad length %d (want %d)", len(seed), seedSize)
-		}
-		return seed, nil
-	}
-	// Generate a fresh seed.
-	seed := make([]byte, seedSize)
-	if _, err := rand.Read(seed); err != nil {
-		return nil, fmt.Errorf("fleet: generate context seed: %w", err)
-	}
-	encoded := base64.StdEncoding.EncodeToString(seed)
-	if err := keyring.Set(svc, contextSeedAccount, encoded); err != nil {
-		return nil, fmt.Errorf("fleet: persist context seed: %w", err)
-	}
-	logging.L().Info("fleet.context_crypto.seed_generated")
-	return seed, nil
-}
+// ErrKeychainUnavailable is returned when the OS keychain answered with
+// anything other than "not found" (locked keychain, denied prompt,
+// transient backend error). The seed is a ROOT secret: such an error must
+// never be read as "no seed yet" — minting a replacement would make every
+// synced stream undecryptable and silently rotate the handoff key.
+var ErrKeychainUnavailable = errors.New("fleet: OS keychain unavailable")
 
-// LoadContextSeed reads the seed from the OS keychain without generating one.
-// Returns ErrContextSeedNotFound when no seed exists.
-func LoadContextSeed() ([]byte, error) {
-	svc := paths.FleetKeychainService()
-	existing, err := keyring.Get(svc, contextSeedAccount)
-	if err != nil || existing == "" {
-		return nil, ErrContextSeedNotFound
+// seedMu serialises every read-modify-write of the context seed, so two
+// first-run callers (enroll + sync enable) cannot each mint a seed and
+// race last-write-wins on a root secret.
+var seedMu sync.Mutex
+
+// seedKeyringGet / seedKeyringSet are the keychain seam for the seed (a
+// test substitutes a failing backend; production is core/keyring).
+var (
+	seedKeyringGet = keyring.Get
+	seedKeyringSet = keyring.Set
+)
+
+// readSeedLocked reads the stored seed. (nil, nil) means DEFINITELY absent
+// (keyring.ErrNotFound, or an empty value that cannot be a seed); any other
+// keychain error is ErrKeychainUnavailable. Caller holds seedMu.
+func readSeedLocked() ([]byte, error) {
+	existing, err := seedKeyringGet(paths.FleetKeychainService(), contextSeedAccount)
+	switch {
+	case errors.Is(err, keyring.ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("%w: %v", ErrKeychainUnavailable, err)
+	case existing == "":
+		return nil, nil
 	}
 	seed, decErr := base64.StdEncoding.DecodeString(existing)
 	if decErr != nil {
@@ -156,15 +152,60 @@ func LoadContextSeed() ([]byte, error) {
 	return seed, nil
 }
 
+// SeedKey ensures a context seed exists in the OS keychain and returns it.
+// It generates one ONLY when the keychain says the seed is definitely
+// absent (keyring.ErrNotFound); any other keychain error is returned as
+// ErrKeychainUnavailable and nothing is written. Serialised: concurrent
+// first-run callers get the same seed.
+func SeedKey() ([]byte, error) {
+	seedMu.Lock()
+	defer seedMu.Unlock()
+	seed, err := readSeedLocked()
+	if err != nil {
+		return nil, err
+	}
+	if seed != nil {
+		return seed, nil
+	}
+	seed = make([]byte, seedSize)
+	if _, err := rand.Read(seed); err != nil {
+		return nil, fmt.Errorf("fleet: generate context seed: %w", err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(seed)
+	if err := seedKeyringSet(paths.FleetKeychainService(), contextSeedAccount, encoded); err != nil {
+		return nil, fmt.Errorf("fleet: persist context seed: %w", err)
+	}
+	logging.L().Info("fleet.context_crypto.seed_generated")
+	return seed, nil
+}
+
+// LoadContextSeed reads the seed from the OS keychain without generating one.
+// Returns ErrContextSeedNotFound when no seed exists and
+// ErrKeychainUnavailable (wrapped) when the keychain could not be read.
+func LoadContextSeed() ([]byte, error) {
+	seedMu.Lock()
+	defer seedMu.Unlock()
+	seed, err := readSeedLocked()
+	if err != nil {
+		return nil, err
+	}
+	if seed == nil {
+		return nil, ErrContextSeedNotFound
+	}
+	return seed, nil
+}
+
 // StoreContextSeed writes a raw seed to the OS keychain, overwriting any
-// existing value. Used by UseRecoveryCode to import a seed from another device.
+// existing value. Used by UseRecoveryCode to import a seed from another
+// device — an explicit user action, the only sanctioned overwrite.
 func StoreContextSeed(seed []byte) error {
 	if len(seed) != seedSize {
 		return fmt.Errorf("fleet: seed must be %d bytes, got %d", seedSize, len(seed))
 	}
-	svc := paths.FleetKeychainService()
+	seedMu.Lock()
+	defer seedMu.Unlock()
 	encoded := base64.StdEncoding.EncodeToString(seed)
-	if err := keyring.Set(svc, contextSeedAccount, encoded); err != nil {
+	if err := seedKeyringSet(paths.FleetKeychainService(), contextSeedAccount, encoded); err != nil {
 		return fmt.Errorf("fleet: persist imported context seed: %w", err)
 	}
 	logging.L().Info("fleet.context_crypto.seed_imported")

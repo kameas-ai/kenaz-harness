@@ -65,7 +65,7 @@ const (
 const (
 	keyRegTooManyCopy  = "This device can't receive shared sessions: your account has too many devices registered. Remove an old device in the fleet dashboard, then sign in again."
 	keyRegInvalidCopy  = "This device can't receive shared sessions: fleet rejected its device key. Sign out and back in to retry."
-	keyRegUnavailCopy  = "This device can't receive shared sessions: its device key could not be created (OS keychain unavailable)."
+	keyRegUnavailCopy  = "This device can't receive shared sessions: the OS keychain is unavailable (locked or access denied), so its device key could not be read. Unlock the keychain, then sign in again."
 	keyRegNodeGoneCopy = "This device was removed by an org admin."
 )
 
