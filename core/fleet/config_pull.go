@@ -25,6 +25,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -53,6 +54,13 @@ var configBackoffSteps = []time.Duration{5 * time.Minute, 15 * time.Minute, 60 *
 // the caller will NOT advance lastAppliedID so the bundle is retried next poll.
 type ConfigApplier interface {
 	ApplyBundle(ctx context.Context, b *Bundle) []error
+}
+
+// ConfigItemApplier is the optional extension a ConfigApplier implements to
+// report per-mandated-item statuses for the ACK (WP02). When the applier
+// implements it the poller calls ApplyBundleItems INSTEAD of ApplyBundle.
+type ConfigItemApplier interface {
+	ApplyBundleItems(ctx context.Context, b *Bundle) ([]error, []MandatedItemStatus)
 }
 
 // ConfigPollStatus is the wire shape returned to the frontend via the
@@ -97,6 +105,16 @@ type ConfigPoller struct {
 	checksum      string // SHA-256 hex of last-seen bundle JSON (for 304)
 	source        string
 	keyUnknown    bool // last rejection was ErrSigningKeyUnknown
+
+	// buildVersion is this binary's version (SetBuildVersion). With
+	// reapplyID it implements review F1's re-apply rule: when the build
+	// changed since the last applied bundle, or that bundle had REFUSED
+	// mandated items (a kind this build could not install), the stored
+	// checksum is cleared and the SAME bundle id may be applied once more,
+	// so an upgraded build installs a previously refused pack without
+	// waiting for a new bundle. reapplyID is that bundle id (0 = none).
+	buildVersion string
+	reapplyID    int64
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -143,6 +161,14 @@ func NewConfigPoller(client *Client, dataDir string, applier ConfigApplier) *Con
 	return p
 }
 
+// SetBuildVersion records this binary's version for the re-apply rule (see
+// ConfigPoller.buildVersion). Call before Start.
+func (p *ConfigPoller) SetBuildVersion(v string) {
+	p.mu.Lock()
+	p.buildVersion = v
+	p.mu.Unlock()
+}
+
 // Start launches the background polling goroutine. Loads the cached bundle
 // state (lastAppliedID + checksum) before the first fetch.
 func (p *ConfigPoller) Start(ctx context.Context) {
@@ -158,6 +184,12 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 		p.checksum = cs
 		if id > 0 {
 			p.source = "cache"
+			meta := loadBundleApplyMeta(p.dataDir)
+			if meta.BuildVersion != p.buildVersion || meta.HadRefusals {
+				// F1: re-fetch (no 304) and allow bundle id to apply once more.
+				p.checksum = ""
+				p.reapplyID = id
+			}
 		}
 		p.mu.Unlock()
 	}
@@ -268,7 +300,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	cs := p.checksum
 	p.mu.RUnlock()
 
-	urlPath := fmt.Sprintf("/api/v1/configs?machine=%s&checksum=%s", nodeID, cs)
+	urlPath := fmt.Sprintf("/api/v1/configs?machine=%s&checksum=%s", url.QueryEscape(nodeID), url.QueryEscape(cs))
 
 	// We need to inspect the status code before letting the fleet http.Client
 	// discard non-2xx bodies, so we call Get directly.
@@ -330,6 +362,11 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	keys := FleetSigningKeys()
 	p.mu.RLock()
 	lastID := p.lastAppliedID
+	if p.reapplyID > 0 && p.reapplyID == lastID {
+		// F1 re-apply: the already-applied bundle may verify once more
+		// (a replay of a bundle this device already accepted is harmless).
+		lastID = p.reapplyID - 1
+	}
 	p.mu.RUnlock()
 
 	if err := VerifyWithKeySet(&b, keys, lastID); err != nil {
@@ -345,7 +382,15 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 
 	// Apply the bundle through the registered applier.
 	// FR-012: applier returns ALL per-section errors so the ACK can carry them.
-	applyErrs := p.applier.ApplyBundle(ctx, &b)
+	var (
+		applyErrs []error
+		itemStats []MandatedItemStatus
+	)
+	if ia, ok := p.applier.(ConfigItemApplier); ok {
+		applyErrs, itemStats = ia.ApplyBundleItems(ctx, &b)
+	} else {
+		applyErrs = p.applier.ApplyBundle(ctx, &b)
+	}
 
 	// Compute new checksum of the raw body (for 304 on next poll).
 	newChecksum := hexChecksumOf(body)
@@ -356,11 +401,19 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	// the next GET returns the same bundle (no 304 short-circuit).
 	p.mu.Lock()
 	p.keyUnknown = false // the bundle verified under a pinned key
+	hadRefusals := false
+	for _, st := range itemStats {
+		if st.Status == MandatedStatusRefused {
+			hadRefusals = true
+		}
+	}
+	buildVersion := p.buildVersion
 	if len(applyErrs) == 0 {
 		p.lastAppliedID = b.BundleID
 		p.lastAppliedAt = time.Now()
 		p.checksum = newChecksum
 		p.lastError = ""
+		p.reapplyID = 0
 	} else {
 		// Surface the error set but leave ID + checksum untouched.
 		msgs := make([]string, 0, len(applyErrs))
@@ -379,6 +432,9 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		if saveErr := saveBundleState(p.dataDir, b.BundleID, newChecksum); saveErr != nil {
 			log.Printf("fleet: save bundle state: %v", saveErr)
 		}
+		if saveErr := saveBundleApplyMeta(p.dataDir, bundleApplyMeta{BuildVersion: buildVersion, HadRefusals: hadRefusals}); saveErr != nil {
+			log.Printf("fleet: save bundle apply meta: %v", saveErr)
+		}
 	}
 
 	// ACK back to fleet (best-effort; errors are logged, not propagated).
@@ -386,7 +442,8 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	// the caller's context is cancelled around the same time (e.g. Stop()).
 	ackCtx, ackCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer ackCancel()
-	if ackErr := PostConfigACK(ackCtx, p.client, b.BundleID, applyErrs); ackErr != nil {
+	machineID, _ := NodeID(p.dataDir) // the same id the pull's ?machine= sends
+	if ackErr := PostConfigACK(ackCtx, p.client, b.BundleID, applyErrs, ConfigACKReport{MachineID: machineID, Items: itemStats}); ackErr != nil {
 		log.Printf("fleet: config ack: %v", ackErr)
 	}
 
@@ -458,6 +515,44 @@ func loadBundleState(dataDir string) (int64, string, error) {
 		}
 	}
 	return id, cs, nil
+}
+
+// bundleApplyMeta records, for the last fully applied bundle, the build
+// that applied it and whether it carried refused mandated items (F1).
+type bundleApplyMeta struct {
+	BuildVersion string `json:"build_version"`
+	HadRefusals  bool   `json:"had_refusals"`
+}
+
+func bundleApplyMetaPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "bundle_apply_meta.json")
+}
+
+// loadBundleApplyMeta returns the zero meta when absent/unreadable — which
+// reads as "applied by a different (older) build", triggering one re-apply.
+func loadBundleApplyMeta(dataDir string) bundleApplyMeta {
+	var m bundleApplyMeta
+	if dataDir == "" {
+		return m
+	}
+	if raw, err := os.ReadFile(bundleApplyMetaPath(dataDir)); err == nil {
+		_ = json.Unmarshal(raw, &m)
+	}
+	return m
+}
+
+func saveBundleApplyMeta(dataDir string, m bundleApplyMeta) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(bundleApplyMetaPath(dataDir), string(raw)+"\n")
 }
 
 // saveBundleState atomically persists (lastAppliedID, checksum) to disk.

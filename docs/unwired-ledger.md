@@ -342,6 +342,76 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
+
+1. **R1 (P2) — promote-to-team can wedge and duplicate when the user has
+   no team_id.** Fleet 400s `team_shared` pushes without a team_id;
+   `UnitMapper` attaches a nil `m.teamID` unchecked, and
+   `Unit_PromoteAsMergeRequest` creates the local team copy BEFORE the
+   push — a failed push leaves a dirty copy that background sync re-pushes
+   (400ing the whole team batch) every cycle, and each retry mints another
+   copy. **Latent: no frontend caller exists.** Fix shape: refuse before
+   creating the copy when team_id is absent; reuse an existing
+   `promoted_from` copy; teach the test fake the team_id rule. **Owner:**
+   the mission that wires the promote UI — the guard lands BEFORE the
+   first caller.
+2. **R2 (P3) — workflow mandate-takeover restore hands back the mandated
+   content relabelled as a catalog install**, not the user's earlier
+   version/edits (skills restore properly). **Owner:** skill-library
+   mission (01SKLIB01) WP04 territory.
+3. **R3 (P3) — a takeover while mandated_applied.json is unreadable (F5
+   path) never persists PriorSkill**, so a later withdrawal deletes
+   rather than restores. Needs the F5 corruption AND a takeover in the
+   same window. **Owner:** same as R2.
+4. **Mandated workflows are delete-protected but not edit/unschedule-
+   protected** (accepted "not done"): a weak guarantee for
+   compliance-type workflows. **Owner:** skill-library mission, with the
+   read-only UI treatment.
+
+### 2026-10-06 (newly-live fleet routes verification, pre-v0.91.0) · four latent gaps, all verified non-firing today
+
+Fleet deployed audit/append, identity/public-key, handoff/*, context
+streams and team/members (#180-#183); the harness's 404-latches stop
+firing. A six-family verification (no crash/corrupt/loop anywhere)
+left these latents:
+
+1. **Handoff_Share hardcodes nil events** (contextsync/impl.go:186) —
+   once ANY recipient registers a device key, every share 422s
+   handoff_empty; today unreachable (empty roster: can_receive=false
+   for all, no keys registered). **MUST fix before key registration
+   ships** — wire real session-event loading. **Owner:** device-keys
+   /handoff v2 mission.
+2. **EventStream backfill has no 1000-event/2MiB-per-event client caps
+   and sends no client_event_id** (context_sync.go:314-332, 250-268) —
+   latent, no live backfill caller (both Toggles pass nil). **Owner:**
+   context-streams mission.
+3. **Server-seq cursor discipline**: when SessionSync_ResumeFrom gains
+   a real applier, persist fleet's next_seq — never the local message
+   count (the hook posts wire seq=1 per event; server assigns arrival
+   order). **Owner:** context-streams mission.
+4. Cosmetic: handoff 409 recipient_keys_stale / recipient_no_key / 422
+   map to raw "status NNN" in the share dialog. **Owner:** v2 mission.
+
+### 2026-10-06 (empty-turn fix review residuals, fix/session-write-empty-turn) · two pre-existing flags, neither introduced by d845ecf0
+
+1. **Image-only turns drop generated images silently.**
+   `GeneratedImageCapturer.DrainPendingImages` rides the session_write
+   `HookPostLLM` (`chat_runner.go:1598-1612`). A final fire with
+   generated images but EMPTY text now completes via the soft skip and
+   never drains — images lost quietly (previously the same turn
+   hard-errored, losing them loudly). Only bites providers that emit
+   image-only turns. **Fix shape:** move the drain off the session_write
+   hook, or drain on the skip path too. **Owner:** next chat-runner
+   mission; revisit if any wired provider starts emitting image-only
+   finals.
+2. **Whitespace-only assistant rows render as visible empty bubbles.**
+   `session_write` skips only exact `""`; a `"\n"` turn still writes a
+   row, and `MessageBubble.vue` (311, 655-662) renders it under
+   `whitespace-pre-wrap` with no blank guard. Pre-existing. **Fix
+   shape:** TrimSpace-based skip at session_write (consistent with
+   `AppendEntry`'s TrimSpace absorb compare) or a blank guard in the
+   bubble. **Owner:** same follow-up as above.
+
 ### 2026-10-05 (engine-ports review residuals, fix/engine-ports) · two accepted lane-scan edges
 
 1. A slow OUR engine with NO engine.port record (failed write or garbage
@@ -403,6 +473,14 @@ research/pull-idempotency-audit-2026-10-05.md:
    **Owner:** fleet owner for the endpoints; harness copy follows them.
 
 ### 2026-10-05 (fix/fleet-contract-truth review R3) · bootstrap node ids are not user-scoped — org-wide collisions become per-item rejections under fleet PR #173
+
+> **CLOSED 2026-10-06 (fleet wire-contract WP04):** the bootstrap fleet push
+> leg was removed — it pushed classification "personal", which fleet always
+> refuses, and bootstrap has no share-consent surface. `bootstrapNodeID` is
+> deleted; extracted context stays local (RunStatus.SharingSkipped =
+> `personal_requires_share_consent`) and is shared per entry through
+> Knowledge › Curated, whose ids are per-install UUIDv5s (core/fleet/wire_id.go).
+> The text below is historical.
 
 `bootstrapNodeID` (`core/rpc/contextbootstrap_wiring.go`) is
 `"ctxb-" + connector + "-" + sourceRef` — deterministic per source item but
@@ -481,9 +559,10 @@ catalog key and never will be. Org-MANDATED items ship inside the
 ed25519-signed config bundle and verify against the build-time-pinned
 fleet key — `core/fleet/config_pull.go` `VerifyWithKeySet` (hard-reject
 before apply) → `compositeConfigApplier.ApplyBundle`
-(`core/rpc/views/settings/fleet.go`) → `fleet.ApplyMandatedSkills`
-(`core/fleet/skills_sync.go`); that is the ONLY mandated-skill write path
-(no other `ApplyMandatedSkills` / `ApplyBundle` caller). Non-mandated
+(`core/rpc/views/settings/fleet.go`) → `fleet.MandatedApplier.Apply`
+(`core/fleet/mandated.go`, which replaced `ApplyMandatedSkills` with the
+`mandated_items` envelope on 2026-10-06); that is the ONLY mandated-item
+write path. Non-mandated
 catalog installs carry no fleet signature today; a possible future design
 signs item payloads with the bundle key (fleet-owner decision pending).
 So the verifier reports `verified=false` with the C-2 reason (since

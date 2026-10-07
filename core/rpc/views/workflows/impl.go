@@ -557,6 +557,25 @@ func (a *API) Delete(ctx context.Context, id string) error {
 	if a.cfg.Store == nil {
 		return ErrStorageUnavailable
 	}
+	// Review F7: an org-mandated workflow is not the user's to delete —
+	// the org's next bundle (withdrawing the mandate) removes it. Mirrors
+	// slashcmd.ErrSkillOrgManaged for mandated skills.
+	if a.cfg.Provenance != nil {
+		if p, ok, err := a.cfg.Provenance.Get(id); err == nil && ok && p.Source == corewf.ProvenanceMandated {
+			return fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, id)
+		}
+	}
+	return a.deleteWorkflow(ctx, id)
+}
+
+// ErrWorkflowOrgManaged: the workflow is required by the user's org
+// (installed from the bundle's mandated_items) and cannot be deleted here.
+var ErrWorkflowOrgManaged = errors.New("workflows: this workflow is required by your org and cannot be deleted")
+
+// deleteWorkflow is Delete without the org-managed guard — the mandate
+// reconciliation path (RemoveMandatedDocument) is the one caller allowed
+// to remove a mandated workflow.
+func (a *API) deleteWorkflow(ctx context.Context, id string) error {
 	// Probe the store first so the user-facing surface returns a typed
 	// not-found rather than a silent ok. The storage Delete is idempotent
 	// on missing rows, which is the wrong contract for the RPC.
@@ -827,6 +846,11 @@ type DocumentOrigin struct {
 	// Slug is the workflow id the catalog item advertised.
 	Slug    string
 	Version string
+	// Mandated marks an org-mandated install (bundle mandated_items, WP02):
+	// provenance is recorded as corewf.ProvenanceMandated. A mandated item
+	// arrives inside the SIGNED bundle with no separately advertised slug,
+	// so an empty Slug means "the document's own id".
+	Mandated bool
 }
 
 // InstallDocument installs a workflow delivered as a document — the fleet
@@ -852,12 +876,15 @@ func (a *API) InstallDocument(ctx context.Context, payload []byte, origin Docume
 	if a.cfg.Store == nil {
 		return CatalogInstallResult{}, ErrStorageUnavailable
 	}
-	if origin.CatalogID == "" || origin.Slug == "" {
+	if origin.CatalogID == "" || (origin.Slug == "" && !origin.Mandated) {
 		return CatalogInstallResult{}, fmt.Errorf("workflows: install document: the catalog item and its advertised id are required")
 	}
 	w, err := decodeWorkflowDocument(payload)
 	if err != nil {
 		return CatalogInstallResult{}, err
+	}
+	if origin.Mandated && origin.Slug == "" {
+		origin.Slug = w.ID
 	}
 	a.installMu.Lock()
 	defer a.installMu.Unlock()
@@ -902,7 +929,7 @@ func (a *API) InstallDocument(ctx context.Context, payload []byte, origin Docume
 	}
 	if a.cfg.Provenance != nil {
 		if perr := a.cfg.Provenance.Put(corewf.InstallProvenance{
-			WorkflowID: saved.ID, Source: corewf.ProvenanceCatalog,
+			WorkflowID: saved.ID, Source: documentProvenanceSource(origin),
 			CatalogID: origin.CatalogID, Slug: origin.Slug, Version: origin.Version,
 		}); perr != nil {
 			if created {
@@ -947,10 +974,70 @@ func (a *API) ownedByCatalogItem(id, catalogID string) error {
 	switch {
 	case !ok:
 		return fmt.Errorf("%w: %q is a workflow you created", ErrWorkflowIDCollision, id)
-	case p.Source != corewf.ProvenanceCatalog:
+	case p.Source != corewf.ProvenanceCatalog && p.Source != corewf.ProvenanceMandated:
 		return fmt.Errorf("%w: %q was installed from a shipped template", ErrWorkflowIDCollision, id)
 	case p.CatalogID != catalogID:
 		return fmt.Errorf("%w: %q was installed from catalog item %q", ErrWorkflowIDCollision, id, p.CatalogID)
+	}
+	return nil
+}
+
+// documentProvenanceSource is the provenance a document install records.
+func documentProvenanceSource(o DocumentOrigin) string {
+	if o.Mandated {
+		return corewf.ProvenanceMandated
+	}
+	return corewf.ProvenanceCatalog
+}
+
+// InstallMandatedDocument installs an org-mandated workflow document
+// (bundle mandated_items, WP02) and reports whether the mandate TOOK OVER
+// the user's own earlier catalog install of the same item (review F6), so
+// withdrawal can hand it back instead of deleting it.
+func (a *API) InstallMandatedDocument(ctx context.Context, payload []byte, catalogID, version string) (string, bool, error) {
+	tookOver := false
+	if w, err := decodeWorkflowDocument(payload); err == nil && a != nil && a.cfg.Provenance != nil {
+		if p, ok, perr := a.cfg.Provenance.Get(w.ID); perr == nil && ok &&
+			p.Source == corewf.ProvenanceCatalog && p.CatalogID == catalogID {
+			tookOver = true
+		}
+	}
+	res, err := a.InstallDocument(ctx, payload, DocumentOrigin{CatalogID: catalogID, Version: version, Mandated: true})
+	if err != nil {
+		return "", false, err
+	}
+	return res.WorkflowID, tookOver, nil
+}
+
+// RemoveMandatedDocument ends the org mandate on workflowID — ONLY while its
+// recorded provenance is still the mandate of catalogID (a workflow the user
+// or another install now owns, or one already gone, is left alone, nil).
+// restoreCatalog true (the mandate had taken over the user's own catalog
+// install — review F6) hands it back: provenance returns to catalog and the
+// workflow stays. Otherwise it is deleted (schedule disarmed first).
+func (a *API) RemoveMandatedDocument(ctx context.Context, workflowID, catalogID string, restoreCatalog bool) error {
+	if a == nil || a.cfg.Disabled {
+		return ErrFeatureDisabled
+	}
+	if a.cfg.Provenance == nil {
+		return fmt.Errorf("workflows: remove mandated %q: no install provenance store wired", workflowID)
+	}
+	p, ok, err := a.cfg.Provenance.Get(workflowID)
+	if err != nil {
+		return err
+	}
+	if !ok || p.Source != corewf.ProvenanceMandated || p.CatalogID != catalogID {
+		return nil
+	}
+	if restoreCatalog {
+		p.Source = corewf.ProvenanceCatalog
+		return a.cfg.Provenance.Put(p)
+	}
+	if a.scheduler != nil {
+		_ = a.ScheduleClear(ctx, workflowID) // no schedule is not an error here
+	}
+	if err := a.deleteWorkflow(ctx, workflowID); err != nil && !errors.Is(err, corewf.ErrWorkflowNotFound) {
+		return err
 	}
 	return nil
 }

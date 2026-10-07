@@ -150,6 +150,12 @@ type RunStatus struct {
 	// ErrorSummary is a classified error label when Phase==RunPhaseFailed.
 	// NEVER contains raw source content or credential material.
 	ErrorSummary string `json:"error_summary,omitempty"`
+	// SharingSkipped names why extracted nodes were NOT shared beyond this
+	// device (empty when the writer does not report one). Set from the
+	// writer's SharingStatusReporter. The harness writer never pushes
+	// bootstrap context to fleet: it is personal until the user shares an
+	// entry explicitly (fleet wire-contract ruling 2026-10-06, WP04).
+	SharingSkipped string `json:"sharing_skipped,omitempty"`
 }
 
 // ConnectorProgress is the per-connector extraction progress snapshot.

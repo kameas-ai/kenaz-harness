@@ -413,6 +413,27 @@ describe('ContextsView', () => {
       expect(strip.exists()).toBe(true);
       expect(strip.text()).toContain('Team sync active');
       expect(w.find('[data-testid=context-sync-pull-count]').text()).toContain('5');
+      // No skipped kinds → no skipped readout.
+      expect(w.find('[data-testid=context-sync-skipped-kinds]').exists()).toBe(false);
+    });
+
+    it('surfaces pulled nodes of other kinds as skipped, not errors (fleet contract WP03)', async () => {
+      const { client } = provide({
+        syncStatus: {
+          cursor: 'c',
+          last_pull_err: '',
+          last_push_err: '',
+          pull_count: 3,
+          team_cap_enabled: true,
+          skipped_unknown_kinds: 2,
+        },
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      expect(w.find('[data-testid=context-sync-skipped-kinds]').text()).toContain('2 items of other kinds skipped');
+      expect(w.find('[data-testid=context-sync-pull-err]').exists()).toBe(false);
     });
 
     it('shows the publish button disabled with a reason when team cap is absent (knowledge-home WP04, P-5)', async () => {
@@ -1399,8 +1420,9 @@ describe('ContextsView folder share/promote batch dialog (knowledge-home-01DOGF0
     await w.find('[data-testid=folder-share-confirm]').trigger('click');
     await flushPromises();
     expect(publishSpy.mock.calls.map((c) => c[0].node_id)).toEqual([
-      btoa('kameas-ai/context.md'),
-      btoa('kameas-ai/sub/notes.md'),
+      // The LOCAL id (the path); the Go sync layer maps it to a wire UUID.
+      'kameas-ai/context.md',
+      'kameas-ai/sub/notes.md',
     ]);
     expect(publishSpy.mock.calls[0][0]).toMatchObject({ layer: 'team', title: 'context', body: '# c' });
     expect(w.find('[data-testid=folder-share-summary]').text()).toContain('2 shared, 0 failed');
@@ -1410,7 +1432,7 @@ describe('ContextsView folder share/promote batch dialog (knowledge-home-01DOGF0
 
   it('(b) one entry failing leaves the others completed and the summary reports both', async () => {
     const promoteSpy = vi.fn(async (nodeID: string) => {
-      if (nodeID === btoa('kameas-ai/agents.md')) throw new Error('entry not shared to team yet');
+      if (nodeID === 'kameas-ai/agents.md') throw new Error('entry not shared to team yet');
       return { updated_node_id: nodeID, new_classification: 'org_shared' as const };
     });
     const { client } = provide({ tree, files, syncStatus: status(true), promoteSpy });
@@ -1485,7 +1507,7 @@ describe('ContextsView folder share/promote batch dialog (knowledge-home-01DOGF0
 
   it('(F3) failures name their stage and never print [object Object]', async () => {
     const publishSpy = vi.fn(async (req: ContextPublishRequest): Promise<ContextPublishResult> => {
-      if (req.node_id === btoa('kameas-ai/context.md')) throw { code: 'conflict', node: 'c' };
+      if (req.node_id === 'kameas-ai/context.md') throw { code: 'conflict', node: 'c' };
       return { accepted_nodes: 1, accepted_edges: 0, conflicts: [], effective_layer: req.layer };
     });
     // agents.md unreadable: the fake get throws "not found: …".

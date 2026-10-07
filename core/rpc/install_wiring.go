@@ -80,7 +80,7 @@ type fleetCatalogSeam struct {
 }
 
 func (s fleetCatalogSeam) List(ctx context.Context, kind string) ([]capabilitiesview.CatalogEntry, error) {
-	items, err := s.client.List(ctx, corefleet.CatalogFilter{Kind: corefleet.CatalogItemKind(kind)})
+	items, err := s.client.List(ctx, corefleet.CatalogFilter{Kind: corefleet.CatalogKindForCapability(string(kind))})
 	if err != nil {
 		return nil, err
 	}

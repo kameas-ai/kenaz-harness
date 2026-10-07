@@ -62,6 +62,10 @@ func (a *API) Status(ctx context.Context) (ComplianceStatus, error) {
 		if !status.ArchiverRunning && a.archiver.Unsupported() {
 			status.StoppedReason = StoppedReasonEndpointUnsupported
 		}
+		if a.archiver.TooLarge() {
+			status.PausedReason = PausedReasonPayloadTooLarge
+		}
+		status.RejectedEvents = a.archiver.RejectedEvents()
 	}
 	if a.sweeper != nil {
 		status.RetentionDays = a.sweeper.RetentionDays()

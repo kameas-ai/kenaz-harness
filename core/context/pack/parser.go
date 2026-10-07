@@ -179,6 +179,11 @@ func walkEntries(packRoot, entriesRoot string, ref PackRef) ([]ContextEntry, err
 		if entry.Kind == "" {
 			entry.Kind = inferKindFromPath(rel)
 		}
+		// Read-time rename (2026-10-06): a legacy `kind: skill` reads as
+		// "procedure". Applied AFTER parseEntryFile computed ContentHash
+		// over the authored bytes, so pinned pack/bundle content hashes of
+		// packs authored before the rename stay valid.
+		entry.Kind = NormalizeEntryKind(entry.Kind)
 		out = append(out, entry)
 		return nil
 	})
@@ -198,8 +203,8 @@ func inferKindFromPath(rel string) EntryKind {
 		return KindGlossary
 	case "explanations", "explanation":
 		return KindExplanation
-	case "skills", "skill":
-		return KindSkill
+	case "procedures", "procedure", "skills", "skill": // skills/ = legacy folder name
+		return KindProcedure
 	case "guidance", "agents":
 		return KindGuidance
 	}

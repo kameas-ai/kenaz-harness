@@ -3,8 +3,9 @@ package fleet
 // unsupported_endpoint.go — "this fleet server does not have that route".
 //
 // Verified against kenaz-fleet main (2026-10-05): fleet registers NO
-// /api/v1/context/append, /api/v1/context/replay, /api/v1/handoff/* or
-// /api/v1/audit/append route. They answer with the Go mux's plain-text
+// /api/v1/context/append, /api/v1/context/replay, /api/v1/handoff/*,
+// /api/v1/audit/append, /api/v1/identity/public-key or /api/v1/team/members
+// route (fleet serves /admin/teams/{id}/members instead; audit §2.2). They answer with the Go mux's plain-text
 // "404 page not found" — not a JSON {code,message} envelope — and no
 // provisioning, sign-in or retry changes that. The fleet owner's client
 // guidance: treat a plain 404 on these as UNSUPPORTED, stop retrying, keep
@@ -40,6 +41,12 @@ const (
 	FeatureContextEventStream = "context_event_stream"
 	FeatureTeamHandoff        = "team_handoff"
 	FeatureAuditAppend        = "audit_append"
+	// FeatureIdentityPublicKey is GET /api/v1/identity/public-key (handoff
+	// recipient key lookup) and FeatureTeamMembers is GET
+	// /api/v1/team/members (the share picker) — WP04, audit §2.2: the two
+	// routes the latch did not cover.
+	FeatureIdentityPublicKey = "identity_public_key"
+	FeatureTeamMembers       = "team_members"
 )
 
 // UnsupportedEndpointError names the feature and the route that answered a

@@ -3622,9 +3622,9 @@ func (b *Bindings) Fleet_TelemetryStatus() (settings.FleetTelemetryStatusView, e
 
 // ── Phase-3 unit collaboration bindings (unified-context-artifacts-01NCTXU01) ─
 
-// Unit_PromoteAsMergeRequest opens a merge request to promote a unit UP a
-// classification level (personal→team→org) instead of writing the higher layer
-// directly (WP16). toClassification is "team" | "org".
+// Unit_PromoteAsMergeRequest promotes a unit UP a classification level:
+// personal→team is a straight push; team→org pushes then opens a merge
+// request (review F2). toClassification is "team" | "org".
 func (b *Bindings) Unit_PromoteAsMergeRequest(unitID, toClassification, title, body string) (fleetview.MergeRequestResult, error) {
 	defer sentry.WrapBinding("Unit_PromoteAsMergeRequest")()
 	return b.api.Fleet().Unit_PromoteAsMergeRequest(b.ctx(), unitID, toClassification, title, body)

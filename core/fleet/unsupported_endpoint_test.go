@@ -430,3 +430,57 @@ func TestAuditArchiver_ResetUnsupported_NoRestartAfterStop(t *testing.T) {
 		t.Fatal("a stopped archiver was restarted by the reset hook")
 	}
 }
+
+// WP04 (audit §2.2): /team/members and /identity/public-key are routes fleet
+// does not register either; a plain 404 latches each, no further HTTP.
+func TestTeamMembersAndPublicKey_Plain404_Latched(t *testing.T) {
+	withExternalToken(t, "tok")
+	f := newCountingFleet(t, http.StatusNotFound, goMuxNotFound, "text/plain")
+	h := NewHandoffHandler(makeTestClient(t, f.srv.URL), nil, nil)
+	for i := 0; i < 3; i++ {
+		if _, err := h.ListTeam(context.Background()); !errors.Is(err, ErrEndpointUnsupported) {
+			t.Fatalf("ListTeam %d: err = %v, want ErrEndpointUnsupported", i, err)
+		}
+		if _, err := h.fetchRecipientPublicKey(context.Background(), "u1"); !errors.Is(err, ErrEndpointUnsupported) {
+			t.Fatalf("public key %d: err = %v, want ErrEndpointUnsupported", i, err)
+		}
+	}
+	if a, b := f.hitsFor("/api/v1/team/members"), f.hitsFor("/api/v1/identity/public-key"); a != 1 || b != 1 {
+		t.Fatalf("hits team/members=%d public-key=%d, want 1 each", a, b)
+	}
+}
+
+// A JSON 404 on public-key is the application saying "no key for that
+// user" — recipient-not-found, not a missing route.
+func TestPublicKey_JSON404_IsRecipientNotFound(t *testing.T) {
+	withExternalToken(t, "tok")
+	f := newCountingFleet(t, http.StatusNotFound, `{"code":"not_found","message":"no key"}`, "application/json")
+	h := NewHandoffHandler(makeTestClient(t, f.srv.URL), nil, nil)
+	if _, err := h.fetchRecipientPublicKey(context.Background(), "u1"); !errors.Is(err, ErrHandoffRecipientNotFound) {
+		t.Fatalf("err = %v, want ErrHandoffRecipientNotFound", err)
+	}
+	if _, err := h.fetchRecipientPublicKey(context.Background(), "u1"); errors.Is(err, ErrEndpointUnsupported) {
+		t.Fatal("a JSON 404 latched the route unsupported")
+	}
+}
+
+// audit_append now latches on the Client too, so the shared, resettable
+// latch reports it.
+func TestAuditArchiver_Plain404_LatchesClient(t *testing.T) {
+	withExternalToken(t, "tok")
+	f := newCountingFleet(t, http.StatusNotFound, goMuxNotFound, "text/plain")
+	c := makeTestClient(t, f.srv.URL)
+	a := newArchiverWithEvents(t, c)
+	a.cfg.Client = c
+	if err := a.flushOnce(context.Background()); !errors.Is(err, ErrEndpointUnsupported) {
+		t.Fatalf("flush err = %v", err)
+	}
+	if c.endpointUnsupported(FeatureAuditAppend) == nil {
+		t.Fatal("audit_append not latched on the Client")
+	}
+	c.ResetUnsupportedEndpoints()
+	a.ResetUnsupported()
+	if a.isUnsupported() {
+		t.Fatal("session reset did not clear the audit_append latch")
+	}
+}

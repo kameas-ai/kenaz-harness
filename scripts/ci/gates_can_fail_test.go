@@ -2027,6 +2027,27 @@ func plantReplace(t *testing.T, full, target, mutated string) func() {
 	}
 }
 
+// TestInstallProviderCoverageGate_PackTranslationRemovedFires — fleet
+// wire-contract WP04 (2026-10-06). Fleet's catalog kind "pack" maps to the
+// harness install kind "agent_pack" ONLY through core/fleet's
+// CatalogKindForCapability / CapabilityKindForCatalog. The gate honours the
+// mapping while that translation exists; this plant deletes the translation
+// helper and proves "pack" is reported unmapped again, so the exception in
+// the gate cannot outlive the code that justifies it.
+func TestInstallProviderCoverageGate_PackTranslationRemovedFires(t *testing.T) {
+	root := repoRoot(t)
+	catalog := filepath.Join(root, "core", "fleet", "catalog.go")
+	defer plantReplace(t, catalog, "func CapabilityKindForCatalog(", "func capabilityKindForCatalogRemovedProbe(")()
+
+	code, out := runGate(t, "check-install-provider-coverage.sh", root)
+	if code == 0 {
+		t.Fatalf("gate passed with the pack<->agent_pack translation removed:\n%s", out)
+	}
+	if !strings.Contains(out, `CatalogItemKind "pack" has no install.Kind`) {
+		t.Fatalf("gate failed for an unexpected reason:\n%s", out)
+	}
+}
+
 // TestInstallProviderCoverageGate_CommentedConsumerTestDoesNotCount — the
 // 4th planted proof for check-install-provider-coverage.sh (review M2,
 // install-framework-01DOGF0B). The reviewer's degenerate probe: a kind

@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -257,7 +258,7 @@ func (b *BootstrapClient) GetBootstrapRun(ctx context.Context, runID string) (*B
 	if err := b.requireCap(); err != nil {
 		return nil, err
 	}
-	resp, err := b.client.Get(ctx, "/api/v1/context/bootstrap/"+runID)
+	resp, err := b.client.Get(ctx, "/api/v1/context/bootstrap/"+url.PathEscape(runID))
 	if err != nil {
 		return nil, fmt.Errorf("fleet: bootstrap get: %w", err)
 	}
@@ -282,7 +283,7 @@ func (b *BootstrapClient) PatchBootstrapRun(ctx context.Context, runID string, p
 	if err := b.requireCap(); err != nil {
 		return err
 	}
-	resp, err := b.client.PatchJSON(ctx, "/api/v1/context/bootstrap/"+runID, patch)
+	resp, err := b.client.PatchJSON(ctx, "/api/v1/context/bootstrap/"+url.PathEscape(runID), patch)
 	if err != nil {
 		return fmt.Errorf("fleet: bootstrap patch: %w", err)
 	}
@@ -303,7 +304,7 @@ func (b *BootstrapClient) ResumeBootstrapRun(ctx context.Context, runID string) 
 	if err := b.requireCap(); err != nil {
 		return nil, err
 	}
-	resp, err := b.client.PostJSON(ctx, "/api/v1/context/bootstrap/"+runID+"/resume", struct{}{})
+	resp, err := b.client.PostJSON(ctx, "/api/v1/context/bootstrap/"+url.PathEscape(runID)+"/resume", struct{}{})
 	if err != nil {
 		return nil, fmt.Errorf("fleet: bootstrap resume: %w", err)
 	}

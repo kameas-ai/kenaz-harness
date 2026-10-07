@@ -12,17 +12,18 @@
 import type { ContextNode } from '@/lib/types';
 
 /**
- * contextNodeID — the stable fleet node id for a library path. Shared by
- * the single-file publish/promote path and the folder batch so the same
- * file always maps to the same fleet node (btoa of the path; the raw path
- * when btoa cannot encode it, e.g. non-Latin-1 names).
+ * contextNodeID — the LOCAL id a library path publishes/promotes under:
+ * the path itself. Shared by the single-file publish/promote path and the
+ * folder batch so the same file always maps to the same fleet node.
+ *
+ * Fleet requires a UUID node id (it decodes `id` as uuid.UUID and 400s
+ * anything else — the old btoa(path) id failed every share). The UUID is
+ * NOT minted here: the Go sync layer maps this local id to a stable
+ * per-install UUIDv5 (core/fleet/wire_id.go), so the wire id never
+ * depends on frontend state and republish updates the same node.
  */
 export function contextNodeID(path: string): string {
-  try {
-    return btoa(path);
-  } catch {
-    return path;
-  }
+  return path;
 }
 
 /** contextEntryTitle — the published title for a path: basename sans extension. */

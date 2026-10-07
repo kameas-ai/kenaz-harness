@@ -117,6 +117,13 @@ type contextNodeInput struct {
 	Classification ContextClassification `json:"classification"`
 	TeamID         *string               `json:"team_id,omitempty"`
 	Version        int                   `json:"version"`
+	// Unified-Unit dimensions (fleet ContextNodeInput, WP03). unit_kind is
+	// REQUIRED by fleet's knowledge-boundary validation (doc | root |
+	// snippet | tool_output); the rest are optional.
+	UnitKind   string `json:"unit_kind,omitempty"`
+	UnitScope  string `json:"unit_scope,omitempty"`
+	ScopeID    string `json:"scope_id,omitempty"`
+	LoadPolicy string `json:"load_policy,omitempty"`
 }
 
 // contextEdgeInput is the client-side push shape for a single edge.
@@ -129,6 +136,10 @@ type contextEdgeInput struct {
 	Classification ContextClassification `json:"classification"`
 	TeamID         *string               `json:"team_id,omitempty"`
 	Version        int                   `json:"version"`
+	// UnitKind is the lineage overlay (references | derived_from |
+	// promoted_from | supersedes) — set only for those; fleet's enum has no
+	// conflicts_with, which travels in the free-form kind alone.
+	UnitKind string `json:"unit_kind,omitempty"`
 }
 
 // contextPushRequest is the body for POST /api/v1/context/push.
@@ -155,6 +166,9 @@ type ContextPushResult struct {
 	// user or org. Absent on the current server = everything accepted.
 	// Distinct from Conflicts (your own stale version).
 	Rejected []ContextPushRejection `json:"rejected,omitempty"`
+	// WireNodeID is the fleet node UUID the pushed entry was stored under
+	// (harness-side, never decoded from the response — `json:"-"`).
+	WireNodeID string `json:"-"`
 }
 
 // ContextPulledNode is a single node from GET /api/v1/context/pull.
@@ -175,6 +189,12 @@ type ContextPulledNode struct {
 	UpdatedAt      string                `json:"updated_at"`
 	// DeletedAt is non-nil when the entry is a tombstone (FR-103).
 	DeletedAt *string `json:"deleted_at,omitempty"`
+	// Unified-Unit dimensions (fleet ContextNode). Top-level is the ONLY read
+	// path for load_policy (WP03); metadata._unit is write-only compat.
+	UnitKind   string `json:"unit_kind,omitempty"`
+	UnitScope  string `json:"unit_scope,omitempty"`
+	ScopeID    string `json:"scope_id,omitempty"`
+	LoadPolicy string `json:"load_policy,omitempty"`
 }
 
 // ContextPulledEdge is a single edge from the pull response.
@@ -244,6 +264,8 @@ type ContextNodeEntry struct {
 	ServerVersion int `json:"server_version,omitempty"`
 	// DeletedAt is non-nil when the entry is a server-side tombstone.
 	DeletedAt *string `json:"deleted_at,omitempty"`
+	// OwnerUserID is the fleet user who owns the node (pulled entries only).
+	OwnerUserID string `json:"owner_user_id,omitempty"`
 }
 
 // ContextSyncStatus classifies the local sync state of an entry.
@@ -278,6 +300,9 @@ type ContextGraphSyncer struct {
 	client  *Client
 	dataDir string
 	caps    *CapabilityPoller
+	// ids maps local ids (library paths) to fleet wire UUIDs (WP01,
+	// wire_id.go). Immutable after construction.
+	ids *WireIDs
 
 	mu      sync.RWMutex
 	// pulled is the in-memory cache of team/org entries received from fleet.
@@ -298,6 +323,12 @@ type ContextGraphSyncer struct {
 	lastConflicts []ContextPushConflict
 	// pullCount is the total number of entries received from fleet (cumulative).
 	pullCount int
+	// skippedUnknownKinds counts pulled nodes whose kind is not a Curated
+	// kind (a server that ignores ?kind= returns every lane's nodes; WP03).
+	// Skipped, never listed, never a pull error. Cumulative.
+	skippedUnknownKinds int
+	// strippedUnitKeys counts "_unit" metadata keys stripped before push (F13).
+	strippedUnitKeys int
 
 	// pollOnce guards StartPoller so the background loop starts at most once.
 	pollOnce sync.Once
@@ -338,6 +369,7 @@ func NewContextGraphSyncer(client *Client, dataDir string, caps *CapabilityPolle
 		client:  client,
 		dataDir: dataDir,
 		caps:    caps,
+		ids:     NewWireIDs(dataDir),
 	}
 	// Restore cursor from disk.
 	if c, err := loadContextCursor(dataDir); err == nil {
@@ -392,6 +424,11 @@ func (s *ContextGraphSyncer) canPull() error {
 // fleet context graph. The entry must have layer = team or org. Personal
 // entries are rejected with ErrPersonalLayerNotSyncable.
 //
+// entry.ID (and edge ids / endpoints) are LOCAL ids — for Knowledge ›
+// Curated, the library path. They are mapped to fleet wire UUIDs here, in
+// the sync layer (WireNodeID); a value that already is a UUID passes
+// through. The result's WireNodeID reports the id fleet stored.
+//
 // Cap gate: team_shared requires CapSharedTeamGraph.
 // Idempotent: re-pushing with the same version is a no-op on the server.
 //
@@ -418,24 +455,48 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		}
 	}
 
+	wireID := s.WireNodeID(entry.ID)
+	if wireID == "" {
+		return nil, fmt.Errorf("fleet: context push: empty node id")
+	}
+	// Knowledge boundary (WP03): the Curated lane pushes only its own kinds
+	// (legacy "skill" → "procedure"), never a capability word in kind or in
+	// metadata type/kind/category, and always unit_kind=doc.
+	kind, err := NormalizeCuratedKind(entry.Kind)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: context push: %w", err)
+	}
+	if err := checkMetadataNotCapability(entry.Metadata); err != nil {
+		return nil, fmt.Errorf("fleet: context push: %w", err)
+	}
+	// F13: a "_unit" key (any case) in Curated metadata would 400 the push
+	// (case variants) or carry an unvalidated unit envelope; strip + count.
+	metadata, stripped := sanitizeCuratedMetadata(entry.Metadata)
+	if stripped > 0 {
+		s.mu.Lock()
+		s.strippedUnitKeys += stripped
+		s.mu.Unlock()
+		logging.L().Warn("fleet.context.push.stripped_unit_keys", "node_id", wireID, "count", stripped)
+	}
 	node := contextNodeInput{
-		ID:             entry.ID,
-		Kind:           entry.Kind,
+		ID:             wireID,
+		Kind:           kind,
 		Title:          entry.Title,
 		Body:           entry.Body,
-		Metadata:       entry.Metadata,
+		Metadata:       metadata,
 		Classification: classification,
 		TeamID:         entry.TeamID,
 		Version:        entry.Version,
+		UnitKind:       curatedUnitKind,
 	}
 
 	// Build edges slice (two-phase: nodes first, then edges — FR-003).
 	edgeInputs := make([]contextEdgeInput, 0, len(edges))
 	for _, e := range edges {
 		ei := contextEdgeInput{
-			ID:             e.ID,
-			FromNodeID:     e.FromNodeID,
-			ToNodeID:       e.ToNodeID,
+			ID:             s.ids.For(WireLaneCuratedEdge, e.ID),
+			FromNodeID:     s.WireNodeID(e.FromNodeID),
+			ToNodeID:       s.WireNodeID(e.ToNodeID),
 			Kind:           e.Kind,
 			Classification: e.Classification,
 			TeamID:         e.TeamID,
@@ -458,7 +519,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	const pushEndpoint = "/api/v1/context/push"
 	logging.L().Info("fleet.context.push.http.start",
 		"endpoint", pushEndpoint,
-		"node_id", entry.ID,
+		"node_id", wireID,
 		"classification", string(classification),
 		"team_id_present", entry.TeamID != nil,
 		"title_len", len(entry.Title),
@@ -473,7 +534,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		s.mu.Unlock()
 		logging.L().Error("fleet.context.push.http.error",
 			"endpoint", pushEndpoint,
-			"node_id", entry.ID,
+			"node_id", wireID,
 			"err", err.Error(),
 		)
 		return nil, fmt.Errorf("fleet: context push: %w", err)
@@ -500,7 +561,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		s.mu.Unlock()
 		logging.L().Warn("fleet.context.push.http.response",
 			"endpoint", pushEndpoint,
-			"node_id", entry.ID,
+			"node_id", wireID,
 			"status", resp.StatusCode,
 			"code", pe.Code,
 		)
@@ -511,7 +572,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	if err != nil {
 		logging.L().Error("fleet.context.push.http.error",
 			"endpoint", pushEndpoint,
-			"node_id", entry.ID,
+			"node_id", wireID,
 			"err", err.Error(),
 		)
 		return nil, fmt.Errorf("fleet: context push read body: %w", err)
@@ -519,7 +580,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 
 	logging.L().Info("fleet.context.push.http.response",
 		"endpoint", pushEndpoint,
-		"node_id", entry.ID,
+		"node_id", wireID,
 		"status", resp.StatusCode,
 		"body_bytes", len(body),
 	)
@@ -527,7 +588,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	var result ContextPushResult
 	if err := json.Unmarshal(body, &result); err != nil {
 		logging.L().Error("fleet.context.push.parse_error",
-			"node_id", entry.ID,
+			"node_id", wireID,
 			"err", err.Error(),
 		)
 		return nil, fmt.Errorf("fleet: context push parse response: %w", err)
@@ -538,16 +599,16 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	// rejections leave the node published but are recorded as the push
 	// error so Context_SyncStatus shows them.
 	for _, r := range result.Rejected {
-		if r.Kind == "node" && r.ID == entry.ID {
+		if r.Kind == "node" && r.ID == wireID {
 			s.mu.Lock()
 			s.lastPushErr = describeRejections(result.Rejected)
 			s.mu.Unlock()
 			logging.L().Warn("fleet.context.push.rejected",
-				"node_id", entry.ID,
+				"node_id", wireID,
 				"reason", r.Reason,
 				"rejected_count", len(result.Rejected),
 			)
-			return nil, &ContextPushRejectedError{NodeID: entry.ID, Reason: r.Reason}
+			return nil, &ContextPushRejectedError{NodeID: wireID, Reason: r.Reason}
 		}
 	}
 
@@ -556,7 +617,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	if len(result.Rejected) > 0 {
 		s.lastPushErr = describeRejections(result.Rejected)
 		logging.L().Warn("fleet.context.push.rejected",
-			"node_id", entry.ID,
+			"node_id", wireID,
 			"rejected_count", len(result.Rejected),
 		)
 	}
@@ -586,11 +647,12 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	// Privacy invariant: no title, body, or metadata in the payload.
 	contextaudit.MustEmit(ctx, s.auditEmitter, contextaudit.KindFleetContextPublished,
 		contextaudit.FleetContextPublishedPayload{
-			NodeID:         entry.ID,
+			NodeID:         wireID,
 			Classification: string(classification),
 			Version:        entry.Version,
 		}, time.Now())
 
+	result.WireNodeID = wireID
 	return &result, nil
 }
 
@@ -614,10 +676,8 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 	cursor := s.cursor
 	s.mu.RUnlock()
 
-	urlPath := "/api/v1/context/pull"
-	if cursor != "" {
-		urlPath += "?since=" + cursor
-	}
+	// The Curated lane pulls only Curated kinds (WP03 lane split by kind).
+	urlPath := lanePullPath(curatedKinds, cursor)
 
 	resp, err := s.client.Get(ctx, urlPath)
 	if err != nil {
@@ -661,6 +721,13 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 	defer s.mu.Unlock()
 
 	for _, n := range pullResp.Nodes {
+		// Another lane's node (unit kinds, bootstrap taxonomy, anything a
+		// server that ignores ?kind= sends): skip and count — never list it
+		// under Knowledge › Curated (audit §0-E).
+		if !curatedLaneAccepts(n) {
+			s.skippedUnknownKinds++
+			continue
+		}
 		layer, ok := LayerForClassification(n.Classification)
 		if !ok {
 			continue // skip unknown classifications
@@ -678,6 +745,7 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 			SyncStatus:     SyncStatusSynced,
 			ServerVersion:  n.Version,
 			DeletedAt:      n.DeletedAt,
+			OwnerUserID:    n.OwnerUserID,
 		}
 		s.upsertPulledLocked(entry)
 	}
@@ -758,6 +826,15 @@ func (s *ContextGraphSyncer) upsertPulledEdgeLocked(edge ContextEdgeEntry) {
 	s.pulledEdges = append(s.pulledEdges, edge)
 }
 
+// WireNodeID maps a Curated local id (library path, or an already-wire
+// UUID / "<layer>/_fleet/<uuid>" synthetic path) to its fleet node UUID.
+func (s *ContextGraphSyncer) WireNodeID(localID string) string {
+	if s == nil || s.ids == nil {
+		return ""
+	}
+	return s.ids.For(WireLaneCurated, localID)
+}
+
 // teamIDPtr returns a *string for a non-empty team_id string.
 func teamIDPtr(s string) *string {
 	if s == "" {
@@ -772,10 +849,13 @@ func teamIDPtr(s string) *string {
 // Promote elevates a team_shared entry to org_shared.
 // Requires CapSharedTeamGraph (server enforces org-graph separately).
 // FR-201, FR-202.
-func (s *ContextGraphSyncer) Promote(ctx context.Context, nodeID string) (*ContextPromoteResult, error) {
+func (s *ContextGraphSyncer) Promote(ctx context.Context, localID string) (*ContextPromoteResult, error) {
 	if err := s.canPushOrg(); err != nil {
 		return nil, err
 	}
+	// The caller passes the same LOCAL id it published with; promote the
+	// wire node that publish created (WP01).
+	nodeID := s.WireNodeID(localID)
 
 	req := contextPromoteRequest{
 		NodeID:           nodeID,
@@ -1024,6 +1104,11 @@ type ContextSyncStatusSnapshot struct {
 	// most recent push (empty when the last push had none). Lets the Contexts
 	// view prompt the user to reconcile.
 	Conflicts []ContextPushConflict `json:"conflicts,omitempty"`
+	// SkippedUnknownKinds is the cumulative count of pulled nodes skipped
+	// because their kind is not a Curated kind (WP03).
+	SkippedUnknownKinds int `json:"skipped_unknown_kinds"`
+	// StrippedUnitKeys counts "_unit" metadata keys stripped before push.
+	StrippedUnitKeys int `json:"stripped_unit_keys"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -1047,6 +1132,9 @@ func (s *ContextGraphSyncer) Status() ContextSyncStatusSnapshot {
 		PullCount:      s.pullCount,
 		TeamCapEnabled: teamCap,
 		Conflicts:      conflicts,
+
+		SkippedUnknownKinds: s.skippedUnknownKinds,
+		StrippedUnitKeys:    s.strippedUnitKeys,
 	}
 }
 

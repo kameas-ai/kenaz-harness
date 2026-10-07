@@ -83,6 +83,9 @@ type UnitSyncer struct {
 	mapper  *UnitMapper
 	caps    *CapabilityPoller
 	dataDir string
+	// ids derives wire UUIDs for units that have never synced (WP01,
+	// wire_id.go). Immutable after construction.
+	ids *WireIDs
 
 	mu          sync.RWMutex
 	cursor      string
@@ -92,6 +95,18 @@ type UnitSyncer struct {
 	pushCount   int
 	pullCount   int
 	conflicts   []UnitConflict
+	// skippedUnknownKinds counts pulled nodes that are not Unit-lane kinds
+	// (WP03: skip and count — never abort the cursor). skippedInvalid
+	// counts unit-lane nodes the local store refused as invalid (unknown
+	// scope / classification / load policy). Both cumulative.
+	skippedUnknownKinds int
+	skippedInvalid      int
+	// pushRefused counts dirty units refused BEFORE the wire (non-pushable
+	// kind, capability word in metadata); they stay dirty.
+	pushRefused int
+	// pushHeldLoadAlways counts load_policy=always units held back because
+	// the identity's roles are unknown (review F9); they stay dirty.
+	pushHeldLoadAlways int
 
 	stopCh chan struct{}
 	once   sync.Once
@@ -119,6 +134,7 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 		mapper:  mapper,
 		caps:    caps,
 		dataDir: dataDir,
+		ids:     NewWireIDs(dataDir),
 		stopCh:  make(chan struct{}),
 	}
 	if c, err := loadUnitCursor(dataDir); err == nil {
@@ -180,23 +196,85 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 	if err != nil {
 		return 0, fmt.Errorf("fleet: unit push: list dirty: %w", err)
 	}
+	return s.pushUnits(ctx, class, dirty)
+}
+
+// PushUnit pushes ONE team/org unit now (dirty or not) — the "ensure the
+// node exists on fleet" step before a merge request (review F2). Returns
+// the unit's wire node id. Personal units are refused.
+func (s *UnitSyncer) PushUnit(ctx context.Context, unitID string) (string, error) {
+	if err := s.canSync(); err != nil {
+		return "", err
+	}
+	u, err := s.store.Get(ctx, unitID)
+	if err != nil {
+		return "", fmt.Errorf("fleet: push unit: %w", err)
+	}
+	if _, ok := ClassificationForUnit(u.Classification); !ok {
+		return "", ErrPersonalLayerNotSyncable
+	}
+	n, err := s.pushUnits(ctx, u.Classification, []units.Unit{u})
+	if err != nil {
+		return "", err
+	}
+	if n == 0 {
+		if st, gerr := s.store.GetSyncState(ctx, u.ID); gerr != nil || st.SyncedLocalVersion != u.Version {
+			return "", fmt.Errorf("fleet: push unit %s: not accepted by fleet (refused locally, conflicted or rejected)", u.ID)
+		}
+	}
+	return s.WireNodeID(ctx, u.ID), nil
+}
+
+// pushUnits pushes the given units of one classification in a single
+// two-phase (nodes then edges) request. Edges are included only when BOTH
+// endpoints are in this push or already on fleet (a synced sidecar) — an
+// edge to a personal / never-pushed unit would 400 the whole batch
+// (missing_node_reference).
+func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, dirty []units.Unit) (int, error) {
 	if len(dirty) == 0 {
 		return 0, nil
 	}
 
 	nodes := make([]contextNodeInput, 0, len(dirty))
 	pushed := make([]units.Unit, 0, len(dirty))
+	// wireOf maps a pushed unit id to the wire UUID it was sent as, so the
+	// response's conflicts / rejections (keyed by wire id) and the sidecar
+	// write resolve back to the local unit.
+	wireOf := make(map[string]string, len(dirty))
 	seenEdge := map[string]bool{}
 	edges := make([]contextEdgeInput, 0)
+	type edgeCand struct {
+		wire     contextEdgeInput
+		from, to string
+	}
+	var candidates []edgeCand
 
 	for _, u := range dirty {
 		node, ok, err := s.mapper.MapUnitToNode(u)
+		if errors.Is(err, ErrLoadPolicyRolesUnknown) {
+			logging.L().Warn("fleet.unit.push.held_load_always", "unit_id", u.ID)
+			s.mu.Lock()
+			s.pushHeldLoadAlways++
+			s.mu.Unlock()
+			continue
+		}
+		if errors.Is(err, ErrUnitKindNotPushable) || errors.Is(err, ErrKindNotKnowledge) {
+			// Refused before the wire (fleet would 400 the WHOLE batch):
+			// skip this unit, keep it dirty, keep pushing the rest.
+			logging.L().Warn("fleet.unit.push.refused_locally", "unit_id", u.ID, "err", err.Error())
+			s.mu.Lock()
+			s.pushRefused++
+			s.mu.Unlock()
+			continue
+		}
 		if err != nil {
 			return 0, fmt.Errorf("fleet: unit push: map %s: %w", u.ID, err)
 		}
 		if !ok {
 			continue // personal — defensively skipped (ListDirty already filters)
 		}
+		node.ID = s.WireNodeID(ctx, u.ID)
+		wireOf[u.ID] = node.ID
 		nodes = append(nodes, node)
 		pushed = append(pushed, u)
 
@@ -213,12 +291,27 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 			if !ok {
 				continue
 			}
+			wire.ID = s.ids.For(WireLaneUnitEdge, e.ID)
+			wire.FromNodeID = s.WireNodeID(ctx, e.FromID)
+			wire.ToNodeID = s.WireNodeID(ctx, e.ToID)
 			seenEdge[e.ID] = true
-			edges = append(edges, wire)
+			candidates = append(candidates, edgeCand{wire: wire, from: e.FromID, to: e.ToID})
 		}
 	}
 	if len(nodes) == 0 {
 		return 0, nil
+	}
+	onFleet := func(unitID string) bool {
+		if _, ok := wireOf[unitID]; ok {
+			return true
+		}
+		st, err := s.store.GetSyncState(ctx, unitID)
+		return err == nil && IsWireUUID(st.NodeID)
+	}
+	for _, c := range candidates {
+		if onFleet(c.from) && onFleet(c.to) {
+			edges = append(edges, c.wire)
+		}
 	}
 
 	req := contextPushRequest{Nodes: nodes, Edges: edges}
@@ -267,7 +360,7 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 	}
 	now := time.Now().UTC()
 	for _, u := range pushed {
-		if conflicted[u.ID] {
+		if conflicted[wireOf[u.ID]] {
 			continue // conflicted or rejected — leave sidecar untouched (stays dirty)
 		}
 		// After a successful push-ack both baselines advance to the pushed
@@ -276,7 +369,7 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 		// = u.Version immediately after a push.
 		if _, err := s.store.UpsertSyncState(ctx, units.SyncState{
 			UnitID:              u.ID,
-			NodeID:              u.ID, // harness reuses unit id as node id on push
+			NodeID:              wireOf[u.ID], // the wire UUID (WP01) — pull resolves it back via GetSyncStateByNodeID
 			SyncedServerVersion: u.Version,
 			SyncedLocalVersion:  u.Version,
 			Classification:      classStr,
@@ -286,6 +379,25 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 		}
 	}
 	return result.AcceptedNodes, nil
+}
+
+// WireNodeID resolves the fleet node UUID for a local unit id (WP01). A unit
+// that has synced before keeps the NodeID its sidecar recorded — for a
+// pulled unit that is the server's id, for a pushed one the id it was pushed
+// under — so the mapping is durable in the units store, not just derivable.
+// A never-synced unit (or a legacy sidecar row whose NodeID is the raw ULID
+// from before UUIDs, which fleet never accepted) gets the deterministic
+// per-install UUIDv5 (wire_id.go).
+func (s *UnitSyncer) WireNodeID(ctx context.Context, unitID string) string {
+	if unitID == "" {
+		return ""
+	}
+	if s.store != nil {
+		if st, err := s.store.GetSyncState(ctx, unitID); err == nil && IsWireUUID(st.NodeID) {
+			return st.NodeID
+		}
+	}
+	return s.ids.For(WireLaneUnit, unitID)
 }
 
 // ── Pull-down (read-down-auto) ───────────────────────────────────────────────
@@ -310,10 +422,8 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	cursor := s.cursor
 	s.mu.RUnlock()
 
-	urlPath := "/api/v1/context/pull"
-	if cursor != "" {
-		urlPath += "?since=" + cursor
-	}
+	// The Unit lane pulls only unit kinds (WP03 lane split by kind).
+	urlPath := lanePullPath(unitLaneKinds, cursor)
 
 	resp, err := s.client.Get(ctx, urlPath)
 	if err != nil {
@@ -348,9 +458,29 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	}
 
 	applied := 0
+	skippedKinds, skippedInvalid := 0, 0
 	for _, n := range pullResp.Nodes {
+		// Another lane's node — a Curated "guidance", a bootstrap
+		// "project", or a kind this build has never heard of (a server that
+		// ignores ?kind= sends them all). Skip and count: before WP03 one
+		// such node made applyPulledNode fail and PullDown return BEFORE the
+		// cursor advanced, stalling the lane on that page forever (§0-E).
+		if !unitLaneAccepts(n) {
+			skippedKinds++
+			continue
+		}
 		ok, err := s.applyPulledNode(ctx, n)
 		if err != nil {
+			if isUnitValidationErr(err) {
+				// The node itself is invalid for the local store (unknown
+				// scope / classification / load policy): a permanent
+				// property of the node, so retrying cannot help. Skip it.
+				logging.L().Warn("fleet.unit.pull.skipped_invalid", "node_id", n.ID, "err", err.Error())
+				skippedInvalid++
+				continue
+			}
+			// A storage failure is transient: abort before the cursor
+			// advances so the page is retried.
 			return applied, err
 		}
 		if ok {
@@ -359,6 +489,8 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	}
 
 	s.mu.Lock()
+	s.skippedUnknownKinds += skippedKinds
+	s.skippedInvalid += skippedInvalid
 	if pullResp.Cursor != "" {
 		s.cursor = pullResp.Cursor
 		if s.dataDir != "" {
@@ -373,6 +505,13 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	s.mu.Unlock()
 
 	return applied, nil
+}
+
+// isUnitValidationErr reports whether err is the local store refusing a node
+// as invalid (a permanent property of the node, not a transient failure).
+func isUnitValidationErr(err error) bool {
+	return errors.Is(err, units.ErrUnsupportedKind) || errors.Is(err, units.ErrUnsupportedScope) ||
+		errors.Is(err, units.ErrUnsupportedClassification) || errors.Is(err, units.ErrUnsupportedLoadPolicy)
 }
 
 // applyPulledNode maps one pulled node into the local store and returns
@@ -660,6 +799,13 @@ type UnitSyncStatus struct {
 	PushCount     int       `json:"push_count"`
 	PullCount     int       `json:"pull_count"`
 	ConflictCount int       `json:"conflict_count"`
+	// SkippedUnknownKinds / SkippedInvalid / PushRefused — WP03 counters
+	// (see the UnitSyncer fields).
+	SkippedUnknownKinds int `json:"skipped_unknown_kinds"`
+	SkippedInvalid      int `json:"skipped_invalid"`
+	PushRefused         int `json:"push_refused"`
+	PushHeldLoadAlways  int `json:"push_held_load_always"`
+	StrippedUnitKeys    int `json:"stripped_unit_keys"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -674,6 +820,12 @@ func (s *UnitSyncer) Status() UnitSyncStatus {
 		PushCount:     s.pushCount,
 		PullCount:     s.pullCount,
 		ConflictCount: len(s.conflicts),
+
+		SkippedUnknownKinds: s.skippedUnknownKinds,
+		SkippedInvalid:      s.skippedInvalid,
+		PushRefused:         s.pushRefused,
+		PushHeldLoadAlways:  s.pushHeldLoadAlways,
+		StrippedUnitKeys:    int(s.mapper.StrippedUnitKeys()),
 	}
 }
 

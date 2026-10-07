@@ -3526,10 +3526,17 @@ func New(c *core.Core, opts ...Option) *API {
 
 		// fleet-skills-sync-01NDFSEX18 WP05: wire skill refs into the fleet
 		// settings state so the compositeConfigApplier can call
-		// fleet.ApplyMandatedSkills when a config bundle carries mandated_skills.
+		// fleet.MandatedApplier for kind=skill items of a bundle's mandated_items.
 		if skillStore != nil && a.settingsImpl != nil {
 			a.settingsImpl.SetSkillRefs(skillStore, slashRegistry)
 		}
+	}
+
+	// Owner wire-contract ruling 2026-10-06 (WP02): mandated kind=workflow
+	// items install through the workflows view's InstallDocument path with
+	// mandated provenance, and are removed when no longer mandated.
+	if wfImpl, ok := a.workflowsAPI.(*workflowsview.API); ok && wfImpl != nil && a.settingsImpl != nil {
+		a.settingsImpl.SetMandatedWorkflows(mandatedWorkflowsAdapter{wf: wfImpl})
 	}
 
 	// Auto-update subsystem (mission auto-update, v0.4.0 WP03).
@@ -4178,6 +4185,18 @@ func New(c *core.Core, opts ...Option) *API {
 			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps).
 				WithAuditEmitter(&contextSyncAuditBridge{impl: a.auditImpl})
 			impl.WithSyncer(ctxSyncer)
+			// Review F3: hide pulled copies of the user's own entries.
+			selfDataDir := flDataDir
+			impl.WithSelfUserID(func() string {
+				if selfDataDir == "" {
+					return ""
+				}
+				id, err := corefleet.LoadIdentity(selfDataDir)
+				if err != nil {
+					return ""
+				}
+				return id.UserID
+			})
 
 			// FR-012: wire the library merger so each successful PullDelta
 			// applies team/org entries to the local context library. The
@@ -4279,6 +4298,28 @@ func New(c *core.Core, opts ...Option) *API {
 				}
 			}
 			unitMapper := corefleet.NewUnitMapper(teamID)
+			// WP03: fleet lets only org_admin / org_owner push
+			// load_policy=always (403 load_policy_requires_admin otherwise);
+			// for everyone else the mapper sends on_demand. Read live so a
+			// role change after boot takes effect.
+			adminDataDir := flDataDir
+			// Review F9: roles ABSENT (pre-roles enroll, or no identity) is
+			// "unknown", not "non-admin" — such units are held, not downgraded.
+			unitMapper.SetRoleCheck(func() (bool, bool) {
+				if adminDataDir == "" {
+					return false, false
+				}
+				id, err := corefleet.LoadIdentity(adminDataDir)
+				if err != nil || len(id.Roles) == 0 {
+					return false, false
+				}
+				for _, r := range id.Roles {
+					if r == "org_admin" || r == "org_owner" {
+						return true, true
+					}
+				}
+				return false, true
+			})
 			unitSyncer := corefleet.NewUnitSyncer(flCl, a.unitsMgr, unitMapper, caps, flDataDir)
 			// fleet-session-truth-01DOGF0A FR-6: the poll reports into the
 			// shared lane board (FleetSession.sync.unitPoll).
@@ -4816,6 +4857,15 @@ func New(c *core.Core, opts ...Option) *API {
 	// bootPermsErr (trust-surfaces-that-fire-01PMZ202 WP24 review finding)
 	// is synchronous too — captured from stack.staticPermsLoadError above.
 	SetBootErrors(bootMCPErr, bootSkillsErr, bootFleetErr, bootPermsErr)
+
+	// Review F4: the config poller starts only now, after every bundle
+	// consumer (Cedar engine, MCP catalog, skill refs, mandated workflows,
+	// audit emitter, sync-kind registry) has been wired above — its first
+	// apply used to race the skill/workflow wiring and read mandated items
+	// as unwired.
+	if a.settingsImpl != nil {
+		a.settingsImpl.MarkConfigConsumersWired()
+	}
 
 	return a
 }
@@ -11932,4 +11982,16 @@ func (e *auditArchiverEmitter) Emit(_ context.Context, ev contextaudit.Event) er
 		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
 	})
 	return nil
+}
+
+// mandatedWorkflowsAdapter adapts the workflows view to
+// fleet.MandatedWorkflows (core/fleet must not import the view).
+type mandatedWorkflowsAdapter struct{ wf *workflowsview.API }
+
+func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (string, bool, error) {
+	return m.wf.InstallMandatedDocument(ctx, payload, catalogID, version)
+}
+
+func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, restoreCatalog bool) error {
+	return m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID, restoreCatalog)
 }

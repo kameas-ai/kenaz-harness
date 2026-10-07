@@ -25,6 +25,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -119,6 +121,94 @@ type AuditArchiver struct {
 	// (fleet sign-in / sign-out) restarts it; events stay in the local
 	// hash-chained log (unsupported_endpoint.go).
 	unsupported atomic.Bool
+
+	// tooLarge latches when fleet answers 413 to a batch (fleet contract
+	// 2026-10-06: 413 is PERMANENT — the same batch can never be accepted;
+	// content problems come back as 200 + a per-event report instead).
+	// The loop idles without posting (events stay in the local log) until
+	// a fleet session reset clears it (ResetUnsupported).
+	tooLarge atomic.Bool
+
+	// rejectedEvents counts events fleet refused per-event in a 200
+	// response (rejected_events[], e.g. payload_too_large). The cursor
+	// advances past them — retrying cannot change the answer — but they are
+	// logged and counted, never silent (review F10).
+	rejectedEvents atomic.Int64
+}
+
+// RejectedEvents is the cumulative count of events fleet refused per-event.
+func (a *AuditArchiver) RejectedEvents() int64 {
+	return a.rejectedEvents.Load()
+}
+
+// auditAppendResponse mirrors the fields of kenaz-fleet
+// service/handlers_audit_append.go AuditAppendResponse the archiver reads.
+type auditAppendResponse struct {
+	Accepted       int                  `json:"accepted"`
+	Rejected       int                  `json:"rejected"`
+	RejectedEvents []auditRejectedEvent `json:"rejected_events,omitempty"`
+}
+
+// auditRejectedEvent mirrors fleet AuditRejectedEvent.
+type auditRejectedEvent struct {
+	Index  int    `json:"index"`
+	ID     string `json:"id,omitempty"`
+	Reason string `json:"reason"`
+}
+
+// auditRetryAfterError is a 429 carrying fleet's Retry-After.
+type auditRetryAfterError struct {
+	After time.Duration
+}
+
+func (e *auditRetryAfterError) Error() string {
+	return fmt.Sprintf("status 429 (retry after %s)", e.After)
+}
+
+// parseRetryAfter reads a Retry-After header (delta-seconds or HTTP date).
+func parseRetryAfter(v string, now time.Time) (time.Duration, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second, true
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := t.Sub(now); d > 0 {
+			return d, true
+		}
+		return 0, true
+	}
+	return 0, false
+}
+
+// retryWait is how long the loop waits after err: a 429's Retry-After,
+// capped at the NEXT backoff tier (review F10 — a quota reset hours away
+// must not park the archiver past its normal retry ladder); otherwise the
+// current backoff.
+func retryWait(err error, backoff time.Duration) time.Duration {
+	var ra *auditRetryAfterError
+	if errors.As(err, &ra) {
+		next := backoff * 2
+		if next > auditBackoffMax {
+			next = auditBackoffMax
+		}
+		if ra.After < next {
+			return ra.After
+		}
+		return next
+	}
+	return backoff
+}
+
+// ErrAuditBatchTooLarge is fleet's 413 for an audit batch: permanent for that
+// batch, so the archiver stops retrying it.
+var ErrAuditBatchTooLarge = errors.New("fleet/audit_archive: fleet refused the batch as too large (413); archival paused")
+
+// TooLarge reports whether archival is paused on a 413.
+func (a *AuditArchiver) TooLarge() bool {
+	return a.tooLarge.Load()
 }
 
 // Unsupported reports whether the loop stopped because the connected fleet
@@ -133,6 +223,7 @@ func (a *AuditArchiver) Unsupported() bool {
 // sign-out) so a fleet that ships the endpoint, or a fixed host, resumes
 // archival without an app restart. No-op after Stop or before any Start.
 func (a *AuditArchiver) ResetUnsupported() {
+	a.tooLarge.Store(false) // a new session may carry a different server cap
 	if !a.unsupported.CompareAndSwap(true, false) {
 		return
 	}
@@ -250,8 +341,11 @@ func (a *AuditArchiver) ArchiveNow(ctx context.Context) error {
 	if a.chainErr.Load() {
 		return errors.New("fleet/audit_archive: archive halted due to chain-break; operator action required")
 	}
-	if a.unsupported.Load() {
+	if a.isUnsupported() {
 		return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
+	}
+	if a.tooLarge.Load() {
+		return ErrAuditBatchTooLarge
 	}
 	if !a.running.Load() {
 		return errors.New("fleet/audit_archive: archiver not running")
@@ -316,8 +410,8 @@ func (a *AuditArchiver) loop(ctx context.Context) {
 			return
 		}
 
-		// Hard-stop on chain-break.
-		if a.chainErr.Load() {
+		// Hard-stop on chain-break, or on a permanent 413.
+		if a.chainErr.Load() || a.tooLarge.Load() {
 			select {
 			case <-ctx.Done():
 				return
@@ -338,11 +432,11 @@ func (a *AuditArchiver) loop(ctx context.Context) {
 				return // latched: no route, nothing to retry
 			}
 			slog.Warn("fleet/audit_archive: flush error", "err", err)
-			// Exponential backoff.
+			// Exponential backoff (a 429 waits its Retry-After, capped).
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(backoff):
+			case <-time.After(retryWait(err, backoff)):
 			}
 			if backoff < auditBackoffMax {
 				backoff *= 2
@@ -463,8 +557,18 @@ func (a *AuditArchiver) poster() AuditHTTPPoster {
 }
 
 // post signs and POSTs the batch JSON body to the fleet endpoint.
-func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
+// isUnsupported reports the audit_append latch: the archiver's own flag OR
+// the Client's resettable feature latch (WP04 — so a sign-in reset that
+// clears the client latch is honoured by a new archiver run too).
+func (a *AuditArchiver) isUnsupported() bool {
 	if a.unsupported.Load() {
+		return true
+	}
+	return a.cfg.Client != nil && a.cfg.Client.endpointUnsupported(FeatureAuditAppend) != nil
+}
+
+func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
+	if a.isUnsupported() {
 		return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
 	}
 	resp, err := a.poster().Post(ctx, auditArchiveEndpoint, "application/json", bytes.NewReader(body))
@@ -478,17 +582,56 @@ func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
 	if resp.StatusCode == http.StatusNotFound {
 		peek, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), peek) {
-			if a.unsupported.CompareAndSwap(false, true) {
+			if a.unsupported.CompareAndSwap(false, true) && a.cfg.Client == nil {
 				logging.L().Info("fleet.endpoint.unsupported",
 					"feature", FeatureAuditAppend,
 					"endpoint", auditArchiveEndpoint,
 					"action", "stop_retrying_keep_local")
 			}
+			if a.cfg.Client != nil {
+				// Latch on the Client too (logs once there), so every
+				// audit_append caller shares one resettable latch.
+				return a.cfg.Client.markEndpointUnsupported(FeatureAuditAppend, auditArchiveEndpoint)
+			}
 			return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
 		}
 	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
+		if a.tooLarge.CompareAndSwap(false, true) {
+			logging.L().Warn("fleet.audit_archive.batch_too_large",
+				"endpoint", auditArchiveEndpoint, "action", "pause_archival_keep_local")
+		}
+		return ErrAuditBatchTooLarge
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if d, ok := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ok {
+			return &auditRetryAfterError{After: d}
+		}
 		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	// 200 / 201 / 204 are all success (fleet contract 2026-10-06).
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	// Content problems come back as 200 + a per-event report. The batch is
+	// accepted (the cursor advances — retrying cannot change the answer),
+	// but each refused event is logged (id + reason, never the payload) and
+	// counted (review F10).
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var ar auditAppendResponse
+	if len(raw) > 0 && json.Unmarshal(raw, &ar) == nil && (ar.Rejected > 0 || len(ar.RejectedEvents) > 0) {
+		n := ar.Rejected
+		if len(ar.RejectedEvents) > n {
+			n = len(ar.RejectedEvents)
+		}
+		a.rejectedEvents.Add(int64(n))
+		for _, re := range ar.RejectedEvents {
+			logging.L().Warn("fleet.audit_archive.event_rejected",
+				"event_id", re.ID, "index", re.Index, "reason", re.Reason)
+		}
+		if len(ar.RejectedEvents) == 0 {
+			logging.L().Warn("fleet.audit_archive.events_rejected", "count", n)
+		}
 	}
 	return nil
 }

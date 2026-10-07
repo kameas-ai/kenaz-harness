@@ -267,6 +267,11 @@ func classifyAppendError(err error) (reason string, permanent bool) {
 			return "rate_limited", false
 		case se.Status == http.StatusRequestTimeout:
 			return "network", false
+		case se.Status == http.StatusRequestEntityTooLarge:
+			// Fleet contract (2026-10-06): content problems come back as
+			// 200 + a per-event report; a 413 means THIS body can never be
+			// accepted, so re-posting it is pointless. Permanent.
+			return "payload_too_large", true
 		default:
 			return fmt.Sprintf("status_%d", se.Status), true
 		}

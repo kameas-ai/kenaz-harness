@@ -62,29 +62,43 @@ func IsPromotionUp(from, to units.Classification) bool {
 	return rt > rf
 }
 
-// mergeRequestInput is the POST body for /api/v1/context/merge-requests. The
-// JSON tags MUST match the fleet merge_requests object the fleet agent builds.
+// mergeRequestInput is the POST body for /api/v1/context/merge-requests. It
+// mirrors kenaz-fleet service/api_types.go MergeRequestCreateRequest field for
+// field (unit_node_id, to_classification, proposed_title, proposed_body,
+// proposed_metadata). Fleet snapshots from_classification and
+// proposed_version from the live node server-side, so neither is sent.
+// unit_node_id must be a UUID (fleet uuid.Parse, handlers_unit_merge.go) —
+// the unit's wire id, never its local ULID (WP01).
+//
+// Before WP01 this sent title/body/metadata/from_classification/
+// proposed_version: fleet silently ignored all five (unknown JSON fields),
+// so the proposal always carried the live node's content.
 type mergeRequestInput struct {
-	UnitNodeID         string          `json:"unit_node_id"`
-	FromClassification string          `json:"from_classification"`
-	ToClassification   string          `json:"to_classification"`
-	ProposedVersion    int             `json:"proposed_version"`
-	Title              string          `json:"title"`
-	Body               string          `json:"body"`
-	Metadata           json.RawMessage `json:"metadata,omitempty"`
+	UnitNodeID       string          `json:"unit_node_id"`
+	ToClassification string          `json:"to_classification"`
+	ProposedTitle    string          `json:"proposed_title,omitempty"`
+	ProposedBody     string          `json:"proposed_body,omitempty"`
+	ProposedMetadata json.RawMessage `json:"proposed_metadata,omitempty"`
+}
+
+// mergeRequestResponse is fleet's MergeRequestResponse envelope
+// ({"merge_request": {...}, "node": {...}?}).
+type mergeRequestResponse struct {
+	MergeRequest MergeRequest `json:"merge_request"`
 }
 
 // MergeRequest is the harness-side view of a fleet merge_requests row returned
-// by the create endpoint. Status is server-assigned (typically "open").
+// by the create endpoint (fleet api_types.go MergeRequest). Status is
+// server-assigned (typically "open").
 type MergeRequest struct {
 	ID                 string          `json:"id"`
 	UnitNodeID         string          `json:"unit_node_id"`
 	FromClassification string          `json:"from_classification"`
 	ToClassification   string          `json:"to_classification"`
 	ProposedVersion    int             `json:"proposed_version"`
-	Title              string          `json:"title"`
-	Body               string          `json:"body"`
-	Metadata           json.RawMessage `json:"metadata,omitempty"`
+	Title              string          `json:"proposed_title"`
+	Body               string          `json:"proposed_body"`
+	Metadata           json.RawMessage `json:"proposed_metadata,omitempty"`
 	Status             string          `json:"status"`
 	CreatedAt          string          `json:"created_at"`
 }
@@ -115,24 +129,30 @@ func (s *UnitSyncer) CreateMergeRequestForPromote(ctx context.Context, src units
 	if !IsPromotionUp(src.Classification, toClass) {
 		return nil, fmt.Errorf("%w: %s→%s", ErrPromoteNotUp, src.Classification, toClass)
 	}
+	// Review F2: a merge request is ONLY team→org. Fleet's MR targets an
+	// EXISTING node and rejects a target equal to its current
+	// classification, so personal→team is a straight push (PushUnit), and
+	// personal→org is push-at-team then this MR. Callers orchestrate that
+	// (fleet view Unit_PromoteAsMergeRequest).
+	if src.Classification != units.ClassTeam || toClass != units.ClassOrg {
+		return nil, fmt.Errorf("%w: merge requests are team→org only (got %s→%s; personal→team is a direct push)", ErrPromoteNotUp, src.Classification, toClass)
+	}
 	if err := s.canSync(); err != nil {
 		return nil, err
 	}
 
 	in := mergeRequestInput{
-		UnitNodeID:         src.ID,
-		FromClassification: mergeRequestClassString(src.Classification),
-		ToClassification:   mergeRequestClassString(toClass),
-		ProposedVersion:    src.Version,
-		Title:              title,
-		Body:               body,
-		Metadata:           normaliseMergeMeta(src.Metadata),
+		UnitNodeID:       s.WireNodeID(ctx, src.ID),
+		ToClassification: mergeRequestClassString(toClass),
+		ProposedTitle:    title,
+		ProposedBody:     body,
+		ProposedMetadata: normaliseMergeMeta(src.Metadata),
 	}
-	if in.Title == "" {
-		in.Title = src.Title
+	if in.ProposedTitle == "" {
+		in.ProposedTitle = src.Title
 	}
-	if in.Body == "" {
-		in.Body = src.Body
+	if in.ProposedBody == "" {
+		in.ProposedBody = src.Body
 	}
 
 	resp, err := s.client.PostJSON(ctx, "/api/v1/context/merge-requests", in)
@@ -152,10 +172,11 @@ func (s *UnitSyncer) CreateMergeRequestForPromote(ctx context.Context, src units
 	if err != nil {
 		return nil, fmt.Errorf("fleet: create merge request read: %w", err)
 	}
-	var mr MergeRequest
-	if err := json.Unmarshal(raw, &mr); err != nil {
+	var env mergeRequestResponse
+	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("fleet: create merge request parse: %w", err)
 	}
+	mr := env.MergeRequest
 	return &mr, nil
 }
 

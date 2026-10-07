@@ -348,7 +348,7 @@ func TestSigningPayload_KeyIDFieldOrder(t *testing.T) {
 		MCPAllowlist       []string                   `json:"mcp_allowlist"`
 		ModelPrefs         *BundleModelPrefs          `json:"model_prefs,omitempty"`
 		KameasMLWeightURLs []string                   `json:"kameas_ml_weight_urls,omitempty"`
-		MandatedSkills     []json.RawMessage          `json:"mandated_skills,omitempty"`
+		MandatedItems      []BundleMandatedItem       `json:"mandated_items,omitempty"`
 		ProvisionedMCP     []ProvisionedMCP           `json:"provisioned_mcp,omitempty"`
 		ProviderSetups     []ProviderSetup            `json:"provider_setups,omitempty"`
 		OrgConfig          map[string]json.RawMessage `json:"org_config,omitempty"`
@@ -357,7 +357,7 @@ func TestSigningPayload_KeyIDFieldOrder(t *testing.T) {
 		out, err := json.Marshal(legacyBundleSigningPayload{
 			BundleID: b.BundleID, IssuedAt: b.IssuedAt, CedarDelta: b.CedarDelta,
 			MCPAllowlist: b.MCPAllowlist, ModelPrefs: b.ModelPrefs,
-			KameasMLWeightURLs: b.KameasMLWeightURLs, MandatedSkills: b.MandatedSkills,
+			KameasMLWeightURLs: b.KameasMLWeightURLs, MandatedItems: b.MandatedItems,
 			ProvisionedMCP: b.ProvisionedMCP, ProviderSetups: b.ProviderSetups,
 			OrgConfig: b.OrgConfig,
 		})
@@ -368,7 +368,7 @@ func TestSigningPayload_KeyIDFieldOrder(t *testing.T) {
 	}
 	populated := sampleBundle()
 	populated.KameasMLWeightURLs = []string{"https://example.invalid/w"}
-	populated.MandatedSkills = []json.RawMessage{json.RawMessage(`{"id":"s1"}`)}
+	populated.MandatedItems = []BundleMandatedItem{{CatalogID: "c1", Kind: "skill", Version: "1", Payload: json.RawMessage(`{"id":"s1"}`)}}
 	populated.ProvisionedMCP = []ProvisionedMCP{{RecipeID: "slack", PrimaryAuth: "oauth"}}
 	populated.ProviderSetups = []ProviderSetup{{Provider: "anthropic", AccessMode: "byo_key"}}
 	populated.OrgConfig = map[string]json.RawMessage{"b": json.RawMessage(`{}`), "a": json.RawMessage(`[]`)}

@@ -179,7 +179,7 @@ func newIntegrationFleetWithHook(t *testing.T, rec *fleetRecorder, hook func(rec
 func buildIntegrationImpl(t *testing.T, lib *corecontexts.Library, fleetBoot *corefleet.BootstrapClient, fleetClient *corefleet.Client, audit contextaudit.Emitter) *contextBootstrapImpl {
 	t.Helper()
 	recipe := newBootstrapRecipeSource(fleetBoot)
-	writer := newBootstrapContextWriter(lib, fleetClient, fleetBoot, audit)
+	writer := newBootstrapContextWriter(lib, fleetBoot)
 	progress := newBootstrapProgressSink(nil, fleetBoot) // nil broker (no Wails in tests)
 	pool := &fakeBootstrapPool{running: map[string]bool{"gmail": true}}
 	model := newBootstrapModelCaller(fakeBootstrapModel{})
@@ -202,16 +202,15 @@ func buildIntegrationImpl(t *testing.T, lib *corecontexts.Library, fleetBoot *co
 // Not parallel: mutates the shared keychain singleton (SaveTokens/ClearTokens).
 func TestContextBootstrap_FullLifecycle(t *testing.T) {
 	rec := &fleetRecorder{}
-	// contextSyncedCh is closed by the mock HTTP server when it receives
-	// the PATCH /me/onboarding {context_synced:true} request, replacing
-	// the fragile 150 ms sleep that was previously here.
-	contextSyncedCh := make(chan struct{}, 1)
+	// completedCh fires when the mock receives the terminal
+	// status=completed run PATCH (the run is fully dispatched by then).
+	completedCh := make(chan struct{}, 1)
 	audit := &recordingAudit{}
 	fleetBoot, fleetClient, _ := newIntegrationFleetWithHook(t, rec, func(r recordedReq) {
-		if r.method == http.MethodPatch && r.path == "/api/v1/me/onboarding" &&
-			strings.Contains(r.body, `"context_synced":true`) {
+		if r.method == http.MethodPatch && r.path == "/api/v1/context/bootstrap/run-int" &&
+			strings.Contains(r.body, `"status":"completed"`) {
 			select {
-			case contextSyncedCh <- struct{}{}:
+			case completedCh <- struct{}{}:
 			default:
 			}
 		}
@@ -236,48 +235,33 @@ func TestContextBootstrap_FullLifecycle(t *testing.T) {
 		t.Errorf("recipe version = %q, want 9.9.9 (fleet recipe)", res.RecipeVersion)
 	}
 
-	// Wait for the async context_synced PATCH goroutine to fire.
 	select {
-	case <-contextSyncedCh:
+	case <-completedCh:
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for context_synced PATCH /me/onboarding")
+		t.Fatal("timeout waiting for the status=completed run PATCH")
 	}
 
 	reqs := rec.snapshot()
 	// Assert the full lifecycle appears in the outbound requests.
 	assertHit(t, reqs, http.MethodGet, "/api/v1/context/bootstrap/recipe")
 	assertHit(t, reqs, http.MethodPost, "/api/v1/context/bootstrap")
-	assertHit(t, reqs, http.MethodPost, "/api/v1/context/push")
 	assertHit(t, reqs, http.MethodPatch, "/api/v1/context/bootstrap/run-int")
-	assertHit(t, reqs, http.MethodPatch, "/api/v1/me/onboarding")
 
-	// A completed PATCH must be present.
-	if !anyReq(reqs, func(r recordedReq) bool {
-		return r.method == http.MethodPatch && r.path == "/api/v1/context/bootstrap/run-int" && strings.Contains(r.body, `"status":"completed"`)
-	}) {
-		t.Error("no PATCH with status=completed found")
-	}
-	// context_synced=true must be PATCHed.
-	if !anyReq(reqs, func(r recordedReq) bool {
-		return r.path == "/api/v1/me/onboarding" && strings.Contains(r.body, `"context_synced":true`)
-	}) {
-		t.Error("no PATCH /me/onboarding with context_synced=true")
-	}
-
-	// The /context/push body must carry source_kind + provenance + confidence.
-	pushBody := ""
+	// WP04 (owner ruling 2026-10-06): bootstrap context is personal and is
+	// NEVER pushed to fleet — the old push sent classification "personal",
+	// which fleet refuses for the whole batch. No /context/push, and no
+	// context_synced onboarding signal (nothing was synced).
 	for _, r := range reqs {
 		if r.path == "/api/v1/context/push" {
-			pushBody = r.body
+			t.Errorf("bootstrap pushed to fleet: %s", r.body)
+		}
+		if r.path == "/api/v1/me/onboarding" {
+			t.Errorf("bootstrap claimed context_synced with nothing synced: %s", r.body)
 		}
 	}
-	if pushBody == "" {
-		t.Fatal("no /context/push body captured")
-	}
-	for _, want := range []string{`"source_kind"`, `"provenance"`, `"confidence"`, `"classification":"personal"`} {
-		if !strings.Contains(pushBody, want) {
-			t.Errorf("push body missing %s: %s", want, pushBody)
-		}
+	// The run status names why nothing was shared.
+	if st, _ := impl.Status(context.Background()); st.SharingSkipped != BootstrapShareSkippedReason {
+		t.Errorf("RunStatus.SharingSkipped = %q, want %q", st.SharingSkipped, BootstrapShareSkippedReason)
 	}
 
 	// PRIVACY: no third-party credential bytes in ANY outbound fleet payload.

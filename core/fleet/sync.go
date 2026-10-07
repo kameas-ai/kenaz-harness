@@ -280,7 +280,7 @@ func (s *Syncer) Push(ctx context.Context, cat SyncCategory) error {
 		LWWTimestamp: now,
 		Payload:      raw,
 	}
-	resp, err := s.client.PostJSON(ctx, "/api/v1/sync/"+string(cat), sp)
+	resp, err := s.client.PostJSON(ctx, "/api/v1/sync/"+url.PathEscape(string(cat)), sp)
 	if err != nil {
 		st.mu.Lock()
 		st.lastErr = err.Error()
@@ -337,7 +337,7 @@ func (s *Syncer) Pull(ctx context.Context, cat SyncCategory) error {
 	if lwwTS > 0 {
 		q.Set("since", fmt.Sprintf("%d", lwwTS))
 	}
-	path := "/api/v1/sync/" + string(cat)
+	path := "/api/v1/sync/" + url.PathEscape(string(cat))
 	if len(q) > 0 {
 		path = path + "?" + q.Encode()
 	}
