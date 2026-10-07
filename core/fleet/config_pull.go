@@ -106,6 +106,16 @@ type ConfigPoller struct {
 	source        string
 	keyUnknown    bool // last rejection was ErrSigningKeyUnknown
 
+	// buildVersion is this binary's version (SetBuildVersion). With
+	// reapplyID it implements review F1's re-apply rule: when the build
+	// changed since the last applied bundle, or that bundle had REFUSED
+	// mandated items (a kind this build could not install), the stored
+	// checksum is cleared and the SAME bundle id may be applied once more,
+	// so an upgraded build installs a previously refused pack without
+	// waiting for a new bundle. reapplyID is that bundle id (0 = none).
+	buildVersion string
+	reapplyID    int64
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -151,6 +161,14 @@ func NewConfigPoller(client *Client, dataDir string, applier ConfigApplier) *Con
 	return p
 }
 
+// SetBuildVersion records this binary's version for the re-apply rule (see
+// ConfigPoller.buildVersion). Call before Start.
+func (p *ConfigPoller) SetBuildVersion(v string) {
+	p.mu.Lock()
+	p.buildVersion = v
+	p.mu.Unlock()
+}
+
 // Start launches the background polling goroutine. Loads the cached bundle
 // state (lastAppliedID + checksum) before the first fetch.
 func (p *ConfigPoller) Start(ctx context.Context) {
@@ -166,6 +184,12 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 		p.checksum = cs
 		if id > 0 {
 			p.source = "cache"
+			meta := loadBundleApplyMeta(p.dataDir)
+			if meta.BuildVersion != p.buildVersion || meta.HadRefusals {
+				// F1: re-fetch (no 304) and allow bundle id to apply once more.
+				p.checksum = ""
+				p.reapplyID = id
+			}
 		}
 		p.mu.Unlock()
 	}
@@ -338,6 +362,11 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	keys := FleetSigningKeys()
 	p.mu.RLock()
 	lastID := p.lastAppliedID
+	if p.reapplyID > 0 && p.reapplyID == lastID {
+		// F1 re-apply: the already-applied bundle may verify once more
+		// (a replay of a bundle this device already accepted is harmless).
+		lastID = p.reapplyID - 1
+	}
 	p.mu.RUnlock()
 
 	if err := VerifyWithKeySet(&b, keys, lastID); err != nil {
@@ -372,11 +401,19 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	// the next GET returns the same bundle (no 304 short-circuit).
 	p.mu.Lock()
 	p.keyUnknown = false // the bundle verified under a pinned key
+	hadRefusals := false
+	for _, st := range itemStats {
+		if st.Status == MandatedStatusRefused {
+			hadRefusals = true
+		}
+	}
+	buildVersion := p.buildVersion
 	if len(applyErrs) == 0 {
 		p.lastAppliedID = b.BundleID
 		p.lastAppliedAt = time.Now()
 		p.checksum = newChecksum
 		p.lastError = ""
+		p.reapplyID = 0
 	} else {
 		// Surface the error set but leave ID + checksum untouched.
 		msgs := make([]string, 0, len(applyErrs))
@@ -394,6 +431,9 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	if len(applyErrs) == 0 {
 		if saveErr := saveBundleState(p.dataDir, b.BundleID, newChecksum); saveErr != nil {
 			log.Printf("fleet: save bundle state: %v", saveErr)
+		}
+		if saveErr := saveBundleApplyMeta(p.dataDir, bundleApplyMeta{BuildVersion: buildVersion, HadRefusals: hadRefusals}); saveErr != nil {
+			log.Printf("fleet: save bundle apply meta: %v", saveErr)
 		}
 	}
 
@@ -475,6 +515,44 @@ func loadBundleState(dataDir string) (int64, string, error) {
 		}
 	}
 	return id, cs, nil
+}
+
+// bundleApplyMeta records, for the last fully applied bundle, the build
+// that applied it and whether it carried refused mandated items (F1).
+type bundleApplyMeta struct {
+	BuildVersion string `json:"build_version"`
+	HadRefusals  bool   `json:"had_refusals"`
+}
+
+func bundleApplyMetaPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "bundle_apply_meta.json")
+}
+
+// loadBundleApplyMeta returns the zero meta when absent/unreadable — which
+// reads as "applied by a different (older) build", triggering one re-apply.
+func loadBundleApplyMeta(dataDir string) bundleApplyMeta {
+	var m bundleApplyMeta
+	if dataDir == "" {
+		return m
+	}
+	if raw, err := os.ReadFile(bundleApplyMetaPath(dataDir)); err == nil {
+		_ = json.Unmarshal(raw, &m)
+	}
+	return m
+}
+
+func saveBundleApplyMeta(dataDir string, m bundleApplyMeta) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(bundleApplyMetaPath(dataDir), string(raw)+"\n")
 }
 
 // saveBundleState atomically persists (lastAppliedID, checksum) to disk.

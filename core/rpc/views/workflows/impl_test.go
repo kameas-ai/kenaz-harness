@@ -708,20 +708,24 @@ func TestInstallDocument_Mandated_ProvenanceAndRemoval(t *testing.T) {
 		t.Fatalf("mandated update: %v", err)
 	}
 	// Another catalog id may not remove it.
-	if err := api.RemoveMandatedDocument(ctx, "org-flow", "other"); err != nil {
+	if err := api.RemoveMandatedDocument(ctx, "org-flow", "other", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Load(ctx, "org-flow"); err != nil {
 		t.Fatal("a different mandate removed the workflow")
 	}
-	if err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-m"); err != nil {
+	// F7: a mandated workflow is not user-deletable.
+	if err := api.Delete(ctx, "org-flow"); !errors.Is(err, ErrWorkflowOrgManaged) {
+		t.Fatalf("Delete(mandated) err = %v, want ErrWorkflowOrgManaged", err)
+	}
+	if err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-m", false); err != nil {
 		t.Fatalf("RemoveMandatedDocument: %v", err)
 	}
 	if _, err := store.Load(ctx, "org-flow"); !errors.Is(err, corewf.ErrWorkflowNotFound) {
 		t.Fatalf("workflow still stored after mandate removal: %v", err)
 	}
 	// Idempotent.
-	if err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-m"); err != nil {
+	if err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-m", false); err != nil {
 		t.Fatalf("second removal: %v", err)
 	}
 
@@ -729,10 +733,43 @@ func TestInstallDocument_Mandated_ProvenanceAndRemoval(t *testing.T) {
 	if _, err := api.InstallDocument(ctx, []byte("id: mine\nname: Mine\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n"), DocumentOrigin{CatalogID: "cat-u", Slug: "mine"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := api.RemoveMandatedDocument(ctx, "mine", "cat-u"); err != nil {
+	if err := api.RemoveMandatedDocument(ctx, "mine", "cat-u", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Load(ctx, "mine"); err != nil {
 		t.Fatal("a non-mandated catalog install was removed by mandate reconciliation")
+	}
+}
+
+// Review F6: a mandate that took over the user's OWN catalog install of the
+// same item hands it back on withdrawal instead of deleting it.
+func TestInstallMandatedDocument_TakeoverRestoredOnWithdrawal(t *testing.T) {
+	store := newWP07TestStore(t)
+	prov := corewf.NewMemoryProvenanceStore()
+	api := New(Config{Engine: corewf.NewEngine(), Store: store, Provenance: prov})
+	ctx := context.Background()
+	doc := []byte("id: shared-flow\nname: Shared\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n")
+	if _, err := api.InstallDocument(ctx, doc, DocumentOrigin{CatalogID: "cat-s", Slug: "shared-flow", Version: "1"}); err != nil {
+		t.Fatalf("user catalog install: %v", err)
+	}
+	id, tookOver, err := api.InstallMandatedDocument(ctx, doc, "cat-s", "2")
+	if err != nil || id != "shared-flow" || !tookOver {
+		t.Fatalf("InstallMandatedDocument = %q, %v, %v; want takeover", id, tookOver, err)
+	}
+	if err := api.RemoveMandatedDocument(ctx, id, "cat-s", tookOver); err != nil {
+		t.Fatalf("withdraw: %v", err)
+	}
+	if _, err := store.Load(ctx, id); err != nil {
+		t.Fatal("withdrawal deleted the user's own catalog install")
+	}
+	if p, ok, _ := prov.Get(id); !ok || p.Source != corewf.ProvenanceCatalog {
+		t.Fatalf("provenance after withdrawal = %+v, want catalog", p)
+	}
+	if err := api.Delete(ctx, id); err != nil {
+		t.Fatalf("user can no longer delete their restored install: %v", err)
+	}
+	// A fresh mandate install is not a takeover.
+	if _, tookOver, _ := api.InstallMandatedDocument(ctx, doc, "cat-s", "3"); tookOver {
+		t.Error("fresh mandate reported as a takeover")
 	}
 }

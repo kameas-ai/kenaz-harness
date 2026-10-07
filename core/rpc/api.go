@@ -4844,6 +4844,15 @@ func New(c *core.Core, opts ...Option) *API {
 	// is synchronous too — captured from stack.staticPermsLoadError above.
 	SetBootErrors(bootMCPErr, bootSkillsErr, bootFleetErr, bootPermsErr)
 
+	// Review F4: the config poller starts only now, after every bundle
+	// consumer (Cedar engine, MCP catalog, skill refs, mandated workflows,
+	// audit emitter, sync-kind registry) has been wired above — its first
+	// apply used to race the skill/workflow wiring and read mandated items
+	// as unwired.
+	if a.settingsImpl != nil {
+		a.settingsImpl.MarkConfigConsumersWired()
+	}
+
 	return a
 }
 
@@ -11965,16 +11974,10 @@ func (e *auditArchiverEmitter) Emit(_ context.Context, ev contextaudit.Event) er
 // fleet.MandatedWorkflows (core/fleet must not import the view).
 type mandatedWorkflowsAdapter struct{ wf *workflowsview.API }
 
-func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (string, error) {
-	res, err := m.wf.InstallDocument(ctx, payload, workflowsview.DocumentOrigin{
-		CatalogID: catalogID, Version: version, Mandated: true,
-	})
-	if err != nil {
-		return "", err
-	}
-	return res.WorkflowID, nil
+func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (string, bool, error) {
+	return m.wf.InstallMandatedDocument(ctx, payload, catalogID, version)
 }
 
-func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string) error {
-	return m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID)
+func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, restoreCatalog bool) error {
+	return m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID, restoreCatalog)
 }

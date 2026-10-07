@@ -553,7 +553,7 @@ func applyMandatedSkillsForTest(store *slashcmd.SkillStore, registry *slashcmd.R
 	for i, raw := range raws {
 		items[i] = BundleMandatedItem{CatalogID: fmt.Sprintf("cat-%d", i), Kind: MandatedKindSkill, Version: "1.0.0", Payload: raw}
 	}
-	m := &MandatedApplier{Skills: store, Registry: registry}
+	m := &MandatedApplier{Skills: store, Registry: registry, Workflows: &recordingMandatedWorkflows{}}
 	_, errs := m.Apply(context.Background(), items)
 	return errs
 }

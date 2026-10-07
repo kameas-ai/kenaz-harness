@@ -62,6 +62,17 @@ type fleetState struct {
 	// fleet.ErrMandatedConsumerUnwired, never a silent drop.
 	mandatedWorkflows fleet.MandatedWorkflows
 
+	// mandatedApplier is the ONE per-process mandated-items applier (it
+	// remembers whether a state-file error was reported — review F5).
+	mandatedApplier *fleet.MandatedApplier
+
+	// configConsumersWired gates the config poller's start (review F4):
+	// the poller must not apply its first bundle before the mandated-item
+	// consumers (skill refs, workflows) are wired, or the boot-race
+	// bundle reads every skill/workflow item as unwired. Set by
+	// MarkConfigConsumersWired from rpc.New after the wiring block.
+	configConsumersWired bool
+
 	// otlpPipeline is the post-login OTLP export pipeline
 	// (harness-fleet-otlp-export-01NTLMEX01). Set via SetFleetOTLPPipeline;
 	// nil means OTLP export is not configured (OSS build / fleet disabled).
@@ -287,9 +298,10 @@ func (a *API) startFleetBackgroundLocked() {
 			p.Start(context.Background())
 		}
 	}
-	if a.fleet.configPoller == nil && !testing.Testing() {
+	if a.fleet.configPoller == nil && a.fleet.configConsumersWired && !testing.Testing() {
 		applier := &compositeConfigApplier{state: a.fleet}
 		cp := fleet.NewConfigPoller(c, dataDir, applier)
+		cp.SetBuildVersion(a.fleet.clientVersion)
 		a.fleet.configPoller = cp
 		cp.Start(context.Background())
 	}
@@ -681,6 +693,22 @@ func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Regist
 	defer a.fleet.mu.Unlock()
 	a.fleet.skillStore = store
 	a.fleet.skillRegistry = registry
+}
+
+// MarkConfigConsumersWired is called once rpc.New has wired every
+// config-bundle consumer (skill refs, mandated workflows, Cedar engine, MCP
+// catalog…). Only then may the config poller start (review F4); when the
+// fleet client is already set, the poller starts now.
+func (a *API) MarkConfigConsumersWired() {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.configConsumersWired = true
+	if a.fleet.client != nil {
+		a.startFleetBackgroundLocked()
+	}
 }
 
 // SetMandatedWorkflows wires the kind=workflow mandated-item consumer
@@ -1675,14 +1703,14 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 	// a bundle carrying an item this device cannot honour must not ack
 	// applied:true (same posture as cedar_delta above).
 	{
-		a.state.mu.RLock()
-		m := &fleet.MandatedApplier{
-			Skills:    a.state.skillStore,
-			Registry:  a.state.skillRegistry,
-			Workflows: a.state.mandatedWorkflows,
-			DataDir:   a.state.dataDir,
+		a.state.mu.Lock()
+		if a.state.mandatedApplier == nil {
+			a.state.mandatedApplier = &fleet.MandatedApplier{DataDir: a.state.dataDir}
 		}
-		a.state.mu.RUnlock()
+		m := a.state.mandatedApplier
+		skills, reg, wf := a.state.skillStore, a.state.skillRegistry, a.state.mandatedWorkflows
+		a.state.mu.Unlock()
+		m.SetConsumers(skills, reg, wf)
 		statuses, mErrs := m.Apply(ctx, b.MandatedItems)
 		itemStatuses = statuses
 		for _, me := range mErrs {

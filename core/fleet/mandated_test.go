@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -28,17 +30,17 @@ type recordingMandatedWorkflows struct {
 	fail error
 }
 
-func (r *recordingMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, _, _ string, payload []byte) (string, error) {
+func (r *recordingMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, _, _ string, payload []byte) (string, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.fail != nil {
-		return "", r.fail
+		return "", false, r.fail
 	}
 	r.got = append(r.got, append([]byte(nil), payload...))
-	return "wf", nil
+	return "wf", false, nil
 }
 
-func (r *recordingMandatedWorkflows) RemoveMandatedWorkflow(context.Context, string, string) error {
+func (r *recordingMandatedWorkflows) RemoveMandatedWorkflow(context.Context, string, string, bool) error {
 	return nil
 }
 
@@ -65,11 +67,11 @@ func TestMandatedApplier_ReconcileSurvivesRestart(t *testing.T) {
 	reg, _ := slashcmd.NewRegistry(slashcmd.Deps{})
 	ctx := context.Background()
 
-	first := &MandatedApplier{Skills: store, Registry: reg, DataDir: dir}
+	first := &MandatedApplier{Skills: store, Registry: reg, Workflows: &recordingMandatedWorkflows{}, DataDir: dir}
 	if _, errs := first.Apply(ctx, []BundleMandatedItem{skillItem(t, "c1", "org/a", "acmd")}); len(errs) != 0 {
 		t.Fatalf("apply: %v", errs)
 	}
-	second := &MandatedApplier{Skills: store, Registry: reg, DataDir: dir}
+	second := &MandatedApplier{Skills: store, Registry: reg, Workflows: &recordingMandatedWorkflows{}, DataDir: dir}
 	st, errs := second.Apply(ctx, nil)
 	if len(errs) != 0 || len(st) != 1 || st[0].Status != MandatedStatusRemoved || st[0].CatalogID != "c1" {
 		t.Fatalf("restart reconcile: st=%+v errs=%v", st, errs)
@@ -88,7 +90,7 @@ func TestMandatedApplier_LegacyMandatedSkillSeeded(t *testing.T) {
 	if err := slashcmd.LiveRegister(store, reg, slashcmd.Skill{ID: "old", Trigger: "oldcmd", Kind: slashcmd.KindText, Body: "x", Source: slashcmd.SkillSourceMandated}); err != nil {
 		t.Fatal(err)
 	}
-	m := &MandatedApplier{Skills: store, Registry: reg, DataDir: t.TempDir()}
+	m := &MandatedApplier{Skills: store, Registry: reg, Workflows: &recordingMandatedWorkflows{}, DataDir: t.TempDir()}
 	st, errs := m.Apply(context.Background(), nil)
 	if len(errs) != 0 || len(st) != 0 {
 		t.Fatalf("legacy reconcile st=%+v errs=%v, want silent removal", st, errs)
@@ -103,7 +105,7 @@ func TestMandatedApplier_LegacyMandatedSkillSeeded(t *testing.T) {
 func TestMandatedApplier_RemovalLeavesNonMandatedSkill(t *testing.T) {
 	store := slashcmd.NewSkillStore(t.TempDir())
 	reg, _ := slashcmd.NewRegistry(slashcmd.Deps{})
-	m := &MandatedApplier{Skills: store, Registry: reg}
+	m := &MandatedApplier{Skills: store, Registry: reg, Workflows: &recordingMandatedWorkflows{}}
 	ctx := context.Background()
 	if _, errs := m.Apply(ctx, []BundleMandatedItem{skillItem(t, "c1", "org/a", "acmd")}); len(errs) != 0 {
 		t.Fatal(errs)
@@ -127,7 +129,8 @@ func TestMandatedApplier_RemovalLeavesNonMandatedSkill(t *testing.T) {
 // still removes it.
 func TestMandatedApplier_FailedUpdateKeepsTracking(t *testing.T) {
 	wf := &recordingMandatedWorkflows{}
-	m := &MandatedApplier{Workflows: wf}
+	reg, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	m := &MandatedApplier{Skills: slashcmd.NewSkillStore(t.TempDir()), Registry: reg, Workflows: wf}
 	ctx := context.Background()
 	item := BundleMandatedItem{CatalogID: "c", Kind: MandatedKindWorkflow, Version: "1", Payload: json.RawMessage(`{"id":"w"}`)}
 	if _, errs := m.Apply(ctx, []BundleMandatedItem{item}); len(errs) != 0 {
@@ -147,20 +150,110 @@ func TestMandatedApplier_FailedUpdateKeepsTracking(t *testing.T) {
 	}
 }
 
-// Unknown future kinds are refused by name, like pack/bundle.
+// Unknown future kinds are refused by name, like pack/bundle — reported per
+// item only, NOT a bundle error (review F1: the ACK is applied:true).
 func TestMandatedApplier_UnknownKindRefused(t *testing.T) {
 	m := &MandatedApplier{}
 	st, errs := m.Apply(context.Background(), []BundleMandatedItem{
 		{CatalogID: "c1", Kind: MandatedKindBundle, Payload: json.RawMessage(`{}`)},
 		{CatalogID: "c2", Kind: "future-kind", Payload: json.RawMessage(`{}`)},
 	})
-	if len(errs) != 2 || !errors.Is(errs[0], ErrMandatedKindUnsupported) || !errors.Is(errs[1], ErrMandatedKindUnsupported) {
-		t.Fatalf("errs = %v", errs)
+	if len(errs) != 0 {
+		t.Fatalf("errs = %v, want none (refusals are per-item statuses)", errs)
 	}
 	for _, s := range st {
-		if s.Status != MandatedStatusRefused {
-			t.Errorf("%+v, want refused", s)
+		if s.Status != MandatedStatusRefused || !strings.Contains(s.Error, ErrMandatedKindUnsupported.Error()) {
+			t.Errorf("%+v, want refused naming ErrMandatedKindUnsupported", s)
 		}
+	}
+}
+
+// Review F4: an applier whose consumers are not all wired never seeds from
+// the legacy residue and never writes mandated_applied.json — a state file
+// written then would burn the seed for good.
+func TestMandatedApplier_UnwiredNeverPersistsOrSeeds(t *testing.T) {
+	dir := t.TempDir()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	reg, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	if err := slashcmd.LiveRegister(store, reg, slashcmd.Skill{ID: "old", Trigger: "oldcmd", Kind: slashcmd.KindText, Body: "x", Source: slashcmd.SkillSourceMandated}); err != nil {
+		t.Fatal(err)
+	}
+	m := &MandatedApplier{DataDir: dir} // boot race: nothing wired yet
+	st, errs := m.Apply(context.Background(), []BundleMandatedItem{skillItem(t, "c1", "org/a", "acmd")})
+	if len(errs) != 1 || !errors.Is(errs[0], ErrMandatedConsumerUnwired) || st[0].Status != MandatedStatusFailed {
+		t.Fatalf("unwired apply: st=%+v errs=%v, want a failed (retried) item", st, errs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "fleet", "mandated_applied.json")); !os.IsNotExist(err) {
+		t.Fatalf("state file written while consumers unwired: %v", err)
+	}
+	// Once wired, the legacy residue is still seeded and reconciled.
+	m.SetConsumers(store, reg, &recordingMandatedWorkflows{})
+	if _, errs := m.Apply(context.Background(), nil); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if _, err := store.Get("old"); err == nil {
+		t.Fatal("legacy residue seed was burned by the unwired run")
+	}
+}
+
+// Review F5: an unreadable state file is never overwritten; removals are
+// skipped; the error surfaces in the ACK once, then is only logged.
+func TestMandatedApplier_CorruptStateNotOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fleet", "mandated_applied.json")
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	if err := os.WriteFile(path, []byte("{corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := slashcmd.NewSkillStore(t.TempDir())
+	reg, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	m := &MandatedApplier{Skills: store, Registry: reg, Workflows: &recordingMandatedWorkflows{}, DataDir: dir}
+	_, errs := m.Apply(context.Background(), []BundleMandatedItem{skillItem(t, "c1", "org/a", "acmd")})
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "read applied set") {
+		t.Fatalf("first apply errs = %v, want the state error once", errs)
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != "{corrupt" {
+		t.Fatal("unreadable state file was overwritten")
+	}
+	if _, errs := m.Apply(context.Background(), nil); len(errs) != 0 {
+		t.Fatalf("second apply errs = %v, want none (reported once)", errs)
+	}
+	if _, err := store.Get("org/a"); err != nil {
+		t.Fatal("a removal ran against an unreadable state file")
+	}
+}
+
+// Review F6: a mandate that took over the user's own skill (same id)
+// restores it on withdrawal instead of deleting it.
+func TestMandatedApplier_TakeoverRestoresUserSkill(t *testing.T) {
+	store := slashcmd.NewSkillStore(t.TempDir())
+	reg, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	mine := slashcmd.Skill{ID: "org/a", CatalogID: "c1", Version: "0.9", Source: slashcmd.SkillSourceCatalog, Trigger: "acmd", Kind: slashcmd.KindText, Body: "mine"}
+	if err := slashcmd.LiveRegister(store, reg, mine); err != nil {
+		t.Fatal(err)
+	}
+	m := &MandatedApplier{Skills: store, Registry: reg, Workflows: &recordingMandatedWorkflows{}, DataDir: t.TempDir()}
+	ctx := context.Background()
+	if _, errs := m.Apply(ctx, []BundleMandatedItem{skillItem(t, "c1", "org/a", "acmd")}); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if sk, _ := store.Get("org/a"); sk.Source != slashcmd.SkillSourceMandated {
+		t.Fatal("mandate did not take over")
+	}
+	// A second bundle re-pushing the same mandate keeps the prior record.
+	if _, errs := m.Apply(ctx, []BundleMandatedItem{skillItem(t, "c1", "org/a", "acmd")}); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	st, errs := m.Apply(ctx, nil)
+	if len(errs) != 0 || len(st) != 1 || st[0].Status != MandatedStatusRemoved {
+		t.Fatalf("withdraw: st=%+v errs=%v", st, errs)
+	}
+	sk, err := store.Get("org/a")
+	if err != nil || sk.Source != slashcmd.SkillSourceCatalog || sk.Body != "mine" || sk.OrgManaged {
+		t.Fatalf("after withdrawal = %+v, %v; want the user's catalog install restored", sk, err)
+	}
+	if _, ok := reg.Lookup("acmd"); !ok {
+		t.Fatal("restored skill not registered")
 	}
 }
 

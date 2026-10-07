@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,12 +30,12 @@ type fakeMandatedWorkflows struct {
 	removed   []string
 }
 
-func (f *fakeMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, catalogID, _ string, payload []byte) (string, error) {
+func (f *fakeMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, catalogID, _ string, payload []byte) (string, bool, error) {
 	var doc struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(payload, &doc); err != nil || doc.ID == "" {
-		return "", errors.New("not a workflow document")
+		return "", false, errors.New("not a workflow document")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -42,10 +43,10 @@ func (f *fakeMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, catal
 		f.installed = map[string]string{}
 	}
 	f.installed[doc.ID] = catalogID
-	return doc.ID, nil
+	return doc.ID, false, nil
 }
 
-func (f *fakeMandatedWorkflows) RemoveMandatedWorkflow(_ context.Context, workflowID, catalogID string) error {
+func (f *fakeMandatedWorkflows) RemoveMandatedWorkflow(_ context.Context, workflowID, catalogID string, _ bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.installed[workflowID] == catalogID {
@@ -99,14 +100,13 @@ func TestApplyBundleItems_DispatchByKind_ThenEmptySectionRemovesAll(t *testing.T
 	if by["c-pack"].Status != fleet.MandatedStatusRefused || by["c-pack"].Error == "" {
 		t.Fatalf("pack status = %+v, want refused with a named error", by["c-pack"])
 	}
-	refusedNamed := false
-	for _, e := range errs {
-		if errors.Is(e, fleet.ErrMandatedKindUnsupported) {
-			refusedNamed = true
-		}
+	// Review F1: a refused kind is a per-item status naming the error —
+	// never a silent drop, but NOT a bundle error either (applied:true).
+	if len(errs) != 0 {
+		t.Fatalf("errs = %v, want none: refusals are per-item, the bundle applies", errs)
 	}
-	if !refusedNamed {
-		t.Fatalf("errs = %v, want ErrMandatedKindUnsupported (never a silent drop)", errs)
+	if !strings.Contains(by["c-pack"].Error, fleet.ErrMandatedKindUnsupported.Error()) {
+		t.Fatalf("pack status error %q does not name ErrMandatedKindUnsupported", by["c-pack"].Error)
 	}
 	// The skill is the org's copy, stamped with the envelope's catalog id + version.
 	sk, err := store.Get("org/review")
@@ -243,8 +243,9 @@ func TestConfigPoller_MandatedItems_ACKCarriesMachineAndItems(t *testing.T) {
 	if err := json.Unmarshal(raw, &ack); err != nil {
 		t.Fatalf("decode ACK %s: %v", raw, err)
 	}
-	if ack.Applied {
-		t.Error("applied:true with a refused pack — the ACK must not claim full apply")
+	// Review F1: a refused pack is items[].status=refused with applied:true.
+	if !ack.Applied {
+		t.Errorf("applied:false for a bundle whose only non-applied item was REFUSED — refusals must not fail the bundle (errors=%v)", ack.Errors)
 	}
 	if ack.MachineID == "" {
 		t.Error("ACK carries no machine_id")
@@ -255,5 +256,67 @@ func TestConfigPoller_MandatedItems_ACKCarriesMachineAndItems(t *testing.T) {
 	}
 	if got["skill"] != "applied" || got["pack"] != "refused" {
 		t.Errorf("ACK items = %+v, want skill applied + pack refused", ack.Items)
+	}
+}
+
+// Review F12: a bundle that fails verification never reaches the applier,
+// so an (attacker-served) EMPTY mandated_items section removes nothing.
+func TestConfigPoller_UnverifiableEmptyBundle_ZeroRemovals(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, foreign, _ := ed25519.GenerateKey(rand.Reader)
+	restore := fleet.SetSigningKeyForTesting(pub)
+	defer restore()
+
+	applier, store, registry, _ := mandatedFixture(t)
+	skill, _ := json.Marshal(slashcmd.Skill{ID: "org/keep", Trigger: "keepcmd", Kind: slashcmd.KindText, Body: "b"})
+	if errs, _ := applier.ApplyBundleItems(context.Background(), &fleet.Bundle{BundleID: 1, MandatedItems: []fleet.BundleMandatedItem{
+		{CatalogID: "c-keep", Kind: fleet.MandatedKindSkill, Version: "1", Payload: skill},
+	}}); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+
+	var mu sync.Mutex
+	served := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/configs", func(w http.ResponseWriter, r *http.Request) {
+		b := &fleet.Bundle{BundleID: 2, IssuedAt: time.Now()} // empty mandated_items
+		_ = fleet.SignBundleForTesting(b, foreign)            // NOT the pinned key
+		data, _ := json.Marshal(b)
+		mu.Lock()
+		served++
+		mu.Unlock()
+		_, _ = w.Write(data)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	if err := fleet.SaveTokens(fleet.TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = fleet.ClearTokens() }()
+	fleet.SeedFleetConfigForTesting(srv.URL, fleet.FleetConfig{Issuer: srv.URL, ClientID: "test", APIBaseURL: srv.URL, FetchedAt: time.Now().UTC()})
+	poller := fleet.NewConfigPoller(fleet.NewClientForTesting(srv.URL), applier.state.dataDir, applier)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	poller.Start(ctx)
+	defer poller.Stop()
+	for deadline := time.Now().Add(1500 * time.Millisecond); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if poller.Status().LastError != "" {
+			break
+		}
+	}
+	mu.Lock()
+	n := served
+	mu.Unlock()
+	if n == 0 || poller.Status().LastError == "" {
+		t.Fatalf("fixture: unverifiable bundle not served/rejected (served=%d, status=%+v)", n, poller.Status())
+	}
+	if _, err := store.Get("org/keep"); err != nil {
+		t.Fatal("an unverifiable empty bundle removed a mandated skill")
+	}
+	if _, ok := registry.Lookup("keepcmd"); !ok {
+		t.Fatal("an unverifiable empty bundle unregistered a mandated skill")
 	}
 }
