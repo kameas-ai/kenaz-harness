@@ -227,6 +227,10 @@ func (s *stubHandoffBackend) DeleteShare(_ context.Context, id string) error {
 }
 
 // stubAcceptStore records persists; Lookup answers from what it stored.
+// In-memory BY DESIGN (WP-PI AC-PI-2): these tests pin Impl's ordering —
+// lookup → fetch → persist → delete — not storage; the real store's SQL
+// round trip is driven over the v0.91.0 snapshot in
+// core/rpc/handoff_accept_test.go.
 type stubAcceptStore struct {
 	stored map[string]contextsync.AcceptedSessionView
 	err    error
