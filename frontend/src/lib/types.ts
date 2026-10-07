@@ -97,6 +97,27 @@ export interface TurnRun {
   specDigest: string;
   /** RFC3339Nano. */
   createdAt: string;
+  /**
+   * How the run ended (undelivered-message-retry, migration
+   * sessions/0344): "completed" | "failed" | "stopped", or "" while in
+   * flight / for a run recorded before the column existed. Optional so
+   * older fakes and backends type-check; absent reads as "".
+   */
+  outcome?: string;
+  /** Whether the model accepted the request. Meaningful only with an outcome. */
+  delivered?: boolean;
+  /** llm.FailureClass: "user_actionable" | "transient" | "unknown". */
+  failureClass?: string;
+  /** Stable failure code ("payment_required", "rate_limited", …). */
+  failureCode?: string;
+  /** Provider HTTP status, when it sent one. */
+  failureStatus?: number;
+  /** Provider adapter kind ("openrouter"). */
+  failureProvider?: string;
+  /** One-line copy ("Out of credits with OpenRouter"). */
+  failureSummary?: string;
+  /** Provider's own message, sanitized server-side. */
+  failureMessage?: string;
 }
 
 export interface SessionUsage {
