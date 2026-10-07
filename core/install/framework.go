@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -219,6 +220,11 @@ func (f *Framework) install(ctx context.Context, ref Ref, in Inputs, via string)
 
 	v, err := p.Verify(ctx, ref)
 	if err != nil {
+		if errors.Is(err, ErrRevoked) {
+			// skill-library-01SKLIB01 WP01: terminal, user-facing ("revoked
+			// by your org"); returned once, never retried.
+			logging.L().Info("install.revoked", "kind", string(ref.Kind), "id", ref.ID, "version", ref.Version)
+		}
 		return Result{}, err
 	}
 	if v.Method == VerifySignature {

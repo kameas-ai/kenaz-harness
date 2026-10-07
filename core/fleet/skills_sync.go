@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 
@@ -99,6 +98,11 @@ var ErrCatalogPayloadMalformed = errors.New("fleet/catalog: payload is not in th
 // installs nothing: install-framework-01DOGF0B's providers fetch here in
 // Provider.Verify, the framework verifies the bytes once
 // (CatalogSignatureVerdict), and Provider.Install consumes the same bytes.
+//
+// A revoked version (fleet S3: 410 with code "item_revoked", for callers
+// without catalog:manage) is ErrCatalogItemRevoked — a named, terminal
+// error, never an opaque "status 410" (skill-library-01SKLIB01 WP01). Any
+// other non-200 is a *CatalogStatusError.
 func FetchCatalogItem(ctx context.Context, client *Client, catalogID, version string) (CatalogItem, error) {
 	if client == nil || client.isNop {
 		return CatalogItem{}, ErrFleetDisabled
@@ -110,8 +114,11 @@ func FetchCatalogItem(ctx context.Context, client *Client, catalogID, version st
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return CatalogItem{}, fmt.Errorf("fleet/catalog: fetch %s@%s: status %d: %s", catalogID, version, resp.StatusCode, body)
+		se := newCatalogStatusError(fmt.Sprintf("fetch %s@%s", catalogID, version), resp)
+		if se.Status == http.StatusGone && se.Code == catalogCodeItemRevoked {
+			return CatalogItem{}, fmt.Errorf("%w (%s@%s)", ErrCatalogItemRevoked, catalogID, version)
+		}
+		return CatalogItem{}, se
 	}
 	var item CatalogItem
 	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {

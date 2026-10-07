@@ -255,4 +255,25 @@ var (
 	ErrKindMismatch = errors.New("install: provider kind does not match registration")
 	// ErrDuplicateProvider: a provider is already registered for the kind.
 	ErrDuplicateProvider = errors.New("install: provider already registered for this kind")
+	// ErrRevoked: the org revoked the requested catalog version
+	// (skill-library-01SKLIB01 WP01). Terminal: the install fails with the
+	// cause's user-facing copy and is never retried. Providers mark a
+	// source's own revoked error with MarkRevoked.
+	ErrRevoked = errors.New("install: this version was revoked by your org")
 )
+
+// MarkRevoked wraps cause so errors.Is(err, ErrRevoked) holds while the
+// message stays the cause's own (the user-facing "revoked by your org"
+// copy, not a doubled prefix). nil stays nil.
+func MarkRevoked(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	return revokedError{cause}
+}
+
+type revokedError struct{ cause error }
+
+func (e revokedError) Error() string        { return e.cause.Error() }
+func (e revokedError) Unwrap() error        { return e.cause }
+func (e revokedError) Is(target error) bool { return target == ErrRevoked }
