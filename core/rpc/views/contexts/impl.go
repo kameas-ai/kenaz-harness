@@ -466,6 +466,7 @@ func (a *API) Context_SyncStatus(_ context.Context) (ContextSyncStatusView, erro
 		Conflicts:      conflicts,
 
 		SkippedUnknownKinds: snap.SkippedUnknownKinds,
+		StrippedUnitKeys:    snap.StrippedUnitKeys,
 	}, nil
 }
 

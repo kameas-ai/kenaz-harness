@@ -805,6 +805,7 @@ type UnitSyncStatus struct {
 	SkippedInvalid      int `json:"skipped_invalid"`
 	PushRefused         int `json:"push_refused"`
 	PushHeldLoadAlways  int `json:"push_held_load_always"`
+	StrippedUnitKeys    int `json:"stripped_unit_keys"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -824,6 +825,7 @@ func (s *UnitSyncer) Status() UnitSyncStatus {
 		SkippedInvalid:      s.skippedInvalid,
 		PushRefused:         s.pushRefused,
 		PushHeldLoadAlways:  s.pushHeldLoadAlways,
+		StrippedUnitKeys:    int(s.mapper.StrippedUnitKeys()),
 	}
 }
 

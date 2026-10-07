@@ -327,6 +327,8 @@ type ContextGraphSyncer struct {
 	// kind (a server that ignores ?kind= returns every lane's nodes; WP03).
 	// Skipped, never listed, never a pull error. Cumulative.
 	skippedUnknownKinds int
+	// strippedUnitKeys counts "_unit" metadata keys stripped before push (F13).
+	strippedUnitKeys int
 
 	// pollOnce guards StartPoller so the background loop starts at most once.
 	pollOnce sync.Once
@@ -467,12 +469,21 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	if err := checkMetadataNotCapability(entry.Metadata); err != nil {
 		return nil, fmt.Errorf("fleet: context push: %w", err)
 	}
+	// F13: a "_unit" key (any case) in Curated metadata would 400 the push
+	// (case variants) or carry an unvalidated unit envelope; strip + count.
+	metadata, stripped := sanitizeCuratedMetadata(entry.Metadata)
+	if stripped > 0 {
+		s.mu.Lock()
+		s.strippedUnitKeys += stripped
+		s.mu.Unlock()
+		logging.L().Warn("fleet.context.push.stripped_unit_keys", "node_id", wireID, "count", stripped)
+	}
 	node := contextNodeInput{
 		ID:             wireID,
 		Kind:           kind,
 		Title:          entry.Title,
 		Body:           entry.Body,
-		Metadata:       entry.Metadata,
+		Metadata:       metadata,
 		Classification: classification,
 		TeamID:         entry.TeamID,
 		Version:        entry.Version,
@@ -1096,6 +1107,8 @@ type ContextSyncStatusSnapshot struct {
 	// SkippedUnknownKinds is the cumulative count of pulled nodes skipped
 	// because their kind is not a Curated kind (WP03).
 	SkippedUnknownKinds int `json:"skipped_unknown_kinds"`
+	// StrippedUnitKeys counts "_unit" metadata keys stripped before push.
+	StrippedUnitKeys int `json:"stripped_unit_keys"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -1121,6 +1134,7 @@ func (s *ContextGraphSyncer) Status() ContextSyncStatusSnapshot {
 		Conflicts:      conflicts,
 
 		SkippedUnknownKinds: s.skippedUnknownKinds,
+		StrippedUnitKeys:    s.strippedUnitKeys,
 	}
 }
 

@@ -75,6 +75,9 @@ type UnitSyncStatusView struct {
 	// PushHeldLoadAlways counts load_policy=always units held back because
 	// the identity carries no roles (re-sign-in to refresh) — review F9.
 	PushHeldLoadAlways int `json:"pushHeldLoadAlways"`
+	// StrippedUnitKeys counts case-variant "_unit" metadata keys stripped
+	// before push (review F13).
+	StrippedUnitKeys int `json:"strippedUnitKeys"`
 }
 
 // FleetAPI is the view-scoped RPC surface for fleet telemetry consent and

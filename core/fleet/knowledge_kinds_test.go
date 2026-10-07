@@ -362,3 +362,49 @@ func TestUnitSyncer_PushDirty_RolesUnknown_HoldsAlwaysUnits(t *testing.T) {
 		t.Errorf("admin load_policy = %q, want always", n.LoadPolicy)
 	}
 }
+
+// Review F13: a case-variant "_UNIT"/"_Unit" key in caller metadata would
+// 400 the WHOLE batch on fleet; it is stripped before push and counted, and
+// the body passes fleet's strict _unit validation.
+func TestPush_CaseVariantUnitKeysStripped(t *testing.T) {
+	cap, client := newWireCaptureClient(t)
+	ctx := context.Background()
+
+	m := newUnitTestManager()
+	if _, err := m.Create(ctx, units.Unit{
+		Kind: units.KindDoc, Scope: units.ScopeGlobal, Classification: units.ClassOrg, LoadPolicy: units.LoadOnDemand,
+		Title: "u", Body: "b", Metadata: json.RawMessage(`{"_UNIT":{"load_policy":"always"},"_Unit":{"x":"y"},"k":"v"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	us := NewUnitSyncer(client, m, NewUnitMapper(""), makeCapPollerWithTeamCap(t), t.TempDir())
+	if _, err := us.PushDirty(ctx); err != nil {
+		t.Fatalf("PushDirty: %v", err)
+	}
+	if got := us.Status().StrippedUnitKeys; got != 2 {
+		t.Errorf("unit StrippedUnitKeys = %d, want 2", got)
+	}
+
+	cs := NewContextGraphSyncer(client, t.TempDir(), makeCapPollerWithTeamCap(t))
+	if _, err := cs.PushEntry(ctx, ContextNodeEntry{ID: "a.md", Layer: contextpack.LayerOrg, Kind: "guidance", Title: "a", Body: "b", Version: 1,
+		Metadata: json.RawMessage(`{"_Unit":{"load_policy":"always"},"_unit":{"scope":"x"},"tag":"t"}`)}, nil); err != nil {
+		t.Fatalf("PushEntry: %v", err)
+	}
+	if got := cs.Status().StrippedUnitKeys; got != 2 {
+		t.Errorf("curated StrippedUnitKeys = %d, want 2", got)
+	}
+
+	for _, raw := range cap.snapshot("/api/v1/context/push") {
+		req := decodeFleetPush(t, raw) // runs fleet's strict _unit rules
+		for _, n := range req.Nodes {
+			for k := range n.Metadata {
+				if strings.EqualFold(k, "_unit") && k != "_unit" {
+					t.Errorf("case-variant key %q reached the wire", k)
+				}
+			}
+			if n.Metadata["k"] == nil && n.Metadata["tag"] == nil {
+				t.Errorf("caller metadata lost: %v", n.Metadata)
+			}
+		}
+	}
+}

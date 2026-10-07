@@ -716,6 +716,8 @@ export interface ContextSyncStatusView {
   team_cap_enabled: boolean;
   /** Pulled nodes skipped because their kind is not a Curated kind (WP03). */
   skipped_unknown_kinds?: number;
+  /** "_unit" metadata keys stripped before push (review F13). */
+  stripped_unit_keys?: number;
 }
 
 /** One search result from `contexts.search` (Contexts_ContextSearch). */
@@ -4802,6 +4804,8 @@ export interface UnitSyncStatusView {
   pushRefused?: number;
   /** load_policy=always units held: identity roles unknown (re-sign-in). */
   pushHeldLoadAlways?: number;
+  /** Case-variant "_unit" metadata keys stripped before push. */
+  strippedUnitKeys?: number;
 }
 
 // ── Catalog types (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────

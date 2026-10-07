@@ -35,9 +35,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"fmt"
 	"strings"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 )
 
@@ -70,6 +72,17 @@ type UnitMapper struct {
 	// roles are KNOWN at all. nil = no identity source wired (tests /
 	// offline): treated as known non-admin.
 	roleCheck func() (isAdmin, rolesKnown bool)
+
+	// strippedUnitKeys counts case-variant "_unit" metadata keys removed
+	// before push (review F13). Fleet 400s a case-variant _unit key for the
+	// WHOLE batch; the harness's own envelope is the only "_unit" sent.
+	strippedUnitKeys atomic.Int64
+}
+
+// StrippedUnitKeys is the cumulative count of stripped case-variant "_unit"
+// metadata keys.
+func (m *UnitMapper) StrippedUnitKeys() int64 {
+	return m.strippedUnitKeys.Load()
 }
 
 // ErrLoadPolicyRolesUnknown: a load_policy=always unit cannot be pushed yet
@@ -173,7 +186,11 @@ func (m *UnitMapper) MapUnitToNode(u units.Unit) (contextNodeInput, bool, error)
 	if err != nil {
 		return contextNodeInput{}, false, fmt.Errorf("fleet: MapUnitToNode %s: %w", u.ID, err)
 	}
-	meta, err := foldUnitMetadata(u, loadPolicy)
+	meta, stripped, err := foldUnitMetadata(u, loadPolicy)
+	if stripped > 0 {
+		m.strippedUnitKeys.Add(int64(stripped))
+		logging.L().Warn("fleet.unit.push.stripped_unit_keys", "unit_id", u.ID, "count", stripped)
+	}
 	if err != nil {
 		return contextNodeInput{}, false, fmt.Errorf("fleet: MapUnitToNode: %w", err)
 	}
@@ -265,14 +282,16 @@ func (m *UnitMapper) PulledNodeToUnit(n ContextPulledNode) (units.Unit, bool, er
 // foldUnitMetadata merges the caller metadata with the reserved "_unit"
 // envelope. loadPolicy is the WIRE load policy (after the admin downgrade),
 // so the envelope always equals the top-level columns. nil/empty caller
-// metadata is treated as an empty object; a caller "_unit" key is replaced.
-func foldUnitMetadata(u units.Unit, loadPolicy string) (json.RawMessage, error) {
+// metadata is treated as an empty object; a caller "_unit" key is replaced
+// and case-variant "_UNIT"/"_Unit" keys are stripped (returned count, F13).
+func foldUnitMetadata(u units.Unit, loadPolicy string) (json.RawMessage, int, error) {
 	obj := map[string]json.RawMessage{}
 	if len(u.Metadata) > 0 {
 		if err := json.Unmarshal(u.Metadata, &obj); err != nil {
-			return nil, fmt.Errorf("metadata not a JSON object: %w", err)
+			return nil, 0, fmt.Errorf("metadata not a JSON object: %w", err)
 		}
 	}
+	stripped := stripUnitKeyVariants(obj, false)
 	env := unitMetaEnvelope{
 		Scope:      string(u.Scope),
 		ScopeID:    u.ScopeID,
@@ -282,14 +301,51 @@ func foldUnitMetadata(u units.Unit, loadPolicy string) (json.RawMessage, error) 
 	}
 	envBytes, err := json.Marshal(env)
 	if err != nil {
-		return nil, err
+		return nil, stripped, err
 	}
 	obj[unitMetaKey] = envBytes
 	out, err := json.Marshal(obj)
 	if err != nil {
-		return nil, err
+		return nil, stripped, err
 	}
-	return out, nil
+	return out, stripped, nil
+}
+
+// stripUnitKeyVariants deletes every key that equals "_unit"
+// case-insensitively but not exactly (and the exact key too when
+// includeExact). Returns how many were removed.
+func stripUnitKeyVariants(obj map[string]json.RawMessage, includeExact bool) int {
+	n := 0
+	for k := range obj {
+		if strings.EqualFold(k, unitMetaKey) && (includeExact || k != unitMetaKey) {
+			delete(obj, k)
+			n++
+		}
+	}
+	return n
+}
+
+// sanitizeCuratedMetadata removes every "_unit" key (any case) from
+// Curated node metadata — the Curated lane carries no unit envelope, and a
+// case variant 400s the batch on fleet (F13). Non-object metadata is
+// returned unchanged. Returns the metadata and the stripped count.
+func sanitizeCuratedMetadata(md json.RawMessage) (json.RawMessage, int) {
+	if len(md) == 0 {
+		return md, 0
+	}
+	obj := map[string]json.RawMessage{}
+	if err := json.Unmarshal(md, &obj); err != nil {
+		return md, 0
+	}
+	n := stripUnitKeyVariants(obj, true)
+	if n == 0 {
+		return md, 0
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return md, 0
+	}
+	return out, n
 }
 
 // unfoldUnitMetadata derives scope / scope_id / load_policy for a pulled node

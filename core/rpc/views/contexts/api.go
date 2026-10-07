@@ -197,6 +197,9 @@ type ContextSyncStatusView struct {
 	// not a Curated kind (another lane's node, or one this build does not
 	// know) — never listed, never a pull error (WP03).
 	SkippedUnknownKinds int `json:"skipped_unknown_kinds"`
+	// StrippedUnitKeys counts "_unit" metadata keys stripped before push
+	// (review F13).
+	StrippedUnitKeys int `json:"stripped_unit_keys"`
 }
 
 // ContextConflictView is one per-node version conflict surfaced by
