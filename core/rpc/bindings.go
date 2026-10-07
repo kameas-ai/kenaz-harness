@@ -3993,14 +3993,30 @@ func (b *Bindings) Handoff_Share(sessionID, recipientUserID string) error {
 	return b.api.ContextSync().Handoff_Share(b.ctx(), sessionID, recipientUserID)
 }
 
+// Handoff_RecipientDevices lists a teammate's receiving devices (key ids +
+// fingerprints) for the share dialog's trust display. No key bytes cross
+// this boundary (device-keys-handoff-01DEVKH01 FR-6).
+func (b *Bindings) Handoff_RecipientDevices(recipientUserID string) ([]contextsyncview.RecipientDeviceView, error) {
+	defer sentry.WrapBinding("Handoff_RecipientDevices")()
+	return b.api.ContextSync().Handoff_RecipientDevices(b.ctx(), recipientUserID)
+}
+
+// Handoff_Delete dismisses an inbox item without accepting it (fleet
+// DELETE /handoff/{id}, idempotent).
+func (b *Bindings) Handoff_Delete(inboxItemID string) error {
+	defer sentry.WrapBinding("Handoff_Delete")()
+	return b.api.ContextSync().Handoff_Delete(b.ctx(), inboxItemID)
+}
+
 // Handoff_Inbox returns the current fleet handoff inbox for the current user.
 func (b *Bindings) Handoff_Inbox() ([]contextsyncview.InboxItemView, error) {
 	defer sentry.WrapBinding("Handoff_Inbox")()
 	return b.api.ContextSync().Handoff_Inbox(b.ctx())
 }
 
-// Handoff_Accept decrypts an inbox item. Returns a view with the event count;
-// no content crosses the RPC boundary.
+// Handoff_Accept decrypts an inbox item with this device's key, saves it
+// as a new local session (deduped by inbox item id) and returns that
+// session's id; no content crosses the RPC boundary.
 func (b *Bindings) Handoff_Accept(inboxItemID string) (contextsyncview.AcceptedSessionView, error) {
 	defer sentry.WrapBinding("Handoff_Accept")()
 	return b.api.ContextSync().Handoff_Accept(b.ctx(), inboxItemID)

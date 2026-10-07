@@ -64,4 +64,16 @@ describe('review F8 — SessionExpiredBanner reads the shared session', () => {
     await flushPromises();
     expect(w.find('[data-testid="session-expired-banner"]').exists()).toBe(true);
   });
+
+  // device-keys-handoff-01DEVKH01 WP06: the node_removed terminal state.
+  it('shows "removed by an org admin" for signed_out/node_removed', async () => {
+    const w = await mountBanner();
+    applyFleetSession(fakeFleetSession({ state: 'signed_out', reason: 'node_removed' }));
+    await flushPromises();
+    const banner = w.find('[data-testid="session-expired-banner"]');
+    expect(banner.exists()).toBe(true);
+    expect(banner.text()).toContain('Removed by an org admin');
+    expect(w.find('[data-testid="session-expired-signin"]').exists()).toBe(true);
+  });
 });
+

@@ -837,7 +837,7 @@
 # genuine escalation. This class must shrink release over release (spec
 # AC-717); the next sweep should re-walk these against the tree it finds,
 # not assume this list still holds.
-# 78 entries.
+# 80 entries.
 
 # Reachable from the LIVE routed chat surface (MarkdownBlock.vue /
 # CodeBlock.vue's "save as artifact" + artifact-chip flow, and SessionsView.vue
@@ -949,6 +949,11 @@
 "Handoff_Inbox"
 "Handoff_ListTeam"
 "Handoff_Share"
+# Added 2026-10-07 (device-keys-handoff-01DEVKH01 WP06), same class and
+# reasoning as the three above: reached from ShareSessionDialog.vue (device
+# fingerprints) and the SessionsView inbox panel (dismiss). Owner: alec.
+"Handoff_Delete"
+"Handoff_RecipientDevices"
 
 # MemoryCaptureRatePill.vue polls this every 5s unconditionally from
 # LegendBar/shell chrome, with no isServedMode() check. Unlike MemoryBadge it is

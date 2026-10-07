@@ -90,6 +90,18 @@ const sessionMessage = computed(() => {
   if (s.state === 'signed_out' && s.reason === 'session_expired') {
     return 'Your session expired. Sign in again.';
   }
+  if (s.state === 'signed_out' && s.reason === 'node_removed') {
+    // Terminal (fleet 403 node_removed): signing in again registers this
+    // install as a new device (device-keys-handoff-01DEVKH01 WP02).
+    return (
+      s.message ||
+      'This device was removed from your organization by an org admin. Sign in again to re-register it as a new device.'
+    );
+  }
+  if (s.deviceKeys && s.deviceKeys.status !== 'registered' && s.deviceKeys.message) {
+    // Enrolled, but without a handoff key (too many devices / rejected key).
+    return s.deviceKeys.message;
+  }
   return '';
 });
 

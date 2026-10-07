@@ -481,6 +481,45 @@ negative. It passes at `-count=1` (CI's setting).
    > view and `core/workflows` itself, so a future writer that bypasses
    > the view must re-check provenance.
 
+### 2026-10-07 (device-keys-handoff-01DEVKH01 residuals) · seven accepted gaps, none a lie in the UI
+
+Per-device handoff keys + v2 wrap-to-all + accept-persists shipped
+(WP01–WP06). What the mission deliberately left, each with an owner:
+
+1. **Accepted copies carry import-time timestamps.** `created_at` rides in
+   every handoff event, but `session.Manager.ReplayTranscript` (the one
+   sanctioned cross-session writer) does not copy `CreatedAt`, so the
+   recipient's rows are stamped at accept time. Changing that also changes
+   conversation forks. **Owner:** alec — decide with the next
+   ReplayTranscript change.
+2. **AC-7 fixtures were not recorded from the dev fleet.** They are encoded
+   from verbatim mirrors of kenaz-fleet's response structs @ 97a1c12
+   (core/fleet/testdata/handoff/PROVENANCE.md); recording needs a live
+   Team-tier bearer token the implementing agent must not handle.
+   **Owner:** alec — re-record from dev and diff.
+3. **v1 "direct" accept arm is transitional.** Fleet keeps storing v1
+   items until WE signal O5; remove `AcceptShare`'s `direct` case only
+   after a release in which every active device sends v2, coordinated with
+   fleet. **Owner:** alec + fleet.
+4. **Signing key is registered; nothing shows it.** `signing_public_key`
+   now goes up at enroll (audit batches become verifiable, fleet §8.3), but
+   the Compliance panel does not surface verified/unverified (OQ-10 ruled
+   out of scope). **Owner:** next compliance mission.
+5. **Self-unenroll runs on explicit sign-out only.** An uninstalled or
+   abandoned install keeps its handoff key active and counting toward the
+   16-key cap until an admin removes the device in the fleet dashboard.
+   **Owner:** alec (uninstall hook) / fleet (dormant-key policy).
+6. **Media is not shipped in shares.** Image/document/generated-image
+   blocks are counted and noted in the recipient's copy ("1 attachment was
+   not included"), not transferred (2 MiB/event cap; generated images are
+   sender-local artifacts). **Owner:** product — decide if attachments
+   should ride as separate encrypted events.
+7. **Externally-owned tokens + node_removed.** Where the host owns the
+   tokens (served / brokered mode) `ClearTokens` is a no-op; the session
+   still shows signed_out/node_removed and enroll is refused locally until
+   an explicit sign-in, but recovery depends on the host re-authorizing.
+   **Owner:** served-mode boundary owner.
+
 ### 2026-10-06 (newly-live fleet routes verification, pre-v0.91.0) · four latent gaps, all verified non-firing today
 
 Fleet deployed audit/append, identity/public-key, handoff/*, context
@@ -488,12 +527,15 @@ streams and team/members (#180-#183); the harness's 404-latches stop
 firing. A six-family verification (no crash/corrupt/loop anywhere)
 left these latents:
 
-1. **Handoff_Share hardcodes nil events** (contextsync/impl.go:186) —
-   once ANY recipient registers a device key, every share 422s
-   handoff_empty; today unreachable (empty roster: can_receive=false
-   for all, no keys registered). **MUST fix before key registration
-   ships** — wire real session-event loading. **Owner:** device-keys
-   /handoff v2 mission.
+1. ~~**Handoff_Share hardcodes nil events**~~ **CLOSED 2026-10-07**
+   (device-keys-handoff-01DEVKH01 WP04, `ca17df45`): `Handoff_Share`
+   loads the session through the `contextsync.Impl.SessionEvents` seam
+   (wired in api.go to the real session manager) and serializes it as
+   self-contained `kenaz.handoff.event` v1 events
+   (core/session/handoff_transcript.go); an empty session errors readably
+   before any POST. Pinned by `TestHandoffShare_LoadsRealSessionFromUpgradedDB`
+   (v0.91.0 snapshot) and `TestImpl_Handoff_Share_*`. Shipped in the same
+   branch as key registration (WP02) — the release gate held.
 2. **EventStream backfill has no 1000-event/2MiB-per-event client caps
    and sends no client_event_id** (context_sync.go:314-332, 250-268) —
    latent, no live backfill caller (both Toggles pass nil). **Owner:**
@@ -502,8 +544,12 @@ left these latents:
    a real applier, persist fleet's next_seq — never the local message
    count (the hook posts wire seq=1 per event; server assigns arrival
    order). **Owner:** context-streams mission.
-4. Cosmetic: handoff 409 recipient_keys_stale / recipient_no_key / 422
-   map to raw "status NNN" in the share dialog. **Owner:** v2 mission.
+4. ~~Cosmetic: handoff 409/422 raw "status NNN"~~ **CLOSED 2026-10-07**
+   (device-keys-handoff-01DEVKH01 WP04 `ca17df45` + WP06): every §10.3
+   code maps to a `*fleet.HandoffError` whose text is dialog copy
+   (`TestShareSession_ErrorCopy` asserts no "status" leaks); 409
+   recipient_keys_stale re-wraps and retries once; the share dialog and
+   inbox render the copy via `handoffErrorText`.
 
 ### 2026-10-06 (empty-turn fix review residuals, fix/session-write-empty-turn) · two pre-existing flags, neither introduced by d845ecf0
 

@@ -330,6 +330,8 @@ export function describeFleetReason(reason: string | undefined): string {
       return 'Sign-in failed';
     case 'needs_reauth':
       return 'Update your sign-in — telemetry export is off';
+    case 'node_removed':
+      return 'This device was removed by an org admin';
     default:
       return reason ? `Fleet: ${reason}` : '';
   }

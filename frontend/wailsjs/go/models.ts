@@ -2214,6 +2214,22 @@ export namespace contextsync {
 		    return a;
 		}
 	}
+	export class RecipientDeviceView {
+	    keyID: string;
+	    fingerprint: string;
+	    createdAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecipientDeviceView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.keyID = source["keyID"];
+	        this.fingerprint = source["fingerprint"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
 	export class SessionSyncStatus {
 	    enabled: boolean;
 	

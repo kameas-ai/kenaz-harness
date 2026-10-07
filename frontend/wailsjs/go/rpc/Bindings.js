@@ -654,12 +654,20 @@ export function Handoff_Accept(arg1) {
   return window['go']['rpc']['Bindings']['Handoff_Accept'](arg1);
 }
 
+export function Handoff_Delete(arg1) {
+  return window['go']['rpc']['Bindings']['Handoff_Delete'](arg1);
+}
+
 export function Handoff_Inbox() {
   return window['go']['rpc']['Bindings']['Handoff_Inbox']();
 }
 
 export function Handoff_ListTeam() {
   return window['go']['rpc']['Bindings']['Handoff_ListTeam']();
+}
+
+export function Handoff_RecipientDevices(arg1) {
+  return window['go']['rpc']['Bindings']['Handoff_RecipientDevices'](arg1);
 }
 
 export function Handoff_Share(arg1, arg2) {
