@@ -1073,6 +1073,72 @@ func (a *API) RemoveMandatedDocument(ctx context.Context, workflowID, catalogID 
 	return nil
 }
 
+// CatalogInstall is one workflow the USER installed from the fleet catalog
+// (provenance Source=catalog with a recorded catalog id) — the revocation
+// sweep's candidate set (skill-library-01SKLIB01 WP03). Mandated, builtin
+// and user-authored workflows are never listed.
+type CatalogInstall struct {
+	WorkflowID string
+	CatalogID  string
+	Version    string
+}
+
+// CatalogInstalls lists the user's catalog-installed workflows. An
+// unreadable provenance file is an error (never an empty list).
+func (a *API) CatalogInstalls(_ context.Context) ([]CatalogInstall, error) {
+	if a == nil || a.cfg.Disabled {
+		return nil, ErrFeatureDisabled
+	}
+	if a.cfg.Provenance == nil {
+		return nil, nil
+	}
+	recs, err := a.cfg.Provenance.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CatalogInstall, 0, len(recs))
+	for _, r := range recs {
+		if r.Source == corewf.ProvenanceCatalog && r.CatalogID != "" && r.WorkflowID != "" {
+			out = append(out, CatalogInstall{WorkflowID: r.WorkflowID, CatalogID: r.CatalogID, Version: r.Version})
+		}
+	}
+	return out, nil
+}
+
+// RemoveRevokedCatalogDocument removes workflowID because the org revoked
+// the catalog version it was installed from — ONLY while its provenance is
+// still the user's catalog install of catalogID (a mandate, another
+// version, or the user's own workflow now holding the id is left alone:
+// removed=false, nil). The schedule is disarmed first.
+func (a *API) RemoveRevokedCatalogDocument(ctx context.Context, workflowID, catalogID string) (bool, error) {
+	if a == nil || a.cfg.Disabled {
+		return false, ErrFeatureDisabled
+	}
+	if a.cfg.Provenance == nil || catalogID == "" {
+		return false, nil
+	}
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
+	p, ok, err := a.cfg.Provenance.Get(workflowID)
+	if err != nil {
+		return false, err
+	}
+	if !ok || p.Source != corewf.ProvenanceCatalog || p.CatalogID != catalogID {
+		return false, nil
+	}
+	if a.scheduler != nil {
+		_ = a.scheduler.Unregister(ctx, workflowID) // no schedule is not an error here
+	}
+	if err := a.deleteWorkflow(ctx, workflowID); err != nil {
+		if errors.Is(err, corewf.ErrWorkflowNotFound) {
+			_ = a.cfg.Provenance.Remove(workflowID)
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // isShippedTemplate reports whether id is one of the binary's templates.
 func (a *API) isShippedTemplate(ctx context.Context, id string) bool {
 	for _, w := range a.cfg.Catalog {

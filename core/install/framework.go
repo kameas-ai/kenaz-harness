@@ -26,8 +26,10 @@ type Event struct {
 	Version   string `json:"version,omitempty"`
 	Installed bool   `json:"installed"`
 	// Via is how the transition happened: "install", "update",
-	// "uninstall", or "flow" (a per-kind flow — OAuth sign-in, device
-	// code — completed the install and the framework observed it).
+	// "uninstall", "flow" (a per-kind flow — OAuth sign-in, device
+	// code — completed the install and the framework observed it), or
+	// "revoked" (the catalog revocation sweep removed a user copy of a
+	// version the org revoked — skill-library-01SKLIB01 WP03).
 	Via string `json:"via"`
 	// VerifyMethod / Verified / VerifyReason record the Verify step
 	// (empty on uninstall and on observed flows).

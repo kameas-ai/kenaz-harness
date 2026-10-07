@@ -4667,6 +4667,12 @@ export interface FleetSyncView {
   contextSync: FleetSyncLaneView;
   unitPoll: FleetSyncLaneView;
   telemetry: FleetSyncLaneView;
+  /**
+   * The catalog revocation sweep (skill-library-01SKLIB01 WP03): removing
+   * the user's own copies of catalog versions the org revoked. Optional for
+   * a backend that predates the lane.
+   */
+  catalogRevocation?: FleetSyncLaneView;
 }
 
 /**

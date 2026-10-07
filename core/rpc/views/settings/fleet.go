@@ -66,6 +66,14 @@ type fleetState struct {
 	// remembers whether a state-file error was reported — review F5).
 	mandatedApplier *fleet.MandatedApplier
 
+	// revocationWorkflows / revocationAnnounce / revocationSweeper: the
+	// catalog revocation sweep (skill-library-01SKLIB01 WP03). The sweeper
+	// is ONE per process (it carries the 401/403/404 backoff) and runs
+	// after every config poll — no timer of its own.
+	revocationWorkflows fleet.RevocationWorkflows
+	revocationAnnounce  func(fleet.RevocationTarget)
+	revocationSweeper   *fleet.RevocationSweeper
+
 	// configConsumersWired gates the config poller's start (review F4):
 	// the poller must not apply its first bundle before the mandated-item
 	// consumers (skill refs, workflows) are wired, or the boot-race
@@ -302,6 +310,12 @@ func (a *API) startFleetBackgroundLocked() {
 		applier := &compositeConfigApplier{state: a.fleet}
 		cp := fleet.NewConfigPoller(c, dataDir, applier)
 		cp.SetBuildVersion(a.fleet.clientVersion)
+		// The catalog revocation sweep rides this cadence (WP03): right
+		// after the bundle poll that also delivers revoke-of-pinned.
+		cp.SetAfterPoll(a.runRevocationSweep)
+		if a.fleet.revocationSweeper != nil {
+			a.fleet.revocationSweeper.ResetBackoff() // a (re)started poller is a fresh session
+		}
 		a.fleet.configPoller = cp
 		cp.Start(context.Background())
 	}
@@ -721,6 +735,54 @@ func (a *API) SetMandatedWorkflows(w fleet.MandatedWorkflows) {
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
 	a.fleet.mandatedWorkflows = w
+}
+
+// SetRevocationWorkflows wires the workflow half of the catalog revocation
+// sweep (skill-library-01SKLIB01 WP03): the workflows view's catalog-install
+// enumeration and its provenance-checked removal. Safe to skip — the sweep
+// then covers skills only.
+func (a *API) SetRevocationWorkflows(w fleet.RevocationWorkflows) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.revocationWorkflows = w
+}
+
+// SetRevocationAnnouncer wires a callback told about every revocation
+// uninstall (the rpc layer publishes capability:uninstalled so an open
+// Capabilities surface repaints).
+func (a *API) SetRevocationAnnouncer(fn func(fleet.RevocationTarget)) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.revocationAnnounce = fn
+}
+
+// runRevocationSweep is the config poller's after-poll hook: one catalog
+// revocation sweep with the consumers as currently wired.
+func (a *API) runRevocationSweep(ctx context.Context) {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	if a.fleet.revocationSweeper == nil {
+		a.fleet.revocationSweeper = &fleet.RevocationSweeper{}
+	}
+	sw := a.fleet.revocationSweeper
+	client, skills, reg := a.fleet.client, a.fleet.skillStore, a.fleet.skillRegistry
+	wf, lanes, em, announce := a.fleet.revocationWorkflows, a.fleet.lanes, a.fleet.auditEmitter, a.fleet.revocationAnnounce
+	a.fleet.mu.Unlock()
+	sw.Rewire(func(s *fleet.RevocationSweeper) {
+		s.Client, s.Skills, s.Registry, s.Workflows, s.Lanes, s.OnUninstalled = client, skills, reg, wf, lanes, announce
+		s.Emitter = em
+	})
+	if _, err := sw.Sweep(ctx); err != nil {
+		logging.L().Warn("fleet.revocation.sweep_failed", "err", err.Error())
+	}
 }
 
 // SetMCPCatalog wires the shared *recipes.MergedCatalog into the fleet

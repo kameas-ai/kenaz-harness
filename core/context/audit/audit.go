@@ -397,6 +397,16 @@ const (
 	// Payload: FleetSkillUninstalledPayload.
 	KindFleetSkillUninstalled Kind = "fleet.skill_uninstalled"
 
+	// ── Fleet catalog lifecycle (skill-library-01SKLIB01) ───────────────────
+
+	// KindFleetCatalogRevokedUninstalled fires when the revocation sweep
+	// uninstalls a copy the USER installed from the catalog (skill
+	// Source=catalog, or a workflow with catalog provenance) because the
+	// org revoked that version (WP03, fleet ruling OQ-5 = H4a). Never fires
+	// for an org-mandated or user-authored item. Payload:
+	// FleetCatalogRevokedUninstalledPayload.
+	KindFleetCatalogRevokedUninstalled Kind = "fleet.catalog_revoked_uninstalled"
+
 	// ── ACP envelope audit kind (acp-orchestration-integration-01NDFSEX06) ──
 
 	// KindACPEnvelope fires once per ACP envelope exchanged (sent or received).
@@ -1870,6 +1880,22 @@ type FleetSkillInstalledPayload struct {
 	Version string `json:"version,omitempty"`
 	// Trigger is the slash-command trigger (no leading slash).
 	Trigger string `json:"trigger"`
+}
+
+// FleetCatalogRevokedUninstalledPayload carries the audit signalling for
+// KindFleetCatalogRevokedUninstalled. Catalog metadata only — never the
+// payload.
+type FleetCatalogRevokedUninstalledPayload struct {
+	// CatalogID is the revoked catalog version's id.
+	CatalogID string `json:"catalog_id"`
+	// Kind is the catalog kind ("skill" | "workflow").
+	Kind string `json:"kind"`
+	// Version is the installed (revoked) version.
+	Version string `json:"version,omitempty"`
+	// LocalID is the skill store id / workflow id that was removed.
+	LocalID string `json:"local_id"`
+	// Reason is always "revoked".
+	Reason string `json:"reason"`
 }
 
 // FleetSkillUninstalledPayload carries the audit signalling for

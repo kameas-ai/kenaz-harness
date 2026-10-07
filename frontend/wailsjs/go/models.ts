@@ -7550,6 +7550,7 @@ export namespace settings {
 	    contextSync: FleetSyncLaneView;
 	    unitPoll: FleetSyncLaneView;
 	    telemetry: FleetSyncLaneView;
+	    catalogRevocation: FleetSyncLaneView;
 	
 	    static createFrom(source: any = {}) {
 	        return new FleetSyncView(source);
@@ -7560,6 +7561,7 @@ export namespace settings {
 	        this.contextSync = this.convertValues(source["contextSync"], FleetSyncLaneView);
 	        this.unitPoll = this.convertValues(source["unitPoll"], FleetSyncLaneView);
 	        this.telemetry = this.convertValues(source["telemetry"], FleetSyncLaneView);
+	        this.catalogRevocation = this.convertValues(source["catalogRevocation"], FleetSyncLaneView);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

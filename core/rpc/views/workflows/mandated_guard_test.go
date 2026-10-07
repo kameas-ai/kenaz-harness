@@ -126,3 +126,66 @@ func TestMandatedWorkflow_EditAndScheduleGuarded(t *testing.T) {
 		t.Errorf("mandated workflow still stored after removal: %v", err)
 	}
 }
+
+// skill-library-01SKLIB01 WP03: the revocation sweep's workflow half lists
+// ONLY the user's catalog installs and removes one only while its
+// provenance is still that catalog install.
+func TestRevokedCatalogDocument_OnlyUserCatalogInstalls(t *testing.T) {
+	store := newWP07TestStore(t)
+	dir := t.TempDir()
+	prov := corewf.NewFileProvenanceStore(dir)
+	sched := &recordingScheduler{}
+	api := New(Config{Engine: corewf.NewEngine(), Store: store, Provenance: prov, Scheduler: sched})
+	ctx := context.Background()
+	doc := func(id string) []byte {
+		return []byte("id: " + id + "\nname: " + id + "\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n")
+	}
+	if _, err := api.InstallDocument(ctx, doc("user-cat"), DocumentOrigin{CatalogID: "c-rev", Slug: "user-cat", Version: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.InstallDocument(ctx, doc("org"), DocumentOrigin{CatalogID: "c-org", Version: "2", Mandated: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Save(ctx, SaveInput{YAML: string(doc("authored"))}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A fresh store over the same file: enumeration reads what persisted.
+	api2 := New(Config{Engine: corewf.NewEngine(), Store: store, Provenance: corewf.NewFileProvenanceStore(dir), Scheduler: sched})
+	ins, err := api2.CatalogInstalls(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ins) != 1 || ins[0].WorkflowID != "user-cat" || ins[0].CatalogID != "c-rev" || ins[0].Version != "1" {
+		t.Fatalf("CatalogInstalls = %+v, want only the user's catalog install", ins)
+	}
+
+	// Wrong catalog id (another version): left alone.
+	if removed, err := api.RemoveRevokedCatalogDocument(ctx, "user-cat", "c-other"); err != nil || removed {
+		t.Fatalf("other version: removed=%v err=%v", removed, err)
+	}
+	// A mandate is never removed by revocation of its catalog id.
+	if removed, err := api.RemoveRevokedCatalogDocument(ctx, "org", "c-org"); err != nil || removed {
+		t.Fatalf("mandated: removed=%v err=%v", removed, err)
+	}
+	if _, err := store.Load(ctx, "org"); err != nil {
+		t.Fatal("revocation removed a mandated workflow")
+	}
+	removed, err := api.RemoveRevokedCatalogDocument(ctx, "user-cat", "c-rev")
+	if err != nil || !removed {
+		t.Fatalf("revoked user install: removed=%v err=%v", removed, err)
+	}
+	if _, err := store.Load(ctx, "user-cat"); !errors.Is(err, corewf.ErrWorkflowNotFound) {
+		t.Fatalf("revoked workflow still stored: %v", err)
+	}
+	if got := sched.snapshot(); len(got) == 0 || got[len(got)-1] != "unregister:user-cat" {
+		t.Errorf("schedule not disarmed: %v", got)
+	}
+	if _, ok, _ := corewf.NewFileProvenanceStore(dir).Get("user-cat"); ok {
+		t.Error("provenance record survived the removal on disk")
+	}
+	// Idempotent.
+	if removed, err := api.RemoveRevokedCatalogDocument(ctx, "user-cat", "c-rev"); err != nil || removed {
+		t.Fatalf("second removal: removed=%v err=%v", removed, err)
+	}
+}
