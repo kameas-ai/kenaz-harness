@@ -14,6 +14,17 @@ import (
 //
 // The interface is intentionally narrow: the Promoter never reads from
 // the store, only writes new chunks and deletes extractive fallbacks.
+//
+// Fleet memory sync contract (memory-sync-01MEMSY01 WP04, H2): a
+// synthesised write that replaces a turn's earlier narrative chunk mints a
+// new id, and content is immutable on Fleet — so an implementation MUST
+// route the replacement through core/memory.ReplaceForSync (new record
+// with turn_id + forget of each replaced id Fleet may know), and
+// DeleteByTurnFallback through core/memory.RemoveForSync. A plain Delete
+// leaks the stale record to every other device. There is no production
+// implementation today (the promoter is not constructed outside tests;
+// ruling A-4 retired the narrative subsystem); the composition is pinned
+// by core/rpc/views/memory TestResummarize_PromoterPath_ForgetsReplacedID.
 type NarrativeWriter interface {
 	// WriteNarrative adds a narrative chunk with the given content,
 	// kind, sessionID, projectID, turnID, and retrieval weight.

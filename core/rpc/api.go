@@ -724,6 +724,11 @@ type API struct {
 	// the store (core/memory never imports core/fleet). nil when there is
 	// no on-disk store or the clock state is unreadable.
 	memClock *corememory.HLC
+	// memForgets is the persisted Fleet memory-sync forget outbox
+	// (<dataDir>/fleet/memory_outbox.json, memory-sync-01MEMSY01). Every
+	// user-intent chunk removal reports through it; the memory sync lane
+	// drains it. nil when there is no on-disk store.
+	memForgets *corememory.ForgetOutbox
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
 	// WP07). The manager owns the resolved catalog + user-override
@@ -2227,6 +2232,7 @@ func New(c *core.Core, opts ...Option) *API {
 		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
 	a.memClock = openMemoryClock(c, memStore)
+	a.memForgets = openMemoryForgetOutbox(c, memStore, a.memClock)
 	personalForLLM := newPersonalStore(c)
 	a.personalStore = personalForLLM
 	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP10 (FR-014):
@@ -3008,6 +3014,7 @@ func New(c *core.Core, opts ...Option) *API {
 		Embedder: embedder,
 		Reader:   newMemoryMessageReader(c),
 		Profiles: &personalProfileLister{store: personalForLLM},
+		Forgets:  memForgetRecorder(a.memForgets),
 	})
 	// Keep a ref for the search adapter (unified-search-01KX5R8C WP03).
 	a.memStoreRef = memStore
@@ -8862,6 +8869,33 @@ func openMemoryClock(c *core.Core, store corememory.Store) *corememory.HLC {
 		cs.SetClock(clock)
 	}
 	return clock
+}
+
+// openMemoryForgetOutbox opens the persisted forget outbox
+// (memory-sync-01MEMSY01 WP04). nil when there is no store/DataDir; a
+// corrupt outbox is logged and left nil (forgets are then not recorded)
+// rather than reset — resetting would silently drop queued forgets and let
+// the next pull resurrect memories the user deleted.
+func openMemoryForgetOutbox(c *core.Core, store corememory.Store, clock *corememory.HLC) *corememory.ForgetOutbox {
+	if c == nil || c.DataDir() == "" || store == nil {
+		return nil
+	}
+	ob, err := corememory.OpenForgetOutbox(corememory.ForgetOutboxPath(c.DataDir()), clock)
+	if err != nil {
+		logging.L().Error("memory.sync.outbox_open_failed", "err", err.Error())
+		return nil
+	}
+	return ob
+}
+
+// memForgetRecorder adapts the outbox to the view's ForgetRecorder seam
+// without the typed-nil-interface trap (a nil *ForgetOutbox stored in an
+// interface would compare non-nil).
+func memForgetRecorder(ob *corememory.ForgetOutbox) corememory.ForgetRecorder {
+	if ob == nil {
+		return nil
+	}
+	return ob
 }
 
 // buildMemoryPruneScheduler constructs the automatic prune-sweep

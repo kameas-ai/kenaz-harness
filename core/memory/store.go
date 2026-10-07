@@ -343,6 +343,25 @@ func (s *chromemStore) Delete(_ context.Context, id string) error {
 	return fmt.Errorf("memory: chunk %q not found", id)
 }
 
+// Remove deletes id and returns the removed row's final state, atomically
+// under s.mu (ChunkRemover, memory-sync-01MEMSY01 WP04).
+func (s *chromemStore) Remove(_ context.Context, id string) (Chunk, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, c := range s.chunks {
+		if c.ID == id {
+			prev := s.chunks
+			s.chunks = append(append([]Chunk(nil), s.chunks[:i]...), s.chunks[i+1:]...)
+			if err := s.saveLocked(); err != nil {
+				s.chunks = prev
+				return Chunk{}, err
+			}
+			return c, nil
+		}
+	}
+	return Chunk{}, fmt.Errorf("memory: chunk %q not found", id)
+}
+
 func (s *chromemStore) List(_ context.Context, scopes ...ScopeFilter) ([]Chunk, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

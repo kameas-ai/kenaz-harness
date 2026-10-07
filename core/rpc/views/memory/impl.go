@@ -84,6 +84,9 @@ type API struct {
 	// optional; when nil the narrative API methods return a stub/no-op.
 	narrativeMetrics narrative.MetricsStore
 	narrativeJobs    narrative.JobQueue
+	// forgets receives every user-intent removal so Fleet memory sync can
+	// forget the id (memory-sync-01MEMSY01). nil = no sync.
+	forgets corememory.ForgetRecorder
 
 	mu    sync.Mutex
 	stats []PruneStats
@@ -127,6 +130,12 @@ type Config struct {
 	Profiles         ProfileLister
 	NarrativeMetrics narrative.MetricsStore
 	NarrativeJobs    narrative.JobQueue
+	// Forgets is the Fleet memory-sync forget outbox
+	// (memory-sync-01MEMSY01): every path that removes a chunk on the
+	// user's behalf (re-summarize, Forget) reports the removed row so a
+	// chunk Fleet may know is forgotten on every device. The rpc wiring
+	// assigns the persisted corememory.ForgetOutbox. nil = no sync.
+	Forgets corememory.ForgetRecorder
 }
 
 // New constructs a MemoryAPI.
@@ -148,6 +157,7 @@ func New(cfg Config) *API {
 		profiles:         cfg.Profiles,
 		narrativeMetrics: cfg.NarrativeMetrics,
 		narrativeJobs:    cfg.NarrativeJobs,
+		forgets:          cfg.Forgets,
 		resummaryAt:      make(map[string]time.Time),
 	}
 }
@@ -883,13 +893,16 @@ func (a *API) ResummarizeChunk(ctx context.Context, chunkID string) (Chunk, erro
 	fallback := eb.BuildTurnFallback(found.Content, "", nil)
 	newContent := fallback.String()
 
-	// Replace the chunk atomically (Delete + Add).
+	// Content is immutable on Fleet (memory-sync-01MEMSY01 WP04, contract
+	// H2): the re-summary is a NEW record with a new id carrying the same
+	// turn_id, and the old id is forgotten (when Fleet may know it). The
+	// narrative promoter's synthesised write is the second path with the
+	// same obligation; both go through corememory.ReplaceForSync.
 	newID, err := newChunkID()
 	if err != nil {
 		return Chunk{}, err
 	}
-	updated := *found
-	updated.ID = newID
+	updated := corememory.FreshIdentity(*found, newID)
 	updated.Content = newContent
 	updated.ContentHash = corememory.HashContent(newContent)
 	updated.Kind = "narrative_extractive_fallback"
@@ -904,11 +917,9 @@ func (a *API) ResummarizeChunk(ctx context.Context, chunkID string) (Chunk, erro
 		}
 	}
 
-	if err := a.store.Delete(ctx, chunkID); err != nil {
-		return Chunk{}, fmt.Errorf("memory: delete old chunk: %w", err)
-	}
-	if err := a.store.Add(ctx, updated); err != nil {
-		return Chunk{}, fmt.Errorf("memory: add summarised chunk: %w", err)
+	// New record first, then the old one goes (a failed add loses nothing).
+	if err := corememory.ReplaceForSync(ctx, a.store, a.forgets, updated, chunkID); err != nil {
+		return Chunk{}, fmt.Errorf("memory: replace summarised chunk: %w", err)
 	}
 	return toViewChunk(updated), nil
 }
