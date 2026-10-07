@@ -34,6 +34,11 @@ func (f *fakeCaller) callCount() int {
 }
 
 // ---- fake NarrativeWriter ----
+//
+// In-memory by design (WP-PI AC-PI-2, memory-sync-01MEMSY01): these tests
+// pin the promoter's control flow. The writer's persistence + Fleet-forget
+// obligation is pinned against the real gob store and outbox in
+// core/rpc/views/memory TestResummarize_PromoterPath_ForgetsReplacedID.
 
 type fakeWriter struct {
 	mu        sync.Mutex

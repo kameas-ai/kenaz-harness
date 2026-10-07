@@ -721,3 +721,47 @@ func TestMemorySync_HomePathNormalized(t *testing.T) {
 }
 
 var _ = http.StatusOK
+
+// TestMemorySync_V091GobFullSyncCycle (WP-PI): a device whose memory.gob
+// was written by v0.91.0 (no HLC / recall-split / sync fields) completes a
+// full sync cycle — unstamped fields are stamped on first push, the legacy
+// recall count is pushed as recall_own, session memory stays home — and a
+// second device receives it.
+func TestMemorySync_V091GobFullSyncCycle(t *testing.T) {
+	w := newMemWorld(t)
+	raw, err := os.ReadFile(filepath.Join("..", "memory", "testdata", "upgrade", "v0.91.0", "memory.gob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirA := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dirA, "memory.gob"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := w.deviceAt("devA", dirA, 0)
+	b := w.device("devB", 0)
+	a.enable()
+	b.enable()
+	a.sync()
+	g := w.fleet.live("mem-v091-global")
+	if g == nil || g.recall["devA"] != 3 || !g.pinned || g.pinnedHLC == "" || g.scopeHLC == "" || g.title != "Build uses make" {
+		t.Fatalf("Fleet copy of the legacy global chunk = %+v", g)
+	}
+	if lt := w.fleet.live("mem-v091-longterm"); lt == nil || lt.kind != "narrative_synthesised" || lt.turnID != "turn-42" {
+		t.Fatalf("Fleet copy of the legacy long_term chunk = %+v", lt)
+	}
+	if w.fleet.live("mem-v091-session") != nil {
+		t.Fatal("a legacy session chunk was synced")
+	}
+	ac := a.chunks()["mem-v091-global"]
+	if ac.CreatedHLC == "" || ac.SyncedAt.IsZero() || ac.SyncDirty {
+		t.Fatalf("A after first cycle = %+v", ac)
+	}
+	b.sync()
+	bc := b.chunks()
+	if c, ok := bc["mem-v091-global"]; !ok || !c.Pinned || c.RecallOthers != 3 || !c.EmbedPending {
+		t.Fatalf("B's copy = %+v", c)
+	}
+	if _, ok := bc["mem-v091-longterm"]; !ok {
+		t.Fatal("B missing the long_term chunk")
+	}
+}
