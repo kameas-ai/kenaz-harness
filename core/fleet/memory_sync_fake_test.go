@@ -12,6 +12,7 @@ package fleet
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -168,23 +169,6 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.pushes = append(f.pushes, req)
 		f.pushLocked(w, req)
-	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/memory/export":
-		// Pull shape, live rows only, then the trailer (fleet read.go
-		// Export: no device_id, so recall_count_others == recall_count).
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.WriteHeader(200)
-		enc := json.NewEncoder(w)
-		var rows []*fakeMemRec
-		for _, rec := range f.recs {
-			if rec.state == "live" {
-				rows = append(rows, rec)
-			}
-		}
-		sort.Slice(rows, func(i, j int) bool { return rows[i].seq < rows[j].seq })
-		for _, rec := range rows {
-			_ = enc.Encode(f.liveRecordLocked(rec, ""))
-		}
-		_ = enc.Encode(map[string]any{"exported_at": f.now().UTC().Format(time.RFC3339Nano), "count": len(rows)})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/memory/forget-all":
 		n := 0
 		for _, rec := range f.recs {
@@ -212,23 +196,67 @@ func (f *fakeMemoryFleet) settingsLocked() MemorySyncSettings {
 	return MemorySyncSettings{Enabled: f.enabled, Scopes: sc, ConsentVersion: "v"}
 }
 
-func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	cur := int64(0)
-	if c := q.Get("cursor"); c != "" {
-		cur, _ = strconv.ParseInt(c, 10, 64)
-		if cur < f.floor {
-			reason := "cursor_expired"
-			erased := ""
-			if cur < f.erasedAt {
-				reason, erased = "erased", f.erasedBefore
+// fakeCursor mirrors fleet service/memory ParseCursorFull (#191): "" or
+// "s<seq>.<floor>.<erase>" is a snapshot cursor; a plain number is a given
+// (incremental) cursor. The CLIENT never parses cursors; only this fake.
+type fakeCursor struct {
+	seq, floor, erased int64
+	given, snapshot    bool
+}
+
+func parseFakeCursor(c string) fakeCursor {
+	if c == "" {
+		return fakeCursor{}
+	}
+	if strings.HasPrefix(c, "s") {
+		var fc fakeCursor
+		parts := strings.Split(c[1:], ".")
+		fc.seq, _ = strconv.ParseInt(parts[0], 10, 64)
+		fc.floor, _ = strconv.ParseInt(parts[1], 10, 64)
+		fc.erased, _ = strconv.ParseInt(parts[2], 10, 64)
+		fc.snapshot = true
+		return fc
+	}
+	n, _ := strconv.ParseInt(c, 10, 64)
+	return fakeCursor{seq: n, given: true}
+}
+
+// staleLocked mirrors userState.stale (#191): a plain cursor is checked
+// against the floor; a snapshot cursor only against its embedded epoch.
+func (f *fakeMemoryFleet) staleLocked(c fakeCursor) string {
+	switch {
+	case c.given:
+		if c.seq < f.floor {
+			if c.seq < f.erasedAt {
+				return "erased"
 			}
-			writeJSON(w, 200, memPullResponse{Enabled: f.enabled, Reset: true, ResetReason: reason, ErasedBefore: erased, Records: []memPullRecord{}})
-			return
+			return "cursor_expired"
+		}
+	case c.snapshot:
+		if c.erased != f.erasedAt {
+			return "erased"
+		}
+		if f.floor > c.floor {
+			return "cursor_expired"
 		}
 	}
+	return ""
+}
+
+func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	raw := q.Get("cursor")
 	if !f.enabled {
-		writeJSON(w, 200, memPullResponse{Enabled: false, Records: []memPullRecord{}, Cursor: q.Get("cursor")})
+		writeJSON(w, 200, memPullResponse{Enabled: false, Records: []memPullRecord{}, Cursor: raw})
+		return
+	}
+	cu := parseFakeCursor(raw)
+	if reason := f.staleLocked(cu); reason != "" {
+		erased := ""
+		if reason == "erased" {
+			erased = f.erasedBefore
+		}
+		writeJSON(w, 200, memPullResponse{Enabled: true, Reset: true, ResetReason: reason, ErasedBefore: erased, Records: []memPullRecord{}})
 		return
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
@@ -238,7 +266,7 @@ func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
 	dev := q.Get("device_id")
 	var rows []*fakeMemRec
 	for _, rec := range f.recs {
-		if rec.seq > cur {
+		if rec.seq > cu.seq {
 			rows = append(rows, rec)
 		}
 	}
@@ -247,14 +275,28 @@ func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
 	if more {
 		rows = rows[:limit]
 	}
-	out := memPullResponse{Enabled: true, Records: []memPullRecord{}, Cursor: q.Get("cursor"), HasMore: more}
+	out := memPullResponse{Enabled: true, Records: []memPullRecord{}, Cursor: raw, HasMore: more}
+	var last int64
 	for _, rec := range rows {
+		last = rec.seq
 		out.Cursor = strconv.FormatInt(rec.seq, 10)
 		if rec.state == "tombstone" {
 			out.Records = append(out.Records, memPullRecord{ID: rec.id, Seq: out.Cursor, State: "tombstone", Reason: rec.reason, SupersededBy: rec.supersededBy})
 			continue
 		}
 		out.Records = append(out.Records, f.liveRecordLocked(rec, dev))
+	}
+	if !cu.given { // snapshot: from "" or an s-cursor
+		if more {
+			out.Cursor = fmt.Sprintf("s%d.%d.%d", last, f.floor, f.erasedAt)
+		} else {
+			final := max(last, f.floor, cu.seq)
+			if final == 0 {
+				out.Cursor = raw
+			} else {
+				out.Cursor = strconv.FormatInt(final, 10)
+			}
+		}
 	}
 	writeJSON(w, 200, out)
 }
@@ -293,10 +335,8 @@ func (f *fakeMemoryFleet) pushLocked(w http.ResponseWriter, req memPushRequest) 
 	blanket := ""
 	if !f.enabled {
 		blanket = "sync_disabled"
-	} else if req.BaseCursor != "" {
-		if b, _ := strconv.ParseInt(req.BaseCursor, 10, 64); b < f.floor {
-			blanket = "resync_required"
-		}
+	} else if f.staleLocked(parseFakeCursor(req.BaseCursor)) != "" {
+		blanket = "resync_required"
 	}
 	for _, it := range req.Items {
 		if blanket != "" && it.Op != "forget" {

@@ -195,25 +195,6 @@ func TestMemorySync_FleetFixtures(t *testing.T) {
 	if off.Enabled {
 		t.Fatal("disabled fixture")
 	}
-	// Export: NDJSON, pull-shaped live rows then the trailer (the reset
-	// snapshot source).
-	exp, err := os.ReadFile(filepath.Join("testdata", "memory", "export.ndjson"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ed := json.NewDecoder(bytes.NewReader(exp))
-	ed.DisallowUnknownFields()
-	var lines []memExportLine
-	for ed.More() {
-		var l memExportLine
-		if err := ed.Decode(&l); err != nil {
-			t.Fatalf("export.ndjson: %v", err)
-		}
-		lines = append(lines, l)
-	}
-	if len(lines) != 2 || lines[0].ID != "mem-1" || lines[0].Count != nil || lines[1].Count == nil || *lines[1].Count != 1 {
-		t.Fatalf("export lines = %+v", lines)
-	}
 	var set MemorySyncSettings
 	decode("settings.json", &set)
 	if set.Usage.MaxRecords != 20000 || len(set.Scopes) != 2 {

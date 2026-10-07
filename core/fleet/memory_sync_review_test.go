@@ -9,8 +9,10 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,7 +168,7 @@ func TestMemorySync_F4_NoPushMidSnapshot(t *testing.T) {
 	for _, p := range w.fleet.pushLog() {
 		if len(p.Items) > 0 {
 			pushed = true
-			if seqLess(p.BaseCursor, final) {
+			if testCursorSeq(p.BaseCursor) < testCursorSeq(final) {
 				t.Fatalf("push base_cursor %q is behind the end of the feed %q", p.BaseCursor, final)
 			}
 		}
@@ -435,19 +437,15 @@ func TestMemorySync_F9_HLCSaveFailureDegradesLane(t *testing.T) {
 	}
 }
 
-// F3 (real Fleet semantics): Fleet answers any non-empty pull cursor below
-// the floor with reset:true, so a cursor_expired snapshot with more than one
-// page of live rows below the floor could never be paged. The reset is
-// taken from the export route instead; 600 old live rows all survive.
+// F3 (fleet #191): a cursor_expired reset whose snapshot spans more than
+// one page of live rows BELOW the floor pages through them on opaque
+// s-cursors (exempt from the plain floor check); 600 old live rows all
+// survive, push resumes, and the final cursor does not loop back to reset.
 func TestMemorySync_F3_ResetWithManyLiveRowsBelowFloor(t *testing.T) {
 	w := newMemWorld(t)
-	a, b := w.device("devA", 0), w.device("devB", 0)
-	a.enable()
+	b := w.device("devB", 0)
 	b.enable()
-	for i := 0; i < 600; i++ {
-		a.add(fmt.Sprintf("mem-live-%03d", i), "global", fmt.Sprintf("old live row %d", i))
-	}
-	a.sync()
+	seedLive(w, "mem-live-", 600)
 	b.sync()
 	b.add("mem-b-new", "global", "B's unsynced work")
 	seedTombstones(w, 10)
@@ -461,7 +459,7 @@ func TestMemorySync_F3_ResetWithManyLiveRowsBelowFloor(t *testing.T) {
 	bc := b.chunks()
 	n := 0
 	for id := range bc {
-		if len(id) > 9 && id[:9] == "mem-live-" {
+		if strings.HasPrefix(id, "mem-live-") {
 			n++
 		}
 	}
@@ -472,7 +470,90 @@ func TestMemorySync_F3_ResetWithManyLiveRowsBelowFloor(t *testing.T) {
 		t.Fatal("push did not resume after the reset")
 	}
 	b.sync() // and the next pull is not another reset
-	if st := b.ms.state(); st.ResetPending != "" || seqLess(st.Cursor, strconv.FormatInt(w.fleet.floor, 10)) {
+	if st := b.ms.state(); st.ResetPending != "" || testCursorSeq(st.Cursor) < w.fleet.floor {
 		t.Fatalf("cursor %q left below the floor — reset loop", st.Cursor)
+	}
+}
+
+// testCursorSeq reads a cursor's position for TEST assertions only (the
+// client treats cursors as opaque); an s-cursor (mid-snapshot) is -1 so a
+// push carrying one fails the base_cursor assertions.
+func testCursorSeq(c string) int64 {
+	fc := parseFakeCursor(c)
+	if fc.snapshot {
+		return -1
+	}
+	return fc.seq
+}
+
+// F3 (fleet #191): an epoch change mid-snapshot (a sweep raising the floor)
+// restarts the reset from "" and the reset still completes.
+func TestMemorySync_F3_EpochChangeMidSnapshotRestarts(t *testing.T) {
+	w := newMemWorld(t)
+	b := w.device("devB", 0)
+	b.enable()
+	seedLive(w, "mem-e-", 1200)
+	b.sync()
+	b.sync()
+	seedTombstones(w, 5)
+	w.fleet.mu.Lock()
+	w.fleet.floor = w.fleet.seq
+	w.fleet.mu.Unlock()
+	// Let B page part of the reset snapshot, then sweep again mid-snapshot.
+	sweeper := &midSnapshotSweeper{w: w}
+	w.srv.Config.Handler = sweeper
+	for i := 0; i < 4; i++ {
+		b.ms.RunOnce(context.Background())
+		w.wall.advance(3 * time.Minute)
+	}
+	if st := b.ms.state(); st.ResetPending != "" {
+		t.Fatalf("reset never completed after a mid-snapshot epoch change: %+v", st)
+	}
+	if !sweeper.swept {
+		t.Fatal("setup: the mid-snapshot sweep never happened")
+	}
+	n := 0
+	for id := range b.chunks() {
+		if strings.HasPrefix(id, "mem-e-") {
+			n++
+		}
+	}
+	if n != 1200 {
+		t.Fatalf("B holds %d of 1200 rows after the restarted reset", n)
+	}
+}
+
+// midSnapshotSweeper raises the floor once, right after the first s-cursor
+// page of a snapshot has been served.
+type midSnapshotSweeper struct {
+	w     *memWorld
+	swept bool
+}
+
+func (m *midSnapshotSweeper) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	m.w.fleet.ServeHTTP(rw, r)
+	if !m.swept && r.URL.Path == "/api/v1/memory/pull" && strings.HasPrefix(r.URL.Query().Get("cursor"), "s") {
+		m.swept = true
+		seedTombstones(m.w, 1)
+		m.w.fleet.mu.Lock()
+		m.w.fleet.floor = m.w.fleet.seq
+		m.w.fleet.mu.Unlock()
+	}
+}
+
+// seedLive puts n live global records straight into the fake (as if other
+// devices had pushed them), cheaper than n local Adds.
+func seedLive(w *memWorld, prefix string, n int) {
+	w.fleet.mu.Lock()
+	defer w.fleet.mu.Unlock()
+	hlc := memory.FormatHLC(w.wall.now().UnixMilli(), 0, "devSeed")
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("%s%04d", prefix, i)
+		content := "seeded " + id
+		rec := &fakeMemRec{id: id, state: "live", content: content, hash: memory.HashContent(content), kind: "raw",
+			scope: "global", scopeHLC: hlc, weight: 1, recall: map[string]int64{},
+			createdAt: w.wall.now().UTC().Format(time.RFC3339Nano)}
+		w.fleet.recs[id] = rec
+		w.fleet.bump(rec)
 	}
 }

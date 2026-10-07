@@ -215,10 +215,14 @@ type memSyncState struct {
 	// ResetPending survives a crash mid-reset: "" | cursor_expired | erased.
 	ResetPending string `json:"reset_pending,omitempty"`
 	ErasedBefore string `json:"erased_before,omitempty"`
-	// ResetEpoch: rows the reset snapshot (the export) touches are stamped
-	// SyncedAt >= ResetEpoch; the sweep deletes synced rows before it.
-	// Persisted so a crash mid-reset restarts the same reset.
-	ResetEpoch time.Time `json:"reset_epoch,omitempty"`
+	// ResetEpoch: rows a reset page touches are stamped SyncedAt >=
+	// ResetEpoch (a LOCAL time — Fleet's epoch lives inside the opaque
+	// cursor); the sweep deletes synced rows before it. ResetCursor is the
+	// opaque mid-reset snapshot cursor, persisted so a snapshot of any size
+	// completes across cycles. ResetRestarts counts consecutive restarts.
+	ResetEpoch    time.Time `json:"reset_epoch,omitempty"`
+	ResetCursor   string    `json:"reset_cursor,omitempty"`
+	ResetRestarts int       `json:"reset_restarts,omitempty"`
 	// DisablePending: the user turned sync off but Fleet has not confirmed
 	// (the PUT failed). Local sync stays off; the lane retries the PUT and
 	// nothing re-enables this device until Fleet answers.
@@ -605,28 +609,43 @@ func enabledScopes(set MemorySyncSettings) map[string]bool {
 
 // ── pull ────────────────────────────────────────────────────────────────────
 
+// memoryMaxResetRestarts bounds consecutive snapshot restarts (an epoch
+// change mid-snapshot — another sweep or forget-all — restarts from "").
+// Past it the cycle fails, so the lane degrades and backs off instead of
+// paging forever.
+const memoryMaxResetRestarts = 5
+
+// errResetChurn: the reset snapshot kept restarting.
+var errResetChurn = errors.New("fleet: memory reset snapshot restarted too many times in a row (Fleet epoch keeps changing); backing off")
+
 // pull applies pages until has_more=false (bounded per cycle) and reports
-// whether anything was applied and whether the pull reached the end of the
-// feed (complete). complete is the one "caught up" signal: push runs only
-// when it is true, so base_cursor is never a mid-snapshot cursor (fleet's
-// recommendation) — on a first sync, a backlog, or a reset alike.
+// whether anything was applied and whether the pull is caught up
+// (complete). complete is the one signal that gates push: false while
+// pages remain AND while a reset snapshot is in flight, so base_cursor is
+// never a mid-snapshot cursor (Fleet answers a stale-epoch snapshot cursor
+// with resync_required).
 //
-// A reset (cursor below the floor, or a forget-all) is taken from the
-// EXPORT route, not by paging the feed from "": Fleet answers ANY non-empty
-// pull cursor below the floor with reset:true, and after a tombstone sweep
-// live rows routinely sit below the floor — so paging a snapshot of more
-// than one page can never complete (the next page's cursor resets again).
-// The export is Fleet's complete live set in pull shape, in one consistent
-// read; rows it touches are stamped SyncedAt >= the persisted reset epoch,
-// and synced rows it does not touch are then swept. A crash mid-reset
-// restarts it (ResetPending + ResetEpoch are persisted first).
+// Cursors are OPAQUE (fleet #191): a snapshot started from "" returns
+// "s<seq>.<floor>.<erase>" on each has_more page — exempt from the plain
+// below-floor check, so paging continues through live rows older than the
+// floor — and a plain cursor >= floor on its final page. The client never
+// parses either; it stores and echoes them.
+//
+// Reset: on reset:true the client restarts from "" with a fresh local
+// epoch. Every row a reset page touches is stamped SyncedAt >= epoch; the
+// mid-reset cursor is persisted after each applied page, so a snapshot of
+// any size completes across cycles. After the final page, synced rows the
+// snapshot never touched are swept (and, for erased, sync-scope rows
+// created before erased_before). The only reset DURING a snapshot is an
+// epoch change; it restarts the snapshot from "" (bounded).
 func (m *MemorySync) pull(ctx context.Context) (applied, complete bool, err error) {
-	if m.state().ResetPending != "" {
-		n, err := m.resetFromExport(ctx)
-		return n > 0, err == nil, err
-	}
 	device := m.cfg.Clock.NodeID()
-	cursor := m.state().Cursor
+	st := m.state()
+	resetting := st.ResetPending != ""
+	cursor := st.Cursor
+	if resetting {
+		cursor = st.ResetCursor
+	}
 	for page := 0; page < memoryPullPagesPerCycle; page++ {
 		q := url.Values{"cursor": {cursor}, "limit": {strconv.Itoa(memoryPullLimit)}, "device_id": {device}}
 		var resp memPullResponse
@@ -637,24 +656,44 @@ func (m *MemorySync) pull(ctx context.Context) (applied, complete bool, err erro
 			return applied, false, errDisabledOnFleet
 		}
 		if resp.Reset {
-			logging.L().Info("fleet.memory_sync.reset", "reason", resp.ResetReason)
+			logging.L().Info("fleet.memory_sync.reset", "reason", resp.ResetReason, "restart", resetting)
 			if err := m.beginReset(ctx, orDefault(resp.ResetReason, "cursor_expired"), resp.ErasedBefore); err != nil {
 				return applied, false, err
 			}
-			n, err := m.resetFromExport(ctx)
-			return applied || n > 0, err == nil, err
+			if m.state().ResetRestarts > memoryMaxResetRestarts {
+				return applied, false, errResetChurn
+			}
+			resetting, cursor = true, ""
+			continue
 		}
-		n, err := m.applyPage(ctx, resp.Records, m.now().UTC())
+		at := m.now().UTC()
+		if resetting {
+			if ep := m.state().ResetEpoch; at.Before(ep) {
+				at = ep
+			}
+		}
+		n, err := m.applyPage(ctx, resp.Records, at)
 		if err != nil {
 			return applied, false, err
 		}
 		applied = applied || n > 0
 		cursor = resp.Cursor
-		// Persist the cursor only after its page is applied.
-		if err := m.update(func(s *memSyncState) { s.Cursor = cursor }); err != nil {
+		// Persist the (opaque) cursor only after its page is applied.
+		if err := m.update(func(s *memSyncState) {
+			if resetting {
+				s.ResetCursor = cursor
+			} else {
+				s.Cursor = cursor
+			}
+		}); err != nil {
 			return applied, false, err
 		}
 		if !resp.HasMore {
+			if resetting {
+				if err := m.finishReset(ctx, cursor); err != nil {
+					return applied, false, err
+				}
+			}
 			return applied, true, nil
 		}
 	}
@@ -663,118 +702,32 @@ func (m *MemorySync) pull(ctx context.Context) (applied, complete bool, err erro
 	return applied, false, nil
 }
 
-// memExportLine is one NDJSON line of GET /api/v1/memory/export: a live
-// record in pull shape, or the trailer {"exported_at","count"}.
-type memExportLine struct {
-	memPullRecord
-	ExportedAt string `json:"exported_at"`
-	Count      *int   `json:"count"`
-}
-
-// resetFromExport applies Fleet's complete live set as the reset snapshot,
-// then finishes the reset. A missing trailer means a truncated export: the
-// reset stays pending and is retried.
-func (m *MemorySync) resetFromExport(ctx context.Context) (int, error) {
-	resp, err := m.cfg.Client.do(ctx, http.MethodGet, "/api/v1/memory/export", nil)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	m.noteServerDate(resp)
-	if resp.StatusCode/100 != 2 {
-		e := &MemorySyncError{Status: resp.StatusCode}
-		var env memErrEnvelope
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		if json.Unmarshal(raw, &env) == nil {
-			e.Code = env.Code
-		}
-		if s := resp.Header.Get("Retry-After"); s != "" {
-			if secs, perr := strconv.Atoi(s); perr == nil && secs > 0 {
-				e.RetryAfter = time.Duration(secs) * time.Second
-			}
-		}
-		return 0, e
-	}
-	at := m.now().UTC()
-	if ep := m.state().ResetEpoch; at.Before(ep) {
-		at = ep
-	}
-	dec := json.NewDecoder(io.LimitReader(resp.Body, 256<<20))
-	var (
-		batch   []memPullRecord
-		applied int
-		maxSeq  string
-		trailer bool
-	)
-	flush := func() error {
-		if len(batch) == 0 {
-			return nil
-		}
-		n, err := m.applyPage(ctx, batch, at)
-		applied += n
-		batch = batch[:0]
-		return err
-	}
-	for {
-		var line memExportLine
-		if err := dec.Decode(&line); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return applied, fmt.Errorf("fleet: memory export decode: %w", err)
-		}
-		if line.Count != nil && line.ID == "" {
-			trailer = true
-			break
-		}
-		line.State = "live"
-		if seqLess(maxSeq, line.Seq) {
-			maxSeq = line.Seq
-		}
-		batch = append(batch, line.memPullRecord)
-		if len(batch) == memoryPullLimit {
-			if err := flush(); err != nil {
-				return applied, err
-			}
-		}
-	}
-	if err := flush(); err != nil {
-		return applied, err
-	}
-	if !trailer {
-		return applied, errors.New("fleet: memory export truncated (no trailer); reset retried next cycle")
-	}
-	return applied, m.finishReset(ctx, maxSeq)
-}
-
-// beginReset persists a fresh reset: its reason, erased_before, an epoch
-// strictly after every existing SyncedAt, and a reset cursor of "".
+// beginReset persists a (re)started reset: reason, erased_before, an epoch
+// strictly after every existing SyncedAt, and an empty reset cursor. A
+// restart keeps an earlier "erased" (the erase must still be replayed) and
+// counts toward memoryMaxResetRestarts.
 func (m *MemorySync) beginReset(ctx context.Context, reason, erasedBefore string) error {
 	epoch := m.now().UTC()
 	if last := m.cfg.Store.LatestSyncedAt(ctx); !last.Before(epoch) {
 		epoch = last.Add(time.Microsecond)
 	}
 	return m.update(func(s *memSyncState) {
-		s.ResetPending, s.ResetEpoch = reason, epoch
-		s.ErasedBefore = erasedBefore
+		if s.ResetPending != "" {
+			s.ResetRestarts++
+		}
+		if s.ResetPending == "erased" && reason != "erased" {
+			reason = "erased"
+		} else if erasedBefore != "" {
+			s.ErasedBefore = erasedBefore
+		}
+		s.ResetPending, s.ResetEpoch, s.ResetCursor = reason, epoch, ""
 		s.Cursor = ""
 	})
 }
 
+// finishReset runs after the snapshot's final page. cursor is that page's
+// cursor (Fleet guarantees it is >= the floor, #191).
 func (m *MemorySync) finishReset(ctx context.Context, cursor string) error {
-	// Fleet answers a reset snapshot's last page with cursor = the last
-	// record's seq, which after a tombstone sweep can sit BELOW the cursor
-	// floor (live rows older than the newest swept tombstone) — the next
-	// pull would reset again, forever. The snapshot is complete, so no row
-	// exists between its last seq and the floor: advance to the floor,
-	// learned from an empty push (the only route that reports it).
-	floor, err := m.probeFloor(ctx)
-	if err != nil {
-		return err
-	}
-	if seqLess(cursor, floor) {
-		cursor = floor
-	}
 	st := m.state()
 	n, err := m.cfg.Store.DeleteSyncedBefore(ctx, st.ResetEpoch)
 	if err != nil {
@@ -788,34 +741,8 @@ func (m *MemorySync) finishReset(ctx context.Context, cursor string) error {
 	}
 	logging.L().Info("fleet.memory_sync.reset_done", "reason", st.ResetPending, "deleted_absent", n, "deleted_erased", erased)
 	return m.update(func(s *memSyncState) {
-		s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.Cursor = "", "", time.Time{}, cursor
+		s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.ResetCursor, s.ResetRestarts, s.Cursor = "", "", time.Time{}, "", 0, cursor
 	})
-}
-
-// probeFloor asks Fleet for the user's cursor floor with an item-less push.
-func (m *MemorySync) probeFloor(ctx context.Context) (string, error) {
-	var resp memPushResponse
-	req := memPushRequest{DeviceID: m.cfg.Clock.NodeID(), BaseCursor: "", Items: []memPushItem{}}
-	if err := m.doJSON(ctx, http.MethodPost, "/api/v1/memory/push", req, &resp); err != nil {
-		return "", err
-	}
-	if resp.CursorFloor == "0" {
-		return "", nil
-	}
-	return resp.CursorFloor, nil
-}
-
-// seqLess compares two Fleet cursors ("" = before everything).
-func seqLess(a, b string) bool {
-	if b == "" {
-		return false
-	}
-	if a == "" {
-		return true
-	}
-	ai, aerr := strconv.ParseInt(a, 10, 64)
-	bi, berr := strconv.ParseInt(b, 10, 64)
-	return aerr == nil && berr == nil && ai < bi
 }
 
 func orDefault(s, def string) string {
@@ -1364,7 +1291,7 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 		return resp.Erased, err
 	}
 	return resp.Erased, m.update(func(s *memSyncState) {
-		s.Cursor, s.ResetPending, s.ErasedBefore, s.ResetEpoch = "", "", "", time.Time{}
+		s.Cursor, s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.ResetCursor, s.ResetRestarts = "", "", "", time.Time{}, "", 0
 	})
 }
 
