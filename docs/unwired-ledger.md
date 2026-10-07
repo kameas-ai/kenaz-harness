@@ -342,6 +342,32 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
+
+1. **R1 (P2) — promote-to-team can wedge and duplicate when the user has
+   no team_id.** Fleet 400s `team_shared` pushes without a team_id;
+   `UnitMapper` attaches a nil `m.teamID` unchecked, and
+   `Unit_PromoteAsMergeRequest` creates the local team copy BEFORE the
+   push — a failed push leaves a dirty copy that background sync re-pushes
+   (400ing the whole team batch) every cycle, and each retry mints another
+   copy. **Latent: no frontend caller exists.** Fix shape: refuse before
+   creating the copy when team_id is absent; reuse an existing
+   `promoted_from` copy; teach the test fake the team_id rule. **Owner:**
+   the mission that wires the promote UI — the guard lands BEFORE the
+   first caller.
+2. **R2 (P3) — workflow mandate-takeover restore hands back the mandated
+   content relabelled as a catalog install**, not the user's earlier
+   version/edits (skills restore properly). **Owner:** skill-library
+   mission (01SKLIB01) WP04 territory.
+3. **R3 (P3) — a takeover while mandated_applied.json is unreadable (F5
+   path) never persists PriorSkill**, so a later withdrawal deletes
+   rather than restores. Needs the F5 corruption AND a takeover in the
+   same window. **Owner:** same as R2.
+4. **Mandated workflows are delete-protected but not edit/unschedule-
+   protected** (accepted "not done"): a weak guarantee for
+   compliance-type workflows. **Owner:** skill-library mission, with the
+   read-only UI treatment.
+
 ### 2026-10-05 (engine-ports review residuals, fix/engine-ports) · two accepted lane-scan edges
 
 1. A slow OUR engine with NO engine.port record (failed write or garbage
