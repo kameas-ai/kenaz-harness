@@ -1975,6 +1975,11 @@ export interface MemoryChunk {
   retrievalWeight?: number;
   /** Narrative layer — originating turn ID. */
   turnId?: string;
+  /**
+   * memory-sync-01MEMSY01: code Fleet memory sync refused this chunk with
+   * (e.g. "secret_detected") — it stays on this device only.
+   */
+  syncBlocked?: string;
 }
 
 /**
@@ -4663,6 +4668,31 @@ export interface FleetSyncLaneView {
   lastSuccessAt?: string;
   nextRetryAt?: string;
   sessions?: FleetSyncSessionView[];
+}
+
+/**
+ * Mirrors settings.MemorySyncStatusView — the learned-memory sync panel
+ * (memory-sync-01MEMSY01 WP08). `entitled` mirrors the memory_sync
+ * capability: the panel hides the toggle without it.
+ */
+export interface MemorySyncStatus {
+  wired: boolean;
+  entitled: boolean;
+  enabled: boolean;
+  scopes: string[];
+  consentVersion: string;
+  optedInAt: string;
+  currentConsentVersion: string;
+  liveRecords: number;
+  liveBytes: number;
+  maxRecords: number;
+  maxBytes: number;
+  /** Local chunks Fleet refused permanently (e.g. secret_detected). */
+  blockedCount: number;
+  /** Local sync-scope chunks not yet accepted by Fleet. */
+  pendingCount: number;
+  fleetError?: string;
+  lane: FleetSyncLaneView;
 }
 
 /** Mirrors settings.FleetSyncView. */

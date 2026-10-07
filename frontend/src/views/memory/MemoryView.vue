@@ -1083,6 +1083,14 @@ defineExpose({ refresh });
             >
               {{ kindLabel(chunk.kind) }}
             </span>
+            <span
+              v-if="chunk.syncBlocked"
+              class="font-ui text-[10px] uppercase tracking-[0.18em] px-1.5 py-0.5 rounded-sm border text-signal-warn"
+              :title="`Fleet refused to sync this memory (${chunk.syncBlocked}); it stays on this device only.`"
+              :data-testid="`memory-sync-blocked-${chunk.id}`"
+            >
+              this device only
+            </span>
             <span class="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
               {{ formatTimestamp(chunk.createdAt) }}
             </span>

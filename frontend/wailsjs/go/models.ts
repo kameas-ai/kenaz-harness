@@ -4696,6 +4696,7 @@ export namespace memory {
 	    kind?: string;
 	    retrievalWeight?: number;
 	    turnId?: string;
+	    syncBlocked?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Chunk(source);
@@ -4723,6 +4724,7 @@ export namespace memory {
 	        this.kind = source["kind"];
 	        this.retrievalWeight = source["retrievalWeight"];
 	        this.turnId = source["turnId"];
+	        this.syncBlocked = source["syncBlocked"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -7685,6 +7687,64 @@ export namespace settings {
 	        this.active = source["active"];
 	        this.reason = source["reason"];
 	    }
+	}
+	export class MemorySyncStatusView {
+	    wired: boolean;
+	    entitled: boolean;
+	    enabled: boolean;
+	    scopes: string[];
+	    consentVersion: string;
+	    optedInAt: string;
+	    currentConsentVersion: string;
+	    liveRecords: number;
+	    liveBytes: number;
+	    maxRecords: number;
+	    maxBytes: number;
+	    blockedCount: number;
+	    pendingCount: number;
+	    fleetError?: string;
+	    lane: FleetSyncLaneView;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemorySyncStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.wired = source["wired"];
+	        this.entitled = source["entitled"];
+	        this.enabled = source["enabled"];
+	        this.scopes = source["scopes"];
+	        this.consentVersion = source["consentVersion"];
+	        this.optedInAt = source["optedInAt"];
+	        this.currentConsentVersion = source["currentConsentVersion"];
+	        this.liveRecords = source["liveRecords"];
+	        this.liveBytes = source["liveBytes"];
+	        this.maxRecords = source["maxRecords"];
+	        this.maxBytes = source["maxBytes"];
+	        this.blockedCount = source["blockedCount"];
+	        this.pendingCount = source["pendingCount"];
+	        this.fleetError = source["fleetError"];
+	        this.lane = this.convertValues(source["lane"], FleetSyncLaneView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ProviderProfileRef {
 	    providerId?: string;

@@ -630,6 +630,7 @@ func toViewChunk(c corememory.Chunk) Chunk {
 		Kind:            c.Kind,
 		RetrievalWeight: c.RetrievalWeight,
 		TurnID:          c.TurnID,
+		SyncBlocked:     c.SyncBlocked,
 	}
 }
 

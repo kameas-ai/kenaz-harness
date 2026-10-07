@@ -36,6 +36,10 @@ type Chunk struct {
 	Kind            string  `json:"kind,omitempty"`
 	RetrievalWeight float32 `json:"retrievalWeight,omitempty"`
 	TurnID          string  `json:"turnId,omitempty"`
+	// SyncBlocked is the code Fleet memory sync permanently refused this
+	// chunk with (e.g. "secret_detected"); the chunk stays on this device
+	// only and the Learned list badges it (memory-sync-01MEMSY01 OQ-6).
+	SyncBlocked string `json:"syncBlocked,omitempty"`
 }
 
 // NarrativeJobStatus is the wire shape for a failed narrative synthesis job

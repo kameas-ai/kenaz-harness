@@ -4370,6 +4370,9 @@ func New(c *core.Core, opts ...Option) *API {
 		// itself per cycle on the memory_sync capability AND this device's
 		// opt-in, so an un-entitled or un-opted user makes no request.
 		a.memorySync = buildMemorySync(a, flCl, flDataDir)
+		if a.settingsImpl != nil && a.memorySync != nil {
+			a.settingsImpl.SetMemorySync(a.memorySync)
+		}
 
 		// fleet-skills-sync-01NDFSEX18 WP02: wire fleet skill dependencies onto
 		// the slashAPI. The capability snapshot is read lazily from the poller at

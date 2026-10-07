@@ -180,6 +180,7 @@ import type {
   FleetIdentity,
   FleetProfileInfo,
   FleetSessionView,
+  MemorySyncStatus,
   CapabilitiesView,
   FleetConfigPullStatusView,
   FleetHealthView,
@@ -986,6 +987,10 @@ interface WailsBindingsLike {
   /** Persists a new fleet telemetry consent level. Returns an error if the org tier is insufficient. */
   Fleet_SetTelemetryConsent(level: string): Promise<void>;
   Fleet_TelemetryStatus(): Promise<FleetTelemetryStatus>;
+  // ── Fleet learned-memory sync (memory-sync-01MEMSY01 WP08) ────────────
+  Fleet_MemorySyncStatus(): Promise<MemorySyncStatus>;
+  Fleet_MemorySyncEnable(scopes: string[], consentVersion: string): Promise<MemorySyncStatus>;
+  Fleet_MemorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
 
   // ── Capabilities: the one install framework (install-framework-01DOGF0B) ──
   /** Every install provider's items (consumer-derived state) + unreachable sources with reasons. */
@@ -3857,6 +3862,15 @@ export interface FleetClient {
   getTelemetryConsent(): Promise<'none' | 'aggregate' | 'full'>;
   /** Persists a new consent level. Rejects when the org tier is insufficient. */
   setTelemetryConsent(level: 'none' | 'aggregate' | 'full'): Promise<void>;
+  /** Learned-memory sync panel state (memory-sync-01MEMSY01 WP08). */
+  memorySyncStatus(): Promise<MemorySyncStatus>;
+  /** Opt in with scopes ⊆ long_term/global and the accepted disclosure version. */
+  memorySyncEnable(scopes: string[], consentVersion: string): Promise<MemorySyncStatus>;
+  /**
+   * Opt out (Fleet keeps the data). deleteFromFleet erases everything on
+   * Fleet first; confirm must then be exactly "forget-all".
+   */
+  memorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
 }
 
 // ── Capabilities client (install-framework-01DOGF0B) ────────────────────────
@@ -4935,6 +4949,9 @@ export function createHarnessClient(): HarnessClient {
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
       setTelemetryConsent: (level) => b().Fleet_SetTelemetryConsent(level),
       getTelemetryStatus: () => b().Fleet_TelemetryStatus(),
+      memorySyncStatus: () => b().Fleet_MemorySyncStatus(),
+      memorySyncEnable: (scopes, consentVersion) => b().Fleet_MemorySyncEnable(scopes, consentVersion),
+      memorySyncDisable: (deleteFromFleet, confirm) => b().Fleet_MemorySyncDisable(deleteFromFleet, confirm),
     },
     // ── Capabilities (install-framework-01DOGF0B) ─────────────────────────
     capabilities: {
@@ -6846,6 +6863,9 @@ export function createFakeHarnessClient(
     fleet: {
       getTelemetryConsent: async () => 'none' as const,
       setTelemetryConsent: noop,
+      memorySyncStatus: async () => fakeMemorySyncStatus(),
+      memorySyncEnable: async () => fakeMemorySyncStatus(),
+      memorySyncDisable: async () => fakeMemorySyncStatus(),
       getTelemetryStatus: async () => ({
         wired: false,
         enrolled: false,
@@ -7022,4 +7042,24 @@ export function createFakeHarnessClient(
   };
 
   return { ...defaults, ...seed };
+}
+
+/** Fake-client memory sync state: not wired (no store in the fake). */
+function fakeMemorySyncStatus(): MemorySyncStatus {
+  return {
+    wired: false,
+    entitled: false,
+    enabled: false,
+    scopes: [],
+    consentVersion: '',
+    optedInAt: '',
+    currentConsentVersion: '',
+    liveRecords: 0,
+    liveBytes: 0,
+    maxRecords: 0,
+    maxBytes: 0,
+    blockedCount: 0,
+    pendingCount: 0,
+    lane: { status: 'unknown', consecutiveFailures: 0 },
+  };
 }
