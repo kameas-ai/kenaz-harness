@@ -224,6 +224,13 @@ func (s *chromemStore) saveLocked() error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("memory: encode: %w", err)
 	}
+	// fsync before the rename (memory-sync-01MEMSY01 F9): sync bookkeeping
+	// now lives in this file, and a crash must not leave it empty.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("memory: fsync tmp: %w", err)
+	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("memory: close tmp: %w", err)
@@ -548,7 +555,7 @@ func (s *chromemStore) MarkAccessed(_ context.Context, ids []string, at time.Tim
 		// derived total. Recall is pushed (recall_own) but never ticks
 		// the HLC — counters merge by max, not by LWW.
 		s.chunks[i].RecallOwn++
-		normalizeRecall(&s.chunks[i])
+		recomputeRecall(&s.chunks[i])
 		s.chunks[i].LastAccessed = at
 		touchLocked(&s.chunks[i])
 		dirty = true
@@ -587,22 +594,22 @@ func (s *chromemStore) SetEmbedding(_ context.Context, id string, vec []float32)
 // scope with a single save (memory-sync-01MEMSY01 WP09: session delete
 // cascades to its session-scoped memory).
 type ScopeDeleter interface {
-	DeleteScope(ctx context.Context, scope ScopeFilter) ([]string, error)
+	DeleteScope(ctx context.Context, scope ScopeFilter) ([]Chunk, error)
 }
 
 // DeleteScope implements ScopeDeleter. An empty Kind matches nothing (a
 // scope-less call must never wipe the store).
-func (s *chromemStore) DeleteScope(_ context.Context, scope ScopeFilter) ([]string, error) {
+func (s *chromemStore) DeleteScope(_ context.Context, scope ScopeFilter) ([]Chunk, error) {
 	if scope.Kind == "" {
 		return nil, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var gone []string
+	var gone []Chunk
 	kept := make([]Chunk, 0, len(s.chunks))
 	for _, c := range s.chunks {
 		if matchesScope(c, []ScopeFilter{scope}) {
-			gone = append(gone, c.ID)
+			gone = append(gone, c)
 			continue
 		}
 		kept = append(kept, c)
@@ -622,28 +629,50 @@ func (s *chromemStore) DeleteScope(_ context.Context, scope ScopeFilter) ([]stri
 // DeleteSessionMemory removes the session-scoped chunks of a deleted
 // session (memory-sync-01MEMSY01 WP09, H10). Chunks the user promoted
 // out of the session (project / global / long_term) are not the
-// session's anymore and are kept. Session scope never syncs, so nothing
-// is forgotten on Fleet. Returns the removed ids.
-func DeleteSessionMemory(ctx context.Context, store Store, sessionID string) ([]string, error) {
+// session's anymore and are kept. Session memory never syncs — except a
+// chunk that WAS synced and was demoted into this session: Fleet may
+// still hold it live (its demotion not pushed yet), so each removed chunk
+// goes through rec.RecordDelete, which queues a forget exactly when Fleet
+// may know the id. Returns the removed ids.
+func DeleteSessionMemory(ctx context.Context, store Store, rec ForgetRecorder, sessionID string) ([]string, error) {
 	if store == nil || sessionID == "" {
 		return nil, nil
 	}
 	scope := ScopeFilter{Kind: ScopeKindSession, ID: sessionID}
+	var gone []Chunk
 	if d, ok := store.(ScopeDeleter); ok {
-		return d.DeleteScope(ctx, scope)
-	}
-	chunks, err := store.List(ctx, scope)
-	if err != nil {
-		return nil, err
-	}
-	var gone []string
-	for _, c := range chunks {
-		if err := store.Delete(ctx, c.ID); err != nil {
-			return gone, err
+		var err error
+		if gone, err = d.DeleteScope(ctx, scope); err != nil {
+			return nil, err
 		}
-		gone = append(gone, c.ID)
+	} else {
+		chunks, err := store.List(ctx, scope)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range chunks {
+			if err := store.Delete(ctx, c.ID); err != nil {
+				return chunkIDs(gone), err
+			}
+			gone = append(gone, c)
+		}
 	}
-	return gone, nil
+	if rec != nil {
+		for _, c := range gone {
+			if err := rec.RecordDelete(c); err != nil {
+				return chunkIDs(gone), err
+			}
+		}
+	}
+	return chunkIDs(gone), nil
+}
+
+func chunkIDs(cs []Chunk) []string {
+	out := make([]string, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, c.ID)
+	}
+	return out
 }
 
 // RecallFolder is the optional capability prune.Apply uses to persist a
@@ -665,7 +694,7 @@ func (s *chromemStore) FoldRecall(_ context.Context, id string, n int, at time.T
 		}
 		if n > 0 {
 			s.chunks[i].RecallFolded += n
-			normalizeRecall(&s.chunks[i])
+			recomputeRecall(&s.chunks[i])
 		}
 		if at.After(s.chunks[i].LastAccessed) {
 			s.chunks[i].LastAccessed = at

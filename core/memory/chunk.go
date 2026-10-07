@@ -151,6 +151,15 @@ func (c Chunk) FleetMayKnow() bool {
 // zero but whose RecallCount is not is legacy (pre-WP05 gob, or a caller
 // that set only RecallCount): its count becomes RecallOwn — this device
 // produced every recall it ever recorded.
+// recomputeRecall re-derives RecallCount from the components. Every
+// mutation of a component uses this — NOT normalizeRecall, whose legacy
+// rule would misread "others just dropped to 0 with a stale total" as a
+// pre-split chunk and mint phantom own recalls (found by the review's
+// demotion property test).
+func recomputeRecall(c *Chunk) {
+	c.RecallCount = c.RecallOwn + c.RecallOthers + c.RecallFolded
+}
+
 func normalizeRecall(c *Chunk) {
 	if c.RecallOwn == 0 && c.RecallOthers == 0 && c.RecallFolded == 0 && c.RecallCount > 0 {
 		c.RecallOwn = c.RecallCount

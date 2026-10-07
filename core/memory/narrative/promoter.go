@@ -21,10 +21,11 @@ import (
 // route the replacement through core/memory.ReplaceForSync (new record
 // with turn_id + forget of each replaced id Fleet may know), and
 // DeleteByTurnFallback through core/memory.RemoveForSync. A plain Delete
-// leaks the stale record to every other device. There is no production
-// implementation today (the promoter is not constructed outside tests;
-// ruling A-4 retired the narrative subsystem); the composition is pinned
-// by core/rpc/views/memory TestResummarize_PromoterPath_ForgetsReplacedID.
+// leaks the stale record to every other device. The production
+// implementation is core/memory.NarrativeStoreWriter, which does exactly
+// that (pinned end to end by core/rpc/views/memory
+// TestResummarize_PromoterPath_ForgetsReplacedID). The promoter itself is
+// still not constructed outside tests (ruling A-4).
 type NarrativeWriter interface {
 	// WriteNarrative adds a narrative chunk with the given content,
 	// kind, sessionID, projectID, turnID, and retrieval weight.

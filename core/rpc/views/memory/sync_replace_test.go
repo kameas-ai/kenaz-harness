@@ -9,7 +9,6 @@ package memory
 import (
 	"context"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -130,57 +129,6 @@ func TestResummarize_InlinePath_UnsyncedCoalesces(t *testing.T) {
 	}
 }
 
-// storeNarrativeWriter is the composition the NarrativeWriter contract
-// requires of any production implementation (promoter.go doc): replace
-// through ReplaceForSync, delete fallbacks through RemoveForSync.
-type storeNarrativeWriter struct {
-	mu    sync.Mutex
-	store corememory.Store
-	rec   corememory.ForgetRecorder
-	n     int
-}
-
-func (w *storeNarrativeWriter) turnChunks(ctx context.Context, sessionID, turnID string, kinds ...string) []string {
-	all, _ := w.store.List(ctx)
-	var ids []string
-	for _, c := range all {
-		if c.SessionID != sessionID || c.TurnID != turnID {
-			continue
-		}
-		for _, k := range kinds {
-			if c.Kind == k {
-				ids = append(ids, c.ID)
-			}
-		}
-	}
-	return ids
-}
-
-func (w *storeNarrativeWriter) WriteNarrative(ctx context.Context, req narrative.NarrativeWriteReq) (string, error) {
-	w.mu.Lock()
-	w.n++
-	id := "mem-narr-" + req.TurnID + "-" + string(rune('a'+w.n))
-	w.mu.Unlock()
-	next := corememory.Chunk{ID: id, SessionID: req.SessionID, TurnID: req.TurnID,
-		ScopeKind: corememory.ScopeKindGlobal, Content: req.Content, Kind: string(req.Kind),
-		RetrievalWeight: req.RetrievalWeight, Source: req.Source, Embedding: []float32{0, 1},
-		CreatedAt: time.Now().UTC()}
-	var replaced []string
-	if req.Kind == narrative.ChunkKindNarrativeSynthesised {
-		replaced = w.turnChunks(ctx, req.SessionID, req.TurnID, string(narrative.ChunkKindNarrativeSynthesised))
-	}
-	return id, corememory.ReplaceForSync(ctx, w.store, w.rec, next, replaced...)
-}
-
-func (w *storeNarrativeWriter) DeleteByTurnFallback(ctx context.Context, sessionID, turnID string) error {
-	for _, id := range w.turnChunks(ctx, sessionID, turnID, string(narrative.ChunkKindNarrativeExtractiveFallback)) {
-		if err := corememory.RemoveForSync(ctx, w.store, w.rec, id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 type okCaller struct{}
 
 func (okCaller) Complete(context.Context, string, string) (string, error) {
@@ -202,7 +150,7 @@ func TestResummarize_PromoterPath_ForgetsReplacedID(t *testing.T) {
 	if err := f.store.Add(ctx, fallback); err != nil {
 		t.Fatal(err)
 	}
-	w := &storeNarrativeWriter{store: f.store, rec: f.outbox}
+	w := corememory.NewNarrativeStoreWriter(f.store, f.outbox, nil)
 	q := narrative.NewMemJobQueue()
 	p := narrative.NewPromoter(narrative.PromoterConfig{Parallelism: 1, PollInterval: 10 * time.Millisecond},
 		q, w, narrative.NewSyntheticBuilder(okCaller{}))
@@ -223,7 +171,7 @@ func TestResummarize_PromoterPath_ForgetsReplacedID(t *testing.T) {
 			live = append(live, c)
 		}
 	}
-	if len(live) != 1 || live[0].ID == "mem-fb" || live[0].Kind != string(narrative.ChunkKindNarrativeSynthesised) {
+	if len(live) != 1 || live[0].ID == "mem-fb" || live[0].Kind != string(narrative.ChunkKindNarrativeSynthesised) || !live[0].EmbedPending {
 		t.Fatalf("turn-9 live records = %+v; want exactly the new synthesised one", live)
 	}
 	if forgets := f.reopenedForgets(t); len(forgets) != 1 || forgets[0] != "mem-fb" {

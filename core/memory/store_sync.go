@@ -54,12 +54,22 @@ type SyncStore interface {
 	ApplySyncOutcomes(ctx context.Context, outs []SyncOutcome, at time.Time) error
 	// ApplyRemote applies one pull page in one save.
 	ApplyRemote(ctx context.Context, recs []RemoteRecord, at time.Time) error
-	// DeleteSyncedExcept deletes every chunk Fleet had accepted or sent
-	// (SyncedAt set) whose id is not in keep — the reset snapshot rule.
-	DeleteSyncedExcept(ctx context.Context, keep map[string]bool) (int, error)
+	// LatestSyncedAt is the newest SyncedAt in the store — a reset epoch
+	// must sort strictly after it so the post-reset sweep can tell rows the
+	// snapshot touched from rows it did not.
+	LatestSyncedAt(ctx context.Context) time.Time
+	// DeleteSyncedBefore deletes every chunk Fleet had accepted or sent
+	// to us (SyncedAt set) that the reset snapshot did not touch
+	// (SyncedAt before epoch) — the reset snapshot rule, persisted across
+	// cycles via the epoch instead of an in-memory keep set.
+	DeleteSyncedBefore(ctx context.Context, epoch time.Time) (int, error)
 	// DeleteCreatedBefore deletes every sync-scope chunk created before
-	// the erased_before HLC (forget-all replay), synced or not.
-	DeleteCreatedBefore(ctx context.Context, hlc string) (int, error)
+	// the erased_before HLC (forget-all replay), synced or not — EXCEPT
+	// rows the post-erase snapshot touched (SyncedAt >= epoch): anything
+	// Fleet still holds after the erase is post-erase by definition, and a
+	// pulled chunk's CreatedHLC is "" (Fleet does not carry it), which
+	// would otherwise sort below every erased_before.
+	DeleteCreatedBefore(ctx context.Context, hlc string, epoch time.Time) (int, error)
 	// ClearSyncMarkers makes every chunk read as never-synced (this
 	// device ran forget-all: nothing it pushed exists on Fleet anymore).
 	ClearSyncMarkers(ctx context.Context) error
@@ -257,7 +267,7 @@ func mergeAliasInto(canon *Chunk, alias Chunk) {
 	}
 	canon.RecallOwn = max(canon.RecallOwn, alias.RecallOwn)
 	canon.RecallFolded += alias.RecallFolded
-	normalizeRecall(canon)
+	recomputeRecall(canon)
 	if alias.LastAccessed.After(canon.LastAccessed) {
 		canon.LastAccessed = alias.LastAccessed
 	}
@@ -333,8 +343,14 @@ func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at 
 				c.ScopeKind, c.ScopeID, c.ScopeHLC = in.ScopeKind, "", in.ScopeHLC
 			}
 			c.RecallOthers = in.RecallOthers
+			if c.RecallOwn > r.OwnRecall {
+				// Fleet holds less of THIS device's counter than we do
+				// (a recall pushed under a since-revived id, a lost
+				// push): mark for push or the G-counter never converges.
+				touchLocked(c)
+			}
 			c.RecallOwn = max(c.RecallOwn, r.OwnRecall)
-			normalizeRecall(c)
+			recomputeRecall(c)
 			if in.LastAccessed.After(c.LastAccessed) {
 				c.LastAccessed = in.LastAccessed
 			}
@@ -346,7 +362,7 @@ func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at 
 		in.Embedding, in.EmbedPending = nil, true
 		in.RecallOwn = r.OwnRecall
 		in.RecallFolded = 0
-		normalizeRecall(&in)
+		recomputeRecall(&in)
 		if in.ContentHash == "" {
 			in.ContentHash = HashContent(in.Content)
 		}
@@ -365,13 +381,26 @@ func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at 
 	return s.saveLocked()
 }
 
-// DeleteSyncedExcept implements SyncStore.
-func (s *chromemStore) DeleteSyncedExcept(_ context.Context, keep map[string]bool) (int, error) {
+// LatestSyncedAt implements SyncStore.
+func (s *chromemStore) LatestSyncedAt(_ context.Context) time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var t time.Time
+	for _, c := range s.chunks {
+		if c.SyncedAt.After(t) {
+			t = c.SyncedAt
+		}
+	}
+	return t
+}
+
+// DeleteSyncedBefore implements SyncStore.
+func (s *chromemStore) DeleteSyncedBefore(_ context.Context, epoch time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	drop := map[int]bool{}
 	for i, c := range s.chunks {
-		if !c.SyncedAt.IsZero() && !keep[c.ID] {
+		if !c.SyncedAt.IsZero() && c.SyncedAt.Before(epoch) {
 			drop[i] = true
 		}
 	}
@@ -385,8 +414,9 @@ func (s *chromemStore) DeleteSyncedExcept(_ context.Context, keep map[string]boo
 // DeleteCreatedBefore implements SyncStore. Only sync-scope chunks are
 // considered: session (and, while disabled, project) memory never reached
 // Fleet, so a Fleet erase has nothing to say about it. An unstamped legacy
-// chunk ("" sorts first) predates every erase.
-func (s *chromemStore) DeleteCreatedBefore(_ context.Context, hlc string) (int, error) {
+// chunk ("" sorts first) predates every erase — unless the post-erase
+// snapshot touched it.
+func (s *chromemStore) DeleteCreatedBefore(_ context.Context, hlc string, epoch time.Time) (int, error) {
 	if hlc == "" {
 		return 0, nil
 	}
@@ -394,6 +424,9 @@ func (s *chromemStore) DeleteCreatedBefore(_ context.Context, hlc string) (int, 
 	defer s.mu.Unlock()
 	drop := map[int]bool{}
 	for i, c := range s.chunks {
+		if !c.SyncedAt.IsZero() && !c.SyncedAt.Before(epoch) {
+			continue // in the post-erase snapshot ⇒ post-erase
+		}
 		if IsSyncScope(c.ScopeKind) && c.CreatedHLC < hlc {
 			drop[i] = true
 		}

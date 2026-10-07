@@ -16,6 +16,7 @@
 package memory
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,6 +83,10 @@ type HLC struct {
 	// clock stays monotone in-process either way; the error is surfaced so
 	// the sync lane can report it instead of a silent regression on restart.
 	saveErr error
+	// recovered: the state file was unreadable and the clock floor was
+	// rebuilt from stamped memory (RecoverHLC). Reported as unhealthy
+	// until the first clean save.
+	recovered bool
 }
 
 type hlcState struct {
@@ -236,6 +241,65 @@ func (h *HLC) saveLocked() {
 		return
 	}
 	h.saveErr = writeFileAtomic(h.path, mustJSON(hlcState{WallMS: h.wallMS, Counter: h.counter}))
+	if h.saveErr == nil {
+		h.recovered = false
+	}
+}
+
+// HealthErr is non-nil while the clock cannot be trusted to survive a
+// restart: its last save failed, or it was rebuilt from stamped memory and
+// has not saved cleanly since. The sync lane reports it as degraded.
+func (h *HLC) HealthErr() error {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch {
+	case h.saveErr != nil:
+		return fmt.Errorf("memory clock state not saved: %w", h.saveErr)
+	case h.recovered:
+		return errors.New("memory clock state was unreadable and was rebuilt from stamped memory; waiting for a clean save")
+	}
+	return nil
+}
+
+// RecoverHLC builds the clock when its state file is unreadable (corrupt
+// or empty — e.g. a crash mid-write before fsync existed). The floor is
+// the highest HLC this install ever stamped, taken from stamps (every
+// chunk field HLC in memory.gob plus every queued forget): the next tick
+// sorts after all of them, so nothing already pushed can be out-ordered.
+// The rebuild is reported via HealthErr until the first clean save (the
+// next Tick or Observe overwrites the bad file).
+func RecoverHLC(node, path string, stamps []string) (*HLC, error) {
+	h, err := NewHLC(node, "")
+	if err != nil {
+		return nil, err
+	}
+	h.path = path
+	for _, st := range stamps {
+		if w, c, _, ok := ParseHLC(st); ok && (w > h.wallMS || (w == h.wallMS && c > h.counter)) {
+			h.wallMS, h.counter = w, c
+		}
+	}
+	h.recovered = true
+	return h, nil
+}
+
+// StampedHLCs lists every HLC stamped on a chunk in store (for RecoverHLC).
+func StampedHLCs(ctx context.Context, store Store) []string {
+	if store == nil {
+		return nil
+	}
+	all, err := store.List(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(all)*4)
+	for _, c := range all {
+		out = append(out, c.TitleHLC, c.PinnedHLC, c.ScopeHLC, c.CreatedHLC)
+	}
+	return out
 }
 
 func mustJSON(v any) []byte {
@@ -253,8 +317,25 @@ func writeFileAtomic(path string, data []byte) error {
 		return fmt.Errorf("memory: mkdir %s: %w", filepath.Dir(path), err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
 		return fmt.Errorf("memory: write %s: %w", tmp, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("memory: write %s: %w", tmp, err)
+	}
+	// fsync before the rename: without it a crash can leave the renamed
+	// file empty, and an empty clock state reads as corrupt.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("memory: fsync %s: %w", tmp, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("memory: close %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)

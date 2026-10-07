@@ -215,6 +215,14 @@ type memSyncState struct {
 	// ResetPending survives a crash mid-reset: "" | cursor_expired | erased.
 	ResetPending string `json:"reset_pending,omitempty"`
 	ErasedBefore string `json:"erased_before,omitempty"`
+	// ResetEpoch: rows the reset snapshot (the export) touches are stamped
+	// SyncedAt >= ResetEpoch; the sweep deletes synced rows before it.
+	// Persisted so a crash mid-reset restarts the same reset.
+	ResetEpoch time.Time `json:"reset_epoch,omitempty"`
+	// DisablePending: the user turned sync off but Fleet has not confirmed
+	// (the PUT failed). Local sync stays off; the lane retries the PUT and
+	// nothing re-enables this device until Fleet answers.
+	DisablePending bool `json:"disable_pending,omitempty"`
 }
 
 // MemorySyncStatePath is the canonical state-file location under dataDir.
@@ -263,6 +271,12 @@ type MemorySync struct {
 	// how far ahead a fast OS clock is (clock_in_future).
 	serverDate time.Time
 	kick       chan struct{}
+	// skipped holds chunks Fleet refused for a reason other than a
+	// credential (or that rode a dropped 400/413 batch), keyed to the
+	// SyncGen they were refused at: they are not resent until they change
+	// locally (or the process restarts). Deliberately NOT persisted — only
+	// secret_detected earns a durable SyncBlocked (spec: drop and log).
+	skipped map[string]int64
 }
 
 // NewMemorySync builds the lane and loads its persisted state. A corrupt
@@ -275,7 +289,7 @@ func NewMemorySync(cfg MemorySyncConfig) (*MemorySync, error) {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 2 * time.Minute
 	}
-	m := &MemorySync{cfg: cfg, now: cfg.Now, kick: make(chan struct{}, 1)}
+	m := &MemorySync{cfg: cfg, now: cfg.Now, kick: make(chan struct{}, 1), skipped: map[string]int64{}}
 	if m.now == nil {
 		m.now = time.Now
 	}
@@ -331,7 +345,19 @@ func (m *MemorySync) saveStateLocked() error {
 		return err
 	}
 	tmp := m.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(raw); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil { // durable before the rename
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, m.path)
@@ -372,7 +398,15 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 		m.lanes().RecordOff(LaneMemorySync, "not_entitled")
 		return
 	}
-	if !m.state().Enabled {
+	if st := m.state(); !st.Enabled {
+		if st.DisablePending {
+			// Finish the user's opt-out that Fleet has not confirmed. This
+			// is the only request a disabled device makes, and it can only
+			// turn sync OFF.
+			if err := m.putDisabled(ctx); err != nil {
+				logging.L().Warn("fleet.memory_sync.disable_retry_failed", "err", err.Error())
+			}
+		}
 		m.lanes().RecordOff(LaneMemorySync, "not_opted_in")
 		return
 	}
@@ -390,6 +424,19 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 	m.failures = 0
 	m.nextAttempt = time.Time{}
 	m.mu.Unlock()
+	// The cycle worked, but the lane is only "ok" if nothing it depends on
+	// is quietly broken: the clock must persist (a clock that cannot save
+	// can hand out regressed stamps after a restart), and refused memories
+	// are counted, not hidden.
+	if err := m.cfg.Clock.HealthErr(); err != nil {
+		m.lanes().RecordFailure(LaneMemorySync, "hlc_state", err, 0, time.Time{})
+		return
+	}
+	if n := m.SkippedCount(); n > 0 {
+		m.lanes().RecordFailure(LaneMemorySync, "items_refused",
+			fmt.Errorf("Fleet refused %d memories; they stay on this device until they change", n), 0, time.Time{})
+		return
+	}
 	m.lanes().RecordSuccess(LaneMemorySync)
 }
 
@@ -451,17 +498,18 @@ func (m *MemorySync) cycle(ctx context.Context) error {
 	if !set.Enabled {
 		return errDisabledOnFleet
 	}
-	pulled, err := m.pull(ctx)
+	pulled, complete, err := m.pull(ctx)
 	if err != nil {
 		return err
 	}
 	if pulled && m.cfg.AfterPull != nil {
 		m.cfg.AfterPull(ctx)
 	}
-	if m.state().ResetPending != "" {
-		// A reset snapshot is still incomplete (more pages than one
-		// cycle pulls). Pushing now could re-upload memory an erase just
-		// removed; the contract order is reset to exhaustion, THEN push.
+	if !complete {
+		// The feed (or a reset snapshot) has more pages than one cycle
+		// pulls. Pushing now would send a mid-snapshot base_cursor — and,
+		// mid-reset, could re-upload memory an erase just removed. The
+		// contract order is pull to exhaustion, THEN push.
 		return nil
 	}
 	return m.push(ctx, set)
@@ -557,72 +605,163 @@ func enabledScopes(set MemorySyncSettings) map[string]bool {
 
 // ── pull ────────────────────────────────────────────────────────────────────
 
-// pull applies pages until has_more=false (bounded per cycle). It returns
-// whether any record was applied. A reset (cursor below the floor, or a
-// forget-all) restarts from "" and, once the snapshot is complete, deletes
-// synced local chunks absent from it — and for erased, every sync-scope
-// chunk created before erased_before.
-func (m *MemorySync) pull(ctx context.Context) (bool, error) {
-	device := m.cfg.Clock.NodeID()
-	applied := false
-	st := m.state()
-	resetting := st.ResetPending != ""
-	cursor := st.Cursor
-	if resetting {
-		cursor = ""
+// pull applies pages until has_more=false (bounded per cycle) and reports
+// whether anything was applied and whether the pull reached the end of the
+// feed (complete). complete is the one "caught up" signal: push runs only
+// when it is true, so base_cursor is never a mid-snapshot cursor (fleet's
+// recommendation) — on a first sync, a backlog, or a reset alike.
+//
+// A reset (cursor below the floor, or a forget-all) is taken from the
+// EXPORT route, not by paging the feed from "": Fleet answers ANY non-empty
+// pull cursor below the floor with reset:true, and after a tombstone sweep
+// live rows routinely sit below the floor — so paging a snapshot of more
+// than one page can never complete (the next page's cursor resets again).
+// The export is Fleet's complete live set in pull shape, in one consistent
+// read; rows it touches are stamped SyncedAt >= the persisted reset epoch,
+// and synced rows it does not touch are then swept. A crash mid-reset
+// restarts it (ResetPending + ResetEpoch are persisted first).
+func (m *MemorySync) pull(ctx context.Context) (applied, complete bool, err error) {
+	if m.state().ResetPending != "" {
+		n, err := m.resetFromExport(ctx)
+		return n > 0, err == nil, err
 	}
-	keep := map[string]bool{}
+	device := m.cfg.Clock.NodeID()
+	cursor := m.state().Cursor
 	for page := 0; page < memoryPullPagesPerCycle; page++ {
 		q := url.Values{"cursor": {cursor}, "limit": {strconv.Itoa(memoryPullLimit)}, "device_id": {device}}
 		var resp memPullResponse
 		if err := m.doJSON(ctx, http.MethodGet, "/api/v1/memory/pull?"+q.Encode(), nil, &resp); err != nil {
-			return applied, err
+			return applied, false, err
 		}
 		if !resp.Enabled {
-			return applied, errDisabledOnFleet
+			return applied, false, errDisabledOnFleet
 		}
 		if resp.Reset {
-			if err := m.update(func(s *memSyncState) {
-				s.ResetPending = orDefault(resp.ResetReason, "cursor_expired")
-				if resp.ErasedBefore != "" {
-					s.ErasedBefore = resp.ErasedBefore
-				}
-				s.Cursor = ""
-			}); err != nil {
-				return applied, err
-			}
 			logging.L().Info("fleet.memory_sync.reset", "reason", resp.ResetReason)
-			resetting, cursor, keep = true, "", map[string]bool{}
-			continue
+			if err := m.beginReset(ctx, orDefault(resp.ResetReason, "cursor_expired"), resp.ErasedBefore); err != nil {
+				return applied, false, err
+			}
+			n, err := m.resetFromExport(ctx)
+			return applied || n > 0, err == nil, err
 		}
-		n, err := m.applyPage(ctx, resp.Records, keep)
+		n, err := m.applyPage(ctx, resp.Records, m.now().UTC())
 		if err != nil {
-			return applied, err
+			return applied, false, err
 		}
 		applied = applied || n > 0
 		cursor = resp.Cursor
-		if !resetting {
-			// Persist the cursor only after its page is applied.
-			if err := m.update(func(s *memSyncState) { s.Cursor = cursor }); err != nil {
+		// Persist the cursor only after its page is applied.
+		if err := m.update(func(s *memSyncState) { s.Cursor = cursor }); err != nil {
+			return applied, false, err
+		}
+		if !resp.HasMore {
+			return applied, true, nil
+		}
+	}
+	// More pages remain; the durable cursor resumes next cycle. Not
+	// complete: no push this cycle.
+	return applied, false, nil
+}
+
+// memExportLine is one NDJSON line of GET /api/v1/memory/export: a live
+// record in pull shape, or the trailer {"exported_at","count"}.
+type memExportLine struct {
+	memPullRecord
+	ExportedAt string `json:"exported_at"`
+	Count      *int   `json:"count"`
+}
+
+// resetFromExport applies Fleet's complete live set as the reset snapshot,
+// then finishes the reset. A missing trailer means a truncated export: the
+// reset stays pending and is retried.
+func (m *MemorySync) resetFromExport(ctx context.Context) (int, error) {
+	resp, err := m.cfg.Client.do(ctx, http.MethodGet, "/api/v1/memory/export", nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	m.noteServerDate(resp)
+	if resp.StatusCode/100 != 2 {
+		e := &MemorySyncError{Status: resp.StatusCode}
+		var env memErrEnvelope
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		if json.Unmarshal(raw, &env) == nil {
+			e.Code = env.Code
+		}
+		if s := resp.Header.Get("Retry-After"); s != "" {
+			if secs, perr := strconv.Atoi(s); perr == nil && secs > 0 {
+				e.RetryAfter = time.Duration(secs) * time.Second
+			}
+		}
+		return 0, e
+	}
+	at := m.now().UTC()
+	if ep := m.state().ResetEpoch; at.Before(ep) {
+		at = ep
+	}
+	dec := json.NewDecoder(io.LimitReader(resp.Body, 256<<20))
+	var (
+		batch   []memPullRecord
+		applied int
+		maxSeq  string
+		trailer bool
+	)
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		n, err := m.applyPage(ctx, batch, at)
+		applied += n
+		batch = batch[:0]
+		return err
+	}
+	for {
+		var line memExportLine
+		if err := dec.Decode(&line); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return applied, fmt.Errorf("fleet: memory export decode: %w", err)
+		}
+		if line.Count != nil && line.ID == "" {
+			trailer = true
+			break
+		}
+		line.State = "live"
+		if seqLess(maxSeq, line.Seq) {
+			maxSeq = line.Seq
+		}
+		batch = append(batch, line.memPullRecord)
+		if len(batch) == memoryPullLimit {
+			if err := flush(); err != nil {
 				return applied, err
 			}
 		}
-		if !resp.HasMore {
-			if resetting {
-				if err := m.finishReset(ctx, keep, cursor); err != nil {
-					return applied, err
-				}
-			}
-			return applied, nil
-		}
 	}
-	// More pages remain: a non-reset pull resumes next cycle from the
-	// durable cursor; a reset restarts (its snapshot must be complete
-	// before anything is deleted).
-	return applied, nil
+	if err := flush(); err != nil {
+		return applied, err
+	}
+	if !trailer {
+		return applied, errors.New("fleet: memory export truncated (no trailer); reset retried next cycle")
+	}
+	return applied, m.finishReset(ctx, maxSeq)
 }
 
-func (m *MemorySync) finishReset(ctx context.Context, keep map[string]bool, cursor string) error {
+// beginReset persists a fresh reset: its reason, erased_before, an epoch
+// strictly after every existing SyncedAt, and a reset cursor of "".
+func (m *MemorySync) beginReset(ctx context.Context, reason, erasedBefore string) error {
+	epoch := m.now().UTC()
+	if last := m.cfg.Store.LatestSyncedAt(ctx); !last.Before(epoch) {
+		epoch = last.Add(time.Microsecond)
+	}
+	return m.update(func(s *memSyncState) {
+		s.ResetPending, s.ResetEpoch = reason, epoch
+		s.ErasedBefore = erasedBefore
+		s.Cursor = ""
+	})
+}
+
+func (m *MemorySync) finishReset(ctx context.Context, cursor string) error {
 	// Fleet answers a reset snapshot's last page with cursor = the last
 	// record's seq, which after a tombstone sweep can sit BELOW the cursor
 	// floor (live rows older than the newest swept tombstone) — the next
@@ -637,19 +776,19 @@ func (m *MemorySync) finishReset(ctx context.Context, keep map[string]bool, curs
 		cursor = floor
 	}
 	st := m.state()
-	n, err := m.cfg.Store.DeleteSyncedExcept(ctx, keep)
+	n, err := m.cfg.Store.DeleteSyncedBefore(ctx, st.ResetEpoch)
 	if err != nil {
 		return err
 	}
 	erased := 0
 	if st.ResetPending == "erased" && st.ErasedBefore != "" {
-		if erased, err = m.cfg.Store.DeleteCreatedBefore(ctx, st.ErasedBefore); err != nil {
+		if erased, err = m.cfg.Store.DeleteCreatedBefore(ctx, st.ErasedBefore, st.ResetEpoch); err != nil {
 			return err
 		}
 	}
 	logging.L().Info("fleet.memory_sync.reset_done", "reason", st.ResetPending, "deleted_absent", n, "deleted_erased", erased)
 	return m.update(func(s *memSyncState) {
-		s.ResetPending, s.ErasedBefore, s.Cursor = "", "", cursor
+		s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.Cursor = "", "", time.Time{}, cursor
 	})
 }
 
@@ -686,7 +825,7 @@ func orDefault(s, def string) string {
 	return s
 }
 
-func (m *MemorySync) applyPage(ctx context.Context, recs []memPullRecord, keep map[string]bool) (int, error) {
+func (m *MemorySync) applyPage(ctx context.Context, recs []memPullRecord, at time.Time) (int, error) {
 	out := make([]memory.RemoteRecord, 0, len(recs))
 	var acks []string
 	for _, r := range recs {
@@ -694,18 +833,19 @@ func (m *MemorySync) applyPage(ctx context.Context, recs []memPullRecord, keep m
 		m.cfg.Clock.Observe(r.PinnedHLC)
 		m.cfg.Clock.Observe(r.ScopeHLC)
 		if r.State == "tombstone" {
-			if m.cfg.Outbox.Has(r.ID) {
-				acks = append(acks, r.ID) // Fleet already tombstoned it
+			// Only an explicit forget answers a queued forget. A
+			// left_sync_scope tombstone is revivable (a re-promotion
+			// elsewhere brings the record back) and a superseded one is
+			// not ours to vouch for: keep our forget queued so it is sent
+			// and makes the tombstone absorbing (contract §3 rule 8).
+			if r.Reason == memory.TombstoneForgotten && m.cfg.Outbox.Has(r.ID) {
+				acks = append(acks, r.ID)
 			}
 			out = append(out, memory.RemoteRecord{ID: r.ID, Tombstone: true, Reason: r.Reason})
 			continue
 		}
 		if !memory.IsSyncScope(r.ScopeKind) {
 			continue // defensive: Fleet only serves synced scopes
-		}
-		keep[r.ID] = true
-		for _, a := range r.Aliases {
-			keep[a] = true
 		}
 		if m.cfg.Outbox.Has(r.ID) {
 			continue // deleted here; the queued forget wins — never resurrect
@@ -717,7 +857,7 @@ func (m *MemorySync) applyPage(ctx context.Context, recs []memPullRecord, keep m
 			Aliases:   r.Aliases,
 		})
 	}
-	if err := m.cfg.Store.ApplyRemote(ctx, out, m.now().UTC()); err != nil {
+	if err := m.cfg.Store.ApplyRemote(ctx, out, at); err != nil {
 		return 0, err
 	}
 	if err := m.cfg.Outbox.Ack(acks...); err != nil {
@@ -778,11 +918,17 @@ func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings) error {
 		return err
 	}
 	var ids []string
+	m.mu.Lock()
 	for _, c := range all {
+		if gen, skip := m.skipped[c.ID]; skip && gen == c.SyncGen {
+			continue
+		}
+		delete(m.skipped, c.ID)
 		if pushCandidate(c, scopes) {
 			ids = append(ids, c.ID)
 		}
 	}
+	m.mu.Unlock()
 	if len(forgets) == 0 && len(ids) == 0 {
 		return nil
 	}
@@ -822,15 +968,30 @@ func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings) error {
 
 // pushCandidate: a chunk pushes when it is in an enabled sync scope and is
 // new to Fleet or changed (and not blocked); or when it left the sync
-// scopes while Fleet may still hold it (the demotion push).
+// scopes while Fleet may still hold it (the demotion push). A
+// credential-blocked chunk still pushes its demotion: an edit can be
+// refused while the record itself is live on Fleet, and leaving sync must
+// always be possible.
 func pushCandidate(c memory.Chunk, scopes map[string]bool) bool {
-	if c.SyncBlocked != "" {
-		return false
-	}
 	if memory.IsSyncScope(c.ScopeKind) {
-		return scopes[c.ScopeKind] && (c.SyncDirty || c.SyncedAt.IsZero())
+		return c.SyncBlocked == "" && scopes[c.ScopeKind] && (c.SyncDirty || c.SyncedAt.IsZero())
 	}
 	return c.SyncDirty && c.FleetMayKnow() // demotion (to session or project)
+}
+
+// skip records a refused chunk for the in-memory, change-scoped skip set.
+func (m *MemorySync) skip(id string, gen int64) {
+	m.mu.Lock()
+	m.skipped[id] = gen
+	m.mu.Unlock()
+}
+
+// SkippedCount is how many chunks Fleet refused this process (not
+// counting credential blocks, which are durable SyncBlocked).
+func (m *MemorySync) SkippedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.skipped)
 }
 
 // wireScope maps a local scope to the scope_kind sent. While project sync
@@ -932,8 +1093,8 @@ func (m *MemorySync) pushBatch(ctx context.Context, entries []pushEntry) error {
 	var me *MemorySyncError
 	if errors.As(err, &me) && (me.Status == http.StatusBadRequest || me.Status == http.StatusRequestEntityTooLarge) {
 		// An envelope fault is a client bug, not transient: drop the
-		// batch (block its upserts, drop its forgets) and log, rather than
-		// resend the same bytes forever.
+		// batch and log (spec FR-6), rather than resend the same bytes
+		// every cycle. Nothing is blocked durably.
 		logging.L().Error("fleet.memory_sync.batch_dropped", "status", me.Status, "code", me.Code, "items", len(entries))
 		return m.dropBatch(ctx, entries, me)
 	}
@@ -943,20 +1104,21 @@ func (m *MemorySync) pushBatch(ctx context.Context, entries []pushEntry) error {
 	return m.applyResults(ctx, entries, resp)
 }
 
-func (m *MemorySync) dropBatch(ctx context.Context, entries []pushEntry, me *MemorySyncError) error {
-	var outs []memory.SyncOutcome
+func (m *MemorySync) dropBatch(_ context.Context, entries []pushEntry, me *MemorySyncError) error {
 	var acks []string
 	for _, e := range entries {
 		if e.forget {
-			acks = append(acks, e.item.ID)
+			// A 400 means the forget itself is malformed and will never
+			// be accepted; a 413 is the upserts' size — keep forgets
+			// queued (they are tiny and privacy-relevant).
+			if me.Status == http.StatusBadRequest {
+				acks = append(acks, e.item.ID)
+			}
 			continue
 		}
-		outs = append(outs, memory.SyncOutcome{ID: e.item.ID, Gen: e.gen, Kind: memory.OutcomeBlocked, Code: orDefault(me.Code, "client_error")})
+		m.skip(e.item.ID, e.gen)
 	}
-	if err := m.cfg.Outbox.Ack(acks...); err != nil {
-		return err
-	}
-	return m.cfg.Store.ApplySyncOutcomes(ctx, outs, m.now().UTC())
+	return m.cfg.Outbox.Ack(acks...)
 }
 
 func (m *MemorySync) applyResults(ctx context.Context, entries []pushEntry, resp memPushResponse) error {
@@ -1007,7 +1169,9 @@ func (m *MemorySync) applyResults(ctx context.Context, entries []pushEntry, resp
 				m.invalidateSettings()
 				continue // scopes changed on Fleet; re-read next cycle
 			case r.Code == "resync_required":
-				_ = m.update(func(s *memSyncState) { s.ResetPending = "cursor_expired" })
+				if err := m.beginReset(ctx, "cursor_expired", ""); err != nil {
+					return err
+				}
 				retryLater = fmt.Errorf("fleet: memory push: resync required")
 				continue
 			case r.Code == "sync_disabled":
@@ -1019,8 +1183,16 @@ func (m *MemorySync) applyResults(ctx context.Context, entries []pushEntry, resp
 			case retry:
 				retryLater = fmt.Errorf("fleet: memory push: %s (retry)", r.Code)
 				continue
-			default:
+			case r.Code == "secret_detected":
+				// The one durable block: credential-shaped content must
+				// never be resent; the user sees it in Learned.
 				o.Kind, o.Code = memory.OutcomeBlocked, r.Code
+			default:
+				// Other retry:false refusals are dropped and logged; the
+				// chunk is resent only after it changes locally.
+				logging.L().Warn("fleet.memory_sync.item_rejected", "code", r.Code, "field", r.Field)
+				m.skip(r.ID, e.gen)
+				continue
 			}
 		default:
 			continue
@@ -1080,8 +1252,13 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 		return out
 	}
 	out.Fleet = &set
-	if set.Enabled != out.LocalEnabled {
-		// Another device changed the user-level opt-in: follow it.
+	// Fleet's opt-in is user-level. A disable elsewhere reaches this device
+	// on its own (the lane sees enabled:false / sync_disabled and turns
+	// itself off); a RE-enable elsewhere is picked up only here, when the
+	// user opens this panel — intended: consent is per device, so a device
+	// never starts uploading again without its user looking (F11, blessed).
+	// An unconfirmed local opt-out (DisablePending) is never undone here.
+	if set.Enabled != out.LocalEnabled && !m.state().DisablePending {
 		_ = m.update(func(s *memSyncState) { s.Enabled = set.Enabled; s.Scopes = set.Scopes })
 		out.LocalEnabled = set.Enabled
 	}
@@ -1126,62 +1303,55 @@ func (m *MemorySync) Enable(ctx context.Context, scopes []string, consentVersion
 	return set, nil
 }
 
-// Disable turns sync off for the user on Fleet (server data is kept) and on
-// this device. Queued forgets are flushed first — deleting is always
-// allowed, and a forget left queued while disabled would never be sent.
-func (m *MemorySync) Disable(ctx context.Context) error {
-	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
-	if m.cfg.Client != nil && !m.cfg.Client.IsNop() {
-		if pend := m.cfg.Outbox.Pending(); len(pend) > 0 {
-			entries := make([]pushEntry, 0, len(pend))
-			for _, f := range pend {
-				entries = append(entries, pushEntry{item: memPushItem{Op: "forget", ID: f.ID, HLC: f.HLC}, forget: true})
-			}
-			for start := 0; start < len(entries); start += memoryPushMaxItems {
-				end := min(start+memoryPushMaxItems, len(entries))
-				if err := m.pushBatch(ctx, entries[start:end]); err != nil {
-					logging.L().Warn("fleet.memory_sync.disable_forget_flush_failed", "err", err.Error())
-					break
-				}
-			}
-		}
-		off := false
-		if err := m.doJSON(ctx, http.MethodPut, "/api/v1/memory/settings", memSettingsUpdate{Enabled: &off}, nil); err != nil {
-			return err
-		}
-	}
-	m.invalidateSettings()
-	if err := m.update(func(s *memSyncState) { s.Enabled = false }); err != nil {
-		return err
-	}
-	m.lanes().RecordOff(LaneMemorySync, "not_opted_in")
-	return nil
-}
-
-// ForgetAll erases every record of this user on Fleet (all devices reset
-// on their next pull with reason erased). confirm must be "forget-all".
-// It is allowed even after a tier lapse (Fleet gates it on permission
-// only), so it does not require the capability.
-func (m *MemorySync) ForgetAll(ctx context.Context, confirm string) (int, error) {
-	if confirm != "forget-all" {
+// Disable turns memory sync off — for the user on Fleet and on this device
+// — and, with deleteFromFleet, then erases everything Fleet holds
+// (forget-all; confirm must be exactly "forget-all"). It is ONE operation
+// under the cycle lock, ordered disable-first, so no ticker cycle can run
+// between the erase and the opt-out and re-upload the memory the user just
+// deleted:
+//
+//  1. local Enabled=false (+ DisablePending) is persisted BEFORE any
+//     request, so whatever fails below, this device never syncs again
+//     until the user re-enables;
+//  2. queued forgets are flushed (deleting is always allowed, and a forget
+//     left queued while off would never be sent);
+//  3. PUT enabled=false — a failure returns the error and leaves
+//     DisablePending set; the lane retries the PUT (never re-enables);
+//  4. POST forget-all. Fleet's data is gone; THIS device's memory is not
+//     ("delete from Fleet" is not "delete here"): its synced markers are
+//     cleared so a later re-opt-in uploads it afresh, and its cursor
+//     restarts so its own next pull is not an erase replay.
+//
+// forget-all is allowed even after a tier lapse (Fleet gates it on
+// permission only), so this needs no capability. Returns the erased count.
+func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm string) (int, error) {
+	if deleteFromFleet && confirm != "forget-all" {
 		return 0, ErrMemoryConfirmRequired
 	}
-	if m.cfg.Client == nil || m.cfg.Client.IsNop() {
-		return 0, ErrFleetDisabled
-	}
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
+	if err := m.update(func(s *memSyncState) { s.Enabled, s.DisablePending = false, true }); err != nil {
+		return 0, err
+	}
+	m.invalidateSettings()
+	m.lanes().RecordOff(LaneMemorySync, "not_opted_in")
+	if m.cfg.Client == nil || m.cfg.Client.IsNop() {
+		if deleteFromFleet {
+			return 0, ErrFleetDisabled
+		}
+		return 0, nil
+	}
+	m.flushForgets(ctx)
+	if err := m.putDisabled(ctx); err != nil {
+		return 0, err
+	}
+	if !deleteFromFleet {
+		return 0, nil
+	}
 	var resp memForgetAllResponse
 	if err := m.doJSON(ctx, http.MethodPost, "/api/v1/memory/forget-all", map[string]string{"confirm": confirm}, &resp); err != nil {
 		return 0, err
 	}
-	// Everything Fleet held is gone. Other devices reset (erased) on their
-	// next pull; THIS device's local memory is not erased — "delete from
-	// Fleet" is not "delete here". Its synced markers are stale, so it
-	// reads as never-synced from now on (a later re-opt-in uploads it
-	// afresh), queued forgets are moot, and the cursor restarts at "" so
-	// its own next pull is not an erase replay against local memory.
 	pend := m.cfg.Outbox.Pending()
 	ids := make([]string, 0, len(pend))
 	for _, p := range pend {
@@ -1193,5 +1363,35 @@ func (m *MemorySync) ForgetAll(ctx context.Context, confirm string) (int, error)
 	if err := m.cfg.Store.ClearSyncMarkers(ctx); err != nil {
 		return resp.Erased, err
 	}
-	return resp.Erased, m.update(func(s *memSyncState) { s.Cursor, s.ResetPending, s.ErasedBefore = "", "", "" })
+	return resp.Erased, m.update(func(s *memSyncState) {
+		s.Cursor, s.ResetPending, s.ErasedBefore, s.ResetEpoch = "", "", "", time.Time{}
+	})
+}
+
+// flushForgets sends every queued forget (best effort; failures stay queued).
+func (m *MemorySync) flushForgets(ctx context.Context) {
+	pend := m.cfg.Outbox.Pending()
+	if len(pend) == 0 {
+		return
+	}
+	entries := make([]pushEntry, 0, len(pend))
+	for _, f := range pend {
+		entries = append(entries, pushEntry{item: memPushItem{Op: "forget", ID: f.ID, HLC: f.HLC}, forget: true})
+	}
+	for start := 0; start < len(entries); start += memoryPushMaxItems {
+		end := min(start+memoryPushMaxItems, len(entries))
+		if err := m.pushBatch(ctx, entries[start:end]); err != nil {
+			logging.L().Warn("fleet.memory_sync.forget_flush_failed", "err", err.Error())
+			return
+		}
+	}
+}
+
+// putDisabled sends PUT enabled=false and clears DisablePending on success.
+func (m *MemorySync) putDisabled(ctx context.Context) error {
+	off := false
+	if err := m.doJSON(ctx, http.MethodPut, "/api/v1/memory/settings", memSettingsUpdate{Enabled: &off}, nil); err != nil {
+		return err
+	}
+	return m.update(func(s *memSyncState) { s.DisablePending = false })
 }

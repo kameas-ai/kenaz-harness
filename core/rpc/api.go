@@ -2889,7 +2889,7 @@ func New(c *core.Core, opts ...Option) *API {
 		if chatRunnerForDelete != nil {
 			chatRunnerForDelete.ForgetSession(sessionID)
 		}
-		if gone, err := corememory.DeleteSessionMemory(context.Background(), a.memStoreRef, sessionID); err != nil {
+		if gone, err := corememory.DeleteSessionMemory(context.Background(), a.memStoreRef, memForgetRecorder(a.memForgets), sessionID); err != nil {
 			logging.L().Warn("memory.session_cascade_failed", "err", err.Error(), "deleted", len(gone))
 		}
 	})
@@ -8882,10 +8882,25 @@ func openMemoryClock(c *core.Core, store corememory.Store) *corememory.HLC {
 		logging.L().Warn("memory.hlc.node_id_failed", "err", err.Error())
 		return nil
 	}
-	clock, err := corememory.NewHLC(nodeID, corememory.HLCStatePath(c.DataDir()))
+	statePath := corememory.HLCStatePath(c.DataDir())
+	clock, err := corememory.NewHLC(nodeID, statePath)
 	if err != nil {
-		logging.L().Error("memory.hlc.open_failed", "err", err.Error())
-		return nil
+		// Unreadable state (corrupt / empty): rebuild the floor from the
+		// highest HLC this install ever stamped — every chunk field in
+		// memory.gob plus every queued forget — instead of leaving sync
+		// unavailable. The lane reports degraded until the first clean save.
+		stamps := corememory.StampedHLCs(context.Background(), store)
+		if ob, oerr := corememory.OpenForgetOutbox(corememory.ForgetOutboxPath(c.DataDir()), nil); oerr == nil {
+			for _, op := range ob.Pending() {
+				stamps = append(stamps, op.HLC)
+			}
+		}
+		clock, err = corememory.RecoverHLC(nodeID, statePath, stamps)
+		if err != nil {
+			logging.L().Error("memory.hlc.open_failed", "err", err.Error())
+			return nil
+		}
+		logging.L().Warn("memory.hlc.rebuilt_from_stamps", "stamps", len(stamps))
 	}
 	if cs, ok := store.(corememory.ClockSetter); ok {
 		cs.SetClock(clock)

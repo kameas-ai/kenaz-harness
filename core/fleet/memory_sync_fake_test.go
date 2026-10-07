@@ -38,15 +38,26 @@ type fakeMemRec struct {
 }
 
 type fakeMemoryFleet struct {
-	mu       sync.Mutex
-	now      func() time.Time
-	enabled  bool
-	scopes   map[string]bool
-	recs     map[string]*fakeMemRec
-	aliases  map[string]string
-	seq      int64
-	floor    int64
-	requests int
+	mu      sync.Mutex
+	now     func() time.Time
+	enabled bool
+	scopes  map[string]bool
+	recs    map[string]*fakeMemRec
+	aliases map[string]string
+	seq     int64
+	floor   int64
+	// erasedAt / erasedBefore mirror Fleet's memory_user_state
+	// (erased_at_seq, erased_before): set by forget-all, and a pull whose
+	// cursor predates erasedAt resets with reason "erased". The first
+	// version of this fake decided "erased" by len(recs)==0 and stamped
+	// erased_before at PULL time, which hid the F1 erase-replay defect.
+	erasedAt     int64
+	erasedBefore string
+	// failPut forces the next N PUT /settings to answer 500; status413
+	// the next N item-bearing pushes to answer 413.
+	failPut   int
+	status413 int
+	requests  int
 	// status429 / status403 force the next N requests to fail.
 	status429, status403 int
 	pushes               []memPushRequest
@@ -118,6 +129,9 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/memory/settings":
 		writeJSON(w, 200, f.settingsLocked())
+	case r.Method == http.MethodPut && r.URL.Path == "/api/v1/memory/settings" && f.failPut > 0:
+		f.failPut--
+		writeJSON(w, 500, map[string]any{"code": "internal_error"})
 	case r.Method == http.MethodPut && r.URL.Path == "/api/v1/memory/settings":
 		var u struct {
 			Enabled        *bool     `json:"enabled"`
@@ -147,8 +161,30 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]any{"code": "invalid_request_body"})
 			return
 		}
+		if f.status413 > 0 && len(req.Items) > 0 {
+			f.status413--
+			writeJSON(w, 413, map[string]any{"code": "payload_too_large"})
+			return
+		}
 		f.pushes = append(f.pushes, req)
 		f.pushLocked(w, req)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/memory/export":
+		// Pull shape, live rows only, then the trailer (fleet read.go
+		// Export: no device_id, so recall_count_others == recall_count).
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(200)
+		enc := json.NewEncoder(w)
+		var rows []*fakeMemRec
+		for _, rec := range f.recs {
+			if rec.state == "live" {
+				rows = append(rows, rec)
+			}
+		}
+		sort.Slice(rows, func(i, j int) bool { return rows[i].seq < rows[j].seq })
+		for _, rec := range rows {
+			_ = enc.Encode(f.liveRecordLocked(rec, ""))
+		}
+		_ = enc.Encode(map[string]any{"exported_at": f.now().UTC().Format(time.RFC3339Nano), "count": len(rows)})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/memory/forget-all":
 		n := 0
 		for _, rec := range f.recs {
@@ -159,7 +195,9 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.recs, f.aliases = map[string]*fakeMemRec{}, map[string]string{}
 		f.seq++
 		f.floor = f.seq
-		writeJSON(w, 200, map[string]any{"erased": n, "erased_before": memory.FormatHLC(f.now().UnixMilli(), 0, "fleet")})
+		f.erasedAt = f.seq
+		f.erasedBefore = memory.FormatHLC(f.now().UnixMilli(), 0, "fleet")
+		writeJSON(w, 200, map[string]any{"erased": n, "erased_before": f.erasedBefore})
 	default:
 		writeJSON(w, 404, map[string]any{"code": "not_found"})
 	}
@@ -182,8 +220,8 @@ func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
 		if cur < f.floor {
 			reason := "cursor_expired"
 			erased := ""
-			if len(f.recs) == 0 {
-				reason, erased = "erased", memory.FormatHLC(f.now().UnixMilli(), 0, "fleet")
+			if cur < f.erasedAt {
+				reason, erased = "erased", f.erasedBefore
 			}
 			writeJSON(w, 200, memPullResponse{Enabled: f.enabled, Reset: true, ResetReason: reason, ErasedBefore: erased, Records: []memPullRecord{}})
 			return
@@ -216,24 +254,32 @@ func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
 			out.Records = append(out.Records, memPullRecord{ID: rec.id, Seq: out.Cursor, State: "tombstone", Reason: rec.reason, SupersededBy: rec.supersededBy})
 			continue
 		}
-		var total int64
-		for _, v := range rec.recall {
-			total += v
-		}
-		var al []string
-		for a, c := range f.aliases {
-			if c == rec.id {
-				al = append(al, a)
-			}
-		}
-		out.Records = append(out.Records, memPullRecord{ID: rec.id, Seq: out.Cursor, State: "live", Content: rec.content,
-			ContentHash: rec.hash, Kind: rec.kind, RetrievalWeight: rec.weight, TurnID: rec.turnID, Source: rec.source,
-			SourceTurn: rec.sourceTurn, ToolName: rec.toolName, FilesRead: rec.filesRead, FilesModified: rec.filesModified,
-			CreatedAt: rec.createdAt, Title: rec.title, TitleHLC: rec.titleHLC, Pinned: rec.pinned, PinnedHLC: rec.pinnedHLC,
-			ScopeKind: rec.scope, ScopeHLC: rec.scopeHLC, RecallCount: total, RecallCountOthers: total - rec.recall[dev],
-			LastAccessed: rec.lastAccessed, Aliases: al})
+		out.Records = append(out.Records, f.liveRecordLocked(rec, dev))
 	}
 	writeJSON(w, 200, out)
+}
+
+func (f *fakeMemoryFleet) liveRecordLocked(rec *fakeMemRec, dev string) memPullRecord {
+	var total int64
+	for _, v := range rec.recall {
+		total += v
+	}
+	var al []string
+	for a, c := range f.aliases {
+		if c == rec.id {
+			al = append(al, a)
+		}
+	}
+	others := total
+	if dev != "" {
+		others = total - rec.recall[dev]
+	}
+	return memPullRecord{ID: rec.id, Seq: strconv.FormatInt(rec.seq, 10), State: "live", Content: rec.content,
+		ContentHash: rec.hash, Kind: rec.kind, RetrievalWeight: rec.weight, TurnID: rec.turnID, Source: rec.source,
+		SourceTurn: rec.sourceTurn, ToolName: rec.toolName, FilesRead: rec.filesRead, FilesModified: rec.filesModified,
+		CreatedAt: rec.createdAt, Title: rec.title, TitleHLC: rec.titleHLC, Pinned: rec.pinned, PinnedHLC: rec.pinnedHLC,
+		ScopeKind: rec.scope, ScopeHLC: rec.scopeHLC, RecallCount: total, RecallCountOthers: others,
+		LastAccessed: rec.lastAccessed, Aliases: al}
 }
 
 func (f *fakeMemoryFleet) bump(rec *fakeMemRec) { f.seq++; rec.seq = f.seq }

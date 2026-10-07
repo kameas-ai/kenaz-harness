@@ -226,6 +226,6 @@ func FreshIdentity(c Chunk, newID string) Chunk {
 	out.SyncDirty, out.SyncSentAt, out.SyncedAt, out.SyncBlocked, out.SyncGen = false, time.Time{}, time.Time{}, "", 0
 	out.RecallFolded = c.RecallFolded + c.RecallOthers
 	out.RecallOthers = 0
-	normalizeRecall(&out)
+	recomputeRecall(&out)
 	return out
 }

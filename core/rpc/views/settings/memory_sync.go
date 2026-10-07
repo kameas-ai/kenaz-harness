@@ -106,12 +106,7 @@ func (a *API) FleetMemorySyncDisable(ctx context.Context, deleteFromFleet bool, 
 	if ms == nil {
 		return MemorySyncStatusView{}, ErrMemorySyncNotWired
 	}
-	if deleteFromFleet {
-		if _, err := ms.ForgetAll(ctx, confirm); err != nil {
-			return MemorySyncStatusView{}, err
-		}
-	}
-	if err := ms.Disable(ctx); err != nil {
+	if _, err := ms.Disable(ctx, deleteFromFleet, confirm); err != nil {
 		return MemorySyncStatusView{}, err
 	}
 	return memorySyncView(ms.Status(ctx)), nil

@@ -195,6 +195,25 @@ func TestMemorySync_FleetFixtures(t *testing.T) {
 	if off.Enabled {
 		t.Fatal("disabled fixture")
 	}
+	// Export: NDJSON, pull-shaped live rows then the trailer (the reset
+	// snapshot source).
+	exp, err := os.ReadFile(filepath.Join("testdata", "memory", "export.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ed := json.NewDecoder(bytes.NewReader(exp))
+	ed.DisallowUnknownFields()
+	var lines []memExportLine
+	for ed.More() {
+		var l memExportLine
+		if err := ed.Decode(&l); err != nil {
+			t.Fatalf("export.ndjson: %v", err)
+		}
+		lines = append(lines, l)
+	}
+	if len(lines) != 2 || lines[0].ID != "mem-1" || lines[0].Count != nil || lines[1].Count == nil || *lines[1].Count != 1 {
+		t.Fatalf("export lines = %+v", lines)
+	}
 	var set MemorySyncSettings
 	decode("settings.json", &set)
 	if set.Usage.MaxRecords != 20000 || len(set.Scopes) != 2 {
@@ -450,12 +469,17 @@ func TestMemorySync_ForgetForgetAllAndPrune(t *testing.T) {
 	b.add("mem-b-local", "global", "created before the erase, never pushed")
 	b.add("mem-b-session", "session", "local session memory is not Fleet's to erase")
 	w.wall.advance(time.Second)
-	if _, err := a.ms.ForgetAll(context.Background(), "nope"); err == nil {
+	if _, err := a.ms.Disable(context.Background(), true, "nope"); err == nil {
 		t.Fatal("forget-all must require the confirmation string")
 	}
-	if n, err := a.ms.ForgetAll(context.Background(), "forget-all"); err != nil || n != 1 {
-		t.Fatalf("ForgetAll = %d, %v", n, err)
+	if n, err := a.ms.Disable(context.Background(), true, "forget-all"); err != nil || n != 1 {
+		t.Fatalf("Disable+forget-all = %d, %v", n, err)
 	}
+	// Fleet's opt-in is user-level: B must be opted back in to observe the
+	// erase replay (in production B learns "disabled" and stays off).
+	w.fleet.mu.Lock()
+	w.fleet.enabled = true
+	w.fleet.mu.Unlock()
 	w.wall.advance(time.Second)
 	b.sync()
 	bc = b.chunks()
