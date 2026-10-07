@@ -91,6 +91,11 @@ func TestValidateKeySet_RejectsCorruptEntries(t *testing.T) {
 		t.Fatalf("fingerprint mismatch: %v", err)
 	}
 	bad = conv(good)
+	bad[0].Fingerprint = ""
+	if err := validateKeySet(bad); !errors.Is(err, ErrHandoffRecipientKeyInvalid) {
+		t.Fatalf("empty fingerprint must be rejected: %v", err)
+	}
+	bad = conv(good)
 	bad[1].KeyID = bad[0].KeyID
 	if err := validateKeySet(bad); !errors.Is(err, ErrHandoffRecipientKeyInvalid) {
 		t.Fatalf("duplicate key_id: %v", err)
@@ -153,5 +158,51 @@ func TestHandoffFleetFixtures_InboxAndAccept(t *testing.T) {
 	gone := &fakeV2Fleet{srv: fixtureServer(t, http.StatusNotFound, "handoff_not_found.json")}
 	if _, err := recipientDevice(t, gone, fxNodeA).AcceptShare(context.Background(), "x"); !errors.Is(err, ErrHandoffItemGone) {
 		t.Fatalf("not found: %v", err)
+	}
+}
+
+// Review fixes #6/#8: a directory answer with an empty / wrong fingerprint
+// is refused for display AND for sending, with readable copy; displayed
+// fingerprints are computed from the key bytes.
+func TestHandoffRecipientKeys_InvalidSetReadable(t *testing.T) {
+	f, h, _ := sendRig(t)
+	keys := fxKeySet(t)
+	keys[1].Fingerprint = ""
+	f.setKeys(fxRecipientUser, keys)
+	_, err := h.RecipientDevices(context.Background(), fxRecipientUser)
+	var he *HandoffError
+	if !errors.As(err, &he) || he.Code != "recipient_keys_invalid" || !errors.Is(err, ErrHandoffRecipientKeyInvalid) ||
+		!strings.Contains(err.Error(), "look invalid") {
+		t.Fatalf("RecipientDevices err = %v", err)
+	}
+	if _, err := h.ShareSession(context.Background(), "s", fxRecipientUser, plainEvents(1)); !errors.As(err, &he) || he.Code != "recipient_keys_invalid" {
+		t.Fatalf("ShareSession err = %v", err)
+	}
+	if f.sendCount() != 0 {
+		t.Fatal("nothing may be sent to an invalid key set")
+	}
+	// Stale-key retry: a replacement set with a bad fingerprint is refused too.
+	good := fxKeySet(t)
+	f.setKeys(fxRecipientUser, good[:1])
+	bad := fxKeySet(t)
+	bad[1].Fingerprint = bad[0].Fingerprint
+	f.rotateBeforeNextSend(bad)
+	if _, err := h.ShareSession(context.Background(), "s", fxRecipientUser, plainEvents(1)); !errors.As(err, &he) || he.Code != "recipient_keys_invalid" {
+		t.Fatalf("stale retry with a bad set: %v", err)
+	}
+}
+
+func TestRecipientDevices_FingerprintFromKeyBytes(t *testing.T) {
+	f, h, _ := sendRig(t)
+	keys := fxKeySet(t)
+	f.setKeys(fxRecipientUser, keys)
+	devs, err := h.RecipientDevices(context.Background(), fxRecipientUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, d := range devs {
+		if d.Fingerprint != KeyFingerprint(keys[i].PublicKey) {
+			t.Fatalf("device %d fingerprint not computed from the key", i)
+		}
 	}
 }

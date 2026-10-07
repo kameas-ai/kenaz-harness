@@ -172,6 +172,13 @@ func handoffTransportError(err error) error {
 	return &HandoffError{Code: "unavailable", msg: "Sharing failed: fleet is unavailable right now. Please try again later.", cause: err}
 }
 
+// invalidRecipientKeysError is the readable form of a validateKeySet
+// failure (the cause stays reachable for errors.Is).
+func invalidRecipientKeysError(err error) error {
+	return &HandoffError{Code: "recipient_keys_invalid", cause: err,
+		msg: "Your teammate's device keys look invalid. Ask them to sign in to the app again, then retry."}
+}
+
 // handoffSendRequest is the v2 POST /api/v1/handoff/send body.
 type handoffSendRequest struct {
 	SessionID       string        `json:"session_id"`
@@ -213,7 +220,7 @@ func wrapToAll(keys []publicKeyEntry, contentKey []byte) ([]handoffWrap, error) 
 			"Your teammate has more registered devices than a share can address. Ask them to remove an old device.")
 	}
 	if err := validateKeySet(keys); err != nil {
-		return nil, fmt.Errorf("fleet: share session: %w", err)
+		return nil, invalidRecipientKeysError(err)
 	}
 	wraps := make([]handoffWrap, 0, len(keys))
 	for _, k := range keys {

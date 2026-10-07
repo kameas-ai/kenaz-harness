@@ -232,9 +232,11 @@ type RecipientDevice struct {
 // bytes — refused rather than encrypted to.
 var ErrHandoffRecipientKeyInvalid = errors.New("fleet: handoff recipient key invalid")
 
-// validateKeySet checks every entry: 32-byte X25519 point, non-empty
-// key_id, and fingerprint == sha256:<hex> of the key (fleet computes it the
-// same way — a mismatch means a corrupted directory answer).
+// validateKeySet checks every entry: 32-byte X25519 point, unique
+// non-empty key_id, and a PRESENT fingerprint equal to sha256:<hex> of the
+// key (fleet computes it the same way — absent or mismatched means a
+// corrupted directory answer). Used for the lookup AND the stale-key
+// retry's replacement set.
 func validateKeySet(keys []publicKeyEntry) error {
 	seen := map[string]bool{}
 	for _, k := range keys {
@@ -245,8 +247,8 @@ func validateKeySet(keys []publicKeyEntry) error {
 		if _, err := ecdh.X25519().NewPublicKey(k.PublicKey); err != nil {
 			return fmt.Errorf("%w: %v", ErrHandoffRecipientKeyInvalid, err)
 		}
-		if k.Fingerprint != "" && k.Fingerprint != KeyFingerprint(k.PublicKey) {
-			return fmt.Errorf("%w: fingerprint mismatch", ErrHandoffRecipientKeyInvalid)
+		if k.Fingerprint == "" || k.Fingerprint != KeyFingerprint(k.PublicKey) {
+			return fmt.Errorf("%w: missing or mismatched fingerprint", ErrHandoffRecipientKeyInvalid)
 		}
 	}
 	return nil
@@ -306,13 +308,14 @@ func (h *HandoffHandler) RecipientDevices(ctx context.Context, recipientUserID s
 	if err != nil {
 		return nil, err
 	}
+	if err := validateKeySet(keys); err != nil {
+		return nil, invalidRecipientKeysError(err)
+	}
 	out := make([]RecipientDevice, 0, len(keys))
 	for _, k := range keys {
-		fp := k.Fingerprint
-		if fp == "" {
-			fp = KeyFingerprint(k.PublicKey)
-		}
-		out = append(out, RecipientDevice{KeyID: k.KeyID, Fingerprint: fp, CreatedAt: k.CreatedAt})
+		// Computed from the very bytes a share would wrap to — never an
+		// echo of the server's string.
+		out = append(out, RecipientDevice{KeyID: k.KeyID, Fingerprint: KeyFingerprint(k.PublicKey), CreatedAt: k.CreatedAt})
 	}
 	return out, nil
 }
