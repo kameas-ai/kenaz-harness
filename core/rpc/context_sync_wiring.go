@@ -11,9 +11,11 @@ import (
 	"errors"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // ── sessionSyncBackendAdapter ─────────────────────────────────────────────────
@@ -139,7 +141,66 @@ func (a *handoffBackendAdapter) ShareSession(ctx context.Context, sessionID, rec
 	for _, r := range plainEvents {
 		fleet = append(fleet, corefleet.SessionEventRecord{Seq: r.Seq, Bytes: r.Bytes})
 	}
-	return a.hh.ShareSession(ctx, sessionID, recipientUserID, fleet)
+	_, err := a.hh.ShareSession(ctx, sessionID, recipientUserID, fleet)
+	return err
+}
+
+func (a *handoffBackendAdapter) RecipientDevices(ctx context.Context, recipientUserID string) ([]contextsyncview.RecipientDeviceView, error) {
+	devs, err := a.hh.RecipientDevices(ctx, recipientUserID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]contextsyncview.RecipientDeviceView, 0, len(devs))
+	for _, d := range devs {
+		v := contextsyncview.RecipientDeviceView{KeyID: d.KeyID, Fingerprint: d.Fingerprint}
+		if !d.CreatedAt.IsZero() {
+			v.CreatedAt = d.CreatedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// ── handoffSessionLoader ──────────────────────────────────────────────────────
+
+// handoffSessionLoader implements contextsyncview.SessionEventLoader over
+// the real session manager: the session's full transcript (ListMessages —
+// the same row set a conversation fork replays) serialized by
+// session.EncodeHandoffTranscript into self-contained, versioned events.
+type handoffSessionLoader struct {
+	sessions *session.Manager
+}
+
+// newHandoffSessionLoader binds the loader to the chassis session manager
+// (nil chassis → a loader that refuses, never an empty share).
+func newHandoffSessionLoader(c *core.Core) *handoffSessionLoader {
+	if c == nil {
+		return &handoffSessionLoader{}
+	}
+	return &handoffSessionLoader{sessions: c.SessionManager()}
+}
+
+func (l *handoffSessionLoader) LoadSessionEvents(ctx context.Context, sessionID string) ([]contextsyncview.SessionEventRecord, error) {
+	if l == nil || l.sessions == nil {
+		return nil, contextsyncview.ErrHandoffLoaderUnavailable
+	}
+	rec, err := l.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := l.sessions.ListMessages(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	payloads, err := session.EncodeHandoffTranscript(rec.Name, msgs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]contextsyncview.SessionEventRecord, len(payloads))
+	for i, p := range payloads {
+		out[i] = contextsyncview.SessionEventRecord{Seq: uint64(i + 1), Bytes: p}
+	}
+	return out, nil
 }
 
 func (a *handoffBackendAdapter) Inbox(ctx context.Context) ([]contextsyncview.InboxItemRecord, error) {

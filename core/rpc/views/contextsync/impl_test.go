@@ -162,6 +162,23 @@ func (s *stubProjectBackend) IsSyncEnabled(projectID string) bool {
 type stubHandoffBackend struct {
 	err    error
 	shared []string // sessionID sent via ShareSession
+	events [][]contextsync.SessionEventRecord
+}
+
+func (s *stubHandoffBackend) RecipientDevices(_ context.Context, _ string) ([]contextsync.RecipientDeviceView, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return []contextsync.RecipientDeviceView{{KeyID: "k1", Fingerprint: "sha256:aa"}}, nil
+}
+
+type stubEventLoader struct {
+	events []contextsync.SessionEventRecord
+	err    error
+}
+
+func (l *stubEventLoader) LoadSessionEvents(_ context.Context, _ string) ([]contextsync.SessionEventRecord, error) {
+	return l.events, l.err
 }
 
 func (s *stubHandoffBackend) ListTeam(_ context.Context) ([]contextsync.TeamMemberRecord, error) {
@@ -173,11 +190,12 @@ func (s *stubHandoffBackend) ListTeam(_ context.Context) ([]contextsync.TeamMemb
 	}, nil
 }
 
-func (s *stubHandoffBackend) ShareSession(_ context.Context, sessionID, _ string, _ []contextsync.SessionEventRecord) error {
+func (s *stubHandoffBackend) ShareSession(_ context.Context, sessionID, _ string, events []contextsync.SessionEventRecord) error {
 	if s.err != nil {
 		return s.err
 	}
 	s.shared = append(s.shared, sessionID)
+	s.events = append(s.events, append([]contextsync.SessionEventRecord(nil), events...))
 	return nil
 }
 
@@ -298,6 +316,35 @@ func TestImpl_Handoff_ListTeam(t *testing.T) {
 	}
 	if len(members) != 1 || members[0].UserID != "u1" {
 		t.Errorf("unexpected members: %v", members)
+	}
+}
+
+// Ledger 2026-10-06 item 1: Handoff_Share must send the REAL session —
+// never nil events (which fleet 422s as handoff_empty).
+func TestImpl_Handoff_Share_SendsLoadedEvents(t *testing.T) {
+	hb := &stubHandoffBackend{}
+	loader := &stubEventLoader{events: []contextsync.SessionEventRecord{{Seq: 1, Bytes: []byte("a")}, {Seq: 2, Bytes: []byte("b")}}}
+	im := &contextsync.Impl{Handoff: hb, SessionEvents: loader}
+	if err := im.Handoff_Share(context.Background(), "sess-1", "u2"); err != nil {
+		t.Fatalf("Share: %v", err)
+	}
+	if len(hb.events) != 1 || len(hb.events[0]) != 2 || hb.events[0][1].Seq != 2 {
+		t.Fatalf("backend got %v, want the 2 loaded events", hb.events)
+	}
+}
+
+func TestImpl_Handoff_Share_EmptyOrUnwired_NoBackendCall(t *testing.T) {
+	hb := &stubHandoffBackend{}
+	im := &contextsync.Impl{Handoff: hb, SessionEvents: &stubEventLoader{}}
+	if err := im.Handoff_Share(context.Background(), "s", "u"); !errors.Is(err, contextsync.ErrHandoffNothingToShare) {
+		t.Fatalf("empty session: %v", err)
+	}
+	im = &contextsync.Impl{Handoff: hb}
+	if err := im.Handoff_Share(context.Background(), "s", "u"); !errors.Is(err, contextsync.ErrHandoffLoaderUnavailable) {
+		t.Fatalf("no loader: %v", err)
+	}
+	if len(hb.shared) != 0 {
+		t.Fatalf("backend must not be called: %v", hb.shared)
 	}
 }
 

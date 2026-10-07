@@ -7,11 +7,13 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -97,5 +99,31 @@ func TestValidateKeySet_RejectsCorruptEntries(t *testing.T) {
 	bad[0].PublicKey = bad[0].PublicKey[:31]
 	if err := validateKeySet(bad); !errors.Is(err, ErrHandoffRecipientKeyInvalid) {
 		t.Fatalf("short key: %v", err)
+	}
+}
+
+func TestHandoffFleetFixtures_Send(t *testing.T) {
+	var ok handoffSendResponse
+	if err := json.Unmarshal(readFixture(t, "send_success.json"), &ok); err != nil || ok.InboxItemID == "" || ok.ExpiresAt.IsZero() {
+		t.Fatalf("send success = %+v, %v", ok, err)
+	}
+	staleBody := readFixture(t, "send_recipient_keys_stale.json")
+	var d staleKeysDetails
+	if err := json.Unmarshal(staleBody, &d); err != nil || len(d.Details.PublicKeys) != 2 {
+		t.Fatalf("stale details = %+v, %v", d, err)
+	}
+	if err := validateKeySet(d.Details.PublicKeys); err != nil {
+		t.Fatalf("stale details keys must be usable for the re-wrap: %v", err)
+	}
+	if he := mapHandoffHTTPError(http.StatusConflict, http.Header{}, staleBody); he.Code != "recipient_keys_stale" {
+		t.Fatalf("stale code = %q", he.Code)
+	}
+	if he := mapHandoffHTTPError(http.StatusUnprocessableEntity, http.Header{}, readFixture(t, "send_handoff_empty.json")); he.Code != "handoff_empty" || !strings.Contains(he.Error(), "no messages") {
+		t.Fatalf("empty = %+v", he)
+	}
+	h := http.Header{}
+	h.Set("Retry-After", "1800")
+	if he := mapHandoffHTTPError(http.StatusTooManyRequests, h, readFixture(t, "send_rate_limited.json")); !strings.Contains(he.Error(), "30 minutes") {
+		t.Fatalf("rate limited copy = %q", he.Error())
 	}
 }

@@ -221,7 +221,7 @@ func TestHandoff_Plain404_UnsupportedOnce_NoFurtherHTTP(t *testing.T) {
 	if _, err := h.AcceptShare(context.Background(), "item-1"); !errors.Is(err, ErrEndpointUnsupported) {
 		t.Fatalf("AcceptShare err = %v, want ErrEndpointUnsupported", err)
 	}
-	if err := h.ShareSession(context.Background(), "s", "u", nil); !errors.Is(err, ErrEndpointUnsupported) {
+	if _, err := h.ShareSession(context.Background(), "s", "u", nil); !errors.Is(err, ErrEndpointUnsupported) {
 		t.Fatalf("ShareSession err = %v, want ErrEndpointUnsupported", err)
 	}
 	if got := f.total(); got != 1 {

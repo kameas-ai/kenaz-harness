@@ -1,0 +1,7 @@
+{
+  "code": "rate_limited",
+  "message": "too many handoffs; try again later",
+  "details": {
+    "retry_after_seconds": 1800
+  }
+}

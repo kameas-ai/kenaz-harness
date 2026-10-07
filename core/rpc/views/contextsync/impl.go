@@ -21,6 +21,12 @@ type Impl struct {
 	Handoff  HandoffBackend
 	Recovery RecoveryBackend
 
+	// SessionEvents loads the local session Handoff_Share sends
+	// (device-keys-handoff-01DEVKH01 WP04 — closes unwired-ledger
+	// 2026-10-06 item 1, which hardcoded nil events). nil → Handoff_Share
+	// refuses rather than posting an empty handoff.
+	SessionEvents SessionEventLoader
+
 	// Gate is the Cedar policy gate consulted before the two DESTRUCTIVE
 	// ContextSync operations — SessionSync_DeleteRemote and
 	// ProjectSync_DeleteRemote (fleet-enforcement-truth-01PMZ505 WP13,
@@ -173,17 +179,48 @@ func (im *Impl) Handoff_ListTeam(ctx context.Context) ([]TeamMemberView, error) 
 	return out, nil
 }
 
-// Handoff_Share re-encrypts a session and routes it to the recipient's inbox.
-// Plain events are loaded by the backend; no content crosses the RPC boundary.
+// ErrHandoffNothingToShare is returned by Handoff_Share for a session with
+// no messages — before any network call (fleet would 422 handoff_empty).
+var ErrHandoffNothingToShare = errors.New("This session has no messages to share yet.")
+
+// ErrHandoffLoaderUnavailable means the local session loader is not wired.
+var ErrHandoffLoaderUnavailable = errors.New("contextsync: session loader not wired — cannot share")
+
+// Handoff_Share loads the session's full transcript from the local store
+// as self-contained events, and hands them to the backend, which encrypts
+// them and routes them to the recipient's inbox. Only opaque ids cross the
+// RPC boundary. Errors from the backend are returned UNWRAPPED: their text
+// is the human copy the share dialog shows.
 func (im *Impl) Handoff_Share(ctx context.Context, sessionID, recipientUserID string) error {
 	if im.Handoff == nil {
 		return ErrContextSyncUnavailable
 	}
-	// Pass an empty slice — the backend loads events from the encrypted
-	// fleet stream via Resume in a future enhancement. For v0.21.0 the
-	// caller is responsible for providing events through the chassis path.
-	// The RPC binding intentionally accepts only opaque IDs.
-	return im.Handoff.ShareSession(ctx, sessionID, recipientUserID, nil)
+	if im.SessionEvents == nil {
+		return ErrHandoffLoaderUnavailable
+	}
+	events, err := im.SessionEvents.LoadSessionEvents(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("contextsync: load session for sharing: %w", err)
+	}
+	if len(events) == 0 {
+		return ErrHandoffNothingToShare
+	}
+	return im.Handoff.ShareSession(ctx, sessionID, recipientUserID, events)
+}
+
+// Handoff_RecipientDevices lists a teammate's receiving devices.
+func (im *Impl) Handoff_RecipientDevices(ctx context.Context, recipientUserID string) ([]RecipientDeviceView, error) {
+	if im.Handoff == nil {
+		return nil, ErrContextSyncUnavailable
+	}
+	devs, err := im.Handoff.RecipientDevices(ctx, recipientUserID)
+	if err != nil {
+		return nil, err
+	}
+	if devs == nil {
+		devs = []RecipientDeviceView{}
+	}
+	return devs, nil
 }
 
 // Handoff_Inbox returns the current fleet handoff inbox.

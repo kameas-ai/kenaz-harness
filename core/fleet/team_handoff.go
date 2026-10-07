@@ -2,33 +2,28 @@ package fleet
 
 // team_handoff.go — team session handoff: re-encrypt + route + inbox.
 //
-// Flow:
-//   1. Caller retrieves decrypted session events (via SessionSyncer.Resume or
-//      direct DB access — outside this layer).
-//   2. ShareSession re-encrypts events with the recipient's public key
-//      (obtained from the fleet identity service) and POSTs to handoff/send.
+// Flow (device-keys-handoff-01DEVKH01, kenaz-fleet contract §10):
+//   1. The caller serializes the local session into self-contained events
+//      (core/session EncodeHandoffTranscript) — outside this layer.
+//   2. ShareSession (handoff_send.go) seals the events once under a random
+//      content key and wraps that key to EVERY active device key of the
+//      recipient (pinned v2 construction, handoff_crypto.go).
 //   3. Inbox: Inbox() returns items shared with the current user.
-//   4. AcceptShare: downloads the shared payload, decrypts with the recipient's
-//      private key, and returns events for the caller to persist.
+//   4. AcceptShare: downloads one item, unwraps the content key with THIS
+//      device's key (or, for a legacy v1 "direct" item, derives the v1
+//      key), decrypts the events and returns them for the caller to persist.
 //
-// Key exchange model (v0.21.0):
-//   Each user has an asymmetric key pair in the fleet identity service.
-//   Fleet acts as the KX broker: GET /api/v1/identity/public-key?user_id=<id>
-//   returns the recipient's X25519 public key.
-//   For v0.21.0 we use a simplified model: the re-encrypt-on-send approach
-//   means the sender decrypts and re-encrypts with the recipient's key.
-//   The actual key agreement uses X25519 ECDH + HKDF + XChaCha20-Poly1305
-//   (the same AEAD as context_crypto.go, different key derivation path).
+// Key directory: fleet is a trusted key directory (contract §10.3 trust
+// model): GET /api/v1/identity/public-key returns every active device key
+// of a teammate. Device keys are registered at enroll (device_keys.go).
 //
 // Privacy invariant: session content is NEVER logged. The sender's decrypted
 // events are only in memory; they are re-encrypted before being transmitted.
 // Audit emits only opaque IDs (session_id, recipient_user_id, inbox_item_id).
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdh"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -142,92 +137,7 @@ const (
 	teamMembersCursorHeader = "X-Next-Cursor"
 )
 
-// ShareSession re-encrypts session events with the recipient's public key and
-// routes them through fleet handoff. plainEvents must already be decrypted
-// (the caller fetches them from the local DB or via Resume).
-//
-// Privacy invariant: plainEvents are re-encrypted in memory before any network
-// call. No event bytes are logged.
-func (h *HandoffHandler) ShareSession(ctx context.Context, sessionID, recipientUserID string, plainEvents []SessionEventRecord) error {
-	if h.client == nil || h.client.isNop {
-		return ErrFleetDisabled
-	}
-	if h.caps != nil && !h.caps.Has(CapTeamSessionHandoff) {
-		return ErrTeamHandoffCapabilityRequired
-	}
-	// Fleet registers no /api/v1/handoff/* routes (verified 2026-10-05);
-	// once a plain 404 has latched that, don't re-encrypt or re-post.
-	if err := h.client.endpointUnsupported(FeatureTeamHandoff); err != nil {
-		return err
-	}
-
-	// Fetch recipient's public key from the identity service.
-	recipientKeys, err := h.fetchRecipientKeys(ctx, recipientUserID)
-	if err != nil {
-		return fmt.Errorf("fleet: share session: %w", err)
-	}
-	// Interim (WP03): v1 direct mode addresses the newest key only; fleet
-	// accepts it only for single-key recipients. WP04 replaces this with
-	// the v2 wrap-to-all send.
-	recipientPubKey := recipientKeys[0].PublicKey
-
-	// Derive a ephemeral per-handoff key via ECDH + HKDF.
-	handoffKey, ephemeralPubKeyBytes, err := deriveHandoffKey(recipientPubKey)
-	if err != nil {
-		return fmt.Errorf("fleet: share session: derive handoff key: %w", err)
-	}
-
-	// Re-encrypt all events with the handoff key.
-	wireEvents := make([]wireEvent, 0, len(plainEvents))
-	for _, r := range plainEvents {
-		ct, nonce, err := Encrypt(handoffKey, r.Bytes)
-		if err != nil {
-			return fmt.Errorf("fleet: share session: encrypt event seq=%d: %w", r.Seq, err)
-		}
-		wireEvents = append(wireEvents, wireEvent{
-			Seq:              r.Seq,
-			EncryptedPayload: ct,
-			Nonce:            nonce,
-		})
-	}
-
-	// POST to fleet handoff.
-	handoffReq := map[string]any{
-		"session_id":           sessionID,
-		"recipient_user_id":    recipientUserID,
-		"ephemeral_public_key": ephemeralPubKeyBytes,
-		"events":               wireEvents,
-	}
-	data, err := json.Marshal(handoffReq)
-	if err != nil {
-		return fmt.Errorf("fleet: share session: marshal: %w", err)
-	}
-
-	const sendPath = "/api/v1/handoff/send"
-	resp, err := h.client.Post(ctx, sendPath, "application/json", bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("fleet: share session: POST: %w", err)
-	}
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
-	if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), respBody) {
-		return h.client.markEndpointUnsupported(FeatureTeamHandoff, sendPath)
-	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("fleet: share session: status %d", resp.StatusCode)
-	}
-
-	logging.L().Info("fleet.handoff.session_shared_outbound",
-		"session_id", shortID(sessionID),
-		"recipient", shortID(recipientUserID),
-	)
-	h.emitAudit(ctx, contextaudit.KindFleetSessionSharedOutbound, contextaudit.FleetSessionHandoffPayload{
-		SessionID:       sessionID,
-		RecipientUserID: recipientUserID,
-	})
-	return nil
-}
+// ShareSession (v2 send) lives in handoff_send.go.
 
 // Inbox returns sessions shared with the current user.
 func (h *HandoffHandler) Inbox(ctx context.Context) ([]InboxItem, error) {
@@ -447,40 +357,6 @@ func (h *HandoffHandler) RecipientDevices(ctx context.Context, recipientUserID s
 		out = append(out, RecipientDevice{KeyID: k.KeyID, Fingerprint: fp, CreatedAt: k.CreatedAt})
 	}
 	return out, nil
-}
-
-// deriveHandoffKey generates an ephemeral X25519 key pair, performs ECDH with
-// the recipient's public key, and derives a 32-byte AEAD key via HKDF.
-// Returns (handoffKey, ephemeralPublicKeyBytes, error).
-func deriveHandoffKey(recipientPubKeyBytes []byte) ([]byte, []byte, error) {
-	curve := ecdh.X25519()
-
-	// Generate ephemeral key pair for this handoff.
-	ephemeralPriv, err := curve.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate ephemeral key: %w", err)
-	}
-	ephemeralPub := ephemeralPriv.PublicKey()
-
-	// Parse recipient public key.
-	recipientPub, err := curve.NewPublicKey(recipientPubKeyBytes)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse recipient public key: %w", err)
-	}
-
-	// ECDH.
-	sharedSecret, err := ephemeralPriv.ECDH(recipientPub)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ECDH: %w", err)
-	}
-
-	// Derive symmetric key: HKDF(sharedSecret, info=LabelHandoffKey).
-	handoffKey, err := DeriveKey(sharedSecret[:32], LabelHandoffKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("derive handoff key: %w", err)
-	}
-
-	return handoffKey, ephemeralPub.Bytes(), nil
 }
 
 // deriveReceiveKey derives the same handoff key as the sender by performing

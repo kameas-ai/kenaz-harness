@@ -47,6 +47,45 @@ type fleetErrorResponse struct {
 	Details map[string]any `json:"details,omitempty"`
 }
 
+type fleetHandoffSendResponse struct {
+	InboxItemID string    `json:"inbox_item_id"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+type fleetHandoffInboxItem struct {
+	InboxItemID   string    `json:"inbox_item_id"`
+	SessionID     string    `json:"session_id"`
+	SenderUserID  string    `json:"sender_user_id"`
+	SenderEmail   string    `json:"sender_email"`
+	ReceivedAt    time.Time `json:"received_at"`
+	Undecryptable bool      `json:"undecryptable,omitempty"`
+}
+
+type fleetHandoffRecipientOut struct {
+	KeyID              string `json:"key_id,omitempty"`
+	Fingerprint        string `json:"fingerprint"`
+	EphemeralPublicKey []byte `json:"ephemeral_public_key" swaggertype:"string" format:"byte"`
+	WrappedKey         []byte `json:"wrapped_key,omitempty" swaggertype:"string" format:"byte"`
+	WrapNonce          []byte `json:"wrap_nonce,omitempty" swaggertype:"string" format:"byte"`
+}
+
+type fleetHandoffGetResponse struct {
+	InboxItemID        string                     `json:"inbox_item_id"`
+	SessionID          string                     `json:"session_id"`
+	SenderUserID       string                     `json:"sender_user_id"`
+	Mode               string                     `json:"mode" enums:"direct,wrapped"`
+	EphemeralPublicKey []byte                     `json:"ephemeral_public_key,omitempty" swaggertype:"string" format:"byte"`
+	Recipients         []fleetHandoffRecipientOut `json:"recipients"`
+	Events             json.RawMessage            `json:"events" swaggertype:"array,object"`
+}
+
+type fleetHandoffEventWire struct {
+	Seq              uint64 `json:"seq"`
+	EncryptedPayload []byte `json:"encrypted_payload" swaggertype:"string" format:"byte"`
+	Nonce            []byte `json:"nonce" swaggertype:"string" format:"byte"`
+	PrevHash         string `json:"prev_hash,omitempty"`
+}
+
 // Fixture identities: two devices of recipient "bob" derived from a fixed
 // seed, so fixture tests can also DECRYPT the handoff fixtures.
 const (
@@ -117,5 +156,21 @@ func TestRegenHandoffFixtures(t *testing.T) {
 
 // regenHandoffSendFixtures / regenHandoffReceiveFixtures: send-side and
 // receive-side fixtures (filled in by WP04 / WP05).
-func regenHandoffSendFixtures(t *testing.T, keys []fleetPublicKeyEntry)    {}
+func regenHandoffSendFixtures(t *testing.T, keys []fleetPublicKeyEntry) {
+	writeFixture(t, "send_success.json", fleetHandoffSendResponse{
+		InboxItemID: "c8a7d6e5-f4b3-4a21-9c0d-1e2f3a4b5c6d",
+		ExpiresAt:   time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC),
+	})
+	writeFixture(t, "send_recipient_keys_stale.json", fleetErrorResponse{
+		Code: "recipient_keys_stale", Message: "recipient key set changed; re-wrap to the current keys",
+		Details: map[string]any{"public_keys": keys},
+	})
+	writeFixture(t, "send_handoff_empty.json", fleetErrorResponse{
+		Code: "handoff_empty", Message: "a handoff must contain at least one event",
+	})
+	writeFixture(t, "send_rate_limited.json", fleetErrorResponse{
+		Code: "rate_limited", Message: "too many handoffs; try again later",
+		Details: map[string]any{"retry_after_seconds": 1800},
+	})
+}
 func regenHandoffReceiveFixtures(t *testing.T, keys []fleetPublicKeyEntry) {}

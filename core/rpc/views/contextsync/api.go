@@ -54,6 +54,13 @@ type InboxItemView struct {
 	ReceivedAt   string `json:"receivedAt"` // RFC3339
 }
 
+// RecipientDeviceView is one receiving device of a teammate.
+type RecipientDeviceView struct {
+	KeyID       string `json:"keyID"`
+	Fingerprint string `json:"fingerprint"`
+	CreatedAt   string `json:"createdAt,omitempty"` // RFC3339
+}
+
 // AcceptedSessionView is returned by Handoff_Accept after the shared events
 // have been decrypted. Contains only the new local session ID — no content.
 type AcceptedSessionView struct {
@@ -97,6 +104,11 @@ type ContextSyncAPI interface {
 	// handoff inbox. The implementation loads the events from the local session
 	// store — no plaintext crosses the RPC boundary.
 	Handoff_Share(ctx context.Context, sessionID, recipientUserID string) error
+
+	// Handoff_RecipientDevices lists a teammate's receiving devices (key
+	// fingerprints) so the share dialog can show the trust anchor before
+	// sending (fleet is a trusted key directory: show fingerprints).
+	Handoff_RecipientDevices(ctx context.Context, recipientUserID string) ([]RecipientDeviceView, error)
 
 	// Handoff_Inbox returns the current contents of the fleet handoff inbox.
 	Handoff_Inbox(ctx context.Context) ([]InboxItemView, error)
@@ -144,11 +156,22 @@ type ProjectSyncBackend interface {
 // team-handoff layer.
 type HandoffBackend interface {
 	ListTeam(ctx context.Context) ([]TeamMemberRecord, error)
+	// RecipientDevices lists a teammate's active handoff device keys.
+	RecipientDevices(ctx context.Context, recipientUserID string) ([]RecipientDeviceView, error)
 	// ShareSession accepts the opaque session ID + recipient + already-loaded plain
 	// events (loaded by the Impl from the local store before calling the backend).
 	ShareSession(ctx context.Context, sessionID, recipientUserID string, plainEvents []SessionEventRecord) error
 	Inbox(ctx context.Context) ([]InboxItemRecord, error)
 	AcceptShare(ctx context.Context, inboxItemID string) ([]SessionEventRecord, error)
+}
+
+// SessionEventLoader loads a LOCAL session as self-contained handoff
+// events (seq 1..N, transcript order) for Handoff_Share
+// (device-keys-handoff-01DEVKH01 WP04). The bytes are plaintext transcript
+// content: they go straight to the encrypting backend and are never logged
+// or returned across the RPC boundary.
+type SessionEventLoader interface {
+	LoadSessionEvents(ctx context.Context, sessionID string) ([]SessionEventRecord, error)
 }
 
 // RecoveryBackend handles context-seed recovery code mint + apply.

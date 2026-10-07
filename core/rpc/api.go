@@ -4512,6 +4512,9 @@ func New(c *core.Core, opts ...Option) *API {
 				Session: &sessionSyncBackendAdapter{ss: sessionSyncer, breaker: appendBreaker},
 				Project: &projectSyncBackendAdapter{ps: projectSyncer},
 				Handoff: &handoffBackendAdapter{hh: handoffHandler},
+				// device-keys-handoff-01DEVKH01 WP04: Handoff_Share sends
+				// the REAL session (unwired-ledger 2026-10-06 item 1).
+				SessionEvents: newHandoffSessionLoader(c),
 				Recovery: &recoveryBackendAdapter{
 					client:  flCl,
 					dataDir: flDataDir,

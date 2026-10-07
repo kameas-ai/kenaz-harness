@@ -258,6 +258,10 @@ func TestIntegration_TeamHandoff_ShareAndListInbox(t *testing.T) {
 			resp := publicKeyResponse{
 				UserID:    r.URL.Query().Get("user_id"),
 				PublicKey: recipientPubBytes,
+				PublicKeys: []publicKeyEntry{{
+					KeyID: "5c3b1a2e-0f9d-4e8c-b7a6-112233445566", NodeID: "n1",
+					PublicKey: recipientPubBytes, Fingerprint: KeyFingerprint(recipientPubBytes),
+				}},
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
@@ -274,7 +278,8 @@ func TestIntegration_TeamHandoff_ShareAndListInbox(t *testing.T) {
 			sendsMu.Lock()
 			sends = append(sends, storedSend{body: body})
 			sendsMu.Unlock()
-			w.WriteHeader(http.StatusOK)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"inbox_item_id":"7e57c0de-0000-4000-8000-000000000001","expires_at":"2026-10-14T00:00:00Z"}`))
 
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/handoff/inbox":
 			sendsMu.Lock()
@@ -322,7 +327,7 @@ func TestIntegration_TeamHandoff_ShareAndListInbox(t *testing.T) {
 	sessionEvents := []SessionEventRecord{
 		{Seq: 1, Bytes: []byte(`{"role":"user","content":"shared msg"}`)},
 	}
-	if err := hh.ShareSession(context.Background(), "shared-sess", "u-recv", sessionEvents); err != nil {
+	if _, err := hh.ShareSession(context.Background(), "shared-sess", "u-recv", sessionEvents); err != nil {
 		t.Fatalf("ShareSession: %v", err)
 	}
 
