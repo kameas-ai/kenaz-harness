@@ -7,14 +7,17 @@ package fleet
 // HARNESS's own structs, so a body fleet refuses (btoa / ULID / "ctxb-" ids,
 // fields fleet does not know) kept CI green — audit §0-A. This file mirrors
 // fleet's REQUEST structs verbatim (each field cites the kenaz-fleet
-// file:line it mirrors, at fleet main 42012d5) and decodes REAL harness push
+// file:line it mirrors, at kenaz-fleet main 3a160a3 — post-#177
+// knowledge boundary) and decodes REAL harness push
 // bodies captured off the wire with them, the way fleet's handlers do:
 //
 //   - uuid.UUID fields decode only from UUID strings (fleet
-//     handlers_context.go:199-205 returns 400 invalid_request otherwise);
-//   - unit_node_id goes through uuid.Parse (handlers_unit_merge.go:117-120);
+//     handleContextPush returns 400 invalid_request otherwise);
+//   - unit_node_id goes through uuid.Parse (handlers_unit_merge.go:130);
 //   - classification must be team_shared | org_shared
-//     (handlers_context.go:216-245).
+//     (handlers_context.go:232-245);
+//   - the knowledge boundary (context_kinds.go validateContextNodeKinds,
+//     handlers_context.go:277-281, fed the node's RAW metadata bytes).
 //
 // Decoding uses DisallowUnknownFields — STRICTER than fleet (which ignores
 // unknown fields): a harness field fleet silently drops is a contract bug
@@ -43,7 +46,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/units"
 )
 
-// fleetContextNodeInput mirrors kenaz-fleet service/lookups_context.go:93-112
+// fleetContextNodeInput mirrors kenaz-fleet service/lookups_context.go:93-111
 // (ContextNodeInput).
 type fleetContextNodeInput struct {
 	ID             uuid.UUID      `json:"id"`                    // lookups_context.go:94
@@ -55,23 +58,23 @@ type fleetContextNodeInput struct {
 	TeamID         *uuid.UUID     `json:"team_id,omitempty"`     // :100
 	Version        int            `json:"version"`               // :101
 	DeletedAt      *time.Time     `json:"deleted_at,omitempty"`  // :102
-	UnitKind       string         `json:"unit_kind,omitempty"`   // :108
-	UnitScope      string         `json:"unit_scope,omitempty"`  // :109
-	ScopeID        string         `json:"scope_id,omitempty"`    // :110
-	LoadPolicy     string         `json:"load_policy,omitempty"` // :111
+	UnitKind       string         `json:"unit_kind,omitempty"`   // :107
+	UnitScope      string         `json:"unit_scope,omitempty"`  // :108
+	ScopeID        string         `json:"scope_id,omitempty"`    // :109
+	LoadPolicy     string         `json:"load_policy,omitempty"` // :110
 }
 
-// fleetContextEdgeInput mirrors service/lookups_context.go:117-128
+// fleetContextEdgeInput mirrors service/lookups_context.go:116-127
 // (ContextEdgeInput).
 type fleetContextEdgeInput struct {
-	ID             uuid.UUID  `json:"id"`                  // lookups_context.go:118
-	FromNodeID     uuid.UUID  `json:"from_node_id"`        // :119
-	ToNodeID       uuid.UUID  `json:"to_node_id"`          // :120
-	Kind           string     `json:"kind"`                // :121
-	Classification string     `json:"classification"`      // :122
-	TeamID         *uuid.UUID `json:"team_id,omitempty"`   // :123
-	Version        int        `json:"version"`             // :124
-	UnitKind       string     `json:"unit_kind,omitempty"` // :127
+	ID             uuid.UUID  `json:"id"`                  // lookups_context.go:117
+	FromNodeID     uuid.UUID  `json:"from_node_id"`        // :118
+	ToNodeID       uuid.UUID  `json:"to_node_id"`          // :119
+	Kind           string     `json:"kind"`                // :120
+	Classification string     `json:"classification"`      // :121
+	TeamID         *uuid.UUID `json:"team_id,omitempty"`   // :122
+	Version        int        `json:"version"`             // :123
+	UnitKind       string     `json:"unit_kind,omitempty"` // :126
 }
 
 // fleetContextPushRequest mirrors service/api_types.go:520-523
@@ -83,7 +86,7 @@ type fleetContextPushRequest struct {
 
 // fleetMergeRequestCreateRequest mirrors service/api_types.go:633-639
 // (MergeRequestCreateRequest). unit_node_id is a string on the struct; the
-// handler uuid.Parse's it (handlers_unit_merge.go:117-120).
+// handler uuid.Parse's it (handlers_unit_merge.go:130).
 type fleetMergeRequestCreateRequest struct {
 	UnitNodeID       string         `json:"unit_node_id"`                // api_types.go:634
 	ToClassification string         `json:"to_classification"`           // :635
@@ -107,11 +110,23 @@ func decodeFleetPush(t *testing.T, raw []byte) fleetContextPushRequest {
 	if err := dec.Decode(&req); err != nil {
 		t.Fatalf("fleet would 400 invalid_request on this harness push body: %v\nbody: %s", err, raw)
 	}
-	for _, n := range req.Nodes {
+	// Fleet validates _unit on the node's RAW metadata bytes (duplicate
+	// keys are invisible after a map decode) — handlers_context.go:277-281.
+	var rawReq struct {
+		Nodes []struct {
+			Metadata json.RawMessage `json:"metadata"`
+		} `json:"nodes"`
+	}
+	_ = json.Unmarshal(raw, &rawReq)
+	for i, n := range req.Nodes {
 		if n.ID == uuid.Nil {
 			t.Errorf("node id is the nil UUID")
 		}
-		if msg := fleetValidateNodeKinds(n); msg != "" {
+		var rawMD []byte
+		if i < len(rawReq.Nodes) {
+			rawMD = rawReq.Nodes[i].Metadata
+		}
+		if msg := fleetValidateNodeKinds(n, rawMD); msg != "" {
 			t.Errorf("node %s: fleet knowledge boundary would 400: %s", n.ID, msg)
 		}
 		if !fleetPushClassifications[n.Classification] {
@@ -130,12 +145,13 @@ func decodeFleetPush(t *testing.T, raw []byte) fleetContextPushRequest {
 	return req
 }
 
-// fleetValidateNodeKinds re-implements kenaz-fleet's knowledge-boundary
-// validation (feat/context-kind-boundary 6980280, service/context_kinds.go
-// validateContextNodeKinds + loadPolicyAlwaysDenied for a NON-admin caller).
-// Returns "" when fleet would accept the node.
-func fleetValidateNodeKinds(n fleetContextNodeInput) string {
+// fleetValidateNodeKinds re-implements kenaz-fleet main 3a160a3
+// service/context_kinds.go validateContextNodeKinds (+ validateUnitMetadata,
+// parseMetadataUnit, scanDuplicateUnitKeys) and loadPolicyAlwaysDenied for a
+// NON-admin caller. Returns "" when fleet would accept the node.
+func fleetValidateNodeKinds(n fleetContextNodeInput, rawMD []byte) string {
 	pushable := map[string]bool{"doc": true, "snippet": true, "tool_output": true, "root": true}
+	curated := map[string]bool{"glossary": true, "explanation": true, "guidance": true, "procedure": true}
 	knowledge := map[string]bool{
 		"glossary": true, "explanation": true, "guidance": true, "procedure": true,
 		"root": true, "doc": true, "snippet": true, "tool_output": true,
@@ -154,26 +170,160 @@ func fleetValidateNodeKinds(n fleetContextNodeInput) string {
 	if n.Kind != kind || !knowledge[kind] {
 		return "invalid_kind " + n.Kind
 	}
-	if u, ok := n.Metadata["_unit"].(map[string]any); ok {
-		if mk, _ := u["unit_kind"].(string); mk != "" && mk != n.UnitKind {
-			return "unit_kind_mismatch"
-		}
-		if ms, _ := u["unit_scope"].(string); ms != "" && ms != n.UnitScope {
-			return "unit_scope_mismatch"
-		}
-		if lp, _ := u["load_policy"].(string); strings.EqualFold(strings.TrimSpace(lp), "always") {
-			return "load_policy_requires_admin (_unit)"
+	// context_kinds.go:284-288 — lane mapping.
+	if (curated[kind] && n.UnitKind != "doc") || (pushable[kind] && kind != n.UnitKind) {
+		return "kind_unit_kind_mismatch " + n.Kind + "/" + n.UnitKind
+	}
+	// scanDuplicateUnitKeys: _unit repeated (case-insensitively) or a
+	// duplicated key inside it.
+	if d := fleetScanDuplicateUnitKeys(rawMD); d != "" {
+		return "invalid_unit_metadata " + d
+	}
+	// parseMetadataUnit: case-variant _unit key; exact allowlisted keys,
+	// string values, valid load_policy.
+	allowed := []string{"scope", "scope_id", "load_policy", "unit_kind", "unit_scope"}
+	for k := range n.Metadata {
+		if strings.EqualFold(k, "_unit") && k != "_unit" {
+			return "invalid_unit_metadata case-variant _unit key " + k
 		}
 	}
-	if n.LoadPolicy == "always" {
-		return "load_policy_requires_admin"
+	u := map[string]string{}
+	if rawU, ok := n.Metadata["_unit"]; ok {
+		obj, isObj := rawU.(map[string]any)
+		if !isObj {
+			return "invalid_unit_metadata _unit not an object"
+		}
+		for k, v := range obj {
+			canon := ""
+			for _, a := range allowed {
+				if strings.EqualFold(k, a) {
+					canon = a
+				}
+			}
+			if canon == "" {
+				return "invalid_unit_metadata unknown key " + k
+			}
+			if k != canon {
+				return "invalid_unit_metadata case-variant key " + k
+			}
+			sv, isStr := v.(string)
+			if !isStr {
+				return "invalid_unit_metadata non-string " + k
+			}
+			u[k] = sv
+		}
+		if lp := u["load_policy"]; lp != "" && lp != "always" && lp != "on_demand" {
+			return "invalid_unit_metadata load_policy"
+		}
 	}
 	for _, key := range []string{"type", "kind", "category"} {
-		if v, _ := n.Metadata[key].(string); reserved[strings.ToLower(strings.TrimSpace(v))] {
-			return "metadata " + key + " is a capability word"
+		for mk, mv := range n.Metadata {
+			if strings.EqualFold(mk, key) {
+				if v, _ := mv.(string); reserved[strings.ToLower(strings.TrimSpace(v))] {
+					return "metadata " + mk + " is a capability word"
+				}
+			}
+		}
+	}
+	if mk := u["unit_kind"]; mk != "" && mk != n.UnitKind {
+		return "unit_kind_mismatch"
+	}
+	// The envelope's "scope" is compared too, not just "unit_scope".
+	for _, key := range []string{"scope", "unit_scope"} {
+		if ms := u[key]; ms != "" && ms != n.UnitScope {
+			return "unit_scope_mismatch (" + key + ")"
+		}
+	}
+	if n.LoadPolicy == "always" || strings.EqualFold(strings.TrimSpace(u["load_policy"]), "always") {
+		return "load_policy_requires_admin"
+	}
+	return ""
+}
+
+// fleetScanDuplicateUnitKeys mirrors context_kinds.go scanDuplicateUnitKeys.
+func fleetScanDuplicateUnitKeys(raw []byte) string {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return ""
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return ""
+	}
+	seenUnit := false
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return ""
+		}
+		key, _ := kt.(string)
+		var val json.RawMessage
+		if err := dec.Decode(&val); err != nil {
+			return ""
+		}
+		if !strings.EqualFold(key, "_unit") {
+			continue
+		}
+		if seenUnit {
+			return "duplicate _unit key"
+		}
+		seenUnit = true
+		inner := json.NewDecoder(bytes.NewReader(val))
+		if tok, err := inner.Token(); err != nil || tok != json.Delim('{') {
+			continue
+		}
+		keys := map[string]bool{}
+		for inner.More() {
+			ik, err := inner.Token()
+			if err != nil {
+				break
+			}
+			name, _ := ik.(string)
+			var skip json.RawMessage
+			if err := inner.Decode(&skip); err != nil {
+				break
+			}
+			lower := strings.ToLower(name)
+			if keys[lower] {
+				return "duplicate key " + name + " in _unit"
+			}
+			keys[lower] = true
 		}
 	}
 	return ""
+}
+
+// TestFleetValidateNodeKinds_MirrorFires is the planted proof for the
+// mirror's rules: each bad node must be refused for the right reason.
+func TestFleetValidateNodeKinds_MirrorFires(t *testing.T) {
+	good := `{"id":"7e3d2c1b-0f9e-4a6c-9b8d-12a3b4c5d6e7","kind":"doc","title":"t","body":"b","classification":"org_shared","version":1,"unit_kind":"doc","unit_scope":"project","metadata":%s}`
+	for name, tc := range map[string]struct{ md, want string }{
+		"clean":            {`{"_unit":{"scope":"project","unit_kind":"doc","unit_scope":"project","load_policy":"on_demand"}}`, ""},
+		"case _UNIT key":   {`{"_UNIT":{"scope":"project"}}`, "case-variant _unit key"},
+		"unknown key":      {`{"_unit":{"scope":"project","weight":"9"}}`, "unknown key"},
+		"case-variant key": {`{"_unit":{"LOAD_POLICY":"always"}}`, "case-variant key"},
+		"duplicate key":    {`{"_unit":{"scope":"project","scope":"global"}}`, "duplicate key"},
+		"duplicate _unit":  {`{"_unit":{},"_Unit":{}}`, "duplicate _unit"},
+		"scope mismatch":   {`{"_unit":{"scope":"global"}}`, "unit_scope_mismatch (scope)"},
+	} {
+		var n fleetContextNodeInput
+		raw := []byte(strings.Replace(good, "%s", tc.md, 1))
+		if err := json.Unmarshal(raw, &n); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var rawReq struct {
+			Metadata json.RawMessage `json:"metadata"`
+		}
+		_ = json.Unmarshal(raw, &rawReq)
+		got := fleetValidateNodeKinds(n, rawReq.Metadata)
+		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+			t.Errorf("%s: got %q, want %q", name, got, tc.want)
+		}
+	}
+	var mismatch fleetContextNodeInput
+	_ = json.Unmarshal([]byte(`{"id":"7e3d2c1b-0f9e-4a6c-9b8d-12a3b4c5d6e7","kind":"guidance","unit_kind":"snippet","classification":"org_shared"}`), &mismatch)
+	if got := fleetValidateNodeKinds(mismatch, nil); !strings.Contains(got, "kind_unit_kind_mismatch") {
+		t.Errorf("curated kind with unit_kind snippet: %q", got)
+	}
 }
 
 // wireCapture is a fake fleet that records raw request bodies by path and
