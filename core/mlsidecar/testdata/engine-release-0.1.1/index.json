@@ -1,0 +1,85 @@
+{
+  "name": "kenaz-ml",
+  "releases": [
+    {
+      "version": "0.1.1",
+      "env": "prod",
+      "released_at": "2026-10-07T16:13:25Z",
+      "darwin_arm64": {
+        "url": "https://downloads.kameas.ai/kenaz-ml/0.1.1/kenaz-ml-0.1.1-darwin-arm64.dmg",
+        "sha256": "sha256:235188a2cdde7043cb302272e29728c5b96a85bb06e3ebcac4291be40c242738",
+        "size_bytes": 189403636,
+        "sig_url": "https://downloads.kameas.ai/kenaz-ml/0.1.1/kenaz-ml-0.1.1-darwin-arm64.dmg.sig",
+        "key_id": "56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512"
+      },
+      "darwin_x86_64": {
+        "url": "https://downloads.kameas.ai/kenaz-ml/0.1.1/kenaz-ml-0.1.1-darwin-x86_64.dmg",
+        "sha256": "sha256:e4d3cb02fdeb004c775ad10ad07e0fcaf72f7e412e759d76b88430eb3f8fb245",
+        "size_bytes": 177543305,
+        "sig_url": "https://downloads.kameas.ai/kenaz-ml/0.1.1/kenaz-ml-0.1.1-darwin-x86_64.dmg.sig",
+        "key_id": "56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512"
+      },
+      "linux_arm64": {
+        "url": "https://downloads.kameas.ai/kenaz-ml/0.1.1/kenaz-ml-0.1.1-linux-arm64.zip",
+        "sha256": "sha256:275d0b005efb0effc61669ec7ee386e8fa6282c92d27b0ebf633ec9d9d3858dc",
+        "size_bytes": 258567809,
+        "sig_url": "https://downloads.kameas.ai/kenaz-ml/0.1.1/kenaz-ml-0.1.1-linux-arm64.zip.sig",
+        "key_id": "56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512"
+      },
+      "linux_x86_64": {
+        "url": "https://downloads.kameas.ai/kenaz-ml/0.1.1/kenaz-ml-0.1.1-linux-x86_64.zip",
+        "sha256": "sha256:a283dcfa18e934894390658519958c05696c4f9081f99ff1baf15fc8f0b0399a",
+        "size_bytes": 271677469,
+        "sig_url": "https://downloads.kameas.ai/kenaz-ml/0.1.1/kenaz-ml-0.1.1-linux-x86_64.zip.sig",
+        "key_id": "56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512"
+      },
+      "windows_x86_64": {
+        "url": "https://downloads.kameas.ai/kenaz-ml/0.1.1/kenaz-ml-0.1.1-windows-x86_64.zip",
+        "sha256": "sha256:fb4622034491f54027a78e7e5be5d9ef2736b15e8e062aa38b7ab4a5f1a1c99f",
+        "size_bytes": 166500530,
+        "sig_url": "https://downloads.kameas.ai/kenaz-ml/0.1.1/kenaz-ml-0.1.1-windows-x86_64.zip.sig",
+        "key_id": "56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512"
+      }
+    },
+    {
+      "version": "0.1.0",
+      "env": "prod",
+      "released_at": "2026-10-07T15:21:59Z",
+      "darwin_arm64": {
+        "url": "https://downloads.kameas.ai/kenaz-ml/0.1.0/kenaz-ml-0.1.0-darwin-arm64.dmg",
+        "sha256": "sha256:40fb540c9da9b9e77cd9f3db70c216752ad8a7b7e0b206c0141be28ef57310c6",
+        "size_bytes": 189883038,
+        "sig_url": "https://downloads.kameas.ai/kenaz-ml/0.1.0/kenaz-ml-0.1.0-darwin-arm64.dmg.sig",
+        "key_id": "56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512"
+      },
+      "darwin_x86_64": {
+        "url": "https://downloads.kameas.ai/kenaz-ml/0.1.0/kenaz-ml-0.1.0-darwin-x86_64.dmg",
+        "sha256": "sha256:5e7fbc7311325816a53fbfa40f8c4b7912e038a417c28f966b9fed4a0b5086f1",
+        "size_bytes": 176816197,
+        "sig_url": "https://downloads.kameas.ai/kenaz-ml/0.1.0/kenaz-ml-0.1.0-darwin-x86_64.dmg.sig",
+        "key_id": "56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512"
+      },
+      "linux_arm64": {
+        "url": "https://downloads.kameas.ai/kenaz-ml/0.1.0/kenaz-ml-0.1.0-linux-arm64.zip",
+        "sha256": "sha256:80a80026233a1d212481f1244cbf0299c0d993da2c8b5e767ec516eba3fd3df9",
+        "size_bytes": 258568450,
+        "sig_url": "https://downloads.kameas.ai/kenaz-ml/0.1.0/kenaz-ml-0.1.0-linux-arm64.zip.sig",
+        "key_id": "56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512"
+      },
+      "linux_x86_64": {
+        "url": "https://downloads.kameas.ai/kenaz-ml/0.1.0/kenaz-ml-0.1.0-linux-x86_64.zip",
+        "sha256": "sha256:06ffec5f7aab3f9bf74412dff88389fb4da10e41ad98e69465c12ac440d24eb2",
+        "size_bytes": 271677220,
+        "sig_url": "https://downloads.kameas.ai/kenaz-ml/0.1.0/kenaz-ml-0.1.0-linux-x86_64.zip.sig",
+        "key_id": "56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512"
+      },
+      "windows_x86_64": {
+        "url": "https://downloads.kameas.ai/kenaz-ml/0.1.0/kenaz-ml-0.1.0-windows-x86_64.zip",
+        "sha256": "sha256:db4fbaa82aac20bcf6b6fb598c1f54635514344c972ef4da4826c82c98513b1f",
+        "size_bytes": 166490436,
+        "sig_url": "https://downloads.kameas.ai/kenaz-ml/0.1.0/kenaz-ml-0.1.0-windows-x86_64.zip.sig",
+        "key_id": "56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512"
+      }
+    }
+  ]
+}

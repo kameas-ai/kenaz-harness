@@ -14,8 +14,10 @@ import (
 // bakedReleaseKeyFile is the compiled-in Kameas ML engine release public
 // key (engine-publication-01ENPUB01 WP-H2, owner decision 2026-10-03 #4:
 // "a baked-in kameas release public key seeded as an anchor at boot, so
-// open-source/local-first installs verify too"). The checked-in file is
-// a NOT-A-REAL-KEY placeholder; see the file itself for the swap point.
+// open-source/local-first installs verify too"). The checked-in file
+// holds the real kenaz-ml release key since #388 (2026-10-07); the
+// release.yml engine-pin step fails the build unless the pinned engine's
+// key_id is this key.
 //
 //go:embed release_signing_key.pub
 var bakedReleaseKeyFile string

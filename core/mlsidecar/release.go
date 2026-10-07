@@ -63,22 +63,20 @@ type ReleaseSource func(ctx context.Context) (EngineRelease, error)
 // ErrNoPublishedRelease when that pin is the zero value.
 //
 // The pin is written by `go run ./cmd/kenaz-ml-sign pin-gen` from the
-// engine release the kenaz-ml publish job put on the env-specific
-// channel (https://<env downloads>/kenaz-ml/<ver>/, a .dmg plus its raw
-// ed25519 .sig). The download -> verify-over-DMG-bytes -> mount -> copy
-// -> clear-quarantine -> start flow behind it is built and tested
-// (install_dmg_test.go; cmd/kenaz-ml-sign's sign->Install proof).
+// stable engine release the kenaz-ml publish job put on the prod engine
+// channel (https://downloads.kameas.ai/kenaz-ml/<ver>/, a .dmg plus its
+// raw ed25519 .sig — stable versions exist only there, so every harness
+// env pins from it). The download -> verify-over-DMG-bytes -> mount ->
+// copy -> clear-quarantine -> start flow behind it is built and tested
+// (install_dmg_test.go; cmd/kenaz-ml-sign's sign->Install proof;
+// published_release_test.go over the real 0.1.1 signature).
 //
-// DATED NOTE (2026-10-04, owner: release-infra): the checked-in pin is
-// zero, so every build still honestly reports the action unavailable.
-// The BLOCKER is external (mission spec §External): kameas-infra must
-// extend gh-deploy-<env> OIDC trust to kenaz-ml, and the owner must
-// generate the release keypair (kenaz-ml-sign keygen), set
-// KENAZ_ML_RELEASE_SIGNING_KEY on kenaz-ml and commit the public key
-// into release_signing_key.pub. When the first signed engine is
-// published, enable the commented engine-pin step in
-// .github/workflows/release.yml (it runs pin-gen before wails build);
-// this note is deleted in that change.
+// The checked-in pin is the zero value on purpose: only the darwin/arm64
+// release build's engine-pin step in .github/workflows/release.yml
+// (enabled 2026-10-07 against kenaz-ml 0.1.1) regenerates it, in the
+// runner workspace, after verifying the published signature under the
+// baked key and the served DMG's size + sha256. Local and other-platform
+// builds therefore honestly report the install action unavailable.
 func PinnedEngineRelease(context.Context) (EngineRelease, error) {
 	r := pinnedRelease
 	if r.Version == "" {
