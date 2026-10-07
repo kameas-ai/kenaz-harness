@@ -83,6 +83,40 @@ type chromemStore struct {
 	// Engine via SetGate). Bundle E bonus — gate-hook wiring per the
 	// WP14 report.
 	gate MemoryWriteGate
+	// clock stamps per-field HLCs on every local mutation
+	// (memory-sync-01MEMSY01 WP02). nil ⇒ fields stay unstamped and the
+	// sync client stamps them on first push.
+	clock *HLC
+}
+
+// ClockSetter is the optional capability the rpc wiring uses to install
+// the per-install HLC (memory-sync-01MEMSY01 WP02). The chromem store
+// implements it; the clock is constructed by the rpc layer from the fleet
+// node id so core/memory never imports core/fleet.
+type ClockSetter interface {
+	SetClock(c *HLC)
+}
+
+// SetClock installs (or replaces) the HLC. nil disables stamping.
+func (s *chromemStore) SetClock(c *HLC) {
+	s.mu.Lock()
+	s.clock = c
+	s.mu.Unlock()
+}
+
+// tickLocked returns a fresh HLC, or "" when no clock is installed.
+func (s *chromemStore) tickLocked() string {
+	if s.clock == nil {
+		return ""
+	}
+	return s.clock.Tick()
+}
+
+// touchLocked records a local mutation for sync: the chunk needs a push
+// and any in-flight push result must not clear that need.
+func touchLocked(c *Chunk) {
+	c.SyncDirty = true
+	c.SyncGen++
 }
 
 // MemoryWriteGate is the narrow interface chromemStore consults on
@@ -166,6 +200,10 @@ func backfillChunkDefaults(c *Chunk) {
 	if c.RetrievalWeight == 0 {
 		c.RetrievalWeight = 1.0
 	}
+	// Memory-sync addendum (memory-sync-01MEMSY01 WP02/WP05): legacy
+	// RecallCount becomes RecallOwn; RecallCount is re-derived as the sum.
+	// Every other sync field's zero value is already correct.
+	normalizeRecall(c)
 }
 
 // saveLocked writes the current chunk slice to disk atomically. The
@@ -210,6 +248,7 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	if chunk.ContentHash == "" {
 		chunk.ContentHash = HashContent(chunk.Content)
 	}
+	normalizeRecall(&chunk)
 	if s.gate != nil {
 		if err := s.gate.CheckWrite(ctx, chunk.ScopeKind); err != nil {
 			return err
@@ -220,7 +259,7 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	cutoff := s.now().Add(-DedupWindow)
 	for i, c := range s.chunks {
 		if c.ID == chunk.ID {
-			s.chunks[i] = chunk
+			s.chunks[i] = s.replaceLocked(c, chunk)
 			return s.saveLocked()
 		}
 		if c.ContentHash == chunk.ContentHash &&
@@ -230,6 +269,7 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 			return ErrDuplicate
 		}
 	}
+	s.stampCreateLocked(&chunk)
 	s.chunks = append(s.chunks, chunk)
 	if err := s.saveLocked(); err != nil {
 		return err
@@ -239,6 +279,56 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	// migration, no persistence.
 	GlobalCaptureTracker().RecordWrite(s.now().UTC())
 	return nil
+}
+
+// stampCreateLocked stamps a net-new chunk: one tick becomes CreatedHLC and
+// the HLC of every LWW field set at capture (title, pinned, scope_kind) —
+// a new Fleet record must carry fields.scope_kind. Caller-supplied stamps
+// are kept (the sync path inserts pulled chunks with their own HLCs).
+func (s *chromemStore) stampCreateLocked(c *Chunk) {
+	if c.CreatedHLC == "" {
+		c.CreatedHLC = s.tickLocked()
+	}
+	if c.ScopeHLC == "" {
+		c.ScopeHLC = c.CreatedHLC
+	}
+	if c.TitleHLC == "" && c.Title != "" {
+		c.TitleHLC = c.CreatedHLC
+	}
+	if c.PinnedHLC == "" && c.Pinned {
+		c.PinnedHLC = c.CreatedHLC
+	}
+	touchLocked(c)
+}
+
+// replaceLocked implements Add's same-id "replaces wholesale" contract
+// without losing the sync identity of the row: the origin stamp, recall
+// G-counter and Fleet bookkeeping carry over from the stored row, and each
+// LWW field whose value changed is re-stamped so the edit wins on Fleet.
+func (s *chromemStore) replaceLocked(old, in Chunk) Chunk {
+	out := in
+	out.CreatedHLC = old.CreatedHLC
+	if out.CreatedHLC == "" {
+		out.CreatedHLC = in.CreatedHLC
+	}
+	out.SyncSentAt, out.SyncedAt, out.SyncBlocked, out.SyncGen = old.SyncSentAt, old.SyncedAt, old.SyncBlocked, old.SyncGen
+	if in.RecallOwn == 0 && in.RecallOthers == 0 && in.RecallFolded == 0 {
+		out.RecallOwn, out.RecallOthers, out.RecallFolded = old.RecallOwn, old.RecallOthers, old.RecallFolded
+	}
+	normalizeRecall(&out)
+	stamp := func(changed bool, cur *string, prev string) {
+		switch {
+		case changed:
+			*cur = s.tickLocked()
+		case prev != "":
+			*cur = prev
+		}
+	}
+	stamp(in.Title != old.Title, &out.TitleHLC, old.TitleHLC)
+	stamp(in.Pinned != old.Pinned, &out.PinnedHLC, old.PinnedHLC)
+	stamp(in.ScopeKind != old.ScopeKind, &out.ScopeHLC, old.ScopeHLC)
+	touchLocked(&out)
+	return out
 }
 
 func (s *chromemStore) Delete(_ context.Context, id string) error {
@@ -352,6 +442,8 @@ func (s *chromemStore) PromoteScope(_ context.Context, oldID, newID, newScopeKin
 	moved.ID = newID
 	moved.ScopeKind = newScopeKind
 	moved.ScopeID = newScopeID
+	moved.ScopeHLC = s.tickLocked()
+	touchLocked(&moved)
 	if newScopeKind == ScopeKindProject {
 		moved.ProjectID = newScopeID
 	}
@@ -380,6 +472,8 @@ func (s *chromemStore) SetPinned(_ context.Context, id string, pinned bool) erro
 				return nil
 			}
 			s.chunks[i].Pinned = pinned
+			s.chunks[i].PinnedHLC = s.tickLocked()
+			touchLocked(&s.chunks[i])
 			return s.saveLocked()
 		}
 	}
@@ -408,8 +502,14 @@ func (s *chromemStore) MarkAccessed(_ context.Context, ids []string, at time.Tim
 		if _, ok := wanted[s.chunks[i].ID]; !ok {
 			continue
 		}
-		s.chunks[i].RecallCount++
+		// G-counter split (memory-sync-01MEMSY01): a recall on this
+		// device bumps this device's own counter; RecallCount is the
+		// derived total. Recall is pushed (recall_own) but never ticks
+		// the HLC — counters merge by max, not by LWW.
+		s.chunks[i].RecallOwn++
+		normalizeRecall(&s.chunks[i])
 		s.chunks[i].LastAccessed = at
+		touchLocked(&s.chunks[i])
 		dirty = true
 	}
 	if !dirty {

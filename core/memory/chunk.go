@@ -60,7 +60,9 @@ type Chunk struct {
 	// RecallCount is the number of times this chunk has been retrieved
 	// by the kernel's MemoryNode / retriever. Updated lazily — the
 	// production store is the canonical recorder. Used by the
-	// recall-frequency prune signal.
+	// recall-frequency prune signal. Since memory-sync-01MEMSY01 WP05 it
+	// is DERIVED: RecallOwn + RecallOthers + RecallFolded (see below);
+	// mutate the components, never this field.
 	RecallCount int `json:"recall_count,omitempty"`
 	// LastAccessed is the last time this chunk was read out of the
 	// store. Defaults to CreatedAt when zero. Used by the staleness
@@ -84,6 +86,76 @@ type Chunk struct {
 	// keying. Used by the Promoter to correlate synthesised narratives
 	// with their extractive fallbacks. Empty for raw chunks.
 	TurnID string `json:"turn_id,omitempty"`
+
+	// ── Memory sync (memory-sync-01MEMSY01) ─────────────────────────────
+	//
+	// All fields below were added gob-additively: a pre-mission memory.gob
+	// reads back with every one at its zero value, and the zero value is
+	// the correct "never synced, unstamped" state. backfillChunkDefaults
+	// migrates the recall counter; nothing else needs a migration.
+
+	// Per-field HLCs (WP02, contract §2). Empty = "unstamped" (legacy
+	// gob); the sync client stamps unstamped fields with a fresh tick on
+	// first push — Fleet keeps the first-seen value and any later real
+	// edit wins by normal ordering. CreatedHLC is set once, at creation,
+	// and drives the forget-all `erased_before` replay.
+	TitleHLC   string `json:"title_hlc,omitempty"`
+	PinnedHLC  string `json:"pinned_hlc,omitempty"`
+	ScopeHLC   string `json:"scope_hlc,omitempty"`
+	CreatedHLC string `json:"created_hlc,omitempty"`
+
+	// Recall G-counter split (WP05, H4). RecallOwn is this device's
+	// monotone counter (the value pushed as `recall_own`); RecallOthers is
+	// pulled `recall_count_others`; RecallFolded is display/score-only
+	// recall inherited from chunks a prune collapse folded into this one —
+	// it is NEVER pushed (folding it into RecallOwn would double-report
+	// recalls another device already pushed). RecallCount above stays the
+	// sum of the three so every existing reader (prune signals, UI) keeps
+	// one number.
+	RecallOwn    int `json:"recall_own,omitempty"`
+	RecallOthers int `json:"recall_others,omitempty"`
+	RecallFolded int `json:"recall_folded,omitempty"`
+
+	// EmbedPending marks a chunk stored without an embedding (pulled from
+	// Fleet; embeddings never travel). The background re-embed drains it
+	// when a real embedder exists (WP06, H5).
+	EmbedPending bool `json:"embed_pending,omitempty"`
+
+	// Sync bookkeeping (WP07). SyncDirty: a local mutation not yet
+	// accepted by Fleet. SyncSentAt: first time the chunk rode a push
+	// request — from then on Fleet MAY know the id, so a local delete must
+	// send a forget (before it, a delete coalesces with the unpushed create
+	// and nothing is sent). SyncedAt: last time Fleet accepted the chunk or
+	// it arrived by pull. SyncBlocked: a retry:false rejection code
+	// (e.g. secret_detected) — the chunk stays local and is surfaced in
+	// the UI. SyncGen: bumped on every local mutation so a push result only
+	// clears SyncDirty when nothing changed while the request was in flight.
+	SyncDirty   bool      `json:"-"`
+	SyncSentAt  time.Time `json:"-"`
+	SyncedAt    time.Time `json:"synced_at,omitempty"`
+	SyncBlocked string    `json:"sync_blocked,omitempty"`
+	SyncGen     int64     `json:"-"`
+}
+
+// FleetMayKnow reports whether Fleet may hold a record for this chunk's id:
+// it was pulled, accepted, or at least sent. A delete of a chunk Fleet
+// cannot know is coalesced with its unpushed create (no forget is sent —
+// Fleet records no forgets for ids it has never seen, fleet-live-notes
+// 2026-10-07).
+func (c Chunk) FleetMayKnow() bool {
+	return !c.SyncedAt.IsZero() || !c.SyncSentAt.IsZero()
+}
+
+// normalizeRecall migrates a legacy single counter into the G-counter split
+// and re-derives RecallCount as the sum. A chunk whose components are all
+// zero but whose RecallCount is not is legacy (pre-WP05 gob, or a caller
+// that set only RecallCount): its count becomes RecallOwn — this device
+// produced every recall it ever recorded.
+func normalizeRecall(c *Chunk) {
+	if c.RecallOwn == 0 && c.RecallOthers == 0 && c.RecallFolded == 0 && c.RecallCount > 0 {
+		c.RecallOwn = c.RecallCount
+	}
+	c.RecallCount = c.RecallOwn + c.RecallOthers + c.RecallFolded
 }
 
 // Result pairs a Chunk with its similarity score against a query

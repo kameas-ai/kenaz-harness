@@ -718,6 +718,12 @@ type API struct {
 	// already wired; this ref lets the search lazy-init access it without
 	// re-opening the gob file.
 	memStoreRef corememory.Store
+	// memClock is the per-install hybrid logical clock that stamps every
+	// local memory mutation for Fleet memory sync (memory-sync-01MEMSY01
+	// WP02). Built from fleet.NodeID(dataDir) at boot and injected into
+	// the store (core/memory never imports core/fleet). nil when there is
+	// no on-disk store or the clock state is unreadable.
+	memClock *corememory.HLC
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
 	// WP07). The manager owns the resolved catalog + user-override
@@ -2220,6 +2226,7 @@ func New(c *core.Core, opts ...Option) *API {
 	if gs, ok := memStore.(corememory.GateSetter); ok && gs != nil {
 		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
+	a.memClock = openMemoryClock(c, memStore)
 	personalForLLM := newPersonalStore(c)
 	a.personalStore = personalForLLM
 	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP10 (FR-014):
@@ -8827,6 +8834,34 @@ func openMemoryStore(c *core.Core) corememory.Store {
 		return nil
 	}
 	return store
+}
+
+// openMemoryClock builds the per-install memory HLC (memory-sync-01MEMSY01
+// WP02) keyed by the fleet node id — the same value the memory sync lane
+// sends as device_id, so HLC node ids and recall G-counter keys agree — and
+// installs it on the store so every local mutation is stamped. Returns nil
+// (stamping off; the sync client stamps unstamped fields on first push)
+// when there is no store/DataDir or the persisted clock state is corrupt;
+// the latter is logged, never silently reset, because a reset clock could
+// hand out HLCs that sort before ones this install already pushed.
+func openMemoryClock(c *core.Core, store corememory.Store) *corememory.HLC {
+	if c == nil || c.DataDir() == "" || store == nil {
+		return nil
+	}
+	nodeID, err := corefleet.NodeID(c.DataDir())
+	if err != nil {
+		logging.L().Warn("memory.hlc.node_id_failed", "err", err.Error())
+		return nil
+	}
+	clock, err := corememory.NewHLC(nodeID, corememory.HLCStatePath(c.DataDir()))
+	if err != nil {
+		logging.L().Error("memory.hlc.open_failed", "err", err.Error())
+		return nil
+	}
+	if cs, ok := store.(corememory.ClockSetter); ok {
+		cs.SetClock(clock)
+	}
+	return clock
 }
 
 // buildMemoryPruneScheduler constructs the automatic prune-sweep
