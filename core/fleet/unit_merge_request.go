@@ -129,6 +129,14 @@ func (s *UnitSyncer) CreateMergeRequestForPromote(ctx context.Context, src units
 	if !IsPromotionUp(src.Classification, toClass) {
 		return nil, fmt.Errorf("%w: %s→%s", ErrPromoteNotUp, src.Classification, toClass)
 	}
+	// Review F2: a merge request is ONLY team→org. Fleet's MR targets an
+	// EXISTING node and rejects a target equal to its current
+	// classification, so personal→team is a straight push (PushUnit), and
+	// personal→org is push-at-team then this MR. Callers orchestrate that
+	// (fleet view Unit_PromoteAsMergeRequest).
+	if src.Classification != units.ClassTeam || toClass != units.ClassOrg {
+		return nil, fmt.Errorf("%w: merge requests are team→org only (got %s→%s; personal→team is a direct push)", ErrPromoteNotUp, src.Classification, toClass)
+	}
 	if err := s.canSync(); err != nil {
 		return nil, err
 	}

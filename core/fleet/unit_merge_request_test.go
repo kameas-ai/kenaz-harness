@@ -80,16 +80,13 @@ func newMRTestSyncer(t *testing.T, srvURL string) (*UnitSyncer, *units.Manager) 
 	return NewUnitSyncer(client, m, NewUnitMapper("team-1"), caps, t.TempDir()), m
 }
 
-func TestCreateMergeRequestForPromote_PersonalToTeam(t *testing.T) {
+func TestCreateMergeRequestForPromote_PersonalToTeam_IsNotAMergeRequest(t *testing.T) {
 	fake := &mrFakeServer{}
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
 	syncer, mgr := newMRTestSyncer(t, srv.URL)
 	ctx := context.Background()
-
-	// A PERSONAL unit being promoted up to team. The personal unit must never be
-	// pushed as a node (NFR-005) — only the reviewed proposal travels.
 	src, err := mgr.Create(ctx, units.Unit{
 		Kind: units.KindDoc, Scope: units.ScopeProject, ScopeID: "p1",
 		Classification: units.ClassPersonal, LoadPolicy: units.LoadAlways,
@@ -98,38 +95,17 @@ func TestCreateMergeRequestForPromote_PersonalToTeam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-
-	mr, err := syncer.CreateMergeRequestForPromote(ctx, src, units.ClassTeam, "Promote my note", "please review")
-	if err != nil {
-		t.Fatalf("CreateMergeRequestForPromote: %v", err)
+	// Review F2: personal→team (and personal→org) is never a merge request —
+	// fleet's MR needs an existing node; the caller pushes at team instead.
+	for _, to := range []units.Classification{units.ClassTeam, units.ClassOrg} {
+		if _, err := syncer.CreateMergeRequestForPromote(ctx, src, to, "t", "b"); !errors.Is(err, ErrPromoteNotUp) {
+			t.Errorf("personal→%s err = %v, want ErrPromoteNotUp (team→org only)", to, err)
+		}
 	}
-	if mr.ID == "" || mr.Status != "open" || mr.Title != "Promote my note" {
-		t.Fatalf("unexpected MR (envelope not decoded?): %+v", mr)
-	}
-
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if len(fake.requests) != 1 {
-		t.Fatalf("merge-request count = %d, want 1", len(fake.requests))
-	}
-	got := fake.requests[0]
-	// Field shapes must match the fleet merge_requests object.
-	// unit_node_id is the unit's wire UUID, never its local ULID (WP01).
-	if !IsWireUUID(got.UnitNodeID) || got.UnitNodeID == src.ID {
-		t.Errorf("unit_node_id = %q, want a UUID distinct from local id %q", got.UnitNodeID, src.ID)
-	}
-	if want := syncer.WireNodeID(ctx, src.ID); got.UnitNodeID != want {
-		t.Errorf("unit_node_id = %q, want the unit's wire id %q", got.UnitNodeID, want)
-	}
-	if got.ToClassification != string(ClassTeamShared) {
-		t.Errorf("to_classification = %q, want %q", got.ToClassification, ClassTeamShared)
-	}
-	if got.ProposedTitle != "Promote my note" || got.ProposedBody != "please review" {
-		t.Errorf("proposed_title/body = %q/%q", got.ProposedTitle, got.ProposedBody)
-	}
-	// The personal source was NEVER pushed as a node.
-	if len(fake.pushNodes) != 0 {
-		t.Errorf("personal unit pushed as node(s) %v — must never happen", fake.pushNodes)
+	if len(fake.requests) != 0 || len(fake.pushNodes) != 0 {
+		t.Fatalf("requests=%d pushes=%v — nothing may travel", len(fake.requests), fake.pushNodes)
 	}
 }
 

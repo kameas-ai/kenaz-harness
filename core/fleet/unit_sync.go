@@ -193,6 +193,41 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 	if err != nil {
 		return 0, fmt.Errorf("fleet: unit push: list dirty: %w", err)
 	}
+	return s.pushUnits(ctx, class, dirty)
+}
+
+// PushUnit pushes ONE team/org unit now (dirty or not) — the "ensure the
+// node exists on fleet" step before a merge request (review F2). Returns
+// the unit's wire node id. Personal units are refused.
+func (s *UnitSyncer) PushUnit(ctx context.Context, unitID string) (string, error) {
+	if err := s.canSync(); err != nil {
+		return "", err
+	}
+	u, err := s.store.Get(ctx, unitID)
+	if err != nil {
+		return "", fmt.Errorf("fleet: push unit: %w", err)
+	}
+	if _, ok := ClassificationForUnit(u.Classification); !ok {
+		return "", ErrPersonalLayerNotSyncable
+	}
+	n, err := s.pushUnits(ctx, u.Classification, []units.Unit{u})
+	if err != nil {
+		return "", err
+	}
+	if n == 0 {
+		if st, gerr := s.store.GetSyncState(ctx, u.ID); gerr != nil || st.SyncedLocalVersion != u.Version {
+			return "", fmt.Errorf("fleet: push unit %s: not accepted by fleet (refused locally, conflicted or rejected)", u.ID)
+		}
+	}
+	return s.WireNodeID(ctx, u.ID), nil
+}
+
+// pushUnits pushes the given units of one classification in a single
+// two-phase (nodes then edges) request. Edges are included only when BOTH
+// endpoints are in this push or already on fleet (a synced sidecar) — an
+// edge to a personal / never-pushed unit would 400 the whole batch
+// (missing_node_reference).
+func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, dirty []units.Unit) (int, error) {
 	if len(dirty) == 0 {
 		return 0, nil
 	}
@@ -205,6 +240,11 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 	wireOf := make(map[string]string, len(dirty))
 	seenEdge := map[string]bool{}
 	edges := make([]contextEdgeInput, 0)
+	type edgeCand struct {
+		wire     contextEdgeInput
+		from, to string
+	}
+	var candidates []edgeCand
 
 	for _, u := range dirty {
 		node, ok, err := s.mapper.MapUnitToNode(u)
@@ -245,11 +285,23 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 			wire.FromNodeID = s.WireNodeID(ctx, e.FromID)
 			wire.ToNodeID = s.WireNodeID(ctx, e.ToID)
 			seenEdge[e.ID] = true
-			edges = append(edges, wire)
+			candidates = append(candidates, edgeCand{wire: wire, from: e.FromID, to: e.ToID})
 		}
 	}
 	if len(nodes) == 0 {
 		return 0, nil
+	}
+	onFleet := func(unitID string) bool {
+		if _, ok := wireOf[unitID]; ok {
+			return true
+		}
+		st, err := s.store.GetSyncState(ctx, unitID)
+		return err == nil && IsWireUUID(st.NodeID)
+	}
+	for _, c := range candidates {
+		if onFleet(c.from) && onFleet(c.to) {
+			edges = append(edges, c.wire)
+		}
 	}
 
 	req := contextPushRequest{Nodes: nodes, Edges: edges}

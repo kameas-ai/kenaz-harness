@@ -86,11 +86,12 @@ type FleetAPI interface {
 	// aggregate requires pro+, full requires team+).
 	SetTelemetryConsent(ctx context.Context, level string) error
 
-	// Unit_PromoteAsMergeRequest opens a merge request to promote a unit UP a
-	// classification level (personal→team→org) instead of writing the higher
-	// layer directly (WP16, write-up-reviewed). The source unit is untouched;
-	// the higher layer only changes when a reviewer accepts on fleet.
-	// toClassification is one of "team" | "org".
+	// Unit_PromoteAsMergeRequest promotes a unit UP a classification level
+	// (review F2, 2026-10-06): personal→team is a straight push of a team
+	// copy (Status "published", no MR); team→org pushes the team node then
+	// opens a merge request to org (the higher layer only changes when a
+	// reviewer accepts on fleet); personal→org does both. The source unit
+	// is untouched. toClassification is one of "team" | "org".
 	Unit_PromoteAsMergeRequest(ctx context.Context, unitID, toClassification, title, body string) (MergeRequestResult, error)
 
 	// Unit_ListConflicts returns the unresolved same-unit pull conflicts the

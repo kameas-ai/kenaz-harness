@@ -147,9 +147,17 @@ func (f *Impl) SetTelemetryConsent(ctx context.Context, level string) error {
 
 // ── Phase-3 unit collaboration ──────────────────────────────────────────────
 
-// Unit_PromoteAsMergeRequest opens a merge request to promote unitID UP to
-// toClassification (WP16). The source unit is left untouched; only the proposal
-// travels (write-up-reviewed).
+// Unit_PromoteAsMergeRequest promotes unitID UP to toClassification
+// (review F2 semantics, owner ruling 2026-10-06):
+//
+//   - personal→team: a STRAIGHT PUSH. The personal unit is left untouched; a
+//     team copy (Units.Promote, with a promoted_from edge) is created and
+//     pushed at team_shared. No merge request — fleet's MR targets an
+//     existing node and refuses a target equal to its classification.
+//     Result: Status "published", ID empty, UnitNodeID the team node.
+//   - team→org: ensure the team node exists on fleet (push it), then open a
+//     merge request to org_shared. Result: the MR.
+//   - personal→org: the straight push at team, then the team→org MR.
 func (f *Impl) Unit_PromoteAsMergeRequest(ctx context.Context, unitID, toClassification, title, body string) (MergeRequestResult, error) {
 	if f.Units == nil {
 		return MergeRequestResult{}, ErrUnitsUnavailable
@@ -173,9 +181,38 @@ func (f *Impl) Unit_PromoteAsMergeRequest(ctx context.Context, unitID, toClassif
 	}
 	src, err := f.Units.Get(ctx, unitID)
 	if err != nil {
-		return MergeRequestResult{}, fmt.Errorf("fleet: promote-as-MR: %w", err)
+		return MergeRequestResult{}, fmt.Errorf("fleet: promote: %w", err)
 	}
-	mr, err := f.Syncer.CreateMergeRequestForPromote(ctx, src, toClass, title, body)
+	if !corefleet.IsPromotionUp(src.Classification, toClass) {
+		return MergeRequestResult{}, fmt.Errorf("%w: %s→%s", corefleet.ErrPromoteNotUp, src.Classification, toClass)
+	}
+
+	teamUnit := src
+	from := string(src.Classification)
+	if src.Classification == units.ClassPersonal {
+		copyUnit, _, perr := f.Units.Promote(ctx, src.ID, src.Scope, src.ScopeID, units.ClassTeam)
+		if perr != nil {
+			return MergeRequestResult{}, fmt.Errorf("fleet: promote: team copy: %w", perr)
+		}
+		teamUnit = copyUnit
+	}
+	// Ensure the node exists on fleet at team_shared.
+	nodeID, err := f.Syncer.PushUnit(ctx, teamUnit.ID)
+	if err != nil {
+		return MergeRequestResult{}, fmt.Errorf("fleet: promote: push at team: %w", err)
+	}
+	if toClass == units.ClassTeam {
+		return MergeRequestResult{
+			UnitNodeID:         nodeID,
+			FromClassification: from,
+			ToClassification:   string(corefleet.ClassTeamShared),
+			ProposedVersion:    teamUnit.Version,
+			Title:              teamUnit.Title,
+			Body:               teamUnit.Body,
+			Status:             "published",
+		}, nil
+	}
+	mr, err := f.Syncer.CreateMergeRequestForPromote(ctx, teamUnit, units.ClassOrg, title, body)
 	if err != nil {
 		return MergeRequestResult{}, err
 	}
