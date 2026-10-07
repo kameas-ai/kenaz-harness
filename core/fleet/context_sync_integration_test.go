@@ -207,7 +207,7 @@ func TestIntegration_ProjectSync_EnableAndSetArtifactClasses(t *testing.T) {
 	}
 
 	// Override artifact class options: notes enabled, binaries disabled.
-	custom := ArtifactClassOptions{Notes: true, Binaries: false, Memory: false}
+	custom := ArtifactClassOptions{Notes: true, Binaries: false}
 	if err := ps.SetArtifactClassOptions(projectID, custom); err != nil {
 		t.Fatalf("SetArtifactClassOptions: %v", err)
 	}
@@ -219,9 +219,6 @@ func TestIntegration_ProjectSync_EnableAndSetArtifactClasses(t *testing.T) {
 	}
 	if got.Binaries {
 		t.Error("expected Binaries to be disabled")
-	}
-	if got.Memory {
-		t.Error("expected Memory to be disabled")
 	}
 
 	snap := em.snapshot()

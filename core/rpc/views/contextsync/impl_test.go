@@ -148,7 +148,7 @@ func (s *stubProjectBackend) GetArtifactClassOptions(projectID string) contextsy
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.opts == nil {
-		return contextsync.ProjectSyncOpts{Notes: true, Memory: true}
+		return contextsync.ProjectSyncOpts{Notes: true}
 	}
 	return s.opts[projectID]
 }
@@ -278,7 +278,7 @@ func TestImpl_ProjectSync_SetArtifactClass(t *testing.T) {
 		t.Fatalf("enable: %v", err)
 	}
 
-	opts := contextsync.ArtifactClassOptionsView{Notes: true, Binaries: true, Memory: false}
+	opts := contextsync.ArtifactClassOptionsView{Notes: true, Binaries: true}
 	status, err := im.ProjectSync_SetArtifactClass(context.Background(), "proj-1", opts)
 	if err != nil {
 		t.Fatalf("SetArtifactClass: %v", err)

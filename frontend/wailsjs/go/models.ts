@@ -2139,7 +2139,6 @@ export namespace contextsync {
 	export class ArtifactClassOptionsView {
 	    notes: boolean;
 	    binaries: boolean;
-	    memory: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ArtifactClassOptionsView(source);
@@ -2149,7 +2148,6 @@ export namespace contextsync {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.notes = source["notes"];
 	        this.binaries = source["binaries"];
-	        this.memory = source["memory"];
 	    }
 	}
 	export class InboxItemView {
