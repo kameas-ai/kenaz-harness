@@ -31,7 +31,6 @@ type ProjectSyncStatus struct {
 type ArtifactClassOptionsView struct {
 	Notes    bool `json:"notes"`
 	Binaries bool `json:"binaries"`
-	Memory   bool `json:"memory"`
 }
 
 // TeamMemberView is the RPC-facing projection of a fleet team member.
@@ -174,14 +173,13 @@ type SessionEventRecord struct {
 type ProjectEventRecord struct {
 	Seq           uint64
 	Bytes         []byte
-	ArtifactClass string // "notes", "binaries", "memory", or ""
+	ArtifactClass string // "notes", "binaries", or ""
 }
 
 // ProjectSyncOpts maps 1:1 to fleet.ArtifactClassOptions.
 type ProjectSyncOpts struct {
 	Notes    bool
 	Binaries bool
-	Memory   bool
 }
 
 // TeamMemberRecord is the raw fleet team member, mapped from fleet.TeamMember.

@@ -1923,13 +1923,16 @@ export interface CostEstimate {
 }
 
 /**
- * MemoryScopeKind — the three scope tiers used by long-term memory.
+ * MemoryScopeKind — the scope tiers used by long-term memory.
  * Mirrors core/memory.ScopeKind. "session" is the chat-local default;
  * "project" survives between sister sessions of the same project;
- * "global" is harness-wide. Promotion is monotonic
- * (session → project → global); demotion isn't supported.
+ * "global" is harness-wide; "long_term" is the harness-wide tier loaded
+ * into the session prelude and resistant to pruning. The UI promotes
+ * session → project → global → long_term; the id is kept across a
+ * promotion (memory-sync-01MEMSY01 WP03 — it is the chunk's Fleet origin
+ * id). Remember (capture) accepts only global / project / session.
  */
-export type MemoryScopeKind = 'global' | 'project' | 'session';
+export type MemoryScopeKind = 'global' | 'long_term' | 'project' | 'session';
 
 /**
  * MemoryChunk — one persisted memory. In the hooks-driven architecture
@@ -1972,6 +1975,11 @@ export interface MemoryChunk {
   retrievalWeight?: number;
   /** Narrative layer — originating turn ID. */
   turnId?: string;
+  /**
+   * memory-sync-01MEMSY01: code Fleet memory sync refused this chunk with
+   * (e.g. "secret_detected") — it stays on this device only.
+   */
+  syncBlocked?: string;
 }
 
 /**
@@ -4660,6 +4668,31 @@ export interface FleetSyncLaneView {
   lastSuccessAt?: string;
   nextRetryAt?: string;
   sessions?: FleetSyncSessionView[];
+}
+
+/**
+ * Mirrors settings.MemorySyncStatusView — the learned-memory sync panel
+ * (memory-sync-01MEMSY01 WP08). `entitled` mirrors the memory_sync
+ * capability: the panel hides the toggle without it.
+ */
+export interface MemorySyncStatus {
+  wired: boolean;
+  entitled: boolean;
+  enabled: boolean;
+  scopes: string[];
+  consentVersion: string;
+  optedInAt: string;
+  currentConsentVersion: string;
+  liveRecords: number;
+  liveBytes: number;
+  maxRecords: number;
+  maxBytes: number;
+  /** Local chunks Fleet refused permanently (e.g. secret_detected). */
+  blockedCount: number;
+  /** Local sync-scope chunks not yet accepted by Fleet. */
+  pendingCount: number;
+  fleetError?: string;
+  lane: FleetSyncLaneView;
 }
 
 /** Mirrors settings.FleetSyncView. */

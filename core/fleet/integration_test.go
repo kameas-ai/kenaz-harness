@@ -53,8 +53,8 @@ func TestIntegration_AllCapabilityKeys(t *testing.T) {
 
 	// Total count gate: 22 baseline + CapContextSync + CapTeamSessionHandoff
 	// + CapContextBootstrap + CapOrgGraphSharing = 26.
-	if len(all) != 28 {
-		t.Errorf("AllCapabilities() len = %d, want 28", len(all))
+	if len(all) != 29 {
+		t.Errorf("AllCapabilities() len = %d, want 29", len(all))
 	}
 }
 

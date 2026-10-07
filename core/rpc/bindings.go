@@ -3620,6 +3620,29 @@ func (b *Bindings) Fleet_TelemetryStatus() (settings.FleetTelemetryStatusView, e
 	return b.api.Settings().FleetTelemetryStatus(b.ctx())
 }
 
+// Fleet_MemorySyncStatus returns the learned-memory sync panel state
+// (memory-sync-01MEMSY01 WP08): opt-in, Fleet scopes + usage, sync_blocked
+// count, lane health.
+func (b *Bindings) Fleet_MemorySyncStatus() (settings.MemorySyncStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MemorySyncStatus")()
+	return b.api.Settings().FleetMemorySyncStatus(b.ctx())
+}
+
+// Fleet_MemorySyncEnable opts in to learned-memory sync with the given
+// scopes (long_term / global) and the accepted disclosure version.
+func (b *Bindings) Fleet_MemorySyncEnable(scopes []string, consentVersion string) (settings.MemorySyncStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MemorySyncEnable")()
+	return b.api.Settings().FleetMemorySyncEnable(b.ctx(), scopes, consentVersion)
+}
+
+// Fleet_MemorySyncDisable opts out (Fleet keeps the data); with
+// deleteFromFleet it first erases everything on Fleet — confirm must be
+// "forget-all".
+func (b *Bindings) Fleet_MemorySyncDisable(deleteFromFleet bool, confirm string) (settings.MemorySyncStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MemorySyncDisable")()
+	return b.api.Settings().FleetMemorySyncDisable(b.ctx(), deleteFromFleet, confirm)
+}
+
 // ── Phase-3 unit collaboration bindings (unified-context-artifacts-01NCTXU01) ─
 
 // Unit_PromoteAsMergeRequest promotes a unit UP a classification level:

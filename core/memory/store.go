@@ -33,6 +33,10 @@ import (
 // claude-mem's behaviour: the same content can be re-pinned later.
 const DedupWindow = 30 * time.Second
 
+// ErrEmbeddingRequired is returned by Add for a chunk with no embedding
+// that is not explicitly EmbedPending.
+var ErrEmbeddingRequired = errors.New("memory: chunk embedding required")
+
 // ErrDuplicate is returned by Add when a chunk with the same scope +
 // content hash was added inside DedupWindow.
 var ErrDuplicate = errors.New("memory: duplicate chunk within dedup window")
@@ -46,12 +50,12 @@ type Store interface {
 	Close() error
 }
 
-// ScopePromoter is the optional capability the rpc/memory view uses
-// to implement move semantics for "promote to project/global". The
-// chromem-go-replacement store implements it; future backends should
-// satisfy this interface so the view layer keeps the same contract.
+// ScopePromoter is the optional capability the rpc/memory view uses to
+// change a chunk's scope ("promote to project/global/long_term", or a
+// demotion). The scope changes in place and the id is kept — it is the
+// chunk's origin id for Fleet memory sync (memory-sync-01MEMSY01 WP03).
 type ScopePromoter interface {
-	PromoteScope(ctx context.Context, oldID, newID, newScopeKind, newScopeID string) error
+	PromoteScope(ctx context.Context, id, newScopeKind, newScopeID string) error
 }
 
 // PruneCapable is the optional capability the prune sweep uses to
@@ -83,6 +87,40 @@ type chromemStore struct {
 	// Engine via SetGate). Bundle E bonus — gate-hook wiring per the
 	// WP14 report.
 	gate MemoryWriteGate
+	// clock stamps per-field HLCs on every local mutation
+	// (memory-sync-01MEMSY01 WP02). nil ⇒ fields stay unstamped and the
+	// sync client stamps them on first push.
+	clock *HLC
+}
+
+// ClockSetter is the optional capability the rpc wiring uses to install
+// the per-install HLC (memory-sync-01MEMSY01 WP02). The chromem store
+// implements it; the clock is constructed by the rpc layer from the fleet
+// node id so core/memory never imports core/fleet.
+type ClockSetter interface {
+	SetClock(c *HLC)
+}
+
+// SetClock installs (or replaces) the HLC. nil disables stamping.
+func (s *chromemStore) SetClock(c *HLC) {
+	s.mu.Lock()
+	s.clock = c
+	s.mu.Unlock()
+}
+
+// tickLocked returns a fresh HLC, or "" when no clock is installed.
+func (s *chromemStore) tickLocked() string {
+	if s.clock == nil {
+		return ""
+	}
+	return s.clock.Tick()
+}
+
+// touchLocked records a local mutation for sync: the chunk needs a push
+// and any in-flight push result must not clear that need.
+func touchLocked(c *Chunk) {
+	c.SyncDirty = true
+	c.SyncGen++
 }
 
 // MemoryWriteGate is the narrow interface chromemStore consults on
@@ -166,6 +204,10 @@ func backfillChunkDefaults(c *Chunk) {
 	if c.RetrievalWeight == 0 {
 		c.RetrievalWeight = 1.0
 	}
+	// Memory-sync addendum (memory-sync-01MEMSY01 WP02/WP05): legacy
+	// RecallCount becomes RecallOwn; RecallCount is re-derived as the sum.
+	// Every other sync field's zero value is already correct.
+	normalizeRecall(c)
 }
 
 // saveLocked writes the current chunk slice to disk atomically. The
@@ -181,6 +223,13 @@ func (s *chromemStore) saveLocked() error {
 		_ = f.Close()
 		_ = os.Remove(tmp)
 		return fmt.Errorf("memory: encode: %w", err)
+	}
+	// fsync before the rename (memory-sync-01MEMSY01 F9): sync bookkeeping
+	// now lives in this file, and a crash must not leave it empty.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("memory: fsync tmp: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
@@ -198,8 +247,13 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	if chunk.ID == "" {
 		return errors.New("memory: chunk id required")
 	}
-	if len(chunk.Embedding) == 0 {
-		return errors.New("memory: chunk embedding required")
+	// The embedding invariant holds for every user/capture path. The one
+	// explicit exception (memory-sync-01MEMSY01 WP06, H5) is a chunk that
+	// says so: EmbedPending — content that arrived without a vector
+	// (embeddings never travel over Fleet memory sync) and will be indexed
+	// by DrainEmbedPending when a real embedder exists.
+	if len(chunk.Embedding) == 0 && !chunk.EmbedPending {
+		return ErrEmbeddingRequired
 	}
 	if chunk.ScopeKind == "" {
 		chunk.ScopeKind = ScopeKindSession
@@ -210,6 +264,7 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	if chunk.ContentHash == "" {
 		chunk.ContentHash = HashContent(chunk.Content)
 	}
+	normalizeRecall(&chunk)
 	if s.gate != nil {
 		if err := s.gate.CheckWrite(ctx, chunk.ScopeKind); err != nil {
 			return err
@@ -220,7 +275,7 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	cutoff := s.now().Add(-DedupWindow)
 	for i, c := range s.chunks {
 		if c.ID == chunk.ID {
-			s.chunks[i] = chunk
+			s.chunks[i] = s.replaceLocked(c, chunk)
 			return s.saveLocked()
 		}
 		if c.ContentHash == chunk.ContentHash &&
@@ -230,6 +285,7 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 			return ErrDuplicate
 		}
 	}
+	s.stampCreateLocked(&chunk)
 	s.chunks = append(s.chunks, chunk)
 	if err := s.saveLocked(); err != nil {
 		return err
@@ -239,6 +295,56 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	// migration, no persistence.
 	GlobalCaptureTracker().RecordWrite(s.now().UTC())
 	return nil
+}
+
+// stampCreateLocked stamps a net-new chunk: one tick becomes CreatedHLC and
+// the HLC of every LWW field set at capture (title, pinned, scope_kind) —
+// a new Fleet record must carry fields.scope_kind. Caller-supplied stamps
+// are kept (the sync path inserts pulled chunks with their own HLCs).
+func (s *chromemStore) stampCreateLocked(c *Chunk) {
+	if c.CreatedHLC == "" {
+		c.CreatedHLC = s.tickLocked()
+	}
+	if c.ScopeHLC == "" {
+		c.ScopeHLC = c.CreatedHLC
+	}
+	if c.TitleHLC == "" && c.Title != "" {
+		c.TitleHLC = c.CreatedHLC
+	}
+	if c.PinnedHLC == "" && c.Pinned {
+		c.PinnedHLC = c.CreatedHLC
+	}
+	touchLocked(c)
+}
+
+// replaceLocked implements Add's same-id "replaces wholesale" contract
+// without losing the sync identity of the row: the origin stamp, recall
+// G-counter and Fleet bookkeeping carry over from the stored row, and each
+// LWW field whose value changed is re-stamped so the edit wins on Fleet.
+func (s *chromemStore) replaceLocked(old, in Chunk) Chunk {
+	out := in
+	out.CreatedHLC = old.CreatedHLC
+	if out.CreatedHLC == "" {
+		out.CreatedHLC = in.CreatedHLC
+	}
+	out.SyncSentAt, out.SyncedAt, out.SyncBlocked, out.SyncGen = old.SyncSentAt, old.SyncedAt, old.SyncBlocked, old.SyncGen
+	if in.RecallOwn == 0 && in.RecallOthers == 0 && in.RecallFolded == 0 {
+		out.RecallOwn, out.RecallOthers, out.RecallFolded = old.RecallOwn, old.RecallOthers, old.RecallFolded
+	}
+	normalizeRecall(&out)
+	stamp := func(changed bool, cur *string, prev string) {
+		switch {
+		case changed:
+			*cur = s.tickLocked()
+		case prev != "":
+			*cur = prev
+		}
+	}
+	stamp(in.Title != old.Title, &out.TitleHLC, old.TitleHLC)
+	stamp(in.Pinned != old.Pinned, &out.PinnedHLC, old.PinnedHLC)
+	stamp(in.ScopeKind != old.ScopeKind, &out.ScopeHLC, old.ScopeHLC)
+	touchLocked(&out)
+	return out
 }
 
 func (s *chromemStore) Delete(_ context.Context, id string) error {
@@ -251,6 +357,25 @@ func (s *chromemStore) Delete(_ context.Context, id string) error {
 		}
 	}
 	return fmt.Errorf("memory: chunk %q not found", id)
+}
+
+// Remove deletes id and returns the removed row's final state, atomically
+// under s.mu (ChunkRemover, memory-sync-01MEMSY01 WP04).
+func (s *chromemStore) Remove(_ context.Context, id string) (Chunk, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, c := range s.chunks {
+		if c.ID == id {
+			prev := s.chunks
+			s.chunks = append(append([]Chunk(nil), s.chunks[:i]...), s.chunks[i+1:]...)
+			if err := s.saveLocked(); err != nil {
+				s.chunks = prev
+				return Chunk{}, err
+			}
+			return c, nil
+		}
+	}
+	return Chunk{}, fmt.Errorf("memory: chunk %q not found", id)
 }
 
 func (s *chromemStore) List(_ context.Context, scopes ...ScopeFilter) ([]Chunk, error) {
@@ -281,9 +406,11 @@ func (s *chromemStore) Query(_ context.Context, embedding []float32, k int, scop
 	defer s.mu.RUnlock()
 	results := make([]Result, 0, len(s.chunks))
 	for _, c := range s.chunks {
-		if len(c.Embedding) != len(embedding) {
+		if len(c.Embedding) == 0 || len(c.Embedding) != len(embedding) {
 			// Mismatched dims usually means the user switched embedder
-			// models; skip the row instead of crashing the query.
+			// models; an empty vector is an EmbedPending chunk (pulled,
+			// not yet indexed). Skip either instead of crashing the
+			// query — the chunk stays visible to List / prelude.
 			continue
 		}
 		if !matchesScope(c, scopes) {
@@ -318,18 +445,28 @@ type GateSetter interface {
 	SetGate(g MemoryWriteGate)
 }
 
-// PromoteScope deletes the chunk with oldID and inserts a copy with
-// newID and the supplied (kind, id) scope. Atomic under s.mu — the
-// store is observed in the pre- or post-state, never with both rows.
+// PromoteScope moves chunk id to the (kind, id) scope IN PLACE: the id is
+// the chunk's origin id on Fleet and must survive a scope change
+// (memory-sync-01MEMSY01 WP03, contract H1 — "promote keeps the id and
+// pushes a scope_kind field with a fresh HLC"). Until v0.91.0 this minted a
+// new id and deleted the old row, which on Fleet would have read as a new
+// record plus an orphan. The scope change is stamped (ScopeHLC) and marked
+// for push; content, embedding, recall and pin state are untouched. A
+// no-op move (same kind + id) changes nothing.
+//
+// Demotion is the same operation: moving a synced chunk out of the synced
+// scopes pushes the scope_kind change, Fleet tombstones it left_sync_scope
+// and other devices delete their copies, while this device keeps its chunk
+// (ruling OQ-B).
 //
 // TODO(audit-wired): emit a `memory.scoped` audit event after a
-// successful promote. Payload: {old_chunk_id, new_chunk_id, scope_kind,
-// scope_id}. Same emitter-not-wired blocker as projects.Create and
-// attachments.Add — a process-wide event.Emitter has not been threaded
-// through the rpc layer yet.
-func (s *chromemStore) PromoteScope(_ context.Context, oldID, newID, newScopeKind, newScopeID string) error {
-	if oldID == "" || newID == "" {
-		return errors.New("memory: promote: ids required")
+// successful promote. Payload: {chunk_id, scope_kind, scope_id}. Same
+// emitter-not-wired blocker as projects.Create and attachments.Add — a
+// process-wide event.Emitter has not been threaded through the rpc layer
+// yet.
+func (s *chromemStore) PromoteScope(_ context.Context, id, newScopeKind, newScopeID string) error {
+	if id == "" {
+		return errors.New("memory: promote: id required")
 	}
 	switch newScopeKind {
 	case ScopeKindGlobal, ScopeKindProject, ScopeKindSession, ScopeKindLongTerm:
@@ -340,26 +477,29 @@ func (s *chromemStore) PromoteScope(_ context.Context, oldID, newID, newScopeKin
 	defer s.mu.Unlock()
 	idx := -1
 	for i, c := range s.chunks {
-		if c.ID == oldID {
+		if c.ID == id {
 			idx = i
 			break
 		}
 	}
 	if idx < 0 {
-		return fmt.Errorf("memory: chunk %q not found", oldID)
+		return fmt.Errorf("memory: chunk %q not found", id)
 	}
-	moved := s.chunks[idx]
-	moved.ID = newID
+	prev := s.chunks[idx]
+	if prev.ScopeKind == newScopeKind && prev.ScopeID == newScopeID {
+		return nil
+	}
+	moved := prev
 	moved.ScopeKind = newScopeKind
 	moved.ScopeID = newScopeID
 	if newScopeKind == ScopeKindProject {
 		moved.ProjectID = newScopeID
 	}
-	prev := append([]Chunk(nil), s.chunks...)
-	s.chunks = append(s.chunks[:idx], s.chunks[idx+1:]...)
-	s.chunks = append(s.chunks, moved)
+	moved.ScopeHLC = s.tickLocked()
+	touchLocked(&moved)
+	s.chunks[idx] = moved
 	if err := s.saveLocked(); err != nil {
-		s.chunks = prev
+		s.chunks[idx] = prev
 		return err
 	}
 	return nil
@@ -380,6 +520,8 @@ func (s *chromemStore) SetPinned(_ context.Context, id string, pinned bool) erro
 				return nil
 			}
 			s.chunks[i].Pinned = pinned
+			s.chunks[i].PinnedHLC = s.tickLocked()
+			touchLocked(&s.chunks[i])
 			return s.saveLocked()
 		}
 	}
@@ -408,14 +550,158 @@ func (s *chromemStore) MarkAccessed(_ context.Context, ids []string, at time.Tim
 		if _, ok := wanted[s.chunks[i].ID]; !ok {
 			continue
 		}
-		s.chunks[i].RecallCount++
+		// G-counter split (memory-sync-01MEMSY01): a recall on this
+		// device bumps this device's own counter; RecallCount is the
+		// derived total. Recall is pushed (recall_own) but never ticks
+		// the HLC — counters merge by max, not by LWW.
+		s.chunks[i].RecallOwn++
+		recomputeRecall(&s.chunks[i])
 		s.chunks[i].LastAccessed = at
+		touchLocked(&s.chunks[i])
 		dirty = true
 	}
 	if !dirty {
 		return nil
 	}
 	return s.saveLocked()
+}
+
+// EmbeddingSetter is the optional capability DrainEmbedPending uses to
+// index an EmbedPending chunk (memory-sync-01MEMSY01 WP06). It clears
+// EmbedPending and does not schedule a push (embeddings never sync).
+type EmbeddingSetter interface {
+	SetEmbedding(ctx context.Context, id string, vec []float32) error
+}
+
+// SetEmbedding implements EmbeddingSetter.
+func (s *chromemStore) SetEmbedding(_ context.Context, id string, vec []float32) error {
+	if len(vec) == 0 {
+		return errors.New("memory: set embedding: empty vector")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.chunks {
+		if s.chunks[i].ID == id {
+			s.chunks[i].Embedding = vec
+			s.chunks[i].EmbedPending = false
+			return s.saveLocked()
+		}
+	}
+	return fmt.Errorf("memory: chunk %q not found", id)
+}
+
+// ScopeDeleter is the optional capability that deletes every chunk in one
+// scope with a single save (memory-sync-01MEMSY01 WP09: session delete
+// cascades to its session-scoped memory).
+type ScopeDeleter interface {
+	DeleteScope(ctx context.Context, scope ScopeFilter) ([]Chunk, error)
+}
+
+// DeleteScope implements ScopeDeleter. An empty Kind matches nothing (a
+// scope-less call must never wipe the store).
+func (s *chromemStore) DeleteScope(_ context.Context, scope ScopeFilter) ([]Chunk, error) {
+	if scope.Kind == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var gone []Chunk
+	kept := make([]Chunk, 0, len(s.chunks))
+	for _, c := range s.chunks {
+		if matchesScope(c, []ScopeFilter{scope}) {
+			gone = append(gone, c)
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if len(gone) == 0 {
+		return nil, nil
+	}
+	prev := s.chunks
+	s.chunks = kept
+	if err := s.saveLocked(); err != nil {
+		s.chunks = prev
+		return nil, err
+	}
+	return gone, nil
+}
+
+// DeleteSessionMemory removes the session-scoped chunks of a deleted
+// session (memory-sync-01MEMSY01 WP09, H10). Chunks the user promoted
+// out of the session (project / global / long_term) are not the
+// session's anymore and are kept. Session memory never syncs — except a
+// chunk that WAS synced and was demoted into this session: Fleet may
+// still hold it live (its demotion not pushed yet), so each removed chunk
+// goes through rec.RecordDelete, which queues a forget exactly when Fleet
+// may know the id. Returns the removed ids.
+func DeleteSessionMemory(ctx context.Context, store Store, rec ForgetRecorder, sessionID string) ([]string, error) {
+	if store == nil || sessionID == "" {
+		return nil, nil
+	}
+	scope := ScopeFilter{Kind: ScopeKindSession, ID: sessionID}
+	var gone []Chunk
+	if d, ok := store.(ScopeDeleter); ok {
+		var err error
+		if gone, err = d.DeleteScope(ctx, scope); err != nil {
+			return nil, err
+		}
+	} else {
+		chunks, err := store.List(ctx, scope)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range chunks {
+			if err := store.Delete(ctx, c.ID); err != nil {
+				return chunkIDs(gone), err
+			}
+			gone = append(gone, c)
+		}
+	}
+	if rec != nil {
+		for _, c := range gone {
+			if err := rec.RecordDelete(c); err != nil {
+				return chunkIDs(gone), err
+			}
+		}
+	}
+	return chunkIDs(gone), nil
+}
+
+func chunkIDs(cs []Chunk) []string {
+	out := make([]string, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, c.ID)
+	}
+	return out
+}
+
+// RecallFolder is the optional capability prune.Apply uses to persist a
+// collapse survivor's inherited metadata (memory-sync-01MEMSY01 WP05).
+// FoldRecall adds n to the survivor's display-only RecallFolded and raises
+// LastAccessed to at when later. It does not mark the chunk for push:
+// nothing it changes is a pushed counter.
+type RecallFolder interface {
+	FoldRecall(ctx context.Context, id string, n int, at time.Time) error
+}
+
+// FoldRecall implements RecallFolder.
+func (s *chromemStore) FoldRecall(_ context.Context, id string, n int, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.chunks {
+		if s.chunks[i].ID != id {
+			continue
+		}
+		if n > 0 {
+			s.chunks[i].RecallFolded += n
+			recomputeRecall(&s.chunks[i])
+		}
+		if at.After(s.chunks[i].LastAccessed) {
+			s.chunks[i].LastAccessed = at
+		}
+		return s.saveLocked()
+	}
+	return fmt.Errorf("memory: chunk %q not found", id)
 }
 
 // cosineSimilarity computes the cosine of the angle between a and b.

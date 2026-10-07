@@ -2,8 +2,10 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -76,16 +78,15 @@ func TestProjectSyncer_EnableSync_ArtifactFilter(t *testing.T) {
 	events := []ProjectEventRecord{
 		{Seq: 1, Bytes: []byte("note1"), ArtifactClass: ArtifactClassNotes},
 		{Seq: 2, Bytes: []byte("bin1"), ArtifactClass: ArtifactClassBinaries},
-		{Seq: 3, Bytes: []byte("mem1"), ArtifactClass: ArtifactClassMemory},
 	}
 
 	// Exclude binaries.
-	opts := ArtifactClassOptions{Notes: true, Binaries: false, Memory: true}
+	opts := ArtifactClassOptions{Notes: true, Binaries: false}
 	if err := ps.EnableSync(context.Background(), projectID, events, opts); err != nil {
 		t.Fatalf("EnableSync: %v", err)
 	}
 
-	// Should have sent 2 events (notes + memory), not the binary.
+	// Should have sent the notes event, not the binary.
 	// Since backfill chunks them all in one POST, we check it fired at least once.
 	mu.Lock()
 	ac := appendCount
@@ -126,7 +127,7 @@ func TestProjectSyncer_ArtifactClassOptions_Roundtrip(t *testing.T) {
 	projectID := "proj-opts-test"
 	t.Cleanup(func() { _ = setProjectSyncEnabled(projectID, false) })
 
-	want := ArtifactClassOptions{Notes: true, Binaries: true, Memory: false}
+	want := ArtifactClassOptions{Notes: true, Binaries: true}
 	if err := ps.SetArtifactClassOptions(projectID, want); err != nil {
 		t.Fatalf("SetArtifactClassOptions: %v", err)
 	}
@@ -146,23 +147,34 @@ func TestDefaultArtifactClassOptions(t *testing.T) {
 	if opts.Binaries {
 		t.Error("default: Binaries should be false")
 	}
-	if !opts.Memory {
-		t.Error("default: Memory should be true")
+}
+
+// TestArtifactClassOptions_LegacyMemoryKeyIgnored pins memory-sync-01MEMSY01
+// WP01: a persisted options blob written while the (retired, never-produced)
+// "memory" class existed still decodes, and the key carries no meaning.
+func TestArtifactClassOptions_LegacyMemoryKeyIgnored(t *testing.T) {
+	var opts ArtifactClassOptions
+	if err := json.Unmarshal([]byte(`{"notes":true,"binaries":false,"memory":true}`), &opts); err != nil {
+		t.Fatalf("decode legacy blob: %v", err)
+	}
+	if opts != (ArtifactClassOptions{Notes: true}) {
+		t.Fatalf("legacy blob decoded to %+v", opts)
+	}
+	raw, _ := json.Marshal(DefaultArtifactClassOptions())
+	if strings.Contains(string(raw), "memory") {
+		t.Fatalf("default options still advertise a memory class: %s", raw)
 	}
 }
 
 // ── artifactClassAllowed ────────────────────────────────────────────────────
 
 func TestArtifactClassAllowed(t *testing.T) {
-	opts := ArtifactClassOptions{Notes: true, Binaries: false, Memory: true}
+	opts := ArtifactClassOptions{Notes: true, Binaries: false}
 	if !artifactClassAllowed(ArtifactClassNotes, opts) {
 		t.Error("notes should be allowed")
 	}
 	if artifactClassAllowed(ArtifactClassBinaries, opts) {
 		t.Error("binaries should be disallowed")
-	}
-	if !artifactClassAllowed(ArtifactClassMemory, opts) {
-		t.Error("memory should be allowed")
 	}
 	if !artifactClassAllowed("unknown", opts) {
 		t.Error("unknown class should default to allowed")

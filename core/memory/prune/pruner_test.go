@@ -119,6 +119,9 @@ func TestPlan_RecallPercentile(t *testing.T) {
 	}
 }
 
+// In-memory by design (WP-PI AC-PI-2, memory-sync-01MEMSY01): plan() is
+// pure; the PERSISTED collapse fold is pinned on the real gob in
+// recall_fold_test.go.
 func TestPlan_ClusterCollapse(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)

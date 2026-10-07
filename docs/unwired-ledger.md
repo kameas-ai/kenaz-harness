@@ -397,6 +397,23 @@ prose and in a TS union; they do not call `MoveKinds()`.
    `installMu`. **Owner:** skill-library follow-up, if the sweep ever
    moves off the config poller's goroutine.
 
+### 2026-10-07 (memory-sync-01MEMSY01 verify pass) · PRE-EXISTING flake: `TestStore_Add_WiresGlobalCaptureTracker`
+
+`core/memory/capture_rate_test.go` fails when the whole `core/memory`
+package runs with `-count=5` (ChunksPerMinute delta came out negative). It
+fails the same way on the base commit b2b2df75, so memory-sync did not
+introduce it. Cause: the test reads `GlobalCaptureTracker()`, a
+process-wide sliding 60 s window shared with every other test in the
+package. On repeated runs, earlier writes age out of the window between the
+test's before and after readings, so the delta it measures can go
+negative. It passes at `-count=1` (CI's setting).
+
+- **Class:** test isolation (shared global state), not a production defect.
+- **Fix shape:** inject the tracker into the store (or give it a
+  per-test reset/clock), so the test measures only its own writes.
+- **Owner:** memory follow-up mission (next one to touch
+  `core/memory/capture_rate.go`). Dated 2026-10-07.
+
 ### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
 
 1. **R1 (P2) — promote-to-team can wedge and duplicate when the user has
@@ -5624,6 +5641,34 @@ design. **Owner:** alec — the Settings-health refresh follow-up deletes this
 entry.
 
 ## Drained
+
+### 2026-10-07 · CLOSED — project sync advertised an agent-memory class that shipped nothing (`memory-sync-01MEMSY01` WP01)
+
+Class: **advertised sync that ships nothing.** `core/fleet/project_sync.go`
+declared `ArtifactClassMemory` and `DefaultArtifactClassOptions()` returned
+`Memory: true`; `ProjectSync_Toggle` enabled every project with the same
+default (`core/rpc/views/contextsync/impl.go`). Verified in the 2026-10
+audit (§5.3): no caller of `ProjectSyncer.AppendEvent` ever produced a
+`memory`-class event, `EnableSync`'s backfill was passed `nil`, Fleet has
+no project-memory route, and the project UI's class list never offered
+memory. The `memory: true` flag in the RPC shape (`ArtifactClassOptionsView`)
+was therefore a promise read by nothing.
+
+- **Drained — deleted** (live substitute: the user-private memory lane,
+  `core/fleet/memory_sync.go`, same mission WP07, against Fleet's
+  `/api/v1/memory/*`). Removed the class constant, the `Memory` fields of
+  `ArtifactClassOptions` / `ArtifactClassOptionsView` / `ProjectSyncOpts`,
+  the two adapter copies in `core/rpc/context_sync_wiring.go`, and the
+  hand-matched `memory` member of `frontend/wailsjs/go/models.ts`.
+- **Persisted blobs:** a keyring options blob written with `"memory":true`
+  still decodes (unknown key ignored) — pin
+  `TestArtifactClassOptions_LegacyMemoryKeyIgnored`.
+- **Not fixed here (pre-existing, separate):** `frontend/src/lib/types.ts`
+  `FleetArtifactClassOptionsView` is `{classes: Record<string, boolean>}`
+  while the Go wire shape is flat `{notes, binaries}` — the project landing
+  page's class toggles round-trip a shape the backend does not decode.
+  Owner: the project-registry harness work (fleet P1–P4), which rebuilds
+  that panel.
 
 ### 2026-10-04 · CLOSED — chat run ids were a per-process counter written into a persistent log (`agentgraph-settings-linkage-01DOGF0D` WP02)
 

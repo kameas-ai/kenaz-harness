@@ -99,11 +99,11 @@ func (a *projectSyncBackendAdapter) IsSyncEnabled(projectID string) bool {
 }
 
 func toFleetOpts(o contextsyncview.ProjectSyncOpts) corefleet.ArtifactClassOptions {
-	return corefleet.ArtifactClassOptions{Notes: o.Notes, Binaries: o.Binaries, Memory: o.Memory}
+	return corefleet.ArtifactClassOptions{Notes: o.Notes, Binaries: o.Binaries}
 }
 
 func fromFleetOpts(o corefleet.ArtifactClassOptions) contextsyncview.ProjectSyncOpts {
-	return contextsyncview.ProjectSyncOpts{Notes: o.Notes, Binaries: o.Binaries, Memory: o.Memory}
+	return contextsyncview.ProjectSyncOpts{Notes: o.Notes, Binaries: o.Binaries}
 }
 
 // ── handoffBackendAdapter ─────────────────────────────────────────────────────

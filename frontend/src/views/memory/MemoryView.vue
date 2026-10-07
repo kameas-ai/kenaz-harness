@@ -73,7 +73,7 @@ const activeMainTab = ref<MainTab>('chunks');
 type FilterPill = 'all' | MemoryScopeKind;
 
 function isScopeKind(v: unknown): v is MemoryScopeKind {
-  return v === 'global' || v === 'project' || v === 'session';
+  return v === 'global' || v === 'long_term' || v === 'project' || v === 'session';
 }
 
 interface PromoteState {
@@ -95,6 +95,7 @@ const promote = ref<PromoteState | null>(null);
 
 const filterPills: readonly { id: FilterPill; label: string; glyph: string }[] = [
   { id: 'all', label: 'All', glyph: '∗' },
+  { id: 'long_term', label: 'Long-term', glyph: '🗄' },
   { id: 'global', label: 'Global', glyph: '🌐' },
   { id: 'project', label: 'Project', glyph: '📁' },
   { id: 'session', label: 'Session', glyph: '💬' },
@@ -260,6 +261,9 @@ const promotionTargets = computed(() => {
       return targets;
     }
     if (chunk.scopeKind === 'project') return ['global'];
+    // memory-sync-01MEMSY01 WP03 (spec OQ-2): long_term had no producer;
+    // a global chunk can now be promoted into it.
+    if (chunk.scopeKind === 'global') return ['long_term'];
     return [];
   };
 });
@@ -268,7 +272,7 @@ async function resolveScopeID(
   chunk: MemoryChunk,
   target: MemoryScopeKind,
 ): Promise<string> {
-  if (target === 'global') return '';
+  if (target === 'global' || target === 'long_term') return '';
   if (target === 'project') {
     if ((chunk.projectId ?? '').length > 0) {
       return chunk.projectId as string;
@@ -543,12 +547,14 @@ function shortLabel(chunk: MemoryChunk): string {
 }
 
 function scopeGlyph(kind: MemoryScopeKind): string {
+  if (kind === 'long_term') return '🗄';
   if (kind === 'global') return '🌐';
   if (kind === 'project') return '📁';
   return '💬';
 }
 
 function scopeLabel(kind: MemoryScopeKind): string {
+  if (kind === 'long_term') return 'long-term';
   return kind;
 }
 
@@ -1076,6 +1082,14 @@ defineExpose({ refresh });
               :data-testid="`memory-kind-badge-${chunk.id}`"
             >
               {{ kindLabel(chunk.kind) }}
+            </span>
+            <span
+              v-if="chunk.syncBlocked"
+              class="font-ui text-[10px] uppercase tracking-[0.18em] px-1.5 py-0.5 rounded-sm border text-signal-warn"
+              :title="`Fleet refused to sync this memory (${chunk.syncBlocked}); it stays on this device only.`"
+              :data-testid="`memory-sync-blocked-${chunk.id}`"
+            >
+              this device only
             </span>
             <span class="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
               {{ formatTimestamp(chunk.createdAt) }}

@@ -578,6 +578,18 @@ export function Fleet_GetTelemetryConsent() {
   return window['go']['rpc']['Bindings']['Fleet_GetTelemetryConsent']();
 }
 
+export function Fleet_MemorySyncDisable(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Fleet_MemorySyncDisable'](arg1, arg2);
+}
+
+export function Fleet_MemorySyncEnable(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Fleet_MemorySyncEnable'](arg1, arg2);
+}
+
+export function Fleet_MemorySyncStatus() {
+  return window['go']['rpc']['Bindings']['Fleet_MemorySyncStatus']();
+}
+
 export function Fleet_SetTelemetryConsent(arg1) {
   return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1);
 }

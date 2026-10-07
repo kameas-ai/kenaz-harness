@@ -103,7 +103,7 @@ func (im *Impl) ProjectSync_Toggle(ctx context.Context, projectID string, enable
 	if enable {
 		// Use default artifact class options; callers may update via
 		// ProjectSync_SetArtifactClass after enabling.
-		defaultOpts := ProjectSyncOpts{Notes: true, Binaries: false, Memory: true}
+		defaultOpts := ProjectSyncOpts{Notes: true, Binaries: false}
 		if err := im.Project.EnableSync(ctx, projectID, nil, defaultOpts); err != nil {
 			return ProjectSyncStatus{}, fmt.Errorf("contextsync: project enable: %w", err)
 		}
@@ -257,9 +257,9 @@ func (im *Impl) ContextSync_ApplyRecoveryCode(_ context.Context, code string) er
 // ── conversion helpers ────────────────────────────────────────────────────────
 
 func optsToView(o ProjectSyncOpts) ArtifactClassOptionsView {
-	return ArtifactClassOptionsView{Notes: o.Notes, Binaries: o.Binaries, Memory: o.Memory}
+	return ArtifactClassOptionsView{Notes: o.Notes, Binaries: o.Binaries}
 }
 
 func viewToOpts(v ArtifactClassOptionsView) ProjectSyncOpts {
-	return ProjectSyncOpts{Notes: v.Notes, Binaries: v.Binaries, Memory: v.Memory}
+	return ProjectSyncOpts{Notes: v.Notes, Binaries: v.Binaries}
 }

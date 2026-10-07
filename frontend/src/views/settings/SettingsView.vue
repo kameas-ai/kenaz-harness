@@ -39,6 +39,7 @@ import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
 import AgentsView from '@/views/settings/AgentsView.vue';
 // fleet-share-and-sync-01NDFSEX14 WP06 — Sync panel
 import SyncPanel from '@/views/settings/SyncPanel.vue';
+import MemorySyncPanel from '@/views/settings/MemorySyncPanel.vue';
 // fleet-audit-archival-01NDFSEX13 WP06 — Compliance panel
 import CompliancePanel from '@/views/settings/CompliancePanel.vue';
 // nav-settings-ia-cleanup WP02 — Crash Reporting panel (PRIVACY group)
@@ -1252,6 +1253,11 @@ onMounted(() => {
       data-testid="settings-sync-pane"
     >
       <SyncPanel />
+      <!-- memory-sync-01MEMSY01 WP08: learned-memory sync opt-in (hidden
+           without the memory_sync capability). -->
+      <div class="px-6 py-4">
+        <MemorySyncPanel />
+      </div>
     </div>
 
     <!-- fleet-audit-archival-01NDFSEX13 WP06 — Compliance sub-tab. -->
