@@ -27,6 +27,10 @@ import (
 // (NFR-003: ≤ 256KB).
 const SkillSyncMaxPayloadBytes = 256 * 1024
 
+// defaultSkillPublishVersion is the catalog version a skill with no version
+// publishes as.
+const defaultSkillPublishVersion = "1.0.0"
+
 // ── WP03: Publish (push-up) ──────────────────────────────────────────────────
 
 // PublishSkill serialises skill as an opaque JSON payload and POSTs it to the
@@ -64,6 +68,20 @@ func PublishSkill(
 		return CatalogItem{}, fmt.Errorf("fleet/skills: unknown visibility %q", visibility)
 	}
 
+	// Effective catalog version and slug FIRST, stamped into the skill, THEN
+	// marshal (skill-library-01SKLIB01 WP05, fleet H5; audit §4.1 item 2):
+	// the payload bytes the org reviews (and pins by sha256) must say the
+	// same version — and carry the same trigger — as the catalog row. The
+	// old order marshalled first, so an empty Version published payload
+	// version "" under catalog version "1.0.0".
+	if skill.Version == "" {
+		skill.Version = defaultSkillPublishVersion
+	}
+	if skill.Trigger == "" {
+		skill.Trigger = skill.ID
+	}
+	slug, version := skill.Trigger, skill.Version
+
 	payload, err := json.Marshal(skill)
 	if err != nil {
 		return CatalogItem{}, fmt.Errorf("fleet/skills: marshal skill: %w", err)
@@ -71,15 +89,6 @@ func PublishSkill(
 	if len(payload) > SkillSyncMaxPayloadBytes {
 		return CatalogItem{}, fmt.Errorf("%w: skill %q is %d bytes (max %d)",
 			ErrCatalogPayloadTooLarge, skill.ID, len(payload), SkillSyncMaxPayloadBytes)
-	}
-
-	slug := skill.Trigger
-	if slug == "" {
-		slug = skill.ID
-	}
-	version := skill.Version
-	if version == "" {
-		version = "1.0.0"
 	}
 
 	return client.Publish(ctx, signer, CatalogKindSkill, slug, version, skill.Description, visibility, payload)

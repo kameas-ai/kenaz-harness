@@ -557,3 +557,54 @@ func applyMandatedSkillsForTest(store *slashcmd.SkillStore, registry *slashcmd.R
 	_, errs := m.Apply(context.Background(), items)
 	return errs
 }
+
+// AC-5 (skill-library-01SKLIB01 WP05, fleet H5): a skill published with an
+// empty Version (and no Trigger) lands with the SAME version — and slug — in
+// the catalog row and inside the payload bytes the org reviews, read back
+// through a real fetch. Before, the payload said version "" under catalog
+// version "1.0.0".
+func TestPublishSkill_PayloadVersionEqualsCatalogVersion(t *testing.T) {
+	fake := &fakeCatalogServer{}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
+	c := makeTestClient(t, srv.URL)
+	_, _, signer, caps := makeSkillTestSetup(t)
+
+	for _, tc := range []struct {
+		name, version, trigger, wantVersion, wantSlug string
+	}{
+		{"defaulted", "", "", "1.0.0", "no-trigger"},
+		{"explicit", "2.3.0", "standup", "2.3.0", "standup"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := tc.wantSlug
+			if tc.trigger == "" {
+				id = "no-trigger"
+			}
+			item, err := PublishSkill(context.Background(), c, caps, signer,
+				slashcmd.Skill{ID: id, Trigger: tc.trigger, Version: tc.version, Kind: slashcmd.KindText, Body: "b"}, CatalogVisTeam)
+			if err != nil {
+				t.Fatalf("PublishSkill: %v", err)
+			}
+			pub := fake.published[len(fake.published)-1]
+			if pub.Version != tc.wantVersion || pub.Slug != tc.wantSlug {
+				t.Fatalf("catalog row = %s@%s, want %s@%s", pub.Slug, pub.Version, tc.wantSlug, tc.wantVersion)
+			}
+			got, err := FetchCatalogItem(context.Background(), c, item.ID, item.Version)
+			if err != nil {
+				t.Fatalf("fetch: %v", err)
+			}
+			var sk slashcmd.Skill
+			if err := json.Unmarshal(got.PayloadBytes, &sk); err != nil {
+				t.Fatal(err)
+			}
+			if sk.Version != got.Version || sk.Version != tc.wantVersion {
+				t.Errorf("payload version %q, catalog version %q — they must agree (%q)", sk.Version, got.Version, tc.wantVersion)
+			}
+			if sk.Trigger != got.Slug {
+				t.Errorf("payload trigger %q, catalog slug %q — the slug's source must be in the payload", sk.Trigger, got.Slug)
+			}
+		})
+	}
+}
