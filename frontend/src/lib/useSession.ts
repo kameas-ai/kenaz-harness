@@ -41,7 +41,26 @@ import { isServedMode } from "./useServedMode";
 import { useConnectionState } from "./useConnectionState";
 import { friendly } from "./errors";
 import { liveSpanId } from "./transcript";
-import type { ContentBlock, Message, Session, SessionUsage } from "./types";
+import type { ContentBlock, Message, Session, SessionUsage, TurnRun } from "./types";
+import {
+  AUTO_RETRY_DELAYS_MS,
+  failureFromClosed,
+  isAutoRetryable,
+  undeliveredFromRuns,
+  type DeliveryFailure,
+  type WireClosedDelivery,
+} from "./delivery";
+
+/**
+ * AutoRetryState — a transient delivery failure is being retried
+ * automatically (undelivered-message-retry). `attempt` is 1-based of
+ * `max`; `delayMs` is the wait before it fires.
+ */
+export interface AutoRetryState {
+  attempt: number;
+  max: number;
+  delayMs: number;
+}
 
 /**
  * SessionUsagePayload is the wire shape emitted on `session.usage.updated`
@@ -202,6 +221,38 @@ export interface UseSessionResult {
    * Cleared when a new turn starts or the session changes.
    */
   overflowRecovery: Ref<OverflowRecoveryPayload | null>;
+  /**
+   * User messages that did NOT reach the model, keyed by message id
+   * (undelivered-message-retry). Seeded from the persisted run outcomes
+   * (Sessions_TurnRuns) on load and on every stream close, and updated
+   * live from `llm:stream-closed`. A message drops out of this map the
+   * moment any later run is delivered — that run carried it to the model.
+   */
+  undelivered: Ref<ReadonlyMap<string, DeliveryFailure>>;
+  /**
+   * The newest live delivery failure — what the composer banner shows
+   * (classified reason + Retry). null when the last turn reached the
+   * model, after a new send, and on session switch.
+   */
+  deliveryFailure: Ref<DeliveryFailure | null>;
+  /** Non-null while a transient failure waits for its automatic retry. */
+  autoRetry: Ref<AutoRetryState | null>;
+  /**
+   * True while a Retry's startStream is being dispatched — before the
+   * subscription id exists. The surface must count it as streaming (and
+   * queue a send) or a send in that window starts a second, concurrent
+   * run.
+   */
+  retryInFlight: Ref<boolean>;
+  /**
+   * Re-run the turn of the newest user message WITHOUT appending a new
+   * one: the same LLM_StartStream dispatch a fresh send makes (same
+   * lockdown/allow-list/permission gating), which resolves the newest
+   * persisted user row and runs it by reference. No-op while a stream is
+   * open or a retry is already being dispatched, so a double click can
+   * never double-send.
+   */
+  retry(profileID: string, modelOverride?: string): Promise<void>;
   refresh(): Promise<void>;
   /**
    * Append a user message and start the assistant stream. modelOverride
@@ -225,7 +276,11 @@ export interface UseSessionResult {
     profileID: string,
     modelOverride?: string,
   ): Promise<void>;
-  /** Cancel an in-flight stream. */
+  /**
+   * Cancel an in-flight stream — or, when a transient failure is waiting
+   * for its automatic retry, cancel that retry (the message then shows
+   * as not delivered, with a manual Retry).
+   */
   cancel(): Promise<void>;
 }
 
@@ -270,6 +325,91 @@ export function useSession(id: Ref<string>): UseSessionResult {
   const cumulativeUsage = ref<SessionUsage | null>(null);
   const streamTruncated = ref<StreamTruncatedPayload | null>(null);
   const overflowRecovery = ref<OverflowRecoveryPayload | null>(null);
+
+  // ── delivery state (undelivered-message-retry) ─────────────────────
+  const undelivered = shallowRef<ReadonlyMap<string, DeliveryFailure>>(new Map());
+  const deliveryFailure = ref<DeliveryFailure | null>(null);
+  const autoRetry = ref<AutoRetryState | null>(null);
+  let autoRetryHandle: ReturnType<typeof setTimeout> | null = null;
+  /** Automatic retries already spent on the current failing turn. */
+  let autoRetryAttempts = 0;
+  /** True between retry() starting a dispatch and it settling. */
+  const retryInFlight = ref(false);
+  /** The provider/model the last turn was dispatched with — reused by auto-retry. */
+  let lastDispatch: { profileID: string; modelOverride?: string } | null = null;
+
+  function clearAutoRetry() {
+    if (autoRetryHandle) {
+      clearTimeout(autoRetryHandle);
+      autoRetryHandle = null;
+    }
+    autoRetry.value = null;
+  }
+
+  // Two sources, merged into `undelivered`:
+  //   - persisted: derived from Sessions_TurnRuns (survives reload);
+  //   - live: failures seen on llm:stream-closed, keyed by span and
+  //     carrying the run id. A live entry yields to the persisted list as
+  //     soon as that list contains its run (the persisted derivation is
+  //     authoritative and knows about later delivered runs); it survives
+  //     when the list does not (a build whose turnRuns read is
+  //     unavailable or empty), so the live state is never lost to a
+  //     backend that cannot report it.
+  let persistedUndelivered = new Map<string, DeliveryFailure>();
+  let persistedRunIds = new Set<string>();
+  const liveFailures = new Map<string, { failure: DeliveryFailure; runId: string }>();
+
+  function recomputeUndelivered() {
+    const next = new Map(persistedUndelivered);
+    for (const [span, live] of liveFailures) {
+      if (live.runId && persistedRunIds.has(live.runId)) continue;
+      next.set(span, live.failure);
+    }
+    undelivered.value = next;
+  }
+
+  /** A turn reached the model: nothing earlier in the session is undelivered. */
+  function markDelivered() {
+    clearAutoRetry();
+    autoRetryAttempts = 0;
+    deliveryFailure.value = null;
+    liveFailures.clear();
+    persistedUndelivered = new Map();
+    recomputeUndelivered();
+  }
+
+  function markUndelivered(f: DeliveryFailure, runId: string) {
+    liveFailures.set(f.turnSpanId, { failure: f, runId });
+    recomputeUndelivered();
+  }
+
+  function resetDelivery() {
+    liveFailures.clear();
+    persistedUndelivered = new Map();
+    persistedRunIds = new Set();
+    undelivered.value = new Map();
+  }
+
+  /** Re-read the persisted outcomes — the truth after a reload. */
+  async function loadDelivery(sessionId: string) {
+    // Served builds: Sessions_TurnRuns has no serve dispatch (allowlisted
+    // in scripts/ci/allowlists/i15-serve-dispatch-gap.txt), so there the
+    // NOT DELIVERED state is live-only — it does not survive a reload
+    // until that binding is served.
+    if (served) return;
+    const fetchRuns = (client.sessions as { turnRuns?: (id: string) => Promise<TurnRun[]> }).turnRuns;
+    if (typeof fetchRuns !== "function" || !sessionId) return;
+    try {
+      const runs = (await fetchRuns.call(client.sessions, sessionId)) ?? [];
+      if (id.value !== sessionId) return;
+      persistedUndelivered = undeliveredFromRuns(runs);
+      persistedRunIds = new Set(runs.map((r) => r.runId));
+      recomputeUndelivered();
+    } catch {
+      // Served builds without the binding, or a transient read failure:
+      // keep whatever live state we have.
+    }
+  }
 
   let streamTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let draftDebounceHandle: ReturnType<typeof setTimeout> | null = null;
@@ -394,6 +534,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       messages.value = msgsResult.messages;
       sweptCount.value = msgsResult.sweptCount;
       cumulativeUsage.value = cu;
+      void loadDelivery(sessionId);
       // Dogfood 2026-10-05: the persisted draft is adopted ONCE per
       // session open — a mid-session reload must never touch the
       // composer. Reloads fire on stream start/end, and the persisted
@@ -515,7 +656,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       reasoning?: WireReasoning;
     };
   };
-  type WireClosed = {
+  type WireClosed = WireClosedDelivery & {
     sub_id?: string;
     session_id?: string;
     reason?: string;
@@ -840,16 +981,76 @@ export function useSession(id: Ref<string>): UseSessionResult {
         : payload.reason || "closed-without-finish",
     );
     streamSubscriptionId.value = null;
-    if (payload.reason === "backend-error" && payload.message) {
-      error.value = payload.message;
-      // A session that ran out of context is not a failed send: the
-      // user's message IS in the transcript and the model simply never
-      // got to answer. The surface needs to say so and offer the way
-      // out, rather than the generic retry framing every other
-      // backend-error gets.
-      errorKind.value = payload.error_kind ?? null;
+
+    // undelivered-message-retry: did this turn reach the model?
+    const failure = failureFromClosed(payload);
+    if (payload.delivered === true) {
+      markDelivered();
+    } else if (failure) {
+      markUndelivered(failure, payload.sub_id ?? "");
     }
+    if (failure && failure.code !== "stopped") {
+      deliveryFailure.value = failure;
+    }
+
+    if (payload.reason === "backend-error" && payload.message) {
+      // A message that never reached the model is reported ON the
+      // message (NOT DELIVERED badge) and in the composer banner with a
+      // Retry — not as the generic "Send failed" transcript banner, which
+      // would say the same thing twice. session_full keeps its own banner.
+      const reportedOnMessage =
+        failure !== null && payload.error_kind !== "session_full";
+      if (!reportedOnMessage) {
+        // Mid-stream failure (the model DID get the message): today's
+        // behaviour, now prefixed with the classified reason.
+        const summary = payload.failure_summary;
+        error.value =
+          summary && !payload.error_kind && !payload.message.startsWith(summary)
+            ? `${summary}. ${payload.message}`
+            : payload.message;
+        // A session that ran out of context is not a failed send: the
+        // user's message IS in the transcript and the model simply never
+        // got to answer. The surface needs to say so and offer the way
+        // out, rather than the generic retry framing every other
+        // backend-error gets.
+        errorKind.value = payload.error_kind ?? null;
+      }
+    }
+
+    // Transient + not delivered: retry automatically with backoff.
+    // user_actionable is NEVER auto-retried — surface it immediately.
+    if (failure && isAutoRetryable(failure) && lastDispatch) {
+      scheduleAutoRetry();
+    }
+    // Refresh from the persisted outcomes (written before this close).
+    void loadDelivery(id.value);
   });
+
+  function scheduleAutoRetry() {
+    clearAutoRetry();
+    if (autoRetryAttempts >= AUTO_RETRY_DELAYS_MS.length) return;
+    const delayMs = AUTO_RETRY_DELAYS_MS[autoRetryAttempts];
+    autoRetryAttempts += 1;
+    const sid = id.value;
+    autoRetry.value = {
+      attempt: autoRetryAttempts,
+      max: AUTO_RETRY_DELAYS_MS.length,
+      delayMs,
+    };
+    logEvent("info", "delivery.auto_retry.scheduled", {
+      session_id: sid,
+      attempt: autoRetryAttempts,
+      delay_ms: delayMs,
+    });
+    autoRetryHandle = setTimeout(() => {
+      autoRetryHandle = null;
+      if (id.value !== sid || !lastDispatch) {
+        autoRetry.value = null;
+        return;
+      }
+      void dispatchRetry(lastDispatch.profileID, lastDispatch.modelOverride, true);
+    }, delayMs);
+  }
 
   // Mid-turn context-overflow recovery (chat:overflow-recovery,
   // core/rpc/views/agentgraph/chat/chat_runner.go). The runner hit a
@@ -930,6 +1131,79 @@ export function useSession(id: Ref<string>): UseSessionResult {
     },
   );
 
+  /**
+   * dispatchRetry re-runs the newest user message's turn: the SAME
+   * client.llm.startStream a fresh send calls — every backend gate a send
+   * passes (lockdown, provider allow-list, and inside the run the
+   * permission/confirm/containment ladder) applies unchanged — minus the
+   * append, so no second user row is written.
+   */
+  async function dispatchRetry(
+    profileID: string,
+    modelOverride: string | undefined,
+    automatic: boolean,
+  ) {
+    const sid = id.value;
+    if (!sid) return;
+    if (streamSubscriptionId.value !== null || retryInFlight.value) return;
+    retryInFlight.value = true;
+    if (!automatic) {
+      // A manual Retry starts a fresh automatic-retry budget.
+      autoRetryAttempts = 0;
+    }
+    if (autoRetryHandle) {
+      clearTimeout(autoRetryHandle);
+      autoRetryHandle = null;
+    }
+    lastDispatch = { profileID, modelOverride };
+    error.value = null;
+    errorKind.value = null;
+    deliveryFailure.value = null;
+    logEvent("info", "delivery.retry.requested", {
+      session_id: sid,
+      automatic,
+      attempt: autoRetryAttempts,
+    });
+    try {
+      const subId = await client.llm.startStream(profileID, sid, modelOverride);
+      if (id.value !== sid) return;
+      autoRetry.value = null;
+      streamSubscriptionId.value = subId;
+      streamingTimedOut.value = false;
+      clearStreamTimeout();
+      streamTimeoutHandle = setTimeout(() => {
+        if (
+          streamSubscriptionId.value === subId &&
+          streamingMoves.value.length === 0
+        ) {
+          streamingTimedOut.value = true;
+        }
+      }, STREAM_TIMEOUT_MS);
+    } catch (err) {
+      autoRetry.value = null;
+      const msg = friendly(err);
+      error.value = msg;
+      logEvent("error", "delivery.retry.failed", {
+        session_id: sid,
+        message: msg,
+      });
+    } finally {
+      retryInFlight.value = false;
+    }
+  }
+
+  async function retry(profileID: string, modelOverride?: string) {
+    await dispatchRetry(profileID, modelOverride, false);
+  }
+
+  /** A new send carries every earlier message: stop any pending retry. */
+  function beginNewTurn(profileID: string, modelOverride?: string) {
+    clearAutoRetry();
+    autoRetryAttempts = 0;
+    deliveryFailure.value = null;
+    lastDispatch = { profileID, modelOverride };
+  }
+
   async function send(
     content: string,
     profileID: string,
@@ -937,6 +1211,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
   ) {
     const sid = id.value;
     if (!sid) return;
+    beginNewTurn(profileID, modelOverride);
     error.value = null;
     errorKind.value = null;
     // A new turn starts a fresh stream, so any truncation notice from the
@@ -1000,6 +1275,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     const sid = id.value;
     if (!sid) return;
     if (contentBlocks.length === 0) return;
+    beginNewTurn(profileID, modelOverride);
     error.value = null;
     errorKind.value = null;
     streamTruncated.value = null;
@@ -1054,6 +1330,14 @@ export function useSession(id: Ref<string>): UseSessionResult {
   }
 
   async function cancel() {
+    // Cancelling while a transient failure waits for its automatic retry
+    // cancels the retry: the message stays NOT DELIVERED, with a manual
+    // Retry, and the banner stays up.
+    if (autoRetryHandle || autoRetry.value) {
+      clearAutoRetry();
+      autoRetryAttempts = AUTO_RETRY_DELAYS_MS.length;
+      logEvent("info", "delivery.auto_retry.cancelled", { session_id: id.value });
+    }
     const subId = streamSubscriptionId.value;
     if (!subId) return;
     try {
@@ -1110,6 +1394,11 @@ export function useSession(id: Ref<string>): UseSessionResult {
       lastUsage.value = null;
       streamTruncated.value = null;
       overflowRecovery.value = null;
+      clearAutoRetry();
+      autoRetryAttempts = 0;
+      lastDispatch = null;
+      deliveryFailure.value = null;
+      resetDelivery();
       // showFullHistory is per-session UI state — reset on every
       // session reopen so a switch-back never resurrects the previous
       // view (compaction-strategy-ui WP07 plan §2.8).
@@ -1152,6 +1441,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
 
   onBeforeUnmount(() => {
     clearStreamTimeout();
+    clearAutoRetry();
     if (draftDebounceHandle) clearTimeout(draftDebounceHandle);
     void closeServedStream();
   });
@@ -1172,6 +1462,11 @@ export function useSession(id: Ref<string>): UseSessionResult {
     lastUsage,
     streamTruncated,
     overflowRecovery,
+    undelivered,
+    deliveryFailure,
+    autoRetry,
+    retryInFlight,
+    retry,
     refresh,
     send,
     sendBlocks,

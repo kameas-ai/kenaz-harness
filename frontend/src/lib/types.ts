@@ -97,6 +97,27 @@ export interface TurnRun {
   specDigest: string;
   /** RFC3339Nano. */
   createdAt: string;
+  /**
+   * How the run ended (undelivered-message-retry, migration
+   * sessions/0344): "completed" | "failed" | "stopped", or "" while in
+   * flight / for a run recorded before the column existed. Optional so
+   * older fakes and backends type-check; absent reads as "".
+   */
+  outcome?: string;
+  /** Whether the model accepted the request. Meaningful only with an outcome. */
+  delivered?: boolean;
+  /** llm.FailureClass: "user_actionable" | "transient" | "unknown". */
+  failureClass?: string;
+  /** Stable failure code ("payment_required", "rate_limited", …). */
+  failureCode?: string;
+  /** Provider HTTP status, when it sent one. */
+  failureStatus?: number;
+  /** Provider adapter kind ("openrouter"). */
+  failureProvider?: string;
+  /** One-line copy ("Out of credits with OpenRouter"). */
+  failureSummary?: string;
+  /** Provider's own message, sanitized server-side. */
+  failureMessage?: string;
 }
 
 export interface SessionUsage {
@@ -1923,13 +1944,16 @@ export interface CostEstimate {
 }
 
 /**
- * MemoryScopeKind — the three scope tiers used by long-term memory.
+ * MemoryScopeKind — the scope tiers used by long-term memory.
  * Mirrors core/memory.ScopeKind. "session" is the chat-local default;
  * "project" survives between sister sessions of the same project;
- * "global" is harness-wide. Promotion is monotonic
- * (session → project → global); demotion isn't supported.
+ * "global" is harness-wide; "long_term" is the harness-wide tier loaded
+ * into the session prelude and resistant to pruning. The UI promotes
+ * session → project → global → long_term; the id is kept across a
+ * promotion (memory-sync-01MEMSY01 WP03 — it is the chunk's Fleet origin
+ * id). Remember (capture) accepts only global / project / session.
  */
-export type MemoryScopeKind = 'global' | 'project' | 'session';
+export type MemoryScopeKind = 'global' | 'long_term' | 'project' | 'session';
 
 /**
  * MemoryChunk — one persisted memory. In the hooks-driven architecture
@@ -1972,6 +1996,11 @@ export interface MemoryChunk {
   retrievalWeight?: number;
   /** Narrative layer — originating turn ID. */
   turnId?: string;
+  /**
+   * memory-sync-01MEMSY01: code Fleet memory sync refused this chunk with
+   * (e.g. "secret_detected") — it stays on this device only.
+   */
+  syncBlocked?: string;
 }
 
 /**
@@ -4662,11 +4691,42 @@ export interface FleetSyncLaneView {
   sessions?: FleetSyncSessionView[];
 }
 
+/**
+ * Mirrors settings.MemorySyncStatusView — the learned-memory sync panel
+ * (memory-sync-01MEMSY01 WP08). `entitled` mirrors the memory_sync
+ * capability: the panel hides the toggle without it.
+ */
+export interface MemorySyncStatus {
+  wired: boolean;
+  entitled: boolean;
+  enabled: boolean;
+  scopes: string[];
+  consentVersion: string;
+  optedInAt: string;
+  currentConsentVersion: string;
+  liveRecords: number;
+  liveBytes: number;
+  maxRecords: number;
+  maxBytes: number;
+  /** Local chunks Fleet refused permanently (e.g. secret_detected). */
+  blockedCount: number;
+  /** Local sync-scope chunks not yet accepted by Fleet. */
+  pendingCount: number;
+  fleetError?: string;
+  lane: FleetSyncLaneView;
+}
+
 /** Mirrors settings.FleetSyncView. */
 export interface FleetSyncView {
   contextSync: FleetSyncLaneView;
   unitPoll: FleetSyncLaneView;
   telemetry: FleetSyncLaneView;
+  /**
+   * The catalog revocation sweep (skill-library-01SKLIB01 WP03): removing
+   * the user's own copies of catalog versions the org revoked. Optional for
+   * a backend that predates the lane.
+   */
+  catalogRevocation?: FleetSyncLaneView;
 }
 
 /**
@@ -4676,7 +4736,7 @@ export interface FleetSyncView {
  */
 export interface FleetSessionView {
   state: FleetSessionState;
-  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled */
+  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled | node_removed */
   reason?: string;
   /** Raw error text behind `reason` (humanize before showing). */
   message?: string;
@@ -4696,7 +4756,21 @@ export interface FleetSessionView {
   capabilities: CapabilitiesView;
   profile?: FleetProfileInfo;
   sync: FleetSyncView;
+  /**
+   * This device's key-registration outcome at the last enroll
+   * (device-keys-handoff-01DEVKH01). Absent until an enroll ran.
+   */
+  deviceKeys?: FleetDeviceKeysView;
   updatedAt: string;
+}
+
+/** Mirrors settings.FleetDeviceKeysView. */
+export interface FleetDeviceKeysView {
+  /** registered | too_many_devices | invalid_key | unavailable */
+  status: string;
+  /** Human copy when this device cannot receive shared sessions. */
+  message?: string;
+  handoffFingerprint?: string;
 }
 
 /**
@@ -4848,6 +4922,10 @@ export interface CatalogItemView {
   published_at?: string;
   /** true when this version is installed in the local DataDir. */
   installed: boolean;
+  /** Org lifecycle of this version; absent = active (skill-library-01SKLIB01). */
+  lifecycle?: string;
+  lifecycle_reason?: string;
+  superseded_by?: string;
 }
 
 // ── Sync types (fleet-share-and-sync-01NDFSEX14 WP05) ───────────────────────
@@ -5060,24 +5138,50 @@ export interface FleetTeamMemberView {
 
 /**
  * FleetInboxItemView — one item in the handoff inbox (Handoff_Inbox).
- * Mirrors contextsync.InboxItemView.
+ * Mirrors contextsync.InboxItemView EXACTLY (the previous shape here —
+ * itemID/fromUserID/sessionTitle — never matched the wire; nothing read
+ * it beyond the item count).
  */
 export interface FleetInboxItemView {
-  itemID: string;
-  fromUserID: string;
-  fromDisplayName: string;
-  sessionTitle: string;
+  inboxItemID: string;
+  sessionID: string;
+  senderUserID: string;
+  senderEmail: string;
   /** RFC3339 timestamp when the share was received. */
   receivedAt: string;
+  /**
+   * None of the item's key wraps targets a still-active device key of
+   * this user (the device it was sent to was removed / its key rotated):
+   * it can never be opened (device-keys-handoff-01DEVKH01).
+   */
+  undecryptable: boolean;
 }
 
 /**
  * FleetAcceptedSessionView — returned by Handoff_Accept.
- * Mirrors contextsync.AcceptedSessionView.
- * Only the event count crosses the RPC boundary — no session content.
+ * Mirrors contextsync.AcceptedSessionView. No session content crosses the
+ * RPC boundary — only the new local session's id and title.
  */
 export interface FleetAcceptedSessionView {
+  /** The new local session holding the shared transcript. */
+  localSessionID: string;
   eventCount: number;
+  title: string;
+  /** True when this item was accepted before on this device (no re-fetch). */
+  alreadyAccepted: boolean;
+}
+
+/**
+ * FleetRecipientDeviceView — one receiving device of a teammate
+ * (Handoff_RecipientDevices). Mirrors contextsync.RecipientDeviceView.
+ * Fleet is a trusted key directory; the fingerprint is what a cautious
+ * user compares out of band.
+ */
+export interface FleetRecipientDeviceView {
+  keyID: string;
+  /** sha256:<hex> of the device's handoff public key. */
+  fingerprint: string;
+  createdAt?: string;
 }
 
 /**
@@ -5156,6 +5260,14 @@ export interface CapabilityItem {
   read_only?: boolean;
   read_only_reason?: string;
   requirements?: CapabilityRequirement[];
+  /**
+   * The fleet catalog version's org lifecycle (skill-library-01SKLIB01):
+   * "deprecated", "revoked", or a future state shown verbatim. Absent =
+   * active / not a catalog item. Mirrors install.Item.Lifecycle.
+   */
+  lifecycle?: string;
+  lifecycle_reason?: string;
+  superseded_by?: string;
 }
 
 /** A source a provider could not list — rendered as a reason row (P-5). */

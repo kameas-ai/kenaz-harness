@@ -294,6 +294,30 @@ type TurnRun struct {
 	SpecDigest string `json:"specDigest"`
 	// CreatedAt is RFC3339Nano.
 	CreatedAt string `json:"createdAt"`
+
+	// Outcome is how the run ended (undelivered-message-retry, migration
+	// sessions/0344): "completed" | "failed" | "stopped", or "" while the
+	// run is in flight and for every run that predates the column. The
+	// surface renders "" as nothing — never as NOT DELIVERED.
+	Outcome string `json:"outcome"`
+	// Delivered reports whether the model accepted the request (any
+	// streamed output, or a completion). Meaningful only when Outcome is
+	// non-empty. A failed run with Delivered=false is a user message that
+	// never reached the model.
+	Delivered bool `json:"delivered"`
+	// FailureClass is "user_actionable" | "transient" | "unknown" for a
+	// failed run (llm.FailureClass); FailureCode the stable discriminator
+	// ("payment_required", "auth_invalid", "rate_limited", …);
+	// FailureStatus the provider HTTP status (0 = none); FailureProvider
+	// the adapter kind; FailureSummary one-line copy ("Out of credits
+	// with OpenRouter"); FailureMessage the provider's own text,
+	// sanitized (credential shapes redacted, length-capped).
+	FailureClass    string `json:"failureClass,omitempty"`
+	FailureCode     string `json:"failureCode,omitempty"`
+	FailureStatus   int    `json:"failureStatus,omitempty"`
+	FailureProvider string `json:"failureProvider,omitempty"`
+	FailureSummary  string `json:"failureSummary,omitempty"`
+	FailureMessage  string `json:"failureMessage,omitempty"`
 }
 
 // SessionUsage is the per-session cumulative token + cost aggregate

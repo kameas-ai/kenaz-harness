@@ -91,11 +91,15 @@ func clearIdentityFile(dataDir string) error {
 	return os.Remove(identityFilePath(dataDir))
 }
 
-// enrollRequest is the JSON body for POST /api/v1/enroll.
+// enrollRequest is the JSON body for POST /api/v1/enroll. The two key
+// fields are optional (fleet contract §10.1): registered in the same
+// transaction as the node upsert; omitted = left untouched.
 type enrollRequest struct {
-	NodeID   string `json:"node_id"`
-	Platform string `json:"platform"`
-	Version  string `json:"version"`
+	NodeID           string `json:"node_id"`
+	Platform         string `json:"platform"`
+	Version          string `json:"version"`
+	HandoffPublicKey string `json:"handoff_public_key,omitempty"`
+	SigningPublicKey string `json:"signing_public_key,omitempty"`
 }
 
 // enrollResponse is the JSON shape returned by the fleet enroll endpoint.
@@ -184,6 +188,12 @@ func orgIDToString(v any) string {
 
 // enrollIdentity calls POST /api/v1/enroll on the fleet server and returns
 // the parsed Identity.
+//
+// The body carries this device's public keys (device-keys-handoff-
+// 01DEVKH01 WP02). Fleet registers them atomically with the enroll, so a
+// key rejection (400 invalid_public_key / 409 too_many_device_keys) fails
+// the WHOLE enroll; it is retried once WITHOUT keys so the device still
+// enrolls, and the outcome is recorded in KeyRegistration for the UI.
 func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version string) (Identity, error) {
 	ts, err := LoadTokens()
 	if err != nil {
@@ -196,25 +206,145 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		Platform: platform,
 		Version:  version,
 	}
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return Identity{}, fmt.Errorf("fleet: marshal enroll request: %w", err)
+	km, kerr := c.localDeviceKeys(nodeID)
+	if kerr != nil {
+		logging.L().Warn("fleet.enroll.handoff_key_unavailable", "err", kerr.Error())
 	}
+	reqBody.HandoffPublicKey = km.body.HandoffPublicKey
+	reqBody.SigningPublicKey = km.body.SigningPublicKey
 
 	reqURL, urlErr := c.APIURL(ctx, "/api/v1/enroll")
 	if urlErr != nil {
 		logging.L().Error("fleet.enroll.api_url_failed", "err", urlErr.Error())
 		return Identity{}, urlErr
 	}
+
+	status, respBody, err := c.postEnroll(ctx, reqURL, &ts, reqBody)
+	if err != nil {
+		return Identity{}, err
+	}
+	keysRejected := false
+	if !km.body.empty() {
+		if st, ok := keyRejection(status, respBody); ok {
+			// Atomic enroll-with-keys failed on the KEYS: enroll without
+			// them so the device is still a fleet node, and say why it
+			// cannot receive handoffs.
+			logging.L().Warn("fleet.enroll.keys_rejected_retrying_without_keys",
+				"status", status, "reason", st)
+			c.keyReg.set(KeyRegistration{Status: st, Message: keyRegCopy(st)})
+			keysRejected = true
+			reqBody.HandoffPublicKey, reqBody.SigningPublicKey = "", ""
+			status, respBody, err = c.postEnroll(ctx, reqURL, &ts, reqBody)
+			if err != nil {
+				return Identity{}, err
+			}
+		}
+	}
+
+	if status != http.StatusOK {
+		preview := string(respBody)
+		if len(preview) > 800 {
+			preview = preview[:800] + "…(truncated)"
+		}
+		logging.L().Error("fleet.enroll.non_2xx",
+			"status", status,
+			"url", reqURL,
+			"body", preview,
+		)
+		// 404 with a plain-text Go-stdlib "404 page not found" body
+		// means we reached the fleet binary and authed successfully,
+		// but the deployed version doesn't register /api/v1/enroll.
+		// This is a fleet deployment-version mismatch — the kenaz-fleet
+		// branch with the enroll handler hasn't shipped to this env yet.
+		if status == http.StatusNotFound &&
+			strings.Contains(strings.ToLower(preview), "404 page not found") {
+			return Identity{}, fmt.Errorf("fleet: enroll route not registered on the deployed fleet binary at %s — fleet needs to deploy the branch that ships POST /api/v1/enroll (raw response: %s)", reqURL, preview)
+		}
+		// 403 user_not_provisioned: the identity authenticated with Zitadel
+		// but has no matching Fleet account. Parse the {code, message}
+		// envelope (mirrors mapSiteError in sites.go) so this terminal
+		// condition is a typed sentinel instead of a raw-body string that
+		// nothing downstream can branch on.
+		//
+		// 403 node_removed (fleet contract §10.1): an org admin removed this
+		// (user, node_id). Terminal for this node id — the caller signs the
+		// device out and re-enroll happens under a NEW node id after a fresh
+		// sign-in (device-keys-handoff-01DEVKH01 WP02).
+		if status == http.StatusForbidden {
+			var env enrollErrorEnvelope
+			if jsonErr := json.Unmarshal(respBody, &env); jsonErr == nil {
+				switch env.Code {
+				case "user_not_provisioned":
+					msg := env.Message
+					if msg == "" {
+						msg = preview
+					}
+					return Identity{}, fmt.Errorf("%w (server: %s)", ErrUserNotProvisioned, msg)
+				case "node_removed":
+					c.keyReg.set(KeyRegistration{Message: keyRegNodeGoneCopy})
+					return Identity{}, ErrNodeRemoved
+				}
+			}
+		}
+		return Identity{}, fmt.Errorf("fleet: enroll: status %d: %s", status, respBody)
+	}
+
+	if !keysRejected {
+		switch {
+		case km.body.HandoffPublicKey != "":
+			c.keyReg.set(KeyRegistration{Status: KeyRegRegistered,
+				HandoffFingerprint: km.handoffFingerprint, SigningFingerprint: km.signingFingerprint})
+		default:
+			c.keyReg.set(KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy,
+				SigningFingerprint: km.signingFingerprint})
+		}
+	}
+
+	var er enrollResponse
+	if err := json.Unmarshal(respBody, &er); err != nil {
+		logging.L().Error("fleet.enroll.parse_failed", "err", err.Error(), "body_prefix", string(respBody[:min(len(respBody), 200)]))
+		return Identity{}, fmt.Errorf("fleet: parse enroll response: %w", err)
+	}
+
+	id := Identity{
+		UserID:      er.UserID,
+		OrgID:       orgIDToString(er.OrgID),
+		TeamID:      er.TeamID,
+		OrgName:     er.OrgName,
+		TeamName:    er.TeamName,
+		Email:       er.email(),
+		DisplayName: er.displayName(),
+		Tier:        er.Tier,
+		FetchedAt:   time.Now(),
+	}
+	id.Roles = mergeRoles(er.Role, er.Roles)
+
+	// Cache to disk.
+	if c.dataDir != "" {
+		_ = SaveIdentity(c.dataDir, id)
+	}
+	return id, nil
+}
+
+// postEnroll sends one POST /api/v1/enroll and returns (status, body). It
+// owns the transport-error mapping, the SPA-HTML fall-through check and the
+// single 401 → refresh → retry (ts is updated in place on refresh so a
+// second postEnroll reuses the renewed token).
+func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, reqBody enrollRequest) (int, []byte, error) {
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return 0, nil, fmt.Errorf("fleet: marshal enroll request: %w", err)
+	}
 	logging.L().Info("fleet.enroll.http.start",
 		"url", reqURL,
 		"body_bytes", len(bodyBytes),
 		"access_token_len", len(ts.AccessToken),
+		"with_keys", reqBody.HandoffPublicKey != "" || reqBody.SigningPublicKey != "",
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		logging.L().Error("fleet.enroll.build_request_failed", "err", err.Error())
-		return Identity{}, fmt.Errorf("fleet: enroll request: %w", err)
+		return 0, nil, fmt.Errorf("fleet: enroll request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
@@ -228,9 +358,9 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			strings.Contains(es, "connection refused") ||
 			strings.Contains(es, "i/o timeout") ||
 			strings.Contains(es, "EOF") {
-			return Identity{}, fmt.Errorf("%w (%s): %v", ErrFleetUnreachable, reqURL, err)
+			return 0, nil, fmt.Errorf("%w (%s): %v", ErrFleetUnreachable, reqURL, err)
 		}
-		return Identity{}, fmt.Errorf("fleet: enroll: %w", err)
+		return 0, nil, fmt.Errorf("fleet: enroll: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -258,7 +388,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			"content_type", contentType,
 			"body_prefix", preview,
 		)
-		return Identity{}, fmt.Errorf("%w (got %d bytes of HTML from %s)", ErrFleetAPINotRouted, len(respBody), reqURL)
+		return 0, nil, fmt.Errorf("%w (got %d bytes of HTML from %s)", ErrFleetAPINotRouted, len(respBody), reqURL)
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
@@ -270,7 +400,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			logging.L().Info("fleet.enroll.401_rereading_brokered_token")
 			reloaded, reloadErr := LoadTokens()
 			if reloadErr != nil || reloaded.AccessToken == ts.AccessToken {
-				return Identity{}, ErrTokenExpired
+				return 0, nil, ErrTokenExpired
 			}
 			newTS = reloaded
 		} else {
@@ -280,88 +410,28 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			if refreshErr != nil {
 				// Only a definite rejection is an expired session; a
 				// transport failure is retryable (review F2).
-				return Identity{}, c.refreshFailed("enroll refresh", refreshErr)
+				return 0, nil, c.refreshFailed("enroll refresh", refreshErr)
 			}
 			if saveErr := SaveTokens(refreshed); saveErr != nil {
-				return Identity{}, saveErr
+				return 0, nil, saveErr
 			}
 			c.notifyAuthOK()
 			newTS = refreshed
 		}
+		*ts = newTS
 		// Retry with new token.
 		req2, _ := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 		req2.Header.Set("Content-Type", "application/json")
 		req2.Header.Set("Authorization", "Bearer "+newTS.AccessToken)
 		resp2, err2 := c.httpClient.Do(req2)
 		if err2 != nil {
-			return Identity{}, fmt.Errorf("fleet: enroll retry: %w", err2)
+			return 0, nil, fmt.Errorf("fleet: enroll retry: %w", err2)
 		}
 		defer resp2.Body.Close()
 		respBody, _ = io.ReadAll(resp2.Body)
-		resp = resp2
+		return resp2.StatusCode, respBody, nil
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		preview := string(respBody)
-		if len(preview) > 800 {
-			preview = preview[:800] + "…(truncated)"
-		}
-		logging.L().Error("fleet.enroll.non_2xx",
-			"status", resp.StatusCode,
-			"url", reqURL,
-			"body", preview,
-		)
-		// 404 with a plain-text Go-stdlib "404 page not found" body
-		// means we reached the fleet binary and authed successfully,
-		// but the deployed version doesn't register /api/v1/enroll.
-		// This is a fleet deployment-version mismatch — the kenaz-fleet
-		// branch with the enroll handler hasn't shipped to this env yet.
-		if resp.StatusCode == http.StatusNotFound &&
-			strings.Contains(strings.ToLower(preview), "404 page not found") {
-			return Identity{}, fmt.Errorf("fleet: enroll route not registered on the deployed fleet binary at %s — fleet needs to deploy the branch that ships POST /api/v1/enroll (raw response: %s)", reqURL, preview)
-		}
-		// 403 user_not_provisioned: the identity authenticated with Zitadel
-		// but has no matching Fleet account. Parse the {code, message}
-		// envelope (mirrors mapSiteError in sites.go) so this terminal
-		// condition is a typed sentinel instead of a raw-body string that
-		// nothing downstream can branch on.
-		if resp.StatusCode == http.StatusForbidden {
-			var env enrollErrorEnvelope
-			if jsonErr := json.Unmarshal(respBody, &env); jsonErr == nil && env.Code == "user_not_provisioned" {
-				msg := env.Message
-				if msg == "" {
-					msg = preview
-				}
-				return Identity{}, fmt.Errorf("%w (server: %s)", ErrUserNotProvisioned, msg)
-			}
-		}
-		return Identity{}, fmt.Errorf("fleet: enroll: status %d: %s", resp.StatusCode, respBody)
-	}
-
-	var er enrollResponse
-	if err := json.Unmarshal(respBody, &er); err != nil {
-		logging.L().Error("fleet.enroll.parse_failed", "err", err.Error(), "body_prefix", string(respBody[:min(len(respBody), 200)]))
-		return Identity{}, fmt.Errorf("fleet: parse enroll response: %w", err)
-	}
-
-	id := Identity{
-		UserID:      er.UserID,
-		OrgID:       orgIDToString(er.OrgID),
-		TeamID:      er.TeamID,
-		OrgName:     er.OrgName,
-		TeamName:    er.TeamName,
-		Email:       er.email(),
-		DisplayName: er.displayName(),
-		Tier:        er.Tier,
-		FetchedAt:   time.Now(),
-	}
-	id.Roles = mergeRoles(er.Role, er.Roles)
-
-	// Cache to disk.
-	if c.dataDir != "" {
-		_ = SaveIdentity(c.dataDir, id)
-	}
-	return id, nil
+	return resp.StatusCode, respBody, nil
 }
 
 // mergeRoles combines the singular `role` and plural `roles` enroll fields,

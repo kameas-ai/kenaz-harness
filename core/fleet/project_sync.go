@@ -3,8 +3,9 @@ package fleet
 // project_sync.go — project-event tail + per-artifact-class opt-in + audit.
 //
 // ProjectSyncer parallels SessionSyncer but for project bundles. A "project
-// bundle" is the set of events that describe a project: metadata changes,
-// notes, agent memory. Binary artifacts are excluded by default (configurable
+// bundle" is the set of events that describe a project: metadata changes and
+// notes. Agent memory is NOT a project-bundle class: it syncs on its own
+// user-private lane (memory_sync.go, memory-sync-01MEMSY01). Binary artifacts are excluded by default (configurable
 // via ArtifactClassOptions).
 //
 // Per-artifact-class opt-in:
@@ -42,21 +43,26 @@ const (
 	ArtifactClassNotes ArtifactClass = "notes"
 	// ArtifactClassBinaries includes binary file attachments.
 	ArtifactClassBinaries ArtifactClass = "binaries"
-	// ArtifactClassMemory includes agent long-term memory blobs.
-	ArtifactClassMemory ArtifactClass = "memory"
 )
 
+// The former ArtifactClassMemory ("memory", default ON) was retired by
+// memory-sync-01MEMSY01 WP01: nothing ever appended memory events to a
+// project stream (no ProjectSyncer.AppendEvent producer, EnableSync's
+// backfill was passed nil), so the default advertised a sync that shipped
+// nothing. Agent memory syncs through the dedicated memory lane instead.
+
 // ArtifactClassOptions configures which artifact classes sync for a project.
-// Default: Notes+Memory yes, Binaries no.
+// Default: Notes yes, Binaries no. A persisted options blob from before
+// memory-sync-01MEMSY01 WP01 may still carry "memory": it is ignored on
+// decode (unknown JSON key).
 type ArtifactClassOptions struct {
 	Notes    bool `json:"notes"`
 	Binaries bool `json:"binaries"`
-	Memory   bool `json:"memory"`
 }
 
 // DefaultArtifactClassOptions returns the default opt-in set.
 func DefaultArtifactClassOptions() ArtifactClassOptions {
-	return ArtifactClassOptions{Notes: true, Binaries: false, Memory: true}
+	return ArtifactClassOptions{Notes: true, Binaries: false}
 }
 
 // ProjectEventRecord is the opaque payload unit for a project event.
@@ -346,8 +352,6 @@ func artifactClassAllowed(class ArtifactClass, opts ArtifactClassOptions) bool {
 		return opts.Notes
 	case ArtifactClassBinaries:
 		return opts.Binaries
-	case ArtifactClassMemory:
-		return opts.Memory
 	default:
 		return true // unknown classes default to allowed
 	}

@@ -1,0 +1,17 @@
+[
+  {
+    "inbox_item_id": "e1f2a3b4-c5d6-4e7f-8a9b-0c1d2e3f4a5b",
+    "session_id": "4be0643f1d98573b97cdca98a65347dd",
+    "sender_user_id": "6d1e9c4a-2b3f-4a5e-8c7d-9e0f1a2b3c4d",
+    "sender_email": "alice@example.com",
+    "received_at": "2026-10-07T08:01:00Z"
+  },
+  {
+    "inbox_item_id": "f0e1d2c3-b4a5-4968-8776-5a4b3c2d1e0f",
+    "session_id": "4be0643f1d98573b97cdca98a65347dd",
+    "sender_user_id": "6d1e9c4a-2b3f-4a5e-8c7d-9e0f1a2b3c4d",
+    "sender_email": "alice@example.com",
+    "received_at": "2026-10-07T07:01:00Z",
+    "undecryptable": true
+  }
+]

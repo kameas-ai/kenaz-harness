@@ -180,6 +180,7 @@ import type {
   FleetIdentity,
   FleetProfileInfo,
   FleetSessionView,
+  MemorySyncStatus,
   CapabilitiesView,
   FleetConfigPullStatusView,
   FleetHealthView,
@@ -212,6 +213,7 @@ import type {
   FleetTeamMemberView,
   FleetInboxItemView,
   FleetAcceptedSessionView,
+  FleetRecipientDeviceView,
   ComplianceStatus,
 } from './types';
 
@@ -986,6 +988,10 @@ interface WailsBindingsLike {
   /** Persists a new fleet telemetry consent level. Returns an error if the org tier is insufficient. */
   Fleet_SetTelemetryConsent(level: string): Promise<void>;
   Fleet_TelemetryStatus(): Promise<FleetTelemetryStatus>;
+  // ── Fleet learned-memory sync (memory-sync-01MEMSY01 WP08) ────────────
+  Fleet_MemorySyncStatus(): Promise<MemorySyncStatus>;
+  Fleet_MemorySyncEnable(scopes: string[], consentVersion: string): Promise<MemorySyncStatus>;
+  Fleet_MemorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
 
   // ── Capabilities: the one install framework (install-framework-01DOGF0B) ──
   /** Every install provider's items (consumer-derived state) + unreachable sources with reasons. */
@@ -1101,8 +1107,10 @@ interface WailsBindingsLike {
   ProjectSync_SetArtifactClass(projectID: string, opts: FleetArtifactClassOptionsView): Promise<FleetProjectSyncStatus>;
   Handoff_ListTeam(): Promise<FleetTeamMemberView[]>;
   Handoff_Share(sessionID: string, recipientUserID: string): Promise<void>;
+  Handoff_RecipientDevices(recipientUserID: string): Promise<FleetRecipientDeviceView[]>;
   Handoff_Inbox(): Promise<FleetInboxItemView[]>;
   Handoff_Accept(inboxItemID: string): Promise<FleetAcceptedSessionView>;
+  Handoff_Delete(inboxItemID: string): Promise<void>;
   ContextSync_GenerateRecoveryCode(): Promise<string>;
   ContextSync_ApplyRecoveryCode(code: string): Promise<void>;
   // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ─────────────────
@@ -2629,8 +2637,8 @@ export interface PermissionsClient {
  * Scope (WP06): RememberMessage accepts a third arg, one of
  * `'session' | 'project' | 'global'`, defaulting to `'session'` when
  * the caller omits it. PromoteScope moves an existing chunk to a wider
- * scope (move semantics — the original row is deleted and re-inserted
- * with a new ID; UI must refresh after the call).
+ * scope in place and resolves to the SAME id (memory-sync-01MEMSY01
+ * WP03; UI must still refresh after the call to pick up the new scope).
  */
 export interface MemoryClient {
   listChunks(filter?: MemoryListFilter): Promise<MemoryChunk[]>;
@@ -3857,6 +3865,15 @@ export interface FleetClient {
   getTelemetryConsent(): Promise<'none' | 'aggregate' | 'full'>;
   /** Persists a new consent level. Rejects when the org tier is insufficient. */
   setTelemetryConsent(level: 'none' | 'aggregate' | 'full'): Promise<void>;
+  /** Learned-memory sync panel state (memory-sync-01MEMSY01 WP08). */
+  memorySyncStatus(): Promise<MemorySyncStatus>;
+  /** Opt in with scopes ⊆ long_term/global and the accepted disclosure version. */
+  memorySyncEnable(scopes: string[], consentVersion: string): Promise<MemorySyncStatus>;
+  /**
+   * Opt out (Fleet keeps the data). deleteFromFleet erases everything on
+   * Fleet first; confirm must then be exactly "forget-all".
+   */
+  memorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
 }
 
 // ── Capabilities client (install-framework-01DOGF0B) ────────────────────────
@@ -4111,8 +4128,10 @@ export interface HarnessClient {
   ProjectSync_SetArtifactClass(projectID: string, opts: FleetArtifactClassOptionsView): Promise<FleetProjectSyncStatus>;
   Handoff_ListTeam(): Promise<FleetTeamMemberView[]>;
   Handoff_Share(sessionID: string, recipientUserID: string): Promise<void>;
+  Handoff_RecipientDevices(recipientUserID: string): Promise<FleetRecipientDeviceView[]>;
   Handoff_Inbox(): Promise<FleetInboxItemView[]>;
   Handoff_Accept(inboxItemID: string): Promise<FleetAcceptedSessionView>;
+  Handoff_Delete(inboxItemID: string): Promise<void>;
   ContextSync_GenerateRecoveryCode(): Promise<string>;
   ContextSync_ApplyRecoveryCode(code: string): Promise<void>;
 }
@@ -4173,7 +4192,7 @@ const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
   'Unit_ResolveLoadable', 'Catalog_List', 'Catalog_Installed', 'Sync_Status',
   'Sync_PendingMCPSecrets', 'Sites_List', 'Tasks_List', 'Tasks_Tail',
   'Tasks_ListBySession', 'ACP_ListPeers', 'ACP_ListTraces', 'Handoff_ListTeam',
-  'Handoff_Inbox',
+  'Handoff_Inbox', 'Handoff_RecipientDevices',
 ]);
 
 /**
@@ -4935,6 +4954,9 @@ export function createHarnessClient(): HarnessClient {
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
       setTelemetryConsent: (level) => b().Fleet_SetTelemetryConsent(level),
       getTelemetryStatus: () => b().Fleet_TelemetryStatus(),
+      memorySyncStatus: () => b().Fleet_MemorySyncStatus(),
+      memorySyncEnable: (scopes, consentVersion) => b().Fleet_MemorySyncEnable(scopes, consentVersion),
+      memorySyncDisable: (deleteFromFleet, confirm) => b().Fleet_MemorySyncDisable(deleteFromFleet, confirm),
     },
     // ── Capabilities (install-framework-01DOGF0B) ─────────────────────────
     capabilities: {
@@ -5022,8 +5044,10 @@ export function createHarnessClient(): HarnessClient {
     ProjectSync_SetArtifactClass: (projectID, opts) => b().ProjectSync_SetArtifactClass(projectID, opts),
     Handoff_ListTeam: () => b().Handoff_ListTeam(),
     Handoff_Share: (sessionID, recipientUserID) => b().Handoff_Share(sessionID, recipientUserID),
+    Handoff_RecipientDevices: (recipientUserID) => b().Handoff_RecipientDevices(recipientUserID),
     Handoff_Inbox: () => b().Handoff_Inbox(),
     Handoff_Accept: (inboxItemID) => b().Handoff_Accept(inboxItemID),
+    Handoff_Delete: (inboxItemID) => b().Handoff_Delete(inboxItemID),
     ContextSync_GenerateRecoveryCode: () => b().ContextSync_GenerateRecoveryCode(),
     ContextSync_ApplyRecoveryCode: (code) => b().ContextSync_ApplyRecoveryCode(code),
   };
@@ -5590,7 +5614,7 @@ export function fakeFleetSession(
     tokensUsable: false,
     claims: { hasSubject: false, hasOrgClaim: false },
     capabilities: { tier: '', enabled: {}, fetchedAt: '', source: 'default-deny' },
-    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
+    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane }, catalogRevocation: { ...lane } },
     updatedAt: '',
     ...overrides,
   };
@@ -6846,6 +6870,9 @@ export function createFakeHarnessClient(
     fleet: {
       getTelemetryConsent: async () => 'none' as const,
       setTelemetryConsent: noop,
+      memorySyncStatus: async () => fakeMemorySyncStatus(),
+      memorySyncEnable: async () => fakeMemorySyncStatus(),
+      memorySyncDisable: async () => fakeMemorySyncStatus(),
       getTelemetryStatus: async () => ({
         wired: false,
         enrolled: false,
@@ -7013,13 +7040,38 @@ export function createFakeHarnessClient(
     }),
     Handoff_ListTeam: async (): Promise<FleetTeamMemberView[]> => [],
     Handoff_Share: noop,
+    Handoff_RecipientDevices: async (_recipientUserID: string): Promise<FleetRecipientDeviceView[]> => [],
     Handoff_Inbox: async (): Promise<FleetInboxItemView[]> => [],
     Handoff_Accept: async (_inboxItemID: string): Promise<FleetAcceptedSessionView> => ({
+      localSessionID: '',
       eventCount: 0,
+      title: '',
+      alreadyAccepted: false,
     }),
+    Handoff_Delete: noop,
     ContextSync_GenerateRecoveryCode: async (): Promise<string> => '',
     ContextSync_ApplyRecoveryCode: noop,
   };
 
   return { ...defaults, ...seed };
+}
+
+/** Fake-client memory sync state: not wired (no store in the fake). */
+function fakeMemorySyncStatus(): MemorySyncStatus {
+  return {
+    wired: false,
+    entitled: false,
+    enabled: false,
+    scopes: [],
+    consentVersion: '',
+    optedInAt: '',
+    currentConsentVersion: '',
+    liveRecords: 0,
+    liveBytes: 0,
+    maxRecords: 0,
+    maxBytes: 0,
+    blockedCount: 0,
+    pendingCount: 0,
+    lane: { status: 'unknown', consecutiveFailures: 0 },
+  };
 }

@@ -81,6 +81,7 @@ func (p *SkillProvider) List(ctx context.Context, _ install.Filter) (install.Lis
 			Name: firstNonEmpty(e.Slug, e.ID), Description: e.Description,
 			Source: catalogSource(e.Visibility),
 		}
+		applyLifecycle(&it, e)
 		if sk, ok := installed[e.ID]; ok {
 			it.State = p.stateOf(sk)
 			it.State.UpdateAvailable = it.State.Installed && versionLess(sk.Version, e.Version)

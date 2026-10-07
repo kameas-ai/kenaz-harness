@@ -19,12 +19,14 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
@@ -1433,6 +1435,10 @@ type API struct {
 	// fleet holds the optional fleet client and data dir. Populated via
 	// SetFleetClient during chassis boot; nil when fleet is not wired.
 	fleet *fleetState
+	// memorySync is the Fleet learned-memory sync lane
+	// (memory-sync-01MEMSY01 WP08), installed by SetMemorySync after the
+	// lane is built. Atomic: boot installs it while the UI may read.
+	memorySync atomic.Pointer[fleet.MemorySync]
 
 	// syncNotify is the optional fleet-sync mutation hook
 	// (harness-fleet-sync-activation-01NSYNC01 gap #1). When set via

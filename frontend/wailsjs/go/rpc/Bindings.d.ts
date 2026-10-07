@@ -351,6 +351,12 @@ export function Elicit_SubmitWizardStep(arg1:string,arg2:string,arg3:json.RawMes
 
 export function Fleet_GetTelemetryConsent():Promise<string>;
 
+export function Fleet_MemorySyncDisable(arg1:boolean,arg2:string):Promise<settings.MemorySyncStatusView>;
+
+export function Fleet_MemorySyncEnable(arg1:Array<string>,arg2:string):Promise<settings.MemorySyncStatusView>;
+
+export function Fleet_MemorySyncStatus():Promise<settings.MemorySyncStatusView>;
+
 export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
 
 export function Fleet_TelemetryStatus():Promise<settings.FleetTelemetryStatusView>;
@@ -383,9 +389,13 @@ export function Graph_Validate(arg1:string):Promise<agentgraph.ValidationResult>
 
 export function Handoff_Accept(arg1:string):Promise<contextsync.AcceptedSessionView>;
 
+export function Handoff_Delete(arg1:string):Promise<void>;
+
 export function Handoff_Inbox():Promise<Array<contextsync.InboxItemView>>;
 
 export function Handoff_ListTeam():Promise<Array<contextsync.TeamMemberView>>;
+
+export function Handoff_RecipientDevices(arg1:string):Promise<Array<contextsync.RecipientDeviceView>>;
 
 export function Handoff_Share(arg1:string,arg2:string):Promise<void>;
 

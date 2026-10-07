@@ -578,6 +578,18 @@ export function Fleet_GetTelemetryConsent() {
   return window['go']['rpc']['Bindings']['Fleet_GetTelemetryConsent']();
 }
 
+export function Fleet_MemorySyncDisable(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Fleet_MemorySyncDisable'](arg1, arg2);
+}
+
+export function Fleet_MemorySyncEnable(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Fleet_MemorySyncEnable'](arg1, arg2);
+}
+
+export function Fleet_MemorySyncStatus() {
+  return window['go']['rpc']['Bindings']['Fleet_MemorySyncStatus']();
+}
+
 export function Fleet_SetTelemetryConsent(arg1) {
   return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1);
 }
@@ -642,12 +654,20 @@ export function Handoff_Accept(arg1) {
   return window['go']['rpc']['Bindings']['Handoff_Accept'](arg1);
 }
 
+export function Handoff_Delete(arg1) {
+  return window['go']['rpc']['Bindings']['Handoff_Delete'](arg1);
+}
+
 export function Handoff_Inbox() {
   return window['go']['rpc']['Bindings']['Handoff_Inbox']();
 }
 
 export function Handoff_ListTeam() {
   return window['go']['rpc']['Bindings']['Handoff_ListTeam']();
+}
+
+export function Handoff_RecipientDevices(arg1) {
+  return window['go']['rpc']['Bindings']['Handoff_RecipientDevices'](arg1);
 }
 
 export function Handoff_Share(arg1, arg2) {

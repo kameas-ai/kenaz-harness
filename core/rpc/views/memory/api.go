@@ -36,6 +36,10 @@ type Chunk struct {
 	Kind            string  `json:"kind,omitempty"`
 	RetrievalWeight float32 `json:"retrievalWeight,omitempty"`
 	TurnID          string  `json:"turnId,omitempty"`
+	// SyncBlocked is the code Fleet memory sync permanently refused this
+	// chunk with (e.g. "secret_detected"); the chunk stays on this device
+	// only and the Learned list badges it (memory-sync-01MEMSY01 OQ-6).
+	SyncBlocked string `json:"syncBlocked,omitempty"`
 }
 
 // NarrativeJobStatus is the wire shape for a failed narrative synthesis job
@@ -198,8 +202,9 @@ type MemoryAPI interface {
 	// empty. Returns the new chunk's ID.
 	RememberMessage(ctx context.Context, sessionID, messageID, scope string) (string, error)
 	// PromoteScope moves the chunk with chunkID to (newScopeKind,
-	// newScopeID). Move semantics: the original row is deleted, a new
-	// row is inserted with a new ID. Returns the new chunk's ID.
+	// newScopeID) in place. newScopeKind is one of global, long_term,
+	// project, session. The id is kept (it is the chunk's Fleet origin
+	// id, memory-sync-01MEMSY01 WP03); the returned id equals chunkID.
 	PromoteScope(ctx context.Context, chunkID, newScopeKind, newScopeID string) (string, error)
 	// Forget deletes the chunk with the given id.
 	Forget(ctx context.Context, id string) error

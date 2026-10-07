@@ -708,7 +708,7 @@ func TestInstallDocument_Mandated_ProvenanceAndRemoval(t *testing.T) {
 		t.Fatalf("mandated update: %v", err)
 	}
 	// Another catalog id may not remove it.
-	if err := api.RemoveMandatedDocument(ctx, "org-flow", "other", false); err != nil {
+	if _, err := api.RemoveMandatedDocument(ctx, "org-flow", "other", nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Load(ctx, "org-flow"); err != nil {
@@ -718,14 +718,14 @@ func TestInstallDocument_Mandated_ProvenanceAndRemoval(t *testing.T) {
 	if err := api.Delete(ctx, "org-flow"); !errors.Is(err, ErrWorkflowOrgManaged) {
 		t.Fatalf("Delete(mandated) err = %v, want ErrWorkflowOrgManaged", err)
 	}
-	if err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-m", false); err != nil {
+	if _, err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-m", nil, false); err != nil {
 		t.Fatalf("RemoveMandatedDocument: %v", err)
 	}
 	if _, err := store.Load(ctx, "org-flow"); !errors.Is(err, corewf.ErrWorkflowNotFound) {
 		t.Fatalf("workflow still stored after mandate removal: %v", err)
 	}
 	// Idempotent.
-	if err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-m", false); err != nil {
+	if _, err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-m", nil, false); err != nil {
 		t.Fatalf("second removal: %v", err)
 	}
 
@@ -733,7 +733,7 @@ func TestInstallDocument_Mandated_ProvenanceAndRemoval(t *testing.T) {
 	if _, err := api.InstallDocument(ctx, []byte("id: mine\nname: Mine\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n"), DocumentOrigin{CatalogID: "cat-u", Slug: "mine"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := api.RemoveMandatedDocument(ctx, "mine", "cat-u", false); err != nil {
+	if _, err := api.RemoveMandatedDocument(ctx, "mine", "cat-u", nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Load(ctx, "mine"); err != nil {
@@ -741,35 +741,116 @@ func TestInstallDocument_Mandated_ProvenanceAndRemoval(t *testing.T) {
 	}
 }
 
-// Review F6: a mandate that took over the user's OWN catalog install of the
-// same item hands it back on withdrawal instead of deleting it.
+// Review F6 + ledger 2026-10-06 R2 (skill-library-01SKLIB01 WP04): a
+// mandate that took over the user's OWN catalog install hands back the
+// user's ACTUAL copy on withdrawal — their version and their edits, under
+// their original catalog provenance — not the mandated content relabelled.
+// The mandate may be a different version (its own catalog id) of the item
+// the user installed. Real sqlite store, file-backed provenance.
 func TestInstallMandatedDocument_TakeoverRestoredOnWithdrawal(t *testing.T) {
 	store := newWP07TestStore(t)
-	prov := corewf.NewMemoryProvenanceStore()
+	prov := corewf.NewFileProvenanceStore(t.TempDir())
 	api := New(Config{Engine: corewf.NewEngine(), Store: store, Provenance: prov})
 	ctx := context.Background()
-	doc := []byte("id: shared-flow\nname: Shared\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n")
-	if _, err := api.InstallDocument(ctx, doc, DocumentOrigin{CatalogID: "cat-s", Slug: "shared-flow", Version: "1"}); err != nil {
+	userDoc := []byte("id: shared-flow\nname: Shared v1\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n")
+	orgDoc := []byte("id: shared-flow\nname: Shared ORG v2\nversion: 2\nsteps:\n  - name: b\n    kind: shell\n    cmd: true\n")
+	if _, err := api.InstallDocument(ctx, userDoc, DocumentOrigin{CatalogID: "cat-v1", Slug: "shared-flow", Version: "1"}); err != nil {
 		t.Fatalf("user catalog install: %v", err)
 	}
-	id, tookOver, err := api.InstallMandatedDocument(ctx, doc, "cat-s", "2")
-	if err != nil || id != "shared-flow" || !tookOver {
-		t.Fatalf("InstallMandatedDocument = %q, %v, %v; want takeover", id, tookOver, err)
+	// The user edits their copy.
+	mine, err := api.Get(ctx, "shared-flow")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := api.RemoveMandatedDocument(ctx, id, "cat-s", tookOver); err != nil {
-		t.Fatalf("withdraw: %v", err)
+	mine.Name = "Shared v1 (my edits)"
+	if _, err := api.Save(ctx, SaveInput{Workflow: &mine}); err != nil {
+		t.Fatalf("user edit: %v", err)
 	}
-	if _, err := store.Load(ctx, id); err != nil {
+
+	id, prior, err := api.InstallMandatedDocument(ctx, orgDoc, "cat-v2", "2")
+	if err != nil || id != "shared-flow" || len(prior) == 0 {
+		t.Fatalf("InstallMandatedDocument = %q, prior=%d bytes, %v; want a takeover snapshot", id, len(prior), err)
+	}
+	if w, _ := store.Load(ctx, id); w.Name != "Shared ORG v2" {
+		t.Fatalf("mandated content not installed: name %q", w.Name)
+	}
+
+	out, err := api.RemoveMandatedDocument(ctx, id, "cat-v2", prior, false)
+	if err != nil || !out.Restored {
+		restored := out.Restored
+		t.Fatalf("withdraw: restored=%v err=%v", restored, err)
+	}
+	w, err := store.Load(ctx, id)
+	if err != nil {
 		t.Fatal("withdrawal deleted the user's own catalog install")
 	}
-	if p, ok, _ := prov.Get(id); !ok || p.Source != corewf.ProvenanceCatalog {
-		t.Fatalf("provenance after withdrawal = %+v, want catalog", p)
+	if w.Name != "Shared v1 (my edits)" || len(w.Steps) != 1 || w.Steps[0].Name != "a" {
+		t.Fatalf("restored %q steps=%+v — want the user's edited v1, not the mandated content", w.Name, w.Steps)
+	}
+	if p, ok, _ := prov.Get(id); !ok || p.Source != corewf.ProvenanceCatalog || p.CatalogID != "cat-v1" || p.Version != "1" {
+		t.Fatalf("provenance after withdrawal = %+v, want the user's catalog cat-v1@1", p)
 	}
 	if err := api.Delete(ctx, id); err != nil {
 		t.Fatalf("user can no longer delete their restored install: %v", err)
 	}
 	// A fresh mandate install is not a takeover.
-	if _, tookOver, _ := api.InstallMandatedDocument(ctx, doc, "cat-s", "3"); tookOver {
-		t.Error("fresh mandate reported as a takeover")
+	if _, prior, _ := api.InstallMandatedDocument(ctx, orgDoc, "cat-v2", "3"); len(prior) != 0 {
+		t.Error("fresh mandate reported a takeover snapshot")
+	}
+}
+
+// A v0.91 record (takeover flag, no snapshot) still hands the workflow back
+// on withdrawal by relabelling — the only thing that record makes possible.
+func TestRemoveMandatedDocument_LegacyRecordRelabels(t *testing.T) {
+	store := newWP07TestStore(t)
+	prov := corewf.NewMemoryProvenanceStore()
+	api := New(Config{Engine: corewf.NewEngine(), Store: store, Provenance: prov})
+	ctx := context.Background()
+	doc := []byte("id: legacy-flow\nname: L\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n")
+	if _, err := api.InstallDocument(ctx, doc, DocumentOrigin{CatalogID: "cat-l", Version: "1", Mandated: true}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := api.RemoveMandatedDocument(ctx, "legacy-flow", "cat-l", nil, true)
+	if err != nil || !out.Restored {
+		restored := out.Restored
+		t.Fatalf("legacy restore: %v %v", restored, err)
+	}
+	if p, _, _ := prov.Get("legacy-flow"); p.Source != corewf.ProvenanceCatalog {
+		t.Fatalf("provenance = %+v, want relabelled catalog", p)
+	}
+}
+
+// A mandated workflow promoted v1→v2 (a different catalog id for the same
+// workflow id) updates in place instead of failing as a collision — the
+// precondition for a quiet upgrade.
+func TestInstallMandatedDocument_PromoteUpdatesInPlace(t *testing.T) {
+	store := newWP07TestStore(t)
+	prov := corewf.NewMemoryProvenanceStore()
+	api := New(Config{Engine: corewf.NewEngine(), Store: store, Provenance: prov})
+	ctx := context.Background()
+	v1 := []byte("id: org-flow\nname: v1\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n")
+	v2 := []byte("id: org-flow\nname: v2\nversion: 2\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n")
+	if _, _, err := api.InstallMandatedDocument(ctx, v1, "cat-1", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, prior, err := api.InstallMandatedDocument(ctx, v2, "cat-2", "2"); err != nil || len(prior) != 0 {
+		t.Fatalf("promote: prior=%d err=%v", len(prior), err)
+	}
+	if p, _, _ := prov.Get("org-flow"); p.CatalogID != "cat-2" || p.Source != corewf.ProvenanceMandated {
+		t.Fatalf("provenance = %+v", p)
+	}
+	// The superseded mandate's removal is now a no-op.
+	if _, err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-1", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if w, err := store.Load(ctx, "org-flow"); err != nil || w.Name != "v2" {
+		t.Fatalf("after superseded removal: %v %v", w.Name, err)
+	}
+	// A user-authored workflow is still never taken over.
+	if _, err := api.Save(ctx, SaveInput{Workflow: &Workflow{ID: "authored", Name: "A", Version: 1, Steps: []Step{{Name: "a", Kind: "shell", Cmd: "echo"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := api.InstallMandatedDocument(ctx, []byte("id: authored\nname: X\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n"), "cat-x", "1"); !errors.Is(err, ErrWorkflowIDCollision) {
+		t.Fatalf("mandate over a user-authored workflow = %v, want collision", err)
 	}
 }

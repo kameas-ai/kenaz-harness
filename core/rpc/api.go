@@ -718,6 +718,21 @@ type API struct {
 	// already wired; this ref lets the search lazy-init access it without
 	// re-opening the gob file.
 	memStoreRef corememory.Store
+	// memClock is the per-install hybrid logical clock that stamps every
+	// local memory mutation for Fleet memory sync (memory-sync-01MEMSY01
+	// WP02). Built from fleet.NodeID(dataDir) at boot and injected into
+	// the store (core/memory never imports core/fleet). nil when there is
+	// no on-disk store or the clock state is unreadable.
+	memClock *corememory.HLC
+	// memForgets is the persisted Fleet memory-sync forget outbox
+	// (<dataDir>/fleet/memory_outbox.json, memory-sync-01MEMSY01). Every
+	// user-intent chunk removal reports through it; the memory sync lane
+	// drains it. nil when there is no on-disk store.
+	memForgets *corememory.ForgetOutbox
+	// memorySync is the Fleet learned-memory sync lane
+	// (memory-sync-01MEMSY01 WP07). nil when there is no memory store,
+	// clock or outbox (nil-core chassis, unreadable clock state).
+	memorySync *corefleet.MemorySync
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
 	// WP07). The manager owns the resolved catalog + user-override
@@ -2220,6 +2235,8 @@ func New(c *core.Core, opts ...Option) *API {
 	if gs, ok := memStore.(corememory.GateSetter); ok && gs != nil {
 		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
+	a.memClock = openMemoryClock(c, memStore)
+	a.memForgets = openMemoryForgetOutbox(c, memStore, a.memClock)
 	personalForLLM := newPersonalStore(c)
 	a.personalStore = personalForLLM
 	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP10 (FR-014):
@@ -2858,18 +2875,24 @@ func New(c *core.Core, opts ...Option) *API {
 	// v0.86.0 sweep review (L5): the same teardown forgets any hook
 	// additional_context still queued for the session in the chat runner.
 	// One hook, both duties — WithDeleteHookOpt replaces, not chains.
+	//
+	// memory-sync-01MEMSY01 WP09 (H10): deleting a session also deletes its
+	// session-scoped memory chunks — before this the delete cascade covered
+	// artifacts only and the chunks outlived their session indefinitely.
+	// Read through a.memStoreRef at call time (it is assigned later in New).
 	grants := a.confirmSessionGrants
 	chatRunnerForDelete := stack.chatRunner
-	if grants != nil || chatRunnerForDelete != nil {
-		a.sessionsAPI = sessions.WithDeleteHookOpt(a.sessionsAPI, func(sessionID string) {
-			if grants != nil {
-				grants.RevokeSession(sessionID)
-			}
-			if chatRunnerForDelete != nil {
-				chatRunnerForDelete.ForgetSession(sessionID)
-			}
-		})
-	}
+	a.sessionsAPI = sessions.WithDeleteHookOpt(a.sessionsAPI, func(sessionID string) {
+		if grants != nil {
+			grants.RevokeSession(sessionID)
+		}
+		if chatRunnerForDelete != nil {
+			chatRunnerForDelete.ForgetSession(sessionID)
+		}
+		if gone, err := corememory.DeleteSessionMemory(context.Background(), a.memStoreRef, memForgetRecorder(a.memForgets), sessionID); err != nil {
+			logging.L().Warn("memory.session_cascade_failed", "err", err.Error(), "deleted", len(gone))
+		}
+	})
 	// Wire export dependencies (Cedar gate) at boot time so the Cedar
 	// check is ready before the first Export call. The FilePicker is
 	// intentionally left nil here; it is wired per-invocation in the
@@ -3001,6 +3024,7 @@ func New(c *core.Core, opts ...Option) *API {
 		Embedder: embedder,
 		Reader:   newMemoryMessageReader(c),
 		Profiles: &personalProfileLister{store: personalForLLM},
+		Forgets:  memForgetRecorder(a.memForgets),
 	})
 	// Keep a ref for the search adapter (unified-search-01KX5R8C WP03).
 	a.memStoreRef = memStore
@@ -3499,7 +3523,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// the view degrades to the registry-only API which returns "not wired"
 	// for user commands.
 	{
-		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI, a.exposureIdx)
+		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, memForgetRecorder(a.memForgets), a.branchesAPI, a.workflowsAPI, a.exposureIdx)
 		if slashStore != nil && slashDispatch != nil {
 			a.slashAPI = slashview.NewWithStore(slashRegistry, slashStore, slashDispatch)
 			logging.L().Info("rpc.slashcmd.user_wired",
@@ -3537,6 +3561,21 @@ func New(c *core.Core, opts ...Option) *API {
 	// mandated provenance, and are removed when no longer mandated.
 	if wfImpl, ok := a.workflowsAPI.(*workflowsview.API); ok && wfImpl != nil && a.settingsImpl != nil {
 		a.settingsImpl.SetMandatedWorkflows(mandatedWorkflowsAdapter{wf: wfImpl})
+		// skill-library-01SKLIB01 WP03: the catalog revocation sweep's
+		// workflow half (user catalog installs only, provenance re-checked
+		// at removal).
+		a.settingsImpl.SetRevocationWorkflows(revocationWorkflowsAdapter{wf: wfImpl})
+	}
+	if a.settingsImpl != nil {
+		// A revocation uninstall repaints an open Capabilities surface the
+		// same way any other uninstall does.
+		pub := chatBrokerAdapter{broker: a.broker}
+		a.settingsImpl.SetRevocationAnnouncer(func(t corefleet.RevocationTarget) {
+			pub.Emit(install.TopicCapabilityUninstalled, install.Event{
+				Kind: install.Kind(corefleet.CapabilityKindForCatalog(t.Kind)), ID: t.CatalogID,
+				Version: t.Version, Installed: false, Via: "revoked",
+			})
+		})
 	}
 
 	// Auto-update subsystem (mission auto-update, v0.4.0 WP03).
@@ -4347,6 +4386,15 @@ func New(c *core.Core, opts ...Option) *API {
 			)
 		}
 
+		// memory-sync-01MEMSY01 WP07: the learned-memory sync lane. Built
+		// whenever there is a real memory store + clock + outbox; it gates
+		// itself per cycle on the memory_sync capability AND this device's
+		// opt-in, so an un-entitled or un-opted user makes no request.
+		a.memorySync = buildMemorySync(a, flCl, flDataDir)
+		if a.settingsImpl != nil && a.memorySync != nil {
+			a.settingsImpl.SetMemorySync(a.memorySync)
+		}
+
 		// fleet-skills-sync-01NDFSEX18 WP02: wire fleet skill dependencies onto
 		// the slashAPI. The capability snapshot is read lazily from the poller at
 		// call time via GetCaps so tier changes propagate within one poll
@@ -4461,10 +4509,24 @@ func New(c *core.Core, opts ...Option) *API {
 			}
 
 			a.contextSyncAPI = &contextsyncview.Impl{
-				Session:  &sessionSyncBackendAdapter{ss: sessionSyncer, breaker: appendBreaker},
-				Project:  &projectSyncBackendAdapter{ps: projectSyncer},
-				Handoff:  &handoffBackendAdapter{hh: handoffHandler},
-				Recovery: &recoveryBackendAdapter{},
+				Session: &sessionSyncBackendAdapter{ss: sessionSyncer, breaker: appendBreaker},
+				Project: &projectSyncBackendAdapter{ps: projectSyncer},
+				Handoff: &handoffBackendAdapter{hh: handoffHandler},
+				// device-keys-handoff-01DEVKH01 WP04: Handoff_Share sends
+				// the REAL session (unwired-ledger 2026-10-06 item 1).
+				SessionEvents: newHandoffSessionLoader(c),
+				// device-keys-handoff-01DEVKH01 WP05: accepted handoffs
+				// become real local sessions (OQ-2).
+				Accepted: newHandoffAcceptStore(chassisSessions(c), flDataDir),
+				Recovery: &recoveryBackendAdapter{
+					client:  flCl,
+					dataDir: flDataDir,
+					onNodeRemoved: func() {
+						if a.settingsImpl != nil {
+							a.settingsImpl.FleetNodeRemoved()
+						}
+					},
+				},
 				// fleet-enforcement-truth-01PMZ505 WP13 (owner ruling
 				// G-7): a.cedarGate() is the SAME process-singleton every
 				// other gate site consults (nil-safe — degrades to
@@ -4877,7 +4939,7 @@ func New(c *core.Core, opts ...Option) *API {
 // workflows API (used by /wf).
 // Returns nil when registry construction fails; the view degrades
 // to a friendly error response on every Execute.
-func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI, exposureIdx *secrets.ExposureIndex) *coreslashcmd.Registry {
+func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, memForgets corememory.ForgetRecorder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI, exposureIdx *secrets.ExposureIndex) *coreslashcmd.Registry {
 	deps := coreslashcmd.Deps{}
 	if c != nil && c.SessionManager() != nil {
 		deps.Sessions = &slashSessionAppender{mgr: c.SessionManager()}
@@ -4886,7 +4948,7 @@ func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore coremem
 		deps.Providers = &slashProviderLister{inner: llmAPI}
 	}
 	if memStore != nil && embedder != nil {
-		deps.Memory = &slashMemoryGateway{store: memStore, embedder: embedder}
+		deps.Memory = &slashMemoryGateway{store: memStore, embedder: embedder, forgets: memForgets}
 	}
 	if branchesAPI != nil {
 		deps.Branches = &slashBranchGateway{inner: branchesAPI}
@@ -4965,6 +5027,9 @@ func (a *slashProviderLister) ListProviders(ctx context.Context) ([]coreslashcmd
 type slashMemoryGateway struct {
 	store    corememory.Store
 	embedder corememory.Embedder
+	// forgets: /forget is a user-intent delete — it queues a Fleet memory
+	// sync forget when Fleet may know the chunk (memory-sync-01MEMSY01).
+	forgets corememory.ForgetRecorder
 }
 
 func (g *slashMemoryGateway) Memorize(ctx context.Context, sessionID, text string) (string, error) {
@@ -5055,7 +5120,7 @@ func (g *slashMemoryGateway) Forget(ctx context.Context, id string) error {
 	if g == nil || g.store == nil {
 		return errors.New("slashcmd: memory store unavailable")
 	}
-	if err := g.store.Delete(ctx, id); err != nil {
+	if err := corememory.RemoveForSync(ctx, g.store, g.forgets, id); err != nil {
 		// chromemStore returns a fmt.Errorf("memory: chunk %q not
 		// found", id) — match on the substring since the underlying
 		// error is not a typed sentinel.
@@ -8829,6 +8894,134 @@ func openMemoryStore(c *core.Core) corememory.Store {
 	return store
 }
 
+// openMemoryClock builds the per-install memory HLC (memory-sync-01MEMSY01
+// WP02) keyed by the fleet node id — the same value the memory sync lane
+// sends as device_id, so HLC node ids and recall G-counter keys agree — and
+// installs it on the store so every local mutation is stamped. Returns nil
+// (stamping off; the sync client stamps unstamped fields on first push)
+// when there is no store/DataDir or the persisted clock state is corrupt;
+// the latter is logged, never silently reset, because a reset clock could
+// hand out HLCs that sort before ones this install already pushed.
+func openMemoryClock(c *core.Core, store corememory.Store) *corememory.HLC {
+	if c == nil || c.DataDir() == "" || store == nil {
+		return nil
+	}
+	nodeID, err := corefleet.NodeID(c.DataDir())
+	if err != nil {
+		logging.L().Warn("memory.hlc.node_id_failed", "err", err.Error())
+		return nil
+	}
+	statePath := corememory.HLCStatePath(c.DataDir())
+	clock, err := corememory.NewHLC(nodeID, statePath)
+	if err != nil {
+		// Unreadable state (corrupt / empty): rebuild the floor from the
+		// highest HLC this install ever stamped — every chunk field in
+		// memory.gob plus every queued forget — instead of leaving sync
+		// unavailable. The lane reports degraded until the first clean save.
+		stamps := corememory.StampedHLCs(context.Background(), store)
+		if ob, oerr := corememory.OpenForgetOutbox(corememory.ForgetOutboxPath(c.DataDir()), nil); oerr == nil {
+			for _, op := range ob.Pending() {
+				stamps = append(stamps, op.HLC)
+			}
+		}
+		clock, err = corememory.RecoverHLC(nodeID, statePath, stamps)
+		if err != nil {
+			logging.L().Error("memory.hlc.open_failed", "err", err.Error())
+			return nil
+		}
+		logging.L().Warn("memory.hlc.rebuilt_from_stamps", "stamps", len(stamps))
+	}
+	if cs, ok := store.(corememory.ClockSetter); ok {
+		cs.SetClock(clock)
+	}
+	return clock
+}
+
+// openMemoryForgetOutbox opens the persisted forget outbox
+// (memory-sync-01MEMSY01 WP04). nil when there is no store/DataDir; a
+// corrupt outbox is logged and left nil (forgets are then not recorded)
+// rather than reset — resetting would silently drop queued forgets and let
+// the next pull resurrect memories the user deleted.
+func openMemoryForgetOutbox(c *core.Core, store corememory.Store, clock *corememory.HLC) *corememory.ForgetOutbox {
+	if c == nil || c.DataDir() == "" || store == nil {
+		return nil
+	}
+	ob, err := corememory.OpenForgetOutbox(corememory.ForgetOutboxPath(c.DataDir()), clock)
+	if err != nil {
+		logging.L().Error("memory.sync.outbox_open_failed", "err", err.Error())
+		return nil
+	}
+	return ob
+}
+
+// memForgetRecorder adapts the outbox to the view's ForgetRecorder seam
+// without the typed-nil-interface trap (a nil *ForgetOutbox stored in an
+// interface would compare non-nil).
+func memForgetRecorder(ob *corememory.ForgetOutbox) corememory.ForgetRecorder {
+	if ob == nil {
+		return nil
+	}
+	return ob
+}
+
+// buildMemorySync constructs and starts the Fleet memory sync lane
+// (memory-sync-01MEMSY01 WP07). Returns nil — and starts nothing — when
+// the store is not a SyncStore or the clock / outbox could not be opened.
+// A nil / nop fleet client still builds the lane: it reports itself off
+// (fleet_disabled) on every cycle and makes no request.
+func buildMemorySync(a *API, flCl *corefleet.Client, dataDir string) *corefleet.MemorySync {
+	if a == nil || a.memClock == nil || a.memForgets == nil || dataDir == "" {
+		return nil
+	}
+	store, ok := a.memStoreRef.(corememory.SyncStore)
+	if !ok {
+		return nil
+	}
+	settingsRef := a.settingsImpl
+	home, _ := os.UserHomeDir()
+	coreRef, personal := a.core, a.personalStore
+	ms, err := corefleet.NewMemorySync(corefleet.MemorySyncConfig{
+		Client:  flCl,
+		Store:   store,
+		Clock:   a.memClock,
+		Outbox:  a.memForgets,
+		DataDir: dataDir,
+		Caps: func() *corefleet.Capabilities {
+			if settingsRef == nil {
+				return nil
+			}
+			p := settingsRef.CapabilityPoller()
+			if p == nil {
+				return nil
+			}
+			c := p.Current()
+			return &c
+		},
+		Lanes: func() *corefleet.SyncLanes {
+			if settingsRef == nil {
+				return nil
+			}
+			return settingsRef.FleetSyncLanes()
+		}(),
+		// WP06: pulled chunks arrive without vectors; index them with the
+		// embedder as configured NOW (re-resolved per drain so a provider
+		// added after boot is picked up). NoopEmbedder ⇒ nothing drains.
+		AfterPull: func(ctx context.Context) {
+			emb := newEmbedder(coreRef, personal, settingsRef)
+			if n, err := corememory.DrainEmbedPending(ctx, store, emb, 500); err != nil {
+				logging.L().Warn("memory.sync.reembed_failed", "indexed", n, "err", err.Error())
+			}
+		},
+		HomeDir: home,
+	})
+	if err != nil {
+		logging.L().Error("memory.sync.open_failed", "err", err.Error())
+		return nil
+	}
+	ms.Start(context.Background())
+	return ms
+}
+
 // buildMemoryPruneScheduler constructs the automatic prune-sweep
 // scheduler for the long-term memory store (finding #61 GAP-1: see
 // the API.pruneScheduler field doc). Returns nil when there is no
@@ -9996,6 +10189,28 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 			Content:       m.Content,
 			ContentBlocks: m.ContentBlocks,
 		})
+	}
+	return out, nil
+}
+
+// RunTurnSpans implements llm.TurnRunSpanReader: the turn spans some
+// chat run was already dispatched for (session_turn_runs), so a Retry of
+// an undelivered turn is not re-announced to fleet context-sync.
+func (r *sessionHistoryReader) RunTurnSpans(ctx context.Context, sessionID string) (map[string]llm.TurnRunState, error) {
+	if r == nil || r.mgr == nil {
+		return nil, nil
+	}
+	runs, err := r.mgr.ListTurnRuns(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	// ListTurnRuns is oldest first, so the last write per span wins: the
+	// map holds each span's NEWEST run.
+	out := make(map[string]llm.TurnRunState, len(runs))
+	for _, tr := range runs {
+		if tr.TurnSpanID != "" {
+			out[tr.TurnSpanID] = llm.TurnRunState{Outcome: tr.Outcome.Outcome, Delivered: tr.Outcome.Delivered}
+		}
 	}
 	return out, nil
 }
@@ -11988,10 +12203,33 @@ func (e *auditArchiverEmitter) Emit(_ context.Context, ev contextaudit.Event) er
 // fleet.MandatedWorkflows (core/fleet must not import the view).
 type mandatedWorkflowsAdapter struct{ wf *workflowsview.API }
 
-func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (string, bool, error) {
+func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (string, json.RawMessage, error) {
 	return m.wf.InstallMandatedDocument(ctx, payload, catalogID, version)
 }
 
-func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, restoreCatalog bool) error {
-	return m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID, restoreCatalog)
+func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (corefleet.MandatedWorkflowRemoval, error) {
+	out, err := m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID, prior, legacyRestore)
+	return corefleet.MandatedWorkflowRemoval{Restored: out.Restored, RestoreRefused: out.RestoreRefused}, err
+}
+
+// revocationWorkflowsAdapter adapts the workflows view to
+// fleet.RevocationWorkflows (skill-library-01SKLIB01 WP03).
+type revocationWorkflowsAdapter struct{ wf *workflowsview.API }
+
+func (r revocationWorkflowsAdapter) CatalogInstalledWorkflows(ctx context.Context) ([]corefleet.RevocationTarget, error) {
+	ins, err := r.wf.CatalogInstalls(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]corefleet.RevocationTarget, 0, len(ins))
+	for _, in := range ins {
+		out = append(out, corefleet.RevocationTarget{
+			Kind: corefleet.CatalogKindWorkflow, CatalogID: in.CatalogID, Version: in.Version, LocalID: in.WorkflowID,
+		})
+	}
+	return out, nil
+}
+
+func (r revocationWorkflowsAdapter) RemoveRevokedWorkflow(ctx context.Context, workflowID, catalogID string) (bool, error) {
+	return r.wf.RemoveRevokedCatalogDocument(ctx, workflowID, catalogID)
 }

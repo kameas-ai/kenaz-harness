@@ -84,6 +84,9 @@ type API struct {
 	// optional; when nil the narrative API methods return a stub/no-op.
 	narrativeMetrics narrative.MetricsStore
 	narrativeJobs    narrative.JobQueue
+	// forgets receives every user-intent removal so Fleet memory sync can
+	// forget the id (memory-sync-01MEMSY01). nil = no sync.
+	forgets corememory.ForgetRecorder
 
 	mu    sync.Mutex
 	stats []PruneStats
@@ -127,6 +130,12 @@ type Config struct {
 	Profiles         ProfileLister
 	NarrativeMetrics narrative.MetricsStore
 	NarrativeJobs    narrative.JobQueue
+	// Forgets is the Fleet memory-sync forget outbox
+	// (memory-sync-01MEMSY01): every path that removes a chunk on the
+	// user's behalf (re-summarize, Forget) reports the removed row so a
+	// chunk Fleet may know is forgotten on every device. The rpc wiring
+	// assigns the persisted corememory.ForgetOutbox. nil = no sync.
+	Forgets corememory.ForgetRecorder
 }
 
 // New constructs a MemoryAPI.
@@ -148,6 +157,7 @@ func New(cfg Config) *API {
 		profiles:         cfg.Profiles,
 		narrativeMetrics: cfg.NarrativeMetrics,
 		narrativeJobs:    cfg.NarrativeJobs,
+		forgets:          cfg.Forgets,
 		resummaryAt:      make(map[string]time.Time),
 	}
 }
@@ -284,43 +294,65 @@ func (a *API) RememberMessage(ctx context.Context, sessionID, messageID, scope s
 	return id, nil
 }
 
-// PromoteScope moves a chunk to a new scope. It deletes the original
-// row and inserts a new chunk with a new ID, the same content +
-// embedding, and the new (kind, id) scope. Atomic under the store's
-// mutex: callers see either the old chunk or the new one, never both.
+// PromoteScope moves a chunk to a new scope in place and returns its id,
+// which is unchanged (memory-sync-01MEMSY01 WP03, contract H1: the id is
+// the chunk's Fleet origin id and must survive promotion). long_term is a
+// valid target — it was unreachable from this RPC until WP03, which left
+// Fleet's long_term sync scope with no producer (spec OQ-2). global and
+// long_term are harness-wide, so their scope id is always empty.
 func (a *API) PromoteScope(ctx context.Context, chunkID, newScopeKind, newScopeID string) (string, error) {
 	if a == nil || a.store == nil {
 		return "", ErrStoreUnavailable
 	}
 	switch newScopeKind {
-	case corememory.ScopeKindGlobal, corememory.ScopeKindProject, corememory.ScopeKindSession:
+	case corememory.ScopeKindGlobal, corememory.ScopeKindLongTerm,
+		corememory.ScopeKindProject, corememory.ScopeKindSession:
 	default:
 		return "", fmt.Errorf("%w: %q", ErrInvalidScope, newScopeKind)
 	}
-	if newScopeKind == corememory.ScopeKindGlobal {
+	if newScopeKind == corememory.ScopeKindGlobal || newScopeKind == corememory.ScopeKindLongTerm {
 		newScopeID = ""
 	}
 	mover, ok := a.store.(corememory.ScopePromoter)
 	if !ok {
 		return "", errors.New("memory: store does not support scope promotion")
 	}
-	newID, err := newChunkID()
-	if err != nil {
+	if err := mover.PromoteScope(ctx, chunkID, newScopeKind, newScopeID); err != nil {
 		return "", err
 	}
-	if err := mover.PromoteScope(ctx, chunkID, newID, newScopeKind, newScopeID); err != nil {
-		return "", err
-	}
-	return newID, nil
+	return chunkID, nil
 }
 
-// Forget removes the chunk with id from the store. Bare wrapper around
-// Store.Delete so the bindings layer doesn't import core/memory.
+// Forget removes the chunk with id from the store. It is a user-intent
+// delete (memory-sync-01MEMSY01 WP07, contract H7): when Fleet may know
+// the chunk, a forget op is queued so every other device deletes it too.
+// A chunk Fleet cannot know coalesces with its unpushed create and sends
+// nothing. (Automatic prune never comes through here.)
 func (a *API) Forget(ctx context.Context, id string) error {
 	if a == nil || a.store == nil {
 		return ErrStoreUnavailable
 	}
-	return a.store.Delete(ctx, id)
+	if err := corememory.RemoveForSync(ctx, a.store, a.forgets, id); err != nil {
+		return err
+	}
+	a.dropMetrics(ctx, id)
+	return nil
+}
+
+// dropMetrics removes the narrative metrics row of a removed chunk so its
+// signals do not outlive it (memory-sync-01MEMSY01 WP09, H10). The
+// metrics store is optional; there is no production SQL store today (the
+// narrative_metrics migration is not registered — ruling A-4), so this
+// only matters once one is wired.
+func (a *API) dropMetrics(ctx context.Context, ids ...string) {
+	if a.narrativeMetrics == nil {
+		return
+	}
+	for _, id := range ids {
+		if err := a.narrativeMetrics.Delete(ctx, id); err != nil {
+			slog.WarnContext(ctx, "memory: drop narrative metrics failed", "error", err.Error())
+		}
+	}
 }
 
 // Pin sets / clears the do-not-prune flag on a chunk (Bundle E WP16).
@@ -578,7 +610,7 @@ func buildScopeFilter(scope string) []corememory.ScopeFilter {
 	switch scope {
 	case "":
 		return nil
-	case corememory.ScopeKindGlobal, corememory.ScopeKindProject, corememory.ScopeKindSession:
+	case corememory.ScopeKindGlobal, corememory.ScopeKindLongTerm, corememory.ScopeKindProject, corememory.ScopeKindSession:
 		return []corememory.ScopeFilter{{Kind: scope}}
 	default:
 		return nil
@@ -618,6 +650,7 @@ func toViewChunk(c corememory.Chunk) Chunk {
 		Kind:            c.Kind,
 		RetrievalWeight: c.RetrievalWeight,
 		TurnID:          c.TurnID,
+		SyncBlocked:     c.SyncBlocked,
 	}
 }
 
@@ -884,13 +917,16 @@ func (a *API) ResummarizeChunk(ctx context.Context, chunkID string) (Chunk, erro
 	fallback := eb.BuildTurnFallback(found.Content, "", nil)
 	newContent := fallback.String()
 
-	// Replace the chunk atomically (Delete + Add).
+	// Content is immutable on Fleet (memory-sync-01MEMSY01 WP04, contract
+	// H2): the re-summary is a NEW record with a new id carrying the same
+	// turn_id, and the old id is forgotten (when Fleet may know it). The
+	// narrative promoter's synthesised write is the second path with the
+	// same obligation; both go through corememory.ReplaceForSync.
 	newID, err := newChunkID()
 	if err != nil {
 		return Chunk{}, err
 	}
-	updated := *found
-	updated.ID = newID
+	updated := corememory.FreshIdentity(*found, newID)
 	updated.Content = newContent
 	updated.ContentHash = corememory.HashContent(newContent)
 	updated.Kind = "narrative_extractive_fallback"
@@ -899,18 +935,23 @@ func (a *API) ResummarizeChunk(ctx context.Context, chunkID string) (Chunk, erro
 	if a.embedder != nil {
 		if _, ok := a.embedder.(corememory.NoopEmbedder); !ok {
 			vecs, embedErr := a.embedder.Embed(ctx, []string{newContent})
-			if embedErr == nil && len(vecs) > 0 {
+			if embedErr == nil && len(vecs) > 0 && len(vecs[0]) > 0 {
 				updated.Embedding = vecs[0]
+				updated.EmbedPending = false
 			}
 		}
 	}
+	// A chunk pulled from Fleet may have no vector yet (WP06): the
+	// re-summary inherits that state instead of failing the add.
+	if len(updated.Embedding) == 0 {
+		updated.EmbedPending = true
+	}
 
-	if err := a.store.Delete(ctx, chunkID); err != nil {
-		return Chunk{}, fmt.Errorf("memory: delete old chunk: %w", err)
+	// New record first, then the old one goes (a failed add loses nothing).
+	if err := corememory.ReplaceForSync(ctx, a.store, a.forgets, updated, chunkID); err != nil {
+		return Chunk{}, fmt.Errorf("memory: replace summarised chunk: %w", err)
 	}
-	if err := a.store.Add(ctx, updated); err != nil {
-		return Chunk{}, fmt.Errorf("memory: add summarised chunk: %w", err)
-	}
+	a.dropMetrics(ctx, chunkID)
 	return toViewChunk(updated), nil
 }
 

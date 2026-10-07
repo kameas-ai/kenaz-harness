@@ -25,6 +25,7 @@ import (
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
@@ -220,8 +221,16 @@ type RunSpecRecorder func(runID string, g coreag.Graph)
 // turn from yesterday link to /agentgraph/run/:runId. *session.Manager
 // satisfies it. specDigest is agentgraph.SpecDigest of the resolved
 // spec: which version of graphID the run executed.
+//
+// RecordTurnOutcome stamps how the run ended onto the same row
+// (undelivered-message-retry, migration sessions/0344): whether the model
+// accepted the request (Delivered) and, for a failure, its classified
+// reason. It is written by driveRun BEFORE the llm:stream-closed emit, so
+// a surface that reloads Sessions_TurnRuns on close always sees it; it is
+// what makes a message's NOT DELIVERED state survive a reload.
 type TurnRunRecorder interface {
 	RecordTurnRun(ctx context.Context, sessionID, turnSpanID, runID, graphID, specDigest string) error
+	RecordTurnOutcome(ctx context.Context, sessionID, runID string, o session.TurnRunOutcome) error
 }
 
 // AnswerInjector pushes the latest user message answer into the
@@ -899,6 +908,11 @@ type chatSub struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	bridge *StreamBridge
+	// providerKind is the adapter kind of the run's profile, resolved
+	// once at StartStream so the terminal path can classify a failure
+	// with the provider's name ("Out of credits with OpenRouter") even
+	// when the typed error carries no registry decoration.
+	providerKind string
 	// journal is the turn's move journal
 	// (model-moves-transcript-01PMCH01 WP02). driveRun's terminal paths
 	// flush it, and the interrupt path records the partial through it so
@@ -1640,6 +1654,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		done:          make(chan struct{}),
 		bridge:        bridge,
 		journal:       journal,
+		providerKind:  llmAdapter.ProviderKind(),
 		effectiveTier: resolvedKnobs.EffectiveTier,
 		// Claimed synchronously, here, rather than at the top of
 		// driveRun's goroutine: PauseSubagent can race in the instant
@@ -1714,6 +1729,24 @@ func (r *ChatRunner) StopStream(_ context.Context, subID string) error {
 	sub.cancel()
 	<-sub.done
 	return nil
+}
+
+// HasActiveRun reports whether a run for sessionID is still executing —
+// started and not yet at its terminal close. The llm view uses it to
+// refuse a second, concurrent Retry of the same turn
+// (undelivered-message-retry; llm.ActiveRunChecker).
+func (r *ChatRunner) HasActiveRun(sessionID string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, sub := range r.subs {
+		if sub.sessionID == sessionID && !sub.finished.Load() {
+			return true
+		}
+	}
+	return false
 }
 
 // HasPausedSubFor reports whether a paused turn exists for the given profileID.
@@ -1811,6 +1844,13 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 			// Best-effort: tell the frontend the turn ended so the typing
 			// indicator clears instead of hanging forever.
 			if sub.finished.CompareAndSwap(false, true) {
+				r.recordTurnOutcome(sub, session.TurnRunOutcome{
+					Outcome:        session.TurnOutcomeFailed,
+					Delivered:      sub.bridge.ModelResponded(),
+					FailureClass:   string(corellm.FailureUnknown),
+					FailureCode:    corellm.FailureCodeUnknown,
+					FailureSummary: "Internal error",
+				})
 				sub.bridge.EmitClosed("backend-error", "internal error", "")
 			}
 		}
@@ -1947,6 +1987,10 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	reason := "completed"
 	message := ""
 	finishReason := ""
+	// failure is the classified reason a backend-error close carries
+	// (undelivered-message-retry): class + code + provider + sanitized
+	// provider message. Zero for every non-error close.
+	var failure corellm.RunFailure
 	// errorKind discriminates the terminal close beyond `reason` so the
 	// surface can render honest copy — see StreamClosedPayload.ErrorKind.
 	errorKind := ""
@@ -2004,6 +2048,10 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		if !sub.finished.CompareAndSwap(false, true) {
 			return
 		}
+		// The run is over even though the stream stays open: record it so
+		// a reload shows the message as not delivered (a successful
+		// RedriveLastTurn is a later delivered run, which clears it).
+		r.recordTurnOutcome(sub, failedOutcome(corellm.ClassifyFailure(err, sub.providerKind), sub.bridge.ModelResponded()))
 		log.Info("chat.run.auth_failure_paused",
 			"sub_id", sub.id,
 			"session_id", sub.sessionID,
@@ -2041,6 +2089,10 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	case errors.Is(err, coreag.ErrBudgetExceeded):
 		reason = "backend-error"
 		message = budgetCapMessage(err, sub.effectiveTier)
+		failure = corellm.RunFailure{
+			Class: corellm.FailureUserActionable, Code: failureCodeBudget,
+			Provider: sub.providerKind, Summary: "Reached the per-run budget cap",
+		}
 	case errors.Is(err, compaction.ErrSessionFull):
 		// The `compact` node decided the user is genuinely out of
 		// context: the dial is "off" and the session is already over
@@ -2137,6 +2189,30 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// err.Error() unchanged.
 		message = corellm.FriendlyOr(err, err.Error())
 	}
+	// The close Message reaches a chat bubble and, for a partial, a
+	// persisted row; Friendly() copy embeds the provider's raw error body
+	// verbatim, and some providers echo the offending key or header back
+	// in it. Redact every credential shape before it leaves the runner.
+	message = corellm.RedactCredentials(message)
+	if reason == "backend-error" && failure.Class == "" {
+		failure = corellm.ClassifyFailure(err, sub.providerKind)
+		if errorKind == StreamClosedErrorKindSessionFull {
+			failure.Class = corellm.FailureUserActionable
+			failure.Code = StreamClosedErrorKindSessionFull
+			failure.Summary = "The conversation no longer fits the model's context window"
+		}
+	} else if reason == "custom_endpoint_missing_capability" {
+		failure = corellm.ClassifyFailure(err, sub.providerKind)
+		failure.Class, failure.Code = corellm.FailureUserActionable, corellm.FailureCodeUnsupported
+		failure.Summary = "This endpoint does not support a capability this request needs"
+	}
+	// delivered: did the model accept this turn's request? Any streamed
+	// model output (text, reasoning, a tool call, usage, finish) means it
+	// did; a clean completion means it did. A failure before the first
+	// such event — a 402/401/429 on the response line, a refused
+	// connection — means the user's message never reached the model,
+	// which is what the chat surface renders as NOT DELIVERED.
+	delivered := runTerminatedClean || sub.bridge.ModelResponded()
 
 	// long-turn-resilience-01KR3PRS WP03: when the kernel exited with
 	// a backend-error AND the StreamBridge accumulated text deltas
@@ -2287,6 +2363,16 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	if !sub.finished.CompareAndSwap(false, true) {
 		return
 	}
+	// Persist the outcome BEFORE the close is announced, so a surface
+	// that re-reads Sessions_TurnRuns on stream-closed sees it.
+	switch {
+	case runTerminatedClean:
+		r.recordTurnOutcome(sub, session.TurnRunOutcome{Outcome: session.TurnOutcomeCompleted, Delivered: true})
+	case reason == "stop-called":
+		r.recordTurnOutcome(sub, session.TurnRunOutcome{Outcome: session.TurnOutcomeStopped, Delivered: delivered})
+	default:
+		r.recordTurnOutcome(sub, failedOutcome(failure, delivered))
+	}
 	sub.bridge.EmitClosedFull(StreamClosed{
 		Reason:             reason,
 		Message:            message,
@@ -2295,6 +2381,9 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		PartialFailureKind: partialFailureKind,
 		PartialRecoverable: partialRecoverable,
 		ErrorKind:          errorKind,
+		TurnSpanID:         sub.turn.MessageID,
+		Delivered:          delivered,
+		Failure:            failure,
 	})
 	log.Info("chat.run.complete",
 		"sub_id", sub.id,
@@ -2302,6 +2391,47 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		"reason", reason,
 		"err", message,
 	)
+}
+
+// failureCodeBudget is the run-failure code for a per-run budget cap. It
+// is chat-local (the cap is a harness policy, not a provider error) and
+// user_actionable: retrying unchanged hits the same cap.
+const failureCodeBudget = "budget_exceeded"
+
+// failedOutcome builds the persisted outcome of a failed run.
+func failedOutcome(f corellm.RunFailure, delivered bool) session.TurnRunOutcome {
+	class := string(f.Class)
+	if class == "" {
+		class = string(corellm.FailureUnknown)
+	}
+	return session.TurnRunOutcome{
+		Outcome:         session.TurnOutcomeFailed,
+		Delivered:       delivered,
+		FailureClass:    class,
+		FailureCode:     f.Code,
+		FailureStatus:   f.Status,
+		FailureProvider: f.Provider,
+		FailureSummary:  f.Summary,
+		FailureMessage:  f.Message,
+	}
+}
+
+// recordTurnOutcome stamps the run's terminal outcome onto its
+// session_turn_runs row (undelivered-message-retry). Best-effort, like
+// RecordTurnRun: a failure is logged, never fatal — the outcome is what
+// makes NOT DELIVERED survive a reload, but the live close payload still
+// carries it for the open surface. A fresh context: the run's own ctx is
+// often already cancelled here.
+func (r *ChatRunner) recordTurnOutcome(sub *chatSub, o session.TurnRunOutcome) {
+	if r.cfg.TurnRuns == nil || sub == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+	defer cancel()
+	if err := r.cfg.TurnRuns.RecordTurnOutcome(ctx, sub.sessionID, sub.id, o); err != nil {
+		logging.L().Warn("chat.turn_run.outcome_record_failed",
+			"session_id", sub.sessionID, "run_id", sub.id, "err", err.Error())
+	}
 }
 
 // cancelCauseString returns the recorded cancellation cause for a sub

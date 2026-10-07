@@ -10,6 +10,10 @@
  * the session recovered. It now renders the shared fleet-session store:
  * shown while the snapshot is signed_out/session_expired, gone the moment
  * the session is back (sign-in, or the backend's recovery probe).
+ *
+ * Also the "removed by admin" terminal state (fleet 403 node_removed,
+ * device-keys-handoff-01DEVKH01 WP02): same affordance — signing in again
+ * registers this install as a new device.
  */
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -17,10 +21,16 @@ import { fleetSession } from '@/lib/fleetSession';
 
 const router = useRouter();
 
-const expired = computed(
+const removed = computed(
   () =>
     fleetSession.value?.state === 'signed_out' &&
-    fleetSession.value?.reason === 'session_expired',
+    fleetSession.value?.reason === 'node_removed',
+);
+const expired = computed(
+  () =>
+    removed.value ||
+    (fleetSession.value?.state === 'signed_out' &&
+      fleetSession.value?.reason === 'session_expired'),
 );
 const dismissed = ref(false);
 // A new expiry after recovery shows the banner again.
@@ -48,10 +58,14 @@ function dismiss() {
     data-testid="session-expired-banner"
   >
     <span class="font-ui text-sm font-semibold text-signal-warn shrink-0">
-      Fleet session expired
+      {{ removed ? 'Removed by an org admin' : 'Fleet session expired' }}
     </span>
-    <span class="font-ui text-sm text-ink flex-1 truncate">
-      — Re-authenticate to restore fleet capabilities.
+    <span class="font-ui text-sm text-ink flex-1 truncate" data-testid="session-expired-detail">
+      {{
+        removed
+          ? '— This device was removed from your organization. Sign in again to re-register it.'
+          : '— Re-authenticate to restore fleet capabilities.'
+      }}
     </span>
     <button
       type="button"

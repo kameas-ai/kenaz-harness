@@ -378,6 +378,17 @@ func NewClientForTesting(baseURL string) *Client {
 	}
 }
 
+// NewClientForTestingWithDataDir is NewClientForTesting with the data dir
+// production clients get from ClientOpts.DataDir — identity cache, node
+// id, device signing key and handoff identity all persist under it, so
+// cross-package tests drive those through REAL files
+// (device-keys-handoff-01DEVKH01). Test seam ONLY.
+func NewClientForTestingWithDataDir(baseURL, dataDir string) *Client {
+	c := NewClientForTesting(baseURL)
+	c.dataDir = dataDir
+	return c
+}
+
 // drainClose drains and closes an HTTP response body (keep-alive reuse + no leak).
 func drainClose(resp *http.Response) {
 	if resp == nil || resp.Body == nil {

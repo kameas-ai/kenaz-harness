@@ -7,7 +7,7 @@
  *   - Policies whose name starts with "fleet-team/" display a "team-managed"
  *     badge in the file list and editor header.
  *   - An "Override" button appears next to team-managed rules when:
- *       signedIn && capability('opa_custom_rego')
+ *       signedIn && capability('cedar_custom_policies')
  *     Clicking it inserts a local forbid template into a new draft policy
  *     in the user's policy directory, pre-populated with the team_rule_id.
  *   - Config-pull status banner: shows the last applied bundle_id and error
@@ -134,7 +134,12 @@ const isTeamManaged = computed(
 
 /** True when the Override button should be shown for the selected file. */
 const canOverride = computed(
-  () => isTeamManaged.value && signedIn.value && capability('opa_custom_rego'),
+  () =>
+    isTeamManaged.value &&
+    signedIn.value &&
+    // cedar_custom_policies is the renamed wire name; opa_custom_rego is the
+    // transition alias until fleet phase 2 drops it.
+    (capability('cedar_custom_policies') || capability('opa_custom_rego')),
 );
 
 /** The team_rule_id extracted from the selected file name (fleet-team/<id>). */
@@ -458,7 +463,7 @@ function showToast(msg: string) {
         Edit Cedar policies under <code>&lt;DataDir&gt;/policy/</code>.
         Fleet-managed rules carry a <em>team-managed</em> badge.
         Override them locally via the Override button (requires
-        <code>opa_custom_rego</code> capability).
+        <code>cedar_custom_policies</code> capability).
       </p>
 
       <!-- Config-pull status banner (fleet only) -->

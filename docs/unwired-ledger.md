@@ -342,6 +342,92 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-07 (v0.93.0 CI) · core/rpc test package is at the 10-minute cliff
+
+core/rpc ran 580.9s under `-race -short` on the self-hosted ARM runner in
+the v0.91.0 CI run; v0.93.0's additions (real-sqlite retry + handoff accept
+tests) pushed it past Go's default 10m per-package timeout (one just-started
+test in the dump — slowness, not a hang). `pr.yml` now passes `-timeout 20m`.
+**Fix shape:** split core/rpc's heavy integration tests into a sibling
+package (or `t.Parallel()` the independent real-sqlite tests), so the
+per-package alarm returns to a tight budget. **Owner:** next release's
+unwired/CI-hygiene sweep. Related flake seen in the same run:
+`core/mlsidecar` TestDemandProbe_FirstDemandStartsEngine_OneEnsurePerTick
+("first demand must not block" — a timing assertion under runner load);
+owner: mlsidecar follow-up if it recurs.
+
+### 2026-10-07 (skill-library-01SKLIB01 residuals + review F4–F6, feat/skill-library) · six accepted, none introduced as regressions
+
+1. **OQ-1 — the revocation sweep covers skills + workflows only.**
+   Catalog-installed packs and bundles have no consumer install record
+   carrying a catalog id (both kinds are still allowlisted in
+   `check-install-provider-coverage.sh` — there is no pack/bundle
+   provider), so `RevocationSweeper` has nothing to diff for them; a
+   revoked pack/bundle the user downloaded stays as `installed/` residue.
+   **Blocker:** install-framework Phase 3 (pack/bundle providers).
+   **Owner:** the mission that registers those providers adds a
+   `RevocationWorkflows`-shaped source for each kind.
+2. **`CatalogItem.LifecycleReason` has no producer on the live wire.**
+   Fleet main (@ b57b2ec) sends `lifecycle`, `superseded_by` (+
+   `revoked_at` on list) on `GET /catalog/list` and the fetch, but
+   `lifecycle_reason` only on `GET /catalog/entries/{kind}/{slug}`. The
+   harness decodes it forward-compatibly and the chip tooltip shows it
+   when present, so today the tooltip never carries the admin's reason —
+   not a lie (nothing claims a reason), but a consumer without a
+   producer. **Owner:** fleet (add `lifecycle_reason` to
+   `CatalogItemMetaAPI` / `CatalogFetchResponse`, additive), or a harness
+   follow-up that reads the entries detail for deprecated rows.
+3. **A user cannot move their catalog install of a skill from v1 to v2.**
+   Each version is its own catalog id, so `LiveRegister` refuses v2 over
+   v1 under the same store id (`ErrSkillIDCollision`), and
+   `SkillProvider.Update` never offers one (`newestByID` keys on the
+   per-version id). Pre-existing since per-version ids; surfaced, not
+   introduced, by this mission (the mandated path was fixed in WP04 —
+   mandates may take over any catalog-provenance copy). **Owner:** the
+   OQ-4 follow-up ("nudge toward `superseded_by`"), which needs
+   entry-level grouping of versions anyway.
+4. **Review F4 — the mandated-workflow read-only guard fails OPEN on an
+   unreadable provenance file.** `isOrgMandated` reads an unreadable
+   `install_provenance.json` as "not mandated", so Save / ScheduleSet /
+   ScheduleClear are allowed while it is broken. Deliberately matches
+   the pre-existing `Delete` posture (the install-collision checks fail
+   closed on their own, and the provenance store logs the breakage at
+   WARN once). **Owner:** skill-library follow-up — decide fail-closed
+   for all four mutators together, not one at a time.
+5. **Review F5 — a FAILED v2 promote removes v1 until the retry.** When
+   v2's install fails in the same bundle that drops v1, v1 is not "seen"
+   and the reconcile removes it; the bundle error retries and v2 lands
+   on a later poll. Pre-existing since v0.91 (the applier cannot know a
+   failed item's local id when its payload did not decode). **Owner:**
+   skill-library follow-up — keep v1 when a failed item shares its
+   catalog entry (needs fleet to send the entry slug in the envelope,
+   which is a signed-wire change under the §5.4 rule).
+6. **Review F6 — the revocation sweep's skill removal is check-then-act.**
+   `uninstallLocked` re-reads the skill and then `LiveUnregister`s it; a
+   mandate landing between the two could in principle be removed. The
+   window is two local file ops inside one sweep and the config poller
+   that applies mandates runs the sweep on its own goroutine AFTER apply,
+   so the two never interleave today; the workflow side is atomic under
+   `installMu`. **Owner:** skill-library follow-up, if the sweep ever
+   moves off the config poller's goroutine.
+
+### 2026-10-07 (memory-sync-01MEMSY01 verify pass) · PRE-EXISTING flake: `TestStore_Add_WiresGlobalCaptureTracker`
+
+`core/memory/capture_rate_test.go` fails when the whole `core/memory`
+package runs with `-count=5` (ChunksPerMinute delta came out negative). It
+fails the same way on the base commit b2b2df75, so memory-sync did not
+introduce it. Cause: the test reads `GlobalCaptureTracker()`, a
+process-wide sliding 60 s window shared with every other test in the
+package. On repeated runs, earlier writes age out of the window between the
+test's before and after readings, so the delta it measures can go
+negative. It passes at `-count=1` (CI's setting).
+
+- **Class:** test isolation (shared global state), not a production defect.
+- **Fix shape:** inject the tracker into the store (or give it a
+  per-test reset/clock), so the test measures only its own writes.
+- **Owner:** memory follow-up mission (next one to touch
+  `core/memory/capture_rate.go`). Dated 2026-10-07.
+
 ### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
 
 1. **R1 (P2) — promote-to-team can wedge and duplicate when the user has
@@ -359,14 +445,102 @@ prose and in a TS union; they do not call `MoveKinds()`.
    content relabelled as a catalog install**, not the user's earlier
    version/edits (skills restore properly). **Owner:** skill-library
    mission (01SKLIB01) WP04 territory.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP04, `fix(fleet): WP04 —
+   > superseded removals stay quiet locally …`):** a mandate that takes
+   > over the user's catalog install now returns an opaque snapshot of the
+   > user's copy (stored document incl. edits + its install provenance),
+   > persisted as `prior_workflow` in `mandated_applied.json`; withdrawal
+   > restores that copy under its original catalog id/version. A v0.91
+   > record (flag only, no snapshot) keeps the old relabel — the only thing
+   > it makes possible. Also fixed in the same change: a mandate may now
+   > take over a catalog/mandated row of ANY catalog id (every version has
+   > its own id), so a v1→v2 promote updates in place instead of failing
+   > as a collision and deleting the workflow. Pinned by
+   > `TestInstallMandatedDocument_TakeoverRestoredOnWithdrawal` (real
+   > sqlite, file provenance), `TestRemoveMandatedDocument_LegacyRecordRelabels`,
+   > `TestInstallMandatedDocument_PromoteUpdatesInPlace`. Review F3
+   > (2026-10-07): the restore now runs the Cedar save gate; a refused
+   > restore deletes the mandated copy and audits `restore_refused`
+   > (`TestRemoveMandatedDocument_RestoreRefusedByPolicyDeletes`).
 3. **R3 (P3) — a takeover while mandated_applied.json is unreadable (F5
    path) never persists PriorSkill**, so a later withdrawal deletes
    rather than restores. Needs the F5 corruption AND a takeover in the
    same window. **Owner:** same as R2.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP04):** while the state
+   > file is unreadable the applier still never overwrites it (F5), but
+   > records what it applied — takeover priors included — in
+   > `fleet/mandated_applied.pending.json`, carries it across further
+   > unreadable runs, merges it into the applied set on the first readable
+   > run (file rewritten OR deleted), and clears it after a successful
+   > save. Removals stay skipped while unreadable (F5 unchanged). Pinned by
+   > `TestMandated_TakeoverDuringUnreadableStatePersistsPrior` (real
+   > files; fails with the merge removed).
 4. **Mandated workflows are delete-protected but not edit/unschedule-
    protected** (accepted "not done"): a weak guarantee for
    compliance-type workflows. **Owner:** skill-library mission, with the
    read-only UI treatment.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP02, `feat(frontend):
+   > WP02 — Deprecated/Revoked chips …`):** the workflows view refuses
+   > Save, ScheduleSet and ScheduleClear (as well as Delete) for a workflow
+   > whose provenance is `mandated`, with `ErrWorkflowOrgManaged`; a user
+   > catalog re-install can no longer relabel the org's copy as the user's
+   > (it had been able to, which also silently ended the delete guard);
+   > the mandate's own removal disarms the schedule directly. `Summary`
+   > carries `orgManaged`; the Library hides Edit / Edit on canvas /
+   > Delete and says why, the Schedules tab offers no Schedule/Unschedule,
+   > and the Capabilities workflow row is read-only. Pinned by
+   > `TestMandatedWorkflow_EditAndScheduleGuarded` (real sqlite store,
+   > file provenance) and `WorkflowsView.orgManaged.spec.ts`. The guard is view-level: a
+   > 2026-10-07 grep found no `Store.Save` caller outside the workflows
+   > view and `core/workflows` itself, so a future writer that bypasses
+   > the view must re-check provenance.
+
+### 2026-10-07 (device-keys-handoff-01DEVKH01 residuals) · seven accepted gaps, none a lie in the UI
+
+Per-device handoff keys + v2 wrap-to-all + accept-persists shipped
+(WP01–WP06). What the mission deliberately left, each with an owner:
+
+1. **Accepted copies carry import-time timestamps.** `created_at` rides in
+   every handoff event, but `session.Manager.ReplayTranscript` (the one
+   sanctioned cross-session writer) does not copy `CreatedAt`, so the
+   recipient's rows are stamped at accept time. Changing that also changes
+   conversation forks. **Owner:** alec — decide with the next
+   ReplayTranscript change.
+2. **AC-7 fixtures were not recorded from the dev fleet.** They are encoded
+   from verbatim mirrors of kenaz-fleet's response structs @ 97a1c12
+   (core/fleet/testdata/handoff/PROVENANCE.md); recording needs a live
+   Team-tier bearer token the implementing agent must not handle.
+   **Owner:** alec — re-record from dev and diff.
+3. ~~**v1 "direct" accept arm is transitional.**~~ **CLOSED 2026-10-07**
+   (review fix #9): the arm is deleted — the v1 send never produced a real
+   item (nil events → 422), so nothing could be accepted through it. The
+   coordinator signalled fleet O5 (drop direct-mode acceptance).
+4. **Signing key is registered; nothing shows it.** `signing_public_key`
+   now goes up at enroll (audit batches become verifiable, fleet §8.3), but
+   the Compliance panel does not surface verified/unverified (OQ-10 ruled
+   out of scope). **Owner:** next compliance mission.
+5. **Self-unenroll runs on explicit sign-out only.** An uninstalled or
+   abandoned install keeps its handoff key active and counting toward the
+   16-key cap until an admin removes the device in the fleet dashboard.
+   **Owner:** alec (uninstall hook) / fleet (dormant-key policy).
+6. **Media is not shipped in shares.** Image/document/generated-image
+   blocks are counted and noted in the recipient's copy ("1 attachment was
+   not included"), not transferred (2 MiB/event cap; generated images are
+   sender-local artifacts). **Owner:** product — decide if attachments
+   should ride as separate encrypted events.
+7. **Externally-owned tokens + node_removed.** Where the host owns the
+   tokens (served / brokered mode) `ClearTokens` is a no-op. Since review
+   fix #5 (2026-10-07) the block is DURABLE (`<dataDir>/fleet/node_removed`,
+   honoured by every enroll path incl. cmd/servedfleet's supervisor, cleared
+   only by an explicit sign-in). **Served-mode gap (verify pass,
+   2026-10-07):** a served guest has no sign-in of its own and NO code path
+   clears the marker when the host re-authorizes — a removed served guest
+   stays blocked until someone deletes `<dataDir>/fleet/node_removed` by
+   hand. Fix shape: clear the marker when the served supervisor observes a
+   NEW identity (different user/node) from the host. **Owner:** served-mode
+   boundary owner. Also low: a crash between `sessions.Create` and the first
+   `importing` ledger write leaves an empty "Shared by…" session (never a
+   second transcript); owner: same mission follow-up.
 
 ### 2026-10-06 (newly-live fleet routes verification, pre-v0.91.0) · four latent gaps, all verified non-firing today
 
@@ -375,12 +549,15 @@ streams and team/members (#180-#183); the harness's 404-latches stop
 firing. A six-family verification (no crash/corrupt/loop anywhere)
 left these latents:
 
-1. **Handoff_Share hardcodes nil events** (contextsync/impl.go:186) —
-   once ANY recipient registers a device key, every share 422s
-   handoff_empty; today unreachable (empty roster: can_receive=false
-   for all, no keys registered). **MUST fix before key registration
-   ships** — wire real session-event loading. **Owner:** device-keys
-   /handoff v2 mission.
+1. ~~**Handoff_Share hardcodes nil events**~~ **CLOSED 2026-10-07**
+   (device-keys-handoff-01DEVKH01 WP04, `ca17df45`): `Handoff_Share`
+   loads the session through the `contextsync.Impl.SessionEvents` seam
+   (wired in api.go to the real session manager) and serializes it as
+   self-contained `kenaz.handoff.event` v1 events
+   (core/session/handoff_transcript.go); an empty session errors readably
+   before any POST. Pinned by `TestHandoffShare_LoadsRealSessionFromUpgradedDB`
+   (v0.91.0 snapshot) and `TestImpl_Handoff_Share_*`. Shipped in the same
+   branch as key registration (WP02) — the release gate held.
 2. **EventStream backfill has no 1000-event/2MiB-per-event client caps
    and sends no client_event_id** (context_sync.go:314-332, 250-268) —
    latent, no live backfill caller (both Toggles pass nil). **Owner:**
@@ -389,8 +566,12 @@ left these latents:
    a real applier, persist fleet's next_seq — never the local message
    count (the hook posts wire seq=1 per event; server assigns arrival
    order). **Owner:** context-streams mission.
-4. Cosmetic: handoff 409 recipient_keys_stale / recipient_no_key / 422
-   map to raw "status NNN" in the share dialog. **Owner:** v2 mission.
+4. ~~Cosmetic: handoff 409/422 raw "status NNN"~~ **CLOSED 2026-10-07**
+   (device-keys-handoff-01DEVKH01 WP04 `ca17df45` + WP06): every §10.3
+   code maps to a `*fleet.HandoffError` whose text is dialog copy
+   (`TestShareSession_ErrorCopy` asserts no "status" leaks); 409
+   recipient_keys_stale re-wraps and retries once; the share dialog and
+   inbox render the copy via `handoffErrorText`.
 
 ### 2026-10-06 (empty-turn fix review residuals, fix/session-write-empty-turn) · two pre-existing flags, neither introduced by d845ecf0
 
@@ -426,6 +607,39 @@ left these latents:
    verification (tampered/refuse-unverified) before removing the root —
    correct for the token (never send to the unverified), but a behaviour
    change: such an engine keeps running until it idle-exits. Same owner.
+
+### 2026-10-07 (undelivered-message-retry review, informational) · Retry on a scheduled session's undelivered prompt runs it attended, without the schedule's tool allowlist
+
+**Owner**: toolset/containment follow-up (alec) — decided by the B-3
+attended-semantics ruling. **Ungated.**
+
+Retry re-dispatches the newest user row through the ordinary interactive
+`LLM_StartStream` path. In a session a schedule created, that row can be a
+scheduled (possibly model-written — `scheduled_chat_runs.created_by`)
+prompt whose original run was unattended and constrained by the
+schedule's `tool_allowlist`. Retrying it from the chat surface re-runs
+that prompt interactively, with the session's normal tool catalog and the
+attended confirm ladder rather than the schedule's allowlist. This is the
+same posture as the user typing into that session — the human is present
+and every confirm/containment gate applies — so it is not a bypass, but
+it changes which tools the prompt can reach. Blocker: B-3 has not ruled
+whether attended re-runs of scheduled prompts inherit the schedule's
+allowlist. Owner change that closes this: the B-3 ruling, then either
+carry the allowlist onto the retried run or document "attended = session
+catalog".
+
+### 2026-10-07 (undelivered-message-retry review, pre-existing) · `provider:auth-resumed` is not filtered by session
+
+**Owner**: alec (chat surface). **Ungated.**
+
+`useSession.ts`'s `provider:auth-resumed` handler adopts
+`payload.new_sub_id` as the active stream for WHICHEVER session view is
+mounted — it never compares `payload.session_id` (which
+`AuthResumedPayload` carries) to the current session. With two sessions
+on one profile, rotating a key in one can point the other view's stream
+guard at the wrong run and clear its banner. Pre-existing (not introduced
+by undelivered-message-retry); found in its review. Fix: early-return when
+`payload.session_id` is set and differs from `id.value`, with a test.
 
 ### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event; the two pull surfaces are count-only stubs
 
@@ -5528,6 +5742,34 @@ design. **Owner:** alec — the Settings-health refresh follow-up deletes this
 entry.
 
 ## Drained
+
+### 2026-10-07 · CLOSED — project sync advertised an agent-memory class that shipped nothing (`memory-sync-01MEMSY01` WP01)
+
+Class: **advertised sync that ships nothing.** `core/fleet/project_sync.go`
+declared `ArtifactClassMemory` and `DefaultArtifactClassOptions()` returned
+`Memory: true`; `ProjectSync_Toggle` enabled every project with the same
+default (`core/rpc/views/contextsync/impl.go`). Verified in the 2026-10
+audit (§5.3): no caller of `ProjectSyncer.AppendEvent` ever produced a
+`memory`-class event, `EnableSync`'s backfill was passed `nil`, Fleet has
+no project-memory route, and the project UI's class list never offered
+memory. The `memory: true` flag in the RPC shape (`ArtifactClassOptionsView`)
+was therefore a promise read by nothing.
+
+- **Drained — deleted** (live substitute: the user-private memory lane,
+  `core/fleet/memory_sync.go`, same mission WP07, against Fleet's
+  `/api/v1/memory/*`). Removed the class constant, the `Memory` fields of
+  `ArtifactClassOptions` / `ArtifactClassOptionsView` / `ProjectSyncOpts`,
+  the two adapter copies in `core/rpc/context_sync_wiring.go`, and the
+  hand-matched `memory` member of `frontend/wailsjs/go/models.ts`.
+- **Persisted blobs:** a keyring options blob written with `"memory":true`
+  still decodes (unknown key ignored) — pin
+  `TestArtifactClassOptions_LegacyMemoryKeyIgnored`.
+- **Not fixed here (pre-existing, separate):** `frontend/src/lib/types.ts`
+  `FleetArtifactClassOptionsView` is `{classes: Record<string, boolean>}`
+  while the Go wire shape is flat `{notes, binaries}` — the project landing
+  page's class toggles round-trip a shape the backend does not decode.
+  Owner: the project-registry harness work (fleet P1–P4), which rebuilds
+  that panel.
 
 ### 2026-10-04 · CLOSED — chat run ids were a per-process counter written into a persistent log (`agentgraph-settings-linkage-01DOGF0D` WP02)
 

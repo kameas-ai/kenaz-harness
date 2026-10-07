@@ -31,7 +31,6 @@ type ProjectSyncStatus struct {
 type ArtifactClassOptionsView struct {
 	Notes    bool `json:"notes"`
 	Binaries bool `json:"binaries"`
-	Memory   bool `json:"memory"`
 }
 
 // TeamMemberView is the RPC-facing projection of a fleet team member.
@@ -53,6 +52,16 @@ type InboxItemView struct {
 	SenderUserID string `json:"senderUserID"`
 	SenderEmail  string `json:"senderEmail"`
 	ReceivedAt   string `json:"receivedAt"` // RFC3339
+	// Undecryptable: none of the item's key wraps targets a still-active
+	// device key of this user — it can never be opened (fleet §10.3).
+	Undecryptable bool `json:"undecryptable"`
+}
+
+// RecipientDeviceView is one receiving device of a teammate.
+type RecipientDeviceView struct {
+	KeyID       string `json:"keyID"`
+	Fingerprint string `json:"fingerprint"`
+	CreatedAt   string `json:"createdAt,omitempty"` // RFC3339
 }
 
 // AcceptedSessionView is returned by Handoff_Accept after the shared events
@@ -62,6 +71,12 @@ type AcceptedSessionView struct {
 	LocalSessionID string `json:"localSessionID"`
 	// EventCount is the number of replayed events.
 	EventCount int `json:"eventCount"`
+	// Title is the new local session's name.
+	Title string `json:"title"`
+	// AlreadyAccepted is true when this inbox item was accepted before on
+	// this device: LocalSessionID is that earlier copy and nothing was
+	// fetched or written (OQ-2 dedupe by inbox item id).
+	AlreadyAccepted bool `json:"alreadyAccepted"`
 }
 
 // ContextSyncAPI is the view-scoped interface for the fleet context-sync
@@ -99,12 +114,21 @@ type ContextSyncAPI interface {
 	// store — no plaintext crosses the RPC boundary.
 	Handoff_Share(ctx context.Context, sessionID, recipientUserID string) error
 
+	// Handoff_RecipientDevices lists a teammate's receiving devices (key
+	// fingerprints) so the share dialog can show the trust anchor before
+	// sending (fleet is a trusted key directory: show fingerprints).
+	Handoff_RecipientDevices(ctx context.Context, recipientUserID string) ([]RecipientDeviceView, error)
+
 	// Handoff_Inbox returns the current contents of the fleet handoff inbox.
 	Handoff_Inbox(ctx context.Context) ([]InboxItemView, error)
 
-	// Handoff_Accept decrypts an inbox item and returns a view with the count
-	// of decrypted events and an opaque local session ID for persistence.
+	// Handoff_Accept decrypts an inbox item, persists it as a NEW local
+	// session (deduped by inbox item id), deletes the fleet copy, and
+	// returns the local session id.
 	Handoff_Accept(ctx context.Context, inboxItemID string) (AcceptedSessionView, error)
+
+	// Handoff_Delete dismisses an inbox item without accepting it.
+	Handoff_Delete(ctx context.Context, inboxItemID string) error
 
 	// ContextSync_GenerateRecoveryCode mints a recovery code for the device
 	// context seed. The code is displayed once and must be acknowledged.
@@ -145,11 +169,55 @@ type ProjectSyncBackend interface {
 // team-handoff layer.
 type HandoffBackend interface {
 	ListTeam(ctx context.Context) ([]TeamMemberRecord, error)
+	// RecipientDevices lists a teammate's active handoff device keys.
+	RecipientDevices(ctx context.Context, recipientUserID string) ([]RecipientDeviceView, error)
 	// ShareSession accepts the opaque session ID + recipient + already-loaded plain
 	// events (loaded by the Impl from the local store before calling the backend).
 	ShareSession(ctx context.Context, sessionID, recipientUserID string, plainEvents []SessionEventRecord) error
 	Inbox(ctx context.Context) ([]InboxItemRecord, error)
-	AcceptShare(ctx context.Context, inboxItemID string) ([]SessionEventRecord, error)
+	// AcceptShare fetches and decrypts one item with THIS device's key.
+	AcceptShare(ctx context.Context, inboxItemID string) (AcceptedShareRecord, error)
+	// DeleteShare removes an item from the inbox (idempotent).
+	DeleteShare(ctx context.Context, inboxItemID string) error
+	// RecordAccepted audits an inbound share AFTER it was persisted locally.
+	RecordAccepted(ctx context.Context, rec AcceptedShareRecord, localSessionID string)
+}
+
+// AcceptedShareRecord is a decrypted inbox item. Privacy: Events are
+// plaintext transcript content — persisted, never logged or returned.
+type AcceptedShareRecord struct {
+	InboxItemID  string
+	SessionID    string
+	SenderUserID string
+	SenderEmail  string
+	Events       []SessionEventRecord
+}
+
+// AcceptedSessionStore persists an accepted handoff as a new local session
+// with provenance, deduped by inbox item id (OQ-2).
+type AcceptedSessionStore interface {
+	// Lookup returns the local session an earlier accept of inboxItemID
+	// created, if that session still exists.
+	Lookup(ctx context.Context, inboxItemID string) (AcceptedSessionView, bool)
+	// Persist writes rec as a new local session (or returns the existing
+	// one when it was accepted concurrently). Idempotent on the inbox item
+	// id: the provenance record is written BEFORE the transcript, so a
+	// crash mid-import can never yield a second session.
+	Persist(ctx context.Context, rec AcceptedShareRecord) (AcceptedSessionView, error)
+	// FleetCopyDeleted reports whether the post-accept fleet DELETE for
+	// inboxItemID has succeeded.
+	FleetCopyDeleted(ctx context.Context, inboxItemID string) bool
+	// MarkFleetCopyDeleted records that the fleet copy is gone.
+	MarkFleetCopyDeleted(ctx context.Context, inboxItemID string) error
+}
+
+// SessionEventLoader loads a LOCAL session as self-contained handoff
+// events (seq 1..N, transcript order) for Handoff_Share
+// (device-keys-handoff-01DEVKH01 WP04). The bytes are plaintext transcript
+// content: they go straight to the encrypting backend and are never logged
+// or returned across the RPC boundary.
+type SessionEventLoader interface {
+	LoadSessionEvents(ctx context.Context, sessionID string) ([]SessionEventRecord, error)
 }
 
 // RecoveryBackend handles context-seed recovery code mint + apply.
@@ -174,14 +242,13 @@ type SessionEventRecord struct {
 type ProjectEventRecord struct {
 	Seq           uint64
 	Bytes         []byte
-	ArtifactClass string // "notes", "binaries", "memory", or ""
+	ArtifactClass string // "notes", "binaries", or ""
 }
 
 // ProjectSyncOpts maps 1:1 to fleet.ArtifactClassOptions.
 type ProjectSyncOpts struct {
 	Notes    bool
 	Binaries bool
-	Memory   bool
 }
 
 // TeamMemberRecord is the raw fleet team member, mapped from fleet.TeamMember.
@@ -201,4 +268,6 @@ type InboxItemRecord struct {
 	SenderUserID string
 	SenderEmail  string
 	ReceivedAt   string // RFC3339
+	// Undecryptable mirrors fleet's inbox flag.
+	Undecryptable bool
 }

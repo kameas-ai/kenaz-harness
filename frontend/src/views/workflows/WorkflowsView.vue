@@ -231,7 +231,15 @@ const selectedHasSchedule = computed<boolean>(
 const selectedDeletable = computed<boolean>(() => {
   if (!selected.value) return false;
   const row = catalog.value.find((w) => w.id === selected.value!.id);
-  return row?.source === 'user';
+  return row?.source === 'user' && !row.orgManaged;
+});
+
+// skill-library-01SKLIB01 (ledger 2026-10-06 item 4): a workflow the org
+// requires is read-only here — the backend refuses Save, Delete and
+// schedule changes for it; it can still be run.
+const selectedOrgManaged = computed<boolean>(() => {
+  if (!selected.value) return false;
+  return !!catalog.value.find((w) => w.id === selected.value!.id)?.orgManaged;
 });
 
 function requestDelete() {
@@ -801,7 +809,7 @@ if (route) {
               >
                 <span class="font-medium text-ink">{{ w.name }}</span>
                 <span class="block text-xs text-ink-muted">
-                  {{ w.stepCount }} steps · v{{ w.version }} · {{ w.source }}
+                  {{ w.stepCount }} steps · v{{ w.version }} · {{ w.source }}<template v-if="w.orgManaged"> · required by your org</template>
                 </span>
               </button>
             </li>
@@ -828,6 +836,14 @@ if (route) {
               class="font-ui text-sm text-ink-muted whitespace-pre-line"
             >
               {{ selected.description }}
+            </p>
+            <p
+              v-if="selectedOrgManaged"
+              class="mt-1 font-ui text-xs text-ink-muted"
+              data-testid="workflows-org-managed-note"
+            >
+              Required by your org and managed by its config — you can run it, but not edit,
+              reschedule or delete it here.
             </p>
           </header>
 
@@ -968,6 +984,7 @@ if (route) {
               {{ running ? 'Running…' : 'Run workflow' }}
             </button>
             <button
+              v-if="!selectedOrgManaged"
               type="button"
               class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink hover:bg-surface-1 disabled:opacity-50"
               data-testid="workflows-edit-button"
@@ -976,6 +993,7 @@ if (route) {
               Edit
             </button>
             <button
+              v-if="!selectedOrgManaged"
               type="button"
               class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink hover:bg-surface-1 disabled:opacity-50"
               data-testid="workflows-edit-canvas-button"

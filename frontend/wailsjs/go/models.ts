@@ -1241,6 +1241,9 @@ export namespace catalog {
 	    visibility: string;
 	    published_at?: string;
 	    installed: boolean;
+	    lifecycle?: string;
+	    lifecycle_reason?: string;
+	    superseded_by?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CatalogItemView(source);
@@ -1256,6 +1259,9 @@ export namespace catalog {
 	        this.visibility = source["visibility"];
 	        this.published_at = source["published_at"];
 	        this.installed = source["installed"];
+	        this.lifecycle = source["lifecycle"];
+	        this.lifecycle_reason = source["lifecycle_reason"];
+	        this.superseded_by = source["superseded_by"];
 	    }
 	}
 	export class PublishInput {
@@ -2125,6 +2131,8 @@ export namespace contextsync {
 	export class AcceptedSessionView {
 	    localSessionID: string;
 	    eventCount: number;
+	    title: string;
+	    alreadyAccepted: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AcceptedSessionView(source);
@@ -2134,12 +2142,13 @@ export namespace contextsync {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.localSessionID = source["localSessionID"];
 	        this.eventCount = source["eventCount"];
+	        this.title = source["title"];
+	        this.alreadyAccepted = source["alreadyAccepted"];
 	    }
 	}
 	export class ArtifactClassOptionsView {
 	    notes: boolean;
 	    binaries: boolean;
-	    memory: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ArtifactClassOptionsView(source);
@@ -2149,7 +2158,6 @@ export namespace contextsync {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.notes = source["notes"];
 	        this.binaries = source["binaries"];
-	        this.memory = source["memory"];
 	    }
 	}
 	export class InboxItemView {
@@ -2158,6 +2166,7 @@ export namespace contextsync {
 	    senderUserID: string;
 	    senderEmail: string;
 	    receivedAt: string;
+	    undecryptable: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new InboxItemView(source);
@@ -2170,6 +2179,7 @@ export namespace contextsync {
 	        this.senderUserID = source["senderUserID"];
 	        this.senderEmail = source["senderEmail"];
 	        this.receivedAt = source["receivedAt"];
+	        this.undecryptable = source["undecryptable"];
 	    }
 	}
 	export class ProjectSyncStatus {
@@ -2203,6 +2213,22 @@ export namespace contextsync {
 		    }
 		    return a;
 		}
+	}
+	export class RecipientDeviceView {
+	    keyID: string;
+	    fingerprint: string;
+	    createdAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecipientDeviceView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.keyID = source["keyID"];
+	        this.fingerprint = source["fingerprint"];
+	        this.createdAt = source["createdAt"];
+	    }
 	}
 	export class SessionSyncStatus {
 	    enabled: boolean;
@@ -3450,6 +3476,9 @@ export namespace install {
 	    read_only?: boolean;
 	    read_only_reason?: string;
 	    requirements?: Requirement[];
+	    lifecycle?: string;
+	    lifecycle_reason?: string;
+	    superseded_by?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Item(source);
@@ -3469,6 +3498,9 @@ export namespace install {
 	        this.read_only = source["read_only"];
 	        this.read_only_reason = source["read_only_reason"];
 	        this.requirements = this.convertValues(source["requirements"], Requirement);
+	        this.lifecycle = source["lifecycle"];
+	        this.lifecycle_reason = source["lifecycle_reason"];
+	        this.superseded_by = source["superseded_by"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -4698,6 +4730,7 @@ export namespace memory {
 	    kind?: string;
 	    retrievalWeight?: number;
 	    turnId?: string;
+	    syncBlocked?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Chunk(source);
@@ -4725,6 +4758,7 @@ export namespace memory {
 	        this.kind = source["kind"];
 	        this.retrievalWeight = source["retrievalWeight"];
 	        this.turnId = source["turnId"];
+	        this.syncBlocked = source["syncBlocked"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -7315,6 +7349,14 @@ export namespace sessions {
 	    graphId: string;
 	    specDigest: string;
 	    createdAt: string;
+	    outcome: string;
+	    delivered: boolean;
+	    failureClass?: string;
+	    failureCode?: string;
+	    failureStatus?: number;
+	    failureProvider?: string;
+	    failureSummary?: string;
+	    failureMessage?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new TurnRun(source);
@@ -7327,6 +7369,14 @@ export namespace sessions {
 	        this.graphId = source["graphId"];
 	        this.specDigest = source["specDigest"];
 	        this.createdAt = source["createdAt"];
+	        this.outcome = source["outcome"];
+	        this.delivered = source["delivered"];
+	        this.failureClass = source["failureClass"];
+	        this.failureCode = source["failureCode"];
+	        this.failureStatus = source["failureStatus"];
+	        this.failureProvider = source["failureProvider"];
+	        this.failureSummary = source["failureSummary"];
+	        this.failureMessage = source["failureMessage"];
 	    }
 	}
 
@@ -7388,6 +7438,22 @@ export namespace settings {
 	        this.source = source["source"];
 	        this.bundleChecksum = source["bundleChecksum"];
 	        this.configDistributionEnabled = source["configDistributionEnabled"];
+	    }
+	}
+	export class FleetDeviceKeysView {
+	    status: string;
+	    message?: string;
+	    handoffFingerprint?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetDeviceKeysView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.message = source["message"];
+	        this.handoffFingerprint = source["handoffFingerprint"];
 	    }
 	}
 	export class FleetHealthView {
@@ -7538,6 +7604,7 @@ export namespace settings {
 	    contextSync: FleetSyncLaneView;
 	    unitPoll: FleetSyncLaneView;
 	    telemetry: FleetSyncLaneView;
+	    catalogRevocation: FleetSyncLaneView;
 	
 	    static createFrom(source: any = {}) {
 	        return new FleetSyncView(source);
@@ -7548,6 +7615,7 @@ export namespace settings {
 	        this.contextSync = this.convertValues(source["contextSync"], FleetSyncLaneView);
 	        this.unitPoll = this.convertValues(source["unitPoll"], FleetSyncLaneView);
 	        this.telemetry = this.convertValues(source["telemetry"], FleetSyncLaneView);
+	        this.catalogRevocation = this.convertValues(source["catalogRevocation"], FleetSyncLaneView);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -7584,6 +7652,7 @@ export namespace settings {
 	    capabilities: CapabilitiesView;
 	    profile?: FleetProfileInfo;
 	    sync: FleetSyncView;
+	    deviceKeys?: FleetDeviceKeysView;
 	    updatedAt: string;
 	
 	    static createFrom(source: any = {}) {
@@ -7607,6 +7676,7 @@ export namespace settings {
 	        this.capabilities = this.convertValues(source["capabilities"], CapabilitiesView);
 	        this.profile = this.convertValues(source["profile"], FleetProfileInfo);
 	        this.sync = this.convertValues(source["sync"], FleetSyncView);
+	        this.deviceKeys = this.convertValues(source["deviceKeys"], FleetDeviceKeysView);
 	        this.updatedAt = source["updatedAt"];
 	    }
 	
@@ -7687,6 +7757,64 @@ export namespace settings {
 	        this.active = source["active"];
 	        this.reason = source["reason"];
 	    }
+	}
+	export class MemorySyncStatusView {
+	    wired: boolean;
+	    entitled: boolean;
+	    enabled: boolean;
+	    scopes: string[];
+	    consentVersion: string;
+	    optedInAt: string;
+	    currentConsentVersion: string;
+	    liveRecords: number;
+	    liveBytes: number;
+	    maxRecords: number;
+	    maxBytes: number;
+	    blockedCount: number;
+	    pendingCount: number;
+	    fleetError?: string;
+	    lane: FleetSyncLaneView;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemorySyncStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.wired = source["wired"];
+	        this.entitled = source["entitled"];
+	        this.enabled = source["enabled"];
+	        this.scopes = source["scopes"];
+	        this.consentVersion = source["consentVersion"];
+	        this.optedInAt = source["optedInAt"];
+	        this.currentConsentVersion = source["currentConsentVersion"];
+	        this.liveRecords = source["liveRecords"];
+	        this.liveBytes = source["liveBytes"];
+	        this.maxRecords = source["maxRecords"];
+	        this.maxBytes = source["maxBytes"];
+	        this.blockedCount = source["blockedCount"];
+	        this.pendingCount = source["pendingCount"];
+	        this.fleetError = source["fleetError"];
+	        this.lane = this.convertValues(source["lane"], FleetSyncLaneView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ProviderProfileRef {
 	    providerId?: string;
@@ -9364,6 +9492,7 @@ export namespace workflows {
 	    version: number;
 	    stepCount: number;
 	    source: string;
+	    orgManaged?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Summary(source);
@@ -9377,6 +9506,7 @@ export namespace workflows {
 	        this.version = source["version"];
 	        this.stepCount = source["stepCount"];
 	        this.source = source["source"];
+	        this.orgManaged = source["orgManaged"];
 	    }
 	}
 

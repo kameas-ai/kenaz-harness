@@ -116,6 +116,11 @@ type ConfigPoller struct {
 	buildVersion string
 	reapplyID    int64
 
+	// afterPoll runs after every poll round, whatever its outcome (the
+	// catalog revocation sweep piggybacks this cadence — no timer of its
+	// own; skill-library-01SKLIB01 WP03). Never affects the poll's backoff.
+	afterPoll func(context.Context)
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -169,6 +174,34 @@ func (p *ConfigPoller) SetBuildVersion(v string) {
 	p.mu.Unlock()
 }
 
+// SetAfterPoll registers fn to run after every poll round (success, 304 or
+// failure), on the poller goroutine. Call before Start. A panic in fn is
+// recovered and logged; it never stops polling.
+func (p *ConfigPoller) SetAfterPoll(fn func(context.Context)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.afterPoll = fn
+}
+
+// round is one poll plus the after-poll hook.
+func (p *ConfigPoller) round(ctx context.Context) error {
+	err := p.poll(ctx)
+	p.mu.RLock()
+	fn := p.afterPoll
+	p.mu.RUnlock()
+	if fn != nil && ctx.Err() == nil {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logging.L().Error("fleet.config_poller.after_poll_panic", "panic", fmt.Sprintf("%v", r))
+				}
+			}()
+			fn(ctx)
+		}()
+	}
+	return err
+}
+
 // Start launches the background polling goroutine. Loads the cached bundle
 // state (lastAppliedID + checksum) before the first fetch.
 func (p *ConfigPoller) Start(ctx context.Context) {
@@ -215,7 +248,7 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 		}()
 
 		// Immediate first poll.
-		if err := p.poll(innerCtx); err != nil {
+		if err := p.round(innerCtx); err != nil {
 			if innerCtx.Err() != nil {
 				return
 			}
@@ -236,7 +269,7 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 			case <-innerCtx.Done():
 				return
 			case <-ticker.C:
-				if err := p.poll(innerCtx); err != nil {
+				if err := p.round(innerCtx); err != nil {
 					if innerCtx.Err() != nil {
 						return
 					}

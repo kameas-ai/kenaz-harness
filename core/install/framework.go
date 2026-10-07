@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -25,8 +26,10 @@ type Event struct {
 	Version   string `json:"version,omitempty"`
 	Installed bool   `json:"installed"`
 	// Via is how the transition happened: "install", "update",
-	// "uninstall", or "flow" (a per-kind flow — OAuth sign-in, device
-	// code — completed the install and the framework observed it).
+	// "uninstall", "flow" (a per-kind flow — OAuth sign-in, device
+	// code — completed the install and the framework observed it), or
+	// "revoked" (the catalog revocation sweep removed a user copy of a
+	// version the org revoked — skill-library-01SKLIB01 WP03).
 	Via string `json:"via"`
 	// VerifyMethod / Verified / VerifyReason record the Verify step
 	// (empty on uninstall and on observed flows).
@@ -219,6 +222,11 @@ func (f *Framework) install(ctx context.Context, ref Ref, in Inputs, via string)
 
 	v, err := p.Verify(ctx, ref)
 	if err != nil {
+		if errors.Is(err, ErrRevoked) {
+			// skill-library-01SKLIB01 WP01: terminal, user-facing ("revoked
+			// by your org"); returned once, never retried.
+			logging.L().Info("install.revoked", "kind", string(ref.Kind), "id", ref.ID, "version", ref.Version)
+		}
 		return Result{}, err
 	}
 	if v.Method == VerifySignature {

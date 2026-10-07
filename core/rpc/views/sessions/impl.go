@@ -970,6 +970,15 @@ func (a *managerAPI) TurnRuns(ctx context.Context, sessionID string) ([]TurnRun,
 			GraphID:    r.GraphID,
 			SpecDigest: r.SpecDigest,
 			CreatedAt:  r.CreatedAt.UTC().Format(time.RFC3339Nano),
+
+			Outcome:         r.Outcome.Outcome,
+			Delivered:       r.Outcome.Delivered,
+			FailureClass:    r.Outcome.FailureClass,
+			FailureCode:     r.Outcome.FailureCode,
+			FailureStatus:   r.Outcome.FailureStatus,
+			FailureProvider: r.Outcome.FailureProvider,
+			FailureSummary:  r.Outcome.FailureSummary,
+			FailureMessage:  r.Outcome.FailureMessage,
 		})
 	}
 	return out, nil

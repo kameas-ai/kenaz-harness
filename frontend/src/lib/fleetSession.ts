@@ -94,7 +94,7 @@ export function seedFleetSessionFromAppInfo(caps: Record<string, boolean> | null
     tokensUsable: Object.keys(caps).length > 0,
     claims: { hasSubject: false, hasOrgClaim: false },
     capabilities: { tier: '', enabled: { ...caps }, fetchedAt: '', source: 'appinfo' },
-    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
+    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane }, catalogRevocation: { ...lane } },
     updatedAt: '',
   };
 }
@@ -231,7 +231,7 @@ function disabledSnapshot(): FleetSessionView {
     tokensUsable: false,
     claims: { hasSubject: false, hasOrgClaim: false },
     capabilities: { tier: '', enabled: {}, fetchedAt: '', source: 'default-deny' },
-    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
+    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane }, catalogRevocation: { ...lane } },
     updatedAt: '',
   };
 }
@@ -330,6 +330,8 @@ export function describeFleetReason(reason: string | undefined): string {
       return 'Sign-in failed';
     case 'needs_reauth':
       return 'Update your sign-in — telemetry export is off';
+    case 'node_removed':
+      return 'This device was removed by an org admin';
     default:
       return reason ? `Fleet: ${reason}` : '';
   }
@@ -375,13 +377,24 @@ export function describeSyncReason(reason: string | undefined): string {
       return 'export could not start';
     case 'api_host_unresolved':
       return "can't resolve the fleet API host";
+    // Catalog revocation sweep (skill-library-01SKLIB01 WP03).
+    case 'not_entitled':
+      return 'your plan does not include the org catalog';
+    case 'signed_out':
+      return 'signed out';
+    case 'list_failed':
+      return "couldn't read the org catalog — nothing was removed";
+    case 'enumerate_failed':
+      return "couldn't read what is installed — nothing was removed";
+    case 'uninstall_failed':
+      return "a revoked item couldn't be removed";
     default:
       return reason ?? '';
   }
 }
 
 export interface DegradedLane {
-  key: 'contextSync' | 'unitPoll' | 'telemetry';
+  key: 'contextSync' | 'unitPoll' | 'telemetry' | 'catalogRevocation';
   label: string;
   reason: string;
   consecutiveFailures: number;
@@ -414,6 +427,7 @@ export const fleetDegradedLanes = computed<DegradedLane[]>(() => {
   add('contextSync', 'Context sync');
   add('unitPoll', 'Shared units');
   add('telemetry', 'Telemetry');
+  add('catalogRevocation', 'Revoked-item check');
   return out;
 });
 

@@ -287,7 +287,10 @@ func TestRetriever_ScopedUnion_NoProject_StillReturnsGlobalAndSession(t *testing
 	}
 }
 
-func TestStore_PromoteScope_MoveSemantics(t *testing.T) {
+// TestStore_PromoteScope_KeepsOriginID pins memory-sync-01MEMSY01 WP03
+// (H1): the scope changes in place, the id is the Fleet origin id and
+// survives, and the change is stamped + marked for push.
+func TestStore_PromoteScope_KeepsOriginID(t *testing.T) {
 	t.Parallel()
 	s := newScopedStore(t, time.Now())
 	ctx := context.Background()
@@ -299,7 +302,13 @@ func TestStore_PromoteScope_MoveSemantics(t *testing.T) {
 	if err := s.Add(ctx, original); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := s.PromoteScope(ctx, "orig", "promoted", ScopeKindProject, "proj-A"); err != nil {
+	clock, err := NewHLC("dev", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetClock(clock)
+	before, _ := s.List(ctx)
+	if err := s.PromoteScope(ctx, "orig", ScopeKindProject, "proj-A"); err != nil {
 		t.Fatalf("PromoteScope: %v", err)
 	}
 	listed, _ := s.List(ctx)
@@ -307,8 +316,14 @@ func TestStore_PromoteScope_MoveSemantics(t *testing.T) {
 		t.Fatalf("len after promote = %d, want 1", len(listed))
 	}
 	got := listed[0]
-	if got.ID != "promoted" {
-		t.Errorf("ID after promote = %q, want promoted", got.ID)
+	if got.ID != "orig" {
+		t.Errorf("ID after promote = %q, want the origin id orig", got.ID)
+	}
+	if got.ScopeHLC == "" || got.ScopeHLC == before[0].ScopeHLC || !got.SyncDirty {
+		t.Errorf("scope change not stamped for push: hlc=%q dirty=%v", got.ScopeHLC, got.SyncDirty)
+	}
+	if len(got.Embedding) != 2 {
+		t.Errorf("embedding lost on promote")
 	}
 	if got.ScopeKind != ScopeKindProject || got.ScopeID != "proj-A" {
 		t.Errorf("scope = (%s, %s), want (project, proj-A)", got.ScopeKind, got.ScopeID)
@@ -319,16 +334,20 @@ func TestStore_PromoteScope_MoveSemantics(t *testing.T) {
 	if got.Content != "promote me" {
 		t.Errorf("content lost: %q", got.Content)
 	}
-	// Original ID must be gone.
-	if err := s.Delete(ctx, "orig"); err == nil {
-		t.Error("original ID still resolvable after promote")
+	// long_term is a valid target (OQ-2: the tier finally has a producer).
+	if err := s.PromoteScope(ctx, "orig", ScopeKindLongTerm, ""); err != nil {
+		t.Fatalf("promote to long_term: %v", err)
+	}
+	lt, _ := s.List(ctx, ScopeFilter{Kind: ScopeKindLongTerm})
+	if len(lt) != 1 || lt[0].ID != "orig" {
+		t.Fatalf("long_term list = %+v", lt)
 	}
 }
 
 func TestStore_PromoteScope_MissingChunk(t *testing.T) {
 	t.Parallel()
 	s := newScopedStore(t, time.Now())
-	err := s.PromoteScope(context.Background(), "missing", "new", ScopeKindGlobal, "")
+	err := s.PromoteScope(context.Background(), "missing", ScopeKindGlobal, "")
 	if err == nil {
 		t.Fatal("expected error for missing chunk")
 	}

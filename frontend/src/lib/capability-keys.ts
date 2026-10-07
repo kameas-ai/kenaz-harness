@@ -9,6 +9,8 @@ export const CAPABILITY_KEYS = [
   'iso_distribution',
   'team_graph_sharing',
   'cross_team_graph_isolation',
+  'cedar_preset_policies',
+  'cedar_custom_policies',
   'opa_preset_policies',
   'opa_custom_rego',
   'attestation_tpm',
@@ -31,6 +33,7 @@ export const CAPABILITY_KEYS = [
   'team_session_handoff',
   'context_bootstrap',
   'org_graph_sharing',
+  'memory_sync',
 ] as const;
 
 export type Capability = (typeof CAPABILITY_KEYS)[number];

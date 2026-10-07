@@ -21,6 +21,8 @@ package fleet
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +32,7 @@ import (
 	"strings"
 	"sync"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
@@ -72,16 +75,30 @@ type MandatedItemStatus struct {
 // rpc layer adapts the workflows view to it (core/fleet must not import it).
 type MandatedWorkflows interface {
 	// InstallMandatedWorkflow installs/updates the workflow document payload
-	// as org-mandated provenance for catalogID@version, returning its id and
-	// whether the mandate TOOK OVER the user's own earlier catalog install
-	// of the same item (review F6: withdrawal then restores it).
-	InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (workflowID string, tookOverCatalogInstall bool, err error)
+	// as org-mandated provenance for catalogID@version, returning its id
+	// and, when the mandate TOOK OVER the user's own catalog install of
+	// that id, an opaque snapshot of the user's copy (review F6; ledger
+	// 2026-10-06 R2). prior is nil otherwise.
+	InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (workflowID string, prior json.RawMessage, err error)
 	// RemoveMandatedWorkflow ends the mandate on workflowID — only while
-	// its recorded provenance is still the mandate of catalogID (a no-op nil
-	// otherwise: the user or another install now owns it). restoreCatalog
-	// true hands the workflow back to the user as a catalog install
-	// instead of deleting it.
-	RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, restoreCatalog bool) error
+	// its recorded provenance is still the mandate of catalogID (a no-op
+	// otherwise: the user or another install now owns it). A non-empty
+	// prior restores the user's own copy; legacyRestore (a v0.91 record:
+	// takeover recorded, no snapshot) hands the current content back as a
+	// catalog install; otherwise it is deleted. The result says whether
+	// the user got a copy back, or why policy refused to restore it.
+	RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (MandatedWorkflowRemoval, error)
+}
+
+// MandatedWorkflowRemoval is the outcome of ending a workflow mandate.
+type MandatedWorkflowRemoval struct {
+	// Restored: the user's own earlier copy was handed back.
+	Restored bool
+	// RestoreRefused is set when a snapshot existed but the policy save
+	// gate refused to write it back (e.g. a shell step under strict mode):
+	// the mandated copy was deleted instead, and the reason is audited —
+	// never dropped silently.
+	RestoreRefused string
 }
 
 // MandatedApplier dispatches + reconciles mandated items. Keep ONE instance
@@ -93,6 +110,11 @@ type MandatedApplier struct {
 	Workflows MandatedWorkflows
 	// DataDir holds the persisted applied set; empty = in-memory only (tests).
 	DataDir string
+	// Emitter records the LOCAL audit of reconcile removals: "removed" for
+	// a real uninstall / hand-back, "upgraded" when a newer version took
+	// over the same local item in the same bundle (skill-library-01SKLIB01
+	// WP04, fleet H3). nil = no local audit (tests).
+	Emitter AuditEmitter
 
 	mu sync.Mutex
 	// mem is the applied set when DataDir is empty.
@@ -100,6 +122,8 @@ type MandatedApplier struct {
 	// loadErrReported: a corrupt/unreadable state file is surfaced in the
 	// ACK errors ONCE per process (review F5), then only logged.
 	loadErrReported bool
+	// loadedAbsorbed is the AbsorbedPending of the state file last read.
+	loadedAbsorbed string
 }
 
 // SetConsumers updates the consumers (wired at boot, possibly after the
@@ -108,6 +132,14 @@ func (m *MandatedApplier) SetConsumers(skills *slashcmd.SkillStore, registry *sl
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Skills, m.Registry, m.Workflows = skills, registry, wf
+}
+
+// SetEmitter wires the local audit emitter. Safe for concurrent use with
+// Apply.
+func (m *MandatedApplier) SetEmitter(em AuditEmitter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Emitter = em
 }
 
 // consumersReadyLocked: every consumer is wired. Until then the applier
@@ -130,13 +162,32 @@ type mandatedRecord struct {
 	// instead of deleting (review F6). Empty for a fresh mandate install.
 	PriorSkill json.RawMessage `json:"prior_skill,omitempty"`
 	// PriorCatalogWorkflow: the mandate took over the user's own catalog
-	// install of this workflow; withdrawal hands it back (review F6).
+	// install of this workflow; withdrawal hands it back (review F6). A
+	// v0.91 record carries only this flag; since skill-library-01SKLIB01
+	// the snapshot below is recorded too, and the flag alone means "legacy
+	// record: relabel on withdrawal".
 	PriorCatalogWorkflow bool `json:"prior_catalog_workflow,omitempty"`
+	// PriorWorkflow is the workflows consumer's opaque snapshot of the
+	// user's own copy the mandate took over (ledger 2026-10-06 R2):
+	// withdrawal restores the user's actual version, not the mandated
+	// content relabelled. Additive; schema stays 1.
+	PriorWorkflow json.RawMessage `json:"prior_workflow,omitempty"`
+}
+
+func (r mandatedRecord) hasPrior() bool {
+	return len(r.PriorSkill) > 0 || len(r.PriorWorkflow) > 0 || r.PriorCatalogWorkflow
 }
 
 type mandatedState struct {
 	Schema int                       `json:"schema"`
 	Items  map[string]mandatedRecord `json:"items"`
+	// AbsorbedPending is the sha256 of the pending side file this applied
+	// set already merged (review F2). A crash after saving this file but
+	// before clearing the side file would otherwise replay it next run —
+	// re-adding keys that run had removed, and so a duplicate "removed"
+	// ACK + audit row. A side file whose hash matches is stale: cleared,
+	// never merged. Additive; schema stays 1.
+	AbsorbedPending string `json:"absorbed_pending,omitempty"`
 }
 
 // legacyCatalogPrefix marks a seed record for a skill mandated through the
@@ -149,6 +200,16 @@ func mandatedStatePath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", "mandated_applied.json")
 }
 
+// mandatedPendingPath is the side file that carries what was applied while
+// mandated_applied.json was UNREADABLE (review F5 never overwrites it).
+// Without it, a takeover during that window recorded nothing, so the
+// user's prior copy was lost and a later withdrawal deleted instead of
+// restoring (ledger 2026-10-06 R3). It is merged into the applied set on
+// the next readable run and removed once that set is saved.
+func mandatedPendingPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "mandated_applied.pending.json")
+}
+
 // Apply installs every item, removes items no longer mandated, persists the
 // new applied set and returns per-item statuses plus the errors that should
 // fail the bundle.
@@ -158,6 +219,19 @@ func mandatedStatePath(dataDir string) string {
 // is NOT a bundle error, so the ACK is applied:true and the bundle
 // advances. A FAILED item (attempted and errored, e.g. a consumer not yet
 // wired during boot) IS a bundle error, so the bundle is retried.
+//
+// ACK version fidelity (fleet H6): every status's Version is the ENVELOPE
+// version (or, for a removal, the version recorded when it was applied) —
+// never a version resolved from the consumer. Fleet's "on older version"
+// adoption counts depend on it.
+//
+// Quiet upgrades (fleet H3, skill-library-01SKLIB01 WP04): when a removed
+// item's local skill/workflow was taken over in THIS run by a different
+// catalog id (the v1→v2 promote), the ACK still says "removed" — fleet
+// groups it by entry and labels it "superseded" — but nothing is
+// uninstalled, the user's prior copy (if the mandate had taken one over)
+// carries forward to the new version's record, and the LOCAL audit records
+// an upgrade, not an uninstall.
 func (m *MandatedApplier) Apply(ctx context.Context, items []BundleMandatedItem) ([]MandatedItemStatus, []error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -166,6 +240,24 @@ func (m *MandatedApplier) Apply(ctx context.Context, items []BundleMandatedItem)
 	prev, loadErr := m.loadLocked(ready)
 	var errs []error
 	persist := ready
+	// carry is where each item's earlier record comes from for INSTALL
+	// purposes (its takeover prior). It is prev — except while the state
+	// file is unreadable, when it is what this applier recorded during that
+	// window (review R3); removals still use prev only (F5).
+	absorbed := ""
+	if loadErr == nil && ready {
+		pending, hash := m.readPendingLocked()
+		switch {
+		case hash == "", hash == m.loadedAbsorbed:
+			// No side file, or (F2) one this applied set already merged — a
+			// crash between saving and clearing it. Never replay; it is
+			// cleared after this run's save.
+		default:
+			mergePending(prev, pending) // R3
+			absorbed = hash
+		}
+	}
+	carry := prev
 	if loadErr != nil {
 		// Review F5: never persist over a state file we could not read —
 		// that would erase the record of what is installed. Treat the
@@ -177,20 +269,26 @@ func (m *MandatedApplier) Apply(ctx context.Context, items []BundleMandatedItem)
 			m.loadErrReported = true
 			errs = append(errs, fmt.Errorf("fleet/mandated: read applied set (left untouched; removals skipped): %w", loadErr))
 		}
+		carry = m.loadPendingLocked()
 	}
 	next := make(map[string]mandatedRecord, len(items))
 	statuses := make([]MandatedItemStatus, 0, len(items)+len(prev))
 	seen := make(map[string]bool, len(items))
+	// owner maps kind:localID to the key that holds it after this run.
+	owner := make(map[string]string, len(items))
 
 	for _, it := range items {
 		key := mandatedKey(it.Kind, it.CatalogID)
 		seen[key] = true
 		st := MandatedItemStatus{CatalogID: it.CatalogID, Kind: it.Kind, Version: it.Version}
-		rec, err := m.install(ctx, it, prev[key])
+		rec, err := m.install(ctx, it, carry[key])
 		switch {
 		case err == nil:
 			st.Status = MandatedStatusApplied
 			next[key] = rec
+			if rec.LocalID != "" {
+				owner[it.Kind+":"+rec.LocalID] = key
+			}
 		case errors.Is(err, ErrMandatedKindUnsupported):
 			// Refused: per-item status only, never a bundle error (F1).
 			st.Status = MandatedStatusRefused
@@ -202,7 +300,7 @@ func (m *MandatedApplier) Apply(ctx context.Context, items []BundleMandatedItem)
 			errs = append(errs, err)
 			// A failed update leaves the earlier install in place: keep
 			// tracking it so a later de-mandate still removes it.
-			if old, ok := prev[key]; ok {
+			if old, ok := carry[key]; ok {
 				next[key] = old
 			}
 		}
@@ -217,16 +315,29 @@ func (m *MandatedApplier) Apply(ctx context.Context, items []BundleMandatedItem)
 		}
 	}
 	sort.Strings(removedKeys)
+	var audits []mandatedAudit
 	for _, key := range removedKeys {
 		old := prev[key]
 		st := MandatedItemStatus{CatalogID: old.CatalogID, Kind: old.Kind, Version: old.Version}
-		if err := m.remove(ctx, old); err != nil {
+		if newKey, ok := owner[old.Kind+":"+old.LocalID]; ok && old.LocalID != "" {
+			// Superseded in this run: the new version already holds the
+			// local item. Nothing to uninstall; hand the user's prior copy
+			// on to the new version's record.
+			nr := next[newKey]
+			if !nr.hasPrior() && old.hasPrior() {
+				nr.PriorSkill, nr.PriorWorkflow, nr.PriorCatalogWorkflow = old.PriorSkill, old.PriorWorkflow, old.PriorCatalogWorkflow
+				next[newKey] = nr
+			}
+			st.Status = MandatedStatusRemoved
+			audits = append(audits, mandatedAudit{upgraded: true, from: old, to: nr})
+		} else if out, err := m.remove(ctx, old); err != nil {
 			st.Status = MandatedStatusFailed
 			st.Error = err.Error()
 			errs = append(errs, err)
 			next[key] = old // still installed: retry the removal next bundle
 		} else {
 			st.Status = MandatedStatusRemoved
+			audits = append(audits, mandatedAudit{from: old, restored: out.Restored, restoreRefused: out.RestoreRefused})
 		}
 		// A legacy seed (pre-envelope mandate) has no fleet catalog id to
 		// report against; its removal is local bookkeeping only.
@@ -236,12 +347,64 @@ func (m *MandatedApplier) Apply(ctx context.Context, items []BundleMandatedItem)
 		statuses = append(statuses, st)
 	}
 
-	if persist {
-		if err := m.saveLocked(next); err != nil {
+	switch {
+	case persist:
+		if absorbed == "" {
+			absorbed = m.loadedAbsorbed // nothing new merged: keep the marker
+		}
+		if err := m.saveLocked(next, absorbed); err != nil {
 			errs = append(errs, fmt.Errorf("fleet/mandated: persist applied set: %w", err))
+		} else {
+			m.clearPendingLocked()
+		}
+	case loadErr != nil && ready:
+		// R3: record what this run applied (and its takeover priors) beside
+		// the unreadable file, never over it.
+		merged := make(map[string]mandatedRecord, len(carry)+len(next))
+		for k, v := range carry {
+			merged[k] = v
+		}
+		for k, v := range next {
+			merged[k] = v
+		}
+		if err := m.savePendingLocked(merged); err != nil {
+			logging.L().Warn("fleet.mandated.pending_write_failed", "err", err.Error())
 		}
 	}
+	m.emitAuditsLocked(ctx, audits)
 	return statuses, errs
+}
+
+// mandatedAudit is one local reconcile event (WP04).
+type mandatedAudit struct {
+	upgraded       bool
+	from           mandatedRecord
+	to             mandatedRecord
+	restored       bool
+	restoreRefused string
+}
+
+func (m *MandatedApplier) emitAuditsLocked(ctx context.Context, audits []mandatedAudit) {
+	for _, a := range audits {
+		p := contextaudit.FleetMandatedItemPayload{
+			CatalogID: a.from.CatalogID, Kind: a.from.Kind, Version: a.from.Version, LocalID: a.from.LocalID,
+		}
+		kind := contextaudit.KindFleetMandatedItemRemoved
+		if a.upgraded {
+			kind = contextaudit.KindFleetMandatedItemUpgraded
+			p.ToCatalogID, p.ToVersion = a.to.CatalogID, a.to.Version
+			logging.L().Info("fleet.mandated.upgraded", "kind", a.from.Kind, "local_id", a.from.LocalID,
+				"from_catalog_id", a.from.CatalogID, "to_catalog_id", a.to.CatalogID)
+		} else {
+			p.Restored = a.restored
+			p.RestoreRefused = a.restoreRefused
+			logging.L().Info("fleet.mandated.removed", "kind", a.from.Kind, "local_id", a.from.LocalID,
+				"catalog_id", a.from.CatalogID, "restored", a.restored, "restore_refused", a.restoreRefused != "")
+		}
+		if m.Emitter != nil {
+			_ = m.Emitter.EmitFleetEvent(ctx, kind, p)
+		}
+	}
 }
 
 func (m *MandatedApplier) install(ctx context.Context, it BundleMandatedItem, prev mandatedRecord) (mandatedRecord, error) {
@@ -267,7 +430,7 @@ func (m *MandatedApplier) install(ctx context.Context, it BundleMandatedItem, pr
 		skill.Version = it.Version
 		// The mandate moved to a new skill id: end it on the old one.
 		if prev.LocalID != "" && prev.LocalID != skill.ID {
-			if err := m.endSkillMandate(prev.LocalID, it.CatalogID, prev.PriorSkill); err != nil {
+			if _, err := m.endSkillMandate(prev.LocalID, it.CatalogID, prev.PriorSkill); err != nil {
 				return rec, err
 			}
 			prev.PriorSkill = nil
@@ -292,16 +455,30 @@ func (m *MandatedApplier) install(ctx context.Context, it BundleMandatedItem, pr
 		if m.Workflows == nil {
 			return rec, fmt.Errorf("%w: workflow %s (workflows view)", ErrMandatedConsumerUnwired, it.CatalogID)
 		}
-		id, tookOver, err := m.Workflows.InstallMandatedWorkflow(ctx, it.CatalogID, it.Version, it.Payload)
+		id, prior, err := m.Workflows.InstallMandatedWorkflow(ctx, it.CatalogID, it.Version, it.Payload)
 		if err != nil {
 			return rec, fmt.Errorf("fleet/mandated: workflow %s: %w", it.CatalogID, err)
 		}
-		rec.PriorCatalogWorkflow = tookOver
+		// R2: keep the user's actual copy (a snapshot), not just a flag.
+		rec.PriorWorkflow = prior
+		rec.PriorCatalogWorkflow = len(prior) > 0
 		if prev.LocalID == id {
-			rec.PriorCatalogWorkflow = rec.PriorCatalogWorkflow || prev.PriorCatalogWorkflow
+			if len(rec.PriorWorkflow) == 0 {
+				// An update of this mandate: the earlier record's prior wins.
+				rec.PriorWorkflow, rec.PriorCatalogWorkflow = prev.PriorWorkflow, prev.PriorCatalogWorkflow
+			}
 		} else if prev.LocalID != "" {
-			if err := m.Workflows.RemoveMandatedWorkflow(ctx, prev.LocalID, it.CatalogID, prev.PriorCatalogWorkflow); err != nil {
+			out, err := m.Workflows.RemoveMandatedWorkflow(ctx, prev.LocalID, it.CatalogID, prev.PriorWorkflow, prev.legacyWorkflowRestore())
+			if err != nil {
 				return rec, fmt.Errorf("fleet/mandated: workflow %s: remove superseded %q: %w", it.CatalogID, prev.LocalID, err)
+			}
+			if out.RestoreRefused != "" {
+				// The mandate moved to a new workflow id and policy refused
+				// to restore the user's copy at the old one: it was deleted.
+				// Fleet 0114+ cannot reach this (versions are immutable);
+				// legacy records can — never silent.
+				logging.L().Warn("fleet.mandated.restore_refused", "kind", MandatedKindWorkflow,
+					"catalog_id", it.CatalogID, "local_id", prev.LocalID, "reason", out.RestoreRefused)
 			}
 		}
 		rec.LocalID = id
@@ -312,47 +489,59 @@ func (m *MandatedApplier) install(ctx context.Context, it BundleMandatedItem, pr
 	}
 }
 
-func (m *MandatedApplier) remove(ctx context.Context, r mandatedRecord) error {
+// remove ends the mandate r recorded: whether the user's own earlier copy
+// was handed back instead of deleted, or why restoring it was refused.
+func (m *MandatedApplier) remove(ctx context.Context, r mandatedRecord) (MandatedWorkflowRemoval, error) {
 	switch r.Kind {
 	case MandatedKindSkill:
-		return m.endSkillMandate(r.LocalID, r.CatalogID, r.PriorSkill)
+		restored, err := m.endSkillMandate(r.LocalID, r.CatalogID, r.PriorSkill)
+		return MandatedWorkflowRemoval{Restored: restored}, err
 	case MandatedKindWorkflow:
 		if m.Workflows == nil {
-			return fmt.Errorf("%w: cannot remove workflow %s", ErrMandatedConsumerUnwired, r.CatalogID)
+			return MandatedWorkflowRemoval{}, fmt.Errorf("%w: cannot remove workflow %s", ErrMandatedConsumerUnwired, r.CatalogID)
 		}
-		if err := m.Workflows.RemoveMandatedWorkflow(ctx, r.LocalID, r.CatalogID, r.PriorCatalogWorkflow); err != nil {
-			return fmt.Errorf("fleet/mandated: remove workflow %s: %w", r.CatalogID, err)
+		out, err := m.Workflows.RemoveMandatedWorkflow(ctx, r.LocalID, r.CatalogID, r.PriorWorkflow, r.legacyWorkflowRestore())
+		if err != nil {
+			return MandatedWorkflowRemoval{}, fmt.Errorf("fleet/mandated: remove workflow %s: %w", r.CatalogID, err)
 		}
-		return nil
+		return out, nil
 	default:
 		// Never installed (refused kinds are never recorded); nothing to do.
-		return nil
+		return MandatedWorkflowRemoval{}, nil
 	}
+}
+
+// legacyWorkflowRestore: a v0.91 record that took over the user's catalog
+// install recorded only the flag — no snapshot to restore — so withdrawal
+// can only relabel (the pre-R2 behaviour, kept for those records).
+func (r mandatedRecord) legacyWorkflowRestore() bool {
+	return r.PriorCatalogWorkflow && len(r.PriorWorkflow) == 0
 }
 
 // endSkillMandate ends the mandate on localID: the mandated copy is
 // unregistered and, when the mandate had taken over the user's own skill
 // (prior), that skill is restored in its place (review F6). Acts only while
-// the stored skill is still the mandated copy of catalogID.
-func (m *MandatedApplier) endSkillMandate(localID, catalogID string, prior json.RawMessage) error {
+// the stored skill is still the mandated copy of catalogID. restored reports
+// whether the prior skill was put back.
+func (m *MandatedApplier) endSkillMandate(localID, catalogID string, prior json.RawMessage) (bool, error) {
 	if err := m.removeSkill(localID, catalogID); err != nil {
-		return err
+		return false, err
 	}
 	if len(prior) == 0 {
-		return nil
+		return false, nil
 	}
 	if _, err := m.Skills.Get(localID); err == nil {
-		return nil // something else holds the id now — leave it
+		return false, nil // something else holds the id now — leave it
 	}
 	var sk slashcmd.Skill
 	if err := json.Unmarshal(prior, &sk); err != nil {
-		return fmt.Errorf("fleet/mandated: restore skill %q: %w", localID, err)
+		return false, fmt.Errorf("fleet/mandated: restore skill %q: %w", localID, err)
 	}
 	sk.OrgManaged = false
 	if err := slashcmd.LiveRegister(m.Skills, m.Registry, sk); err != nil && !isSkillShadowedErr(err) {
-		return fmt.Errorf("fleet/mandated: restore skill %q: %w", localID, err)
+		return false, fmt.Errorf("fleet/mandated: restore skill %q: %w", localID, err)
 	}
-	return nil
+	return true, nil
 }
 
 // removeSkill unregisters a mandated skill — only while it is still the
@@ -381,6 +570,7 @@ func (m *MandatedApplier) removeSkill(localID, catalogID string) error {
 // any skills in the store already marked mandated (residue of the retired
 // mandated_skills section), so the first bundle reconciles them too.
 func (m *MandatedApplier) loadLocked(ready bool) (map[string]mandatedRecord, error) {
+	m.loadedAbsorbed = ""
 	if m.DataDir == "" {
 		out := make(map[string]mandatedRecord, len(m.mem))
 		for k, v := range m.mem {
@@ -405,6 +595,7 @@ func (m *MandatedApplier) loadLocked(ready bool) (map[string]mandatedRecord, err
 	if st.Items == nil {
 		st.Items = map[string]mandatedRecord{}
 	}
+	m.loadedAbsorbed = st.AbsorbedPending
 	return st.Items, nil
 }
 
@@ -432,9 +623,48 @@ func (m *MandatedApplier) legacySkillSeed() map[string]mandatedRecord {
 	return out
 }
 
-func (m *MandatedApplier) saveLocked(set map[string]mandatedRecord) error {
+func (m *MandatedApplier) saveLocked(set map[string]mandatedRecord, absorbed string) error {
 	if m.DataDir == "" {
 		m.mem = set
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(m.DataDir, "fleet"), 0o700); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(mandatedState{Schema: 1, Items: set, AbsorbedPending: absorbed})
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(mandatedStatePath(m.DataDir), string(raw)+"\n")
+}
+
+// loadPendingLocked reads the R3 side file; missing or unreadable is empty.
+func (m *MandatedApplier) loadPendingLocked() map[string]mandatedRecord {
+	out, _ := m.readPendingLocked()
+	return out
+}
+
+// readPendingLocked is loadPendingLocked plus the sha256 of the file's
+// bytes ("" when there is no usable side file).
+func (m *MandatedApplier) readPendingLocked() (map[string]mandatedRecord, string) {
+	out := map[string]mandatedRecord{}
+	if m.DataDir == "" {
+		return out, ""
+	}
+	raw, err := os.ReadFile(mandatedPendingPath(m.DataDir))
+	if err != nil {
+		return out, ""
+	}
+	var st mandatedState
+	if err := json.Unmarshal(raw, &st); err != nil || st.Items == nil {
+		return out, ""
+	}
+	sum := sha256.Sum256(raw)
+	return st.Items, hex.EncodeToString(sum[:])
+}
+
+func (m *MandatedApplier) savePendingLocked(set map[string]mandatedRecord) error {
+	if m.DataDir == "" {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Join(m.DataDir, "fleet"), 0o700); err != nil {
@@ -444,5 +674,32 @@ func (m *MandatedApplier) saveLocked(set map[string]mandatedRecord) error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(mandatedStatePath(m.DataDir), string(raw)+"\n")
+	return atomicWriteFile(mandatedPendingPath(m.DataDir), string(raw)+"\n")
+}
+
+func (m *MandatedApplier) clearPendingLocked() {
+	if m.DataDir == "" {
+		return
+	}
+	if err := os.Remove(mandatedPendingPath(m.DataDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		logging.L().Warn("fleet.mandated.pending_clear_failed", "err", err.Error())
+	}
+}
+
+// mergePending folds records applied while the state file was unreadable
+// into the readable applied set: a key the set lacks is added (it IS
+// installed, so a later de-mandate must remove it), and a matching record
+// missing its takeover prior gains it (R3).
+func mergePending(prev, pending map[string]mandatedRecord) {
+	for k, p := range pending {
+		cur, ok := prev[k]
+		if !ok {
+			prev[k] = p
+			continue
+		}
+		if !cur.hasPrior() && p.hasPrior() && cur.LocalID == p.LocalID {
+			cur.PriorSkill, cur.PriorWorkflow, cur.PriorCatalogWorkflow = p.PriorSkill, p.PriorWorkflow, p.PriorCatalogWorkflow
+			prev[k] = cur
+		}
+	}
 }

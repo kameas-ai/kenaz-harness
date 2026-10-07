@@ -1709,6 +1709,20 @@ type SettingsAPI interface {
 	// FleetTelemetryStatus is a payload-free export health snapshot.
 	FleetTelemetryStatus(ctx context.Context) (FleetTelemetryStatusView, error)
 
+	// ── Fleet learned-memory sync (memory-sync-01MEMSY01 WP08) ──────────
+
+	// FleetMemorySyncStatus returns the opt-in state, Fleet's settings and
+	// usage (fetched only when the memory_sync capability is present),
+	// the sync_blocked count and the lane health.
+	FleetMemorySyncStatus(ctx context.Context) (MemorySyncStatusView, error)
+	// FleetMemorySyncEnable opts in with the given scopes (⊆ long_term,
+	// global) and the disclosure version the user accepted.
+	FleetMemorySyncEnable(ctx context.Context, scopes []string, consentVersion string) (MemorySyncStatusView, error)
+	// FleetMemorySyncDisable opts out (Fleet keeps the data). With
+	// deleteFromFleet it first erases everything on Fleet (forget-all);
+	// confirm must then be exactly "forget-all".
+	FleetMemorySyncDisable(ctx context.Context, deleteFromFleet bool, confirm string) (MemorySyncStatusView, error)
+
 	// FleetProfile returns the active env profile for UI rendering.
 	// Does NOT expose ClientID, APIAudience, or any secret fields.
 	FleetProfile(ctx context.Context) (FleetProfileInfo, error)

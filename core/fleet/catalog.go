@@ -13,6 +13,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -100,7 +101,48 @@ type CatalogItem struct {
 	// produced by the publishing device's key.
 	Signature   string    `json:"signature,omitempty"`
 	PublishedAt time.Time `json:"published_at,omitempty"`
+
+	// Lifecycle is the version's org lifecycle (skill-library-01SKLIB01
+	// WP01, fleet migrations 0114-0116): "active" | "deprecated" |
+	// "revoked". Carried by BOTH the list and the fetch response — the
+	// UNSIGNED catalog wire only; it never enters the signed config bundle
+	// (fleet §5.4 rule, ruling OQ-5 = H4a). Empty means a pre-0114 fleet:
+	// treat as active (EffectiveLifecycle). An unknown value is preserved
+	// verbatim for display, never an error (forward compatibility).
+	Lifecycle string `json:"lifecycle,omitempty"`
+	// LifecycleReason is the admin's reason for a deprecate/revoke.
+	// Additive forward-compat only: fleet's live list and fetch responses
+	// do NOT carry it today (only GET /catalog/entries/{kind}/{slug} does);
+	// decoded here so a later fleet that adds it to list/fetch reaches the
+	// UI without a harness change.
+	LifecycleReason string `json:"lifecycle_reason,omitempty"`
+	// SupersededBy is the catalog id of a newer version of the same entry
+	// the org points deprecated users at (optional).
+	SupersededBy string `json:"superseded_by,omitempty"`
+	// RevokedAt is set on list rows whose lifecycle is "revoked".
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 }
+
+// Catalog lifecycle states (fleet service/lookups_catalog_library.go).
+const (
+	CatalogLifecycleActive     = "active"
+	CatalogLifecycleDeprecated = "deprecated"
+	CatalogLifecycleRevoked    = "revoked"
+)
+
+// EffectiveLifecycle is the item's lifecycle with a pre-0114 fleet's
+// missing key read as "active". Unknown values pass through unchanged.
+func (c CatalogItem) EffectiveLifecycle() string {
+	if c.Lifecycle == "" {
+		return CatalogLifecycleActive
+	}
+	return c.Lifecycle
+}
+
+// IsRevoked reports an EXPLICIT lifecycle=revoked. Absence of the key, an
+// unknown value, or absence of the row are never revocation (WP03's
+// safety rule).
+func (c CatalogItem) IsRevoked() bool { return c.Lifecycle == CatalogLifecycleRevoked }
 
 // CatalogFilter controls which items List returns.
 type CatalogFilter struct {
@@ -152,6 +194,47 @@ var ErrCatalogSignatureMismatch = fmt.Errorf("fleet/catalog: payload signature m
 var ErrCatalogPayloadTooLarge = fmt.Errorf("fleet/catalog: payload exceeds 10MB limit")
 
 const catalogMaxPayloadBytes = 10 * 1024 * 1024 // 10MB (NFR-001)
+
+// ErrCatalogItemRevoked is returned by FetchCatalogItem when fleet answers
+// 410 item_revoked: the org revoked this version and it can no longer be
+// installed (skill-library-01SKLIB01 WP01, fleet S3). Its message is the
+// user-facing copy the install surfaces show; it is terminal — never
+// retried.
+var ErrCatalogItemRevoked = errors.New("this version was revoked by your org and can no longer be installed")
+
+// catalogCodeItemRevoked is fleet's error code on the 410 (httpcore
+// ErrorResponse {"code","message","details"}).
+const catalogCodeItemRevoked = "item_revoked"
+
+// CatalogStatusError is a non-success HTTP answer from a catalog list or
+// fetch, with fleet's error code when the body carried one. Its message is
+// the same "fleet/catalog: <op>: status N: <body>" text these paths always
+// returned; callers that must tell a tier lapse (403) or a missing route
+// (404) from a transient failure use errors.As.
+type CatalogStatusError struct {
+	Op     string // "list" or "fetch <id>@<ver>"
+	Status int
+	Code   string // fleet ErrorResponse.code, "" when absent
+	Body   string
+}
+
+func (e *CatalogStatusError) Error() string {
+	return fmt.Sprintf("fleet/catalog: %s: status %d: %s", e.Op, e.Status, e.Body)
+}
+
+// newCatalogStatusError reads (a bounded prefix of) the body and fleet's
+// {"code": ...} out of it.
+func newCatalogStatusError(op string, resp *http.Response) *CatalogStatusError {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	e := &CatalogStatusError{Op: op, Status: resp.StatusCode, Body: string(body)}
+	var env struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(body, &env) == nil {
+		e.Code = env.Code
+	}
+	return e
+}
 
 // ── Catalog client methods ───────────────────────────────────────────────────
 
@@ -227,6 +310,12 @@ type catalogListResponse struct {
 
 // List fetches catalog metadata from GET /api/v1/catalog/list.
 // Only metadata is returned (no PayloadBytes).
+//
+// It NEVER sends fleet's optional ?lifecycle= filter: fleet's no-param
+// default includes REVOKED rows (with lifecycle:"revoked", never a payload),
+// and the WP03 revocation sweep depends on seeing them — a filtered list
+// would make a revoked install indistinguishable from an absent row, which
+// the sweep must never act on (research/fleet-answers-2026-10-06, OQ-2).
 func (c *Client) List(ctx context.Context, filters CatalogFilter) ([]CatalogItem, error) {
 	if c == nil || c.isNop {
 		return nil, ErrFleetDisabled
@@ -251,8 +340,7 @@ func (c *Client) List(ctx context.Context, filters CatalogFilter) ([]CatalogItem
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("fleet/catalog: list: status %d: %s", resp.StatusCode, body)
+		return nil, newCatalogStatusError("list", resp)
 	}
 	var lr catalogListResponse
 	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil {

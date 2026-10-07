@@ -828,7 +828,14 @@ jobs:
         # was covered by nothing until now. cmd/harness-served has no test
         # files and no effect on this pattern (it also requires -tags serve,
         # exercised separately by the lint-go job's serve-tag build step).
-        run: go test ./core/... ./cmd/... . -race -count=1 -short
+        #
+        # -timeout 20m (2026-10-07, v0.93.0): Go's default is 10m PER PACKAGE.
+        # core/rpc took 580.9s in the v0.91.0 run — within 20s of the
+        # default — and v0.93.0's added real-sqlite tests tipped it over
+        # (the goroutine dump showed one just-started test, no hang).
+        # Splitting / parallelising core/rpc is ledgered; this keeps the
+        # alarm meaningful (a genuine hang still fails, at 20m).
+        run: go test ./core/... ./cmd/... . -race -count=1 -short -timeout 20m
 
       - name: gate meta-tests
         # scripts/ci/gates_can_fail_test.go plants a violation per CI gate

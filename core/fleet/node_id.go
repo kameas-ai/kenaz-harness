@@ -76,3 +76,77 @@ func generateNodeID() string {
 	enc := base32.NewEncoding("0123456789ABCDEFGHJKMNPQRSTVWXYZ").WithPadding(base32.NoPadding)
 	return enc.EncodeToString(combined)
 }
+
+// ClearNodeID removes <dataDir>/fleet/node_id.txt so the next NodeID call
+// mints a fresh id. Used when fleet answers 403 node_removed: an admin
+// removal blocks that (user, node_id) pair, and re-enroll only works under
+// a NEW node id (fleet contract §10.1). Wire-id-safe: wire ids derive from
+// wire_id_salt, never node_id (wire_id.go, F8) — that file is NOT touched.
+// A missing file is not an error.
+func ClearNodeID(dataDir string) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.Remove(nodeIDFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("fleet: clear node_id: %w", err)
+	}
+	return nil
+}
+
+// ReadNodeID returns the persisted node id under dataDir, or "" when none
+// exists. Unlike NodeID it never mints one — used where creating an id
+// would be wrong (self-unenroll on sign-out names the node that enrolled).
+func ReadNodeID(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(nodeIDFilePath(dataDir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// nodeRemovedMarkerPath is the durable "an org admin removed this device"
+// marker (device-keys-handoff-01DEVKH01 review fix #5).
+func nodeRemovedMarkerPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "node_removed")
+}
+
+// MarkNodeRemoved persists the node_removed terminal state so that a
+// restart, a served-mode supervisor tick or a partially-failed ClearTokens
+// cannot re-enroll (under a freshly minted node id) without an explicit
+// sign-in. Cleared only by ClearNodeRemoved from the sign-in flow.
+func MarkNodeRemoved(dataDir string) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		return fmt.Errorf("fleet: mark node removed: %w", err)
+	}
+	stamp := time.Now().UTC().Format(time.RFC3339) + "\n"
+	if err := os.WriteFile(nodeRemovedMarkerPath(dataDir), []byte(stamp), 0o600); err != nil {
+		return fmt.Errorf("fleet: mark node removed: %w", err)
+	}
+	return nil
+}
+
+// NodeRemovedMarked reports whether the node_removed marker is present.
+func NodeRemovedMarked(dataDir string) bool {
+	if dataDir == "" {
+		return false
+	}
+	_, err := os.Stat(nodeRemovedMarkerPath(dataDir))
+	return err == nil
+}
+
+// ClearNodeRemoved removes the marker (explicit sign-in only).
+func ClearNodeRemoved(dataDir string) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.Remove(nodeRemovedMarkerPath(dataDir)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("fleet: clear node removed: %w", err)
+	}
+	return nil
+}
