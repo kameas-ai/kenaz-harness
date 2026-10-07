@@ -1241,6 +1241,9 @@ export namespace catalog {
 	    visibility: string;
 	    published_at?: string;
 	    installed: boolean;
+	    lifecycle?: string;
+	    lifecycle_reason?: string;
+	    superseded_by?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CatalogItemView(source);
@@ -1256,6 +1259,9 @@ export namespace catalog {
 	        this.visibility = source["visibility"];
 	        this.published_at = source["published_at"];
 	        this.installed = source["installed"];
+	        this.lifecycle = source["lifecycle"];
+	        this.lifecycle_reason = source["lifecycle_reason"];
+	        this.superseded_by = source["superseded_by"];
 	    }
 	}
 	export class PublishInput {
@@ -3450,6 +3456,9 @@ export namespace install {
 	    read_only?: boolean;
 	    read_only_reason?: string;
 	    requirements?: Requirement[];
+	    lifecycle?: string;
+	    lifecycle_reason?: string;
+	    superseded_by?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Item(source);
@@ -3469,6 +3478,9 @@ export namespace install {
 	        this.read_only = source["read_only"];
 	        this.read_only_reason = source["read_only_reason"];
 	        this.requirements = this.convertValues(source["requirements"], Requirement);
+	        this.lifecycle = source["lifecycle"];
+	        this.lifecycle_reason = source["lifecycle_reason"];
+	        this.superseded_by = source["superseded_by"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -9364,6 +9376,7 @@ export namespace workflows {
 	    version: number;
 	    stepCount: number;
 	    source: string;
+	    orgManaged?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Summary(source);
@@ -9377,6 +9390,7 @@ export namespace workflows {
 	        this.version = source["version"];
 	        this.stepCount = source["stepCount"];
 	        this.source = source["source"];
+	        this.orgManaged = source["orgManaged"];
 	    }
 	}
 

@@ -14,6 +14,7 @@ import { ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { CapabilityItem } from '@/lib/types';
 import { SOURCE_LABELS } from './labels';
+import { REVOKED_INSTALL_COPY, isRevoked, lifecycleChip } from '../lifecycle';
 
 const props = defineProps<{ item: CapabilityItem }>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
@@ -23,6 +24,10 @@ const installing = ref(false);
 const error = ref<string | null>(null);
 
 async function install() {
+  if (isRevoked(props.item)) {
+    error.value = REVOKED_INSTALL_COPY;
+    return;
+  }
   installing.value = true;
   error.value = null;
   try {
@@ -45,6 +50,24 @@ async function install() {
       </p>
       <p v-if="item.description" class="mt-2 font-ui text-[12px] text-ink-muted">{{ item.description }}</p>
     </header>
+
+    <!-- skill-library-01SKLIB01 WP02: deprecation is a label (an org-required
+         copy stays installed); a revoked version cannot be installed. -->
+    <p
+      v-if="lifecycleChip(item)"
+      class="font-ui text-[12px]"
+      :data-testid="`skill-detail-lifecycle-${item.id}`"
+    >
+      <span :class="['rounded-sm border border-border-muted px-1 text-[10px] uppercase tracking-[0.14em]', lifecycleChip(item)!.tone]">{{ lifecycleChip(item)!.label }}</span>
+      <span class="ml-2 text-ink-muted">{{ lifecycleChip(item)!.title }}<template v-if="item.lifecycle === 'deprecated' && item.read_only"> — still required, so it stays installed.</template></span>
+    </p>
+    <p
+      v-if="isRevoked(item) && !item.state.installed"
+      class="font-ui text-[12px] text-ink-subtle"
+      :data-testid="`skill-detail-revoked-${item.id}`"
+    >
+      {{ REVOKED_INSTALL_COPY }}
+    </p>
 
     <p class="font-ui text-[12px]" data-testid="skill-detail-state">
       <span v-if="item.state.installed" class="text-signal-ok">
@@ -70,7 +93,8 @@ async function install() {
       v-if="!item.state.installed && !item.read_only"
       type="button"
       class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50"
-      :disabled="installing"
+      :disabled="installing || isRevoked(item)"
+      :title="isRevoked(item) ? REVOKED_INSTALL_COPY : undefined"
       :data-testid="`skill-detail-install-${item.id}`"
       @click="install"
     >

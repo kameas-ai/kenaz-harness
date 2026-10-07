@@ -23,6 +23,7 @@ import {
 } from '@/lib/workflowsClient';
 import type { CapabilityItem } from '@/lib/types';
 import { SOURCE_LABELS } from './labels';
+import { REVOKED_INSTALL_COPY, isRevoked, lifecycleChip } from '../lifecycle';
 
 const props = defineProps<{ item: CapabilityItem }>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
@@ -66,6 +67,10 @@ const installError = ref<string | null>(null);
 const result = ref<WorkflowsCatalogInstallResult | null>(null);
 
 async function install() {
+  if (isRevoked(props.item)) {
+    installError.value = REVOKED_INSTALL_COPY;
+    return;
+  }
   installing.value = true;
   installError.value = null;
   try {
@@ -105,6 +110,23 @@ function openInWorkflows() {
         {{ item.description }}
       </p>
     </header>
+
+    <!-- skill-library-01SKLIB01 WP02 -->
+    <p
+      v-if="lifecycleChip(item)"
+      class="font-ui text-[12px]"
+      :data-testid="`workflow-detail-lifecycle-${item.id}`"
+    >
+      <span :class="['rounded-sm border border-border-muted px-1 text-[10px] uppercase tracking-[0.14em]', lifecycleChip(item)!.tone]">{{ lifecycleChip(item)!.label }}</span>
+      <span class="ml-2 text-ink-muted">{{ lifecycleChip(item)!.title }}<template v-if="item.lifecycle === 'deprecated' && item.read_only"> — still required, so it stays installed.</template></span>
+    </p>
+    <p
+      v-if="isRevoked(item) && !item.state.installed"
+      class="font-ui text-[12px] text-ink-subtle"
+      :data-testid="`workflow-detail-revoked-${item.id}`"
+    >
+      {{ REVOKED_INSTALL_COPY }}
+    </p>
 
     <p
       v-if="isTemplate && item.state.update_available"
@@ -187,7 +209,8 @@ function openInWorkflows() {
         v-if="!item.state.installed"
         type="button"
         class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50"
-        :disabled="installing || loading || !!previewError"
+        :disabled="installing || loading || !!previewError || isRevoked(item)"
+        :title="isRevoked(item) ? REVOKED_INSTALL_COPY : undefined"
         :data-testid="`workflow-detail-install-${item.id}`"
         @click="install"
       >

@@ -285,6 +285,7 @@ func (a *API) List(_ context.Context) ([]Summary, error) {
 			Version:     w.Version,
 			StepCount:   len(w.Steps),
 			Source:      src,
+			OrgManaged:  a.isOrgMandated(w.ID),
 		})
 	}
 	return out, nil
@@ -523,6 +524,12 @@ func (a *API) Save(ctx context.Context, in SaveInput) (SaveOutput, error) {
 	default:
 		return SaveOutput{}, ErrInvalidSaveInput
 	}
+	// An org-mandated workflow is the org's content (skill-library
+	// 01SKLIB01, ledger 2026-10-06 item 4): the next bundle would silently
+	// overwrite an edit anyway, so refuse it here instead of losing it.
+	if a.isOrgMandated(w.ID) {
+		return SaveOutput{}, fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, w.ID)
+	}
 	// Cedar gate. Strict mode + shell-bearing workflows → deny here.
 	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cedarMode(), corewf.CollectStepKinds(w)); gerr != nil {
 		return SaveOutput{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
@@ -560,17 +567,29 @@ func (a *API) Delete(ctx context.Context, id string) error {
 	// Review F7: an org-mandated workflow is not the user's to delete —
 	// the org's next bundle (withdrawing the mandate) removes it. Mirrors
 	// slashcmd.ErrSkillOrgManaged for mandated skills.
-	if a.cfg.Provenance != nil {
-		if p, ok, err := a.cfg.Provenance.Get(id); err == nil && ok && p.Source == corewf.ProvenanceMandated {
-			return fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, id)
-		}
+	if a.isOrgMandated(id) {
+		return fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, id)
 	}
 	return a.deleteWorkflow(ctx, id)
 }
 
 // ErrWorkflowOrgManaged: the workflow is required by the user's org
-// (installed from the bundle's mandated_items) and cannot be deleted here.
-var ErrWorkflowOrgManaged = errors.New("workflows: this workflow is required by your org and cannot be deleted")
+// (installed from the bundle's mandated_items). It cannot be deleted,
+// edited, rescheduled or unscheduled here — the org's bundle owns it
+// (review F7; skill-library-01SKLIB01 extended the guard from delete to
+// save + schedule, ledger 2026-10-06 conformance residual item 4).
+var ErrWorkflowOrgManaged = errors.New("workflows: this workflow is required by your org and is managed by its config, so it cannot be changed here")
+
+// isOrgMandated reports whether id's install provenance is an org mandate.
+// An unreadable provenance file reads as "not mandated" here, matching
+// Delete's existing posture (the collision checks fail closed on their own).
+func (a *API) isOrgMandated(id string) bool {
+	if a == nil || a.cfg.Provenance == nil || id == "" {
+		return false
+	}
+	p, ok, err := a.cfg.Provenance.Get(id)
+	return err == nil && ok && p.Source == corewf.ProvenanceMandated
+}
 
 // deleteWorkflow is Delete without the org-managed guard — the mandate
 // reconciliation path (RemoveMandatedDocument) is the one caller allowed
@@ -642,6 +661,9 @@ func (a *API) ScheduleSet(ctx context.Context, in ScheduleSetInput) error {
 	if a.scheduler == nil {
 		return ErrSchedulerUnavailable
 	}
+	if a.isOrgMandated(in.WorkflowID) {
+		return fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, in.WorkflowID)
+	}
 	return a.scheduler.Register(ctx, in.WorkflowID, in.Cron, in.Timezone)
 }
 
@@ -652,6 +674,9 @@ func (a *API) ScheduleClear(ctx context.Context, workflowID string) error {
 	}
 	if a.scheduler == nil {
 		return ErrSchedulerUnavailable
+	}
+	if a.isOrgMandated(workflowID) {
+		return fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, workflowID)
 	}
 	return a.scheduler.Unregister(ctx, workflowID)
 }
@@ -900,6 +925,10 @@ func (a *API) InstallDocument(ctx context.Context, payload []byte, origin Docume
 			return CatalogInstallResult{}, lerr
 		}
 		created = true
+	} else if !origin.Mandated && a.isOrgMandated(w.ID) {
+		// A user catalog (re)install must never relabel the org's mandated
+		// copy as the user's own — that would end the org's protection.
+		return CatalogInstallResult{}, fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, w.ID)
 	} else if err := a.ownedByCatalogItem(w.ID, origin.CatalogID); err != nil {
 		return CatalogInstallResult{}, err
 	}
@@ -1034,7 +1063,9 @@ func (a *API) RemoveMandatedDocument(ctx context.Context, workflowID, catalogID 
 		return a.cfg.Provenance.Put(p)
 	}
 	if a.scheduler != nil {
-		_ = a.ScheduleClear(ctx, workflowID) // no schedule is not an error here
+		// Directly, not via ScheduleClear: that public path refuses a
+		// mandated workflow, and this IS the mandate's own removal.
+		_ = a.scheduler.Unregister(ctx, workflowID) // no schedule is not an error here
 	}
 	if err := a.deleteWorkflow(ctx, workflowID); err != nil && !errors.Is(err, corewf.ErrWorkflowNotFound) {
 		return err

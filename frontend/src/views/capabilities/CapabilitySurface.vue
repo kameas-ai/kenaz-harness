@@ -37,6 +37,7 @@ import {
   reasonElId,
 } from './catalogBrowse';
 import { BUILTIN_TOOLS, type BuiltinTool } from './plugins/builtinTools';
+import { REVOKED_INSTALL_COPY, isRevoked, lifecycleChip } from './lifecycle';
 import {
   ENTRY_POINTS,
   KIND_PLUGINS,
@@ -312,6 +313,12 @@ function setRowError(key: string, msg: string | null) {
 async function install(row: Row & { type: 'item' }) {
   const it = row.item;
   setRowError(row.key, null);
+  if (isRevoked(it)) {
+    // The button is disabled; this keeps a stray call from fetching a
+    // version fleet answers 410 for (skill-library-01SKLIB01 WP02).
+    setRowError(row.key, REVOKED_INSTALL_COPY);
+    return;
+  }
   if (needsFlow(it)) {
     // Keys, OAuth, a directory, a warning to acknowledge: the per-kind
     // flow collects them (FR-4 detail plugin).
@@ -636,8 +643,23 @@ defineExpose({ focusBrowse });
                     :class="['text-[10px] uppercase tracking-[0.14em]', row.item.state.installed ? 'text-signal-ok' : 'text-ink-subtle']"
                     :data-testid="`capability-state-${row.item.kind}-${row.item.id}`"
                   >{{ stateLabel(row.item) }}</span>
+                  <span
+                    v-if="lifecycleChip(row.item)"
+                    :class="['rounded-sm border border-border-muted px-1 text-[10px] uppercase tracking-[0.14em]', lifecycleChip(row.item)!.tone]"
+                    :title="lifecycleChip(row.item)!.title"
+                    :data-testid="`capability-lifecycle-${row.item.kind}-${row.item.id}`"
+                  >{{ lifecycleChip(row.item)!.label }}</span>
                 </div>
                 <p class="mt-1 max-w-prose text-[11px] text-ink-muted line-clamp-2">{{ row.item.description }}</p>
+                <!-- Disabled-with-reason (WP02 posture): visible text, not a tooltip only. -->
+                <p
+                  v-if="isRevoked(row.item) && !row.item.state.installed"
+                  :id="`capability-revoked-reason-${row.item.kind}-${row.item.id}`"
+                  class="mt-1 max-w-prose text-[11px] text-ink-subtle"
+                  :data-testid="`capability-revoked-${row.item.kind}-${row.item.id}`"
+                >
+                  {{ REVOKED_INSTALL_COPY }}
+                </p>
                 <div
                   v-if="rowError[row.key]"
                   class="mt-1 text-[11px] text-signal-danger"
@@ -652,7 +674,9 @@ defineExpose({ focusBrowse });
                   v-if="!row.item.state.installed"
                   type="button"
                   class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:cursor-not-allowed disabled:opacity-50"
-                  :disabled="busy[row.key]"
+                  :disabled="busy[row.key] || isRevoked(row.item)"
+                  :title="isRevoked(row.item) ? REVOKED_INSTALL_COPY : undefined"
+                  :aria-describedby="isRevoked(row.item) ? `capability-revoked-reason-${row.item.kind}-${row.item.id}` : undefined"
                   :data-testid="`capability-install-${row.item.kind}-${row.item.id}`"
                   @click="install(row)"
                 >
@@ -691,6 +715,12 @@ defineExpose({ focusBrowse });
                     :data-testid="`capability-catalog-downloaded-${row.entry.kind}-${row.entry.slug}`"
                   >Downloaded — not active</span>
                   <span v-else class="text-[10px] uppercase tracking-[0.14em] text-ink-subtle">Not installable yet</span>
+                  <span
+                    v-if="lifecycleChip(row.entry)"
+                    :class="['rounded-sm border border-border-muted px-1 text-[10px] uppercase tracking-[0.14em]', lifecycleChip(row.entry)!.tone]"
+                    :title="lifecycleChip(row.entry)!.title"
+                    :data-testid="`capability-catalog-lifecycle-${row.entry.kind}-${row.entry.slug}`"
+                  >{{ lifecycleChip(row.entry)!.label }}</span>
                 </div>
                 <p class="mt-1 max-w-prose text-[11px] text-ink-muted line-clamp-2">{{ row.entry.description || 'No description.' }}</p>
                 <!-- Disabled-with-reason (WP02 posture): visible text, not a tooltip only. -->

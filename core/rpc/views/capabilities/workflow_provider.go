@@ -94,7 +94,15 @@ func (p *WorkflowProvider) List(ctx context.Context, _ install.Filter) (install.
 				Name: firstNonEmpty(e.Slug, e.ID), Description: e.Description,
 				Source: catalogSource(e.Visibility),
 			}
+			applyLifecycle(&it, e)
 			it.State = workflowState(userWF, firstNonEmpty(e.Slug, e.ID))
+			if s, ok := userWF[firstNonEmpty(e.Slug, e.ID)]; ok && s.OrgManaged {
+				// The installed copy is the org's mandate: Framework.Uninstall
+				// refuses it up front instead of failing in Delete.
+				it.Source = install.SourceOrgCatalog
+				it.ReadOnly = true
+				it.ReadOnlyReason = "Required by your org"
+			}
 			out.Items = append(out.Items, it)
 		}
 	}

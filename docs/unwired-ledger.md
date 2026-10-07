@@ -367,6 +367,21 @@ prose and in a TS union; they do not call `MoveKinds()`.
    protected** (accepted "not done"): a weak guarantee for
    compliance-type workflows. **Owner:** skill-library mission, with the
    read-only UI treatment.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP02, `feat(frontend):
+   > WP02 — Deprecated/Revoked chips …`):** the workflows view refuses
+   > Save, ScheduleSet and ScheduleClear (as well as Delete) for a workflow
+   > whose provenance is `mandated`, with `ErrWorkflowOrgManaged`; a user
+   > catalog re-install can no longer relabel the org's copy as the user's
+   > (it had been able to, which also silently ended the delete guard);
+   > the mandate's own removal disarms the schedule directly. `Summary`
+   > carries `orgManaged`; the Library hides Edit / Edit on canvas /
+   > Delete and says why, the Schedules tab offers no Schedule/Unschedule,
+   > and the Capabilities workflow row is read-only. Pinned by
+   > `TestMandatedWorkflow_EditAndScheduleGuarded` (real sqlite store,
+   > file provenance) and `WorkflowsView.orgManaged.spec.ts`. The guard is view-level: a
+   > 2026-10-07 grep found no `Store.Save` caller outside the workflows
+   > view and `core/workflows` itself, so a future writer that bypasses
+   > the view must re-check provenance.
 
 ### 2026-10-06 (newly-live fleet routes verification, pre-v0.91.0) · four latent gaps, all verified non-firing today
 

@@ -31,6 +31,23 @@ type CatalogEntry struct {
 	Description string
 	// Visibility is "private" | "team" | "org_public".
 	Visibility string
+	// Lifecycle, LifecycleReason, SupersededBy: the version's org lifecycle
+	// from the unsigned catalog wire (skill-library-01SKLIB01). Lifecycle
+	// is "" for a pre-0114 fleet (active).
+	Lifecycle       string
+	LifecycleReason string
+	SupersededBy    string
+}
+
+// applyLifecycle copies a catalog entry's lifecycle onto its item. "active"
+// is not labelled (the UI chips only what deviates from normal).
+func applyLifecycle(it *install.Item, e CatalogEntry) {
+	if e.Lifecycle == "" || e.Lifecycle == "active" {
+		return
+	}
+	it.Lifecycle = e.Lifecycle
+	it.LifecycleReason = e.LifecycleReason
+	it.SupersededBy = e.SupersededBy
 }
 
 // catalogSource maps fleet visibility onto the FR-4 source filter.

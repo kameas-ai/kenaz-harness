@@ -89,6 +89,7 @@ func (s fleetCatalogSeam) List(ctx context.Context, kind string) ([]capabilities
 		out = append(out, capabilitiesview.CatalogEntry{
 			ID: it.ID, Slug: it.Slug, Version: it.Version,
 			Description: it.Description, Visibility: string(it.Visibility),
+			Lifecycle: it.Lifecycle, LifecycleReason: it.LifecycleReason, SupersededBy: it.SupersededBy,
 		})
 	}
 	return out, nil

@@ -31,6 +31,12 @@ export interface WorkflowsSummary {
   version: number;
   stepCount: number;
   source: string;
+  /**
+   * Required by the user's org (bundle mandated_items): read-only — the
+   * backend refuses Save / Delete / ScheduleSet / ScheduleClear
+   * (skill-library-01SKLIB01; ledger 2026-10-06 item 4).
+   */
+  orgManaged?: boolean;
 }
 
 export interface WorkflowsInput {

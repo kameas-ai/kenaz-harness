@@ -254,5 +254,8 @@ func catalogItemToView(it corefleet.CatalogItem, installed bool) CatalogItemView
 	if !it.PublishedAt.IsZero() {
 		v.PublishedAt = it.PublishedAt.UTC().Format(time.RFC3339)
 	}
+	if lc := it.EffectiveLifecycle(); lc != corefleet.CatalogLifecycleActive {
+		v.Lifecycle, v.LifecycleReason, v.SupersededBy = lc, it.LifecycleReason, it.SupersededBy
+	}
 	return v
 }

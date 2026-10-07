@@ -167,7 +167,16 @@ async function clearSchedule(id: string) {
               <span v-else class="font-ui text-xs text-ink-muted">—</span>
             </td>
             <td class="px-3 py-2">
-              <div class="flex items-center justify-end gap-1">
+              <!-- skill-library-01SKLIB01: an org-required workflow's schedule
+                   is the org's; the backend refuses Schedule/Unschedule. -->
+              <div
+                v-if="wf.orgManaged"
+                class="text-right font-ui text-xs text-ink-muted"
+                :data-testid="`wf-sched-org-managed-${wf.id}`"
+              >
+                Required by your org
+              </div>
+              <div v-else class="flex items-center justify-end gap-1">
                 <button
                   type="button"
                   class="rounded-sm px-2 py-1 font-ui text-xs text-ink-muted hover:text-ink hover:bg-surface-2"

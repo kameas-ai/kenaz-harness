@@ -119,6 +119,18 @@ type Item struct {
 	ReadOnly       bool          `json:"read_only,omitempty"`
 	ReadOnlyReason string        `json:"read_only_reason,omitempty"`
 	Requirements   []Requirement `json:"requirements,omitempty"`
+	// Lifecycle is the catalog version's org lifecycle for a fleet catalog
+	// item — "deprecated", "revoked", or a future state shown verbatim
+	// (skill-library-01SKLIB01 WP02). Empty = active or not a catalog item.
+	// Pixels only: a deprecated item stays installable and a deprecated
+	// org-required copy stays installed; a revoked version's Install is
+	// disabled (its fetch fails with ErrRevoked anyway).
+	Lifecycle string `json:"lifecycle,omitempty"`
+	// LifecycleReason is the org's reason, when fleet sends one.
+	LifecycleReason string `json:"lifecycle_reason,omitempty"`
+	// SupersededBy names the newer catalog version a deprecated one points
+	// at, when the org set one.
+	SupersededBy string `json:"superseded_by,omitempty"`
 }
 
 // Filter narrows List. Zero fields match everything.
