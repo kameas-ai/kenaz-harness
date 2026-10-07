@@ -342,6 +342,20 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-07 (v0.93.0 CI) · core/rpc test package is at the 10-minute cliff
+
+core/rpc ran 580.9s under `-race -short` on the self-hosted ARM runner in
+the v0.91.0 CI run; v0.93.0's additions (real-sqlite retry + handoff accept
+tests) pushed it past Go's default 10m per-package timeout (one just-started
+test in the dump — slowness, not a hang). `pr.yml` now passes `-timeout 20m`.
+**Fix shape:** split core/rpc's heavy integration tests into a sibling
+package (or `t.Parallel()` the independent real-sqlite tests), so the
+per-package alarm returns to a tight budget. **Owner:** next release's
+unwired/CI-hygiene sweep. Related flake seen in the same run:
+`core/mlsidecar` TestDemandProbe_FirstDemandStartsEngine_OneEnsurePerTick
+("first demand must not block" — a timing assertion under runner load);
+owner: mlsidecar follow-up if it recurs.
+
 ### 2026-10-07 (skill-library-01SKLIB01 residuals + review F4–F6, feat/skill-library) · six accepted, none introduced as regressions
 
 1. **OQ-1 — the revocation sweep covers skills + workflows only.**
