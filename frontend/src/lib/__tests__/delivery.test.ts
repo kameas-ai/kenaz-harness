@@ -71,6 +71,13 @@ describe('undeliveredFromRuns', () => {
     expect(undeliveredFromRuns([run({ runId: 'x', turnSpanId: 'u1', outcome: '' })]).size).toBe(0);
   });
 
+  it('session_full is never reported as not delivered (it has its own banner)', () => {
+    expect(undeliveredFromRuns([run({ turnSpanId: 'u1', ...PAY, failureCode: 'session_full' })]).size).toBe(0);
+    expect(failureFromClosed({
+      reason: 'backend-error', turn_span_id: 'u1', delivered: false, failure_code: 'session_full',
+    })).toBeNull();
+  });
+
   it('a mid-stream failure (delivered) is not "not delivered"', () => {
     const m = undeliveredFromRuns([
       run({ turnSpanId: 'u1', outcome: 'failed', delivered: true, failureClass: 'transient' }),

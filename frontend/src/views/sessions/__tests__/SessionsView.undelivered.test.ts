@@ -14,6 +14,7 @@ import SessionsView from '@/views/sessions/SessionsView.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { setConnectionState } from '@/lib/useConnectionState';
+import ChatInput from '@/components/chat/ChatInput.vue';
 import type { Message, Provider, TurnRun } from '@/lib/types';
 
 const SID = 'sess-undelivered';
@@ -31,19 +32,19 @@ const PROVIDER: Provider = {
   models: ['moonshotai/kimi-k3'],
 };
 
-async function mountView() {
+const PAY_RUN: TurnRun = {
+  runId: 'chat-1', turnSpanId: 'u-1', graphId: 'chat_default', specDigest: 'sha256:ab',
+  createdAt: '2026-10-07T00:00:00Z', outcome: 'failed', delivered: false,
+  failureClass: 'user_actionable', failureCode: 'payment_required', failureStatus: 402,
+  failureProvider: 'openrouter', failureSummary: 'Out of credits with OpenRouter',
+  failureMessage: 'This request requires more credits.',
+};
+
+async function mountView(opts: { runs?: TurnRun[]; startStream?: () => Promise<string> } = {}) {
   const base = createFakeHarnessClient();
-  const startStream = vi.fn(async () => 'chat-retry-1');
+  const startStream = vi.fn(opts.startStream ?? (async () => 'chat-retry-1'));
   const appendMessage = vi.fn(base.sessions.appendMessage);
-  const turnRuns = vi.fn(async (): Promise<TurnRun[]> => [
-    {
-      runId: 'chat-1', turnSpanId: 'u-1', graphId: 'chat_default', specDigest: 'sha256:ab',
-      createdAt: '2026-10-07T00:00:00Z', outcome: 'failed', delivered: false,
-      failureClass: 'user_actionable', failureCode: 'payment_required', failureStatus: 402,
-      failureProvider: 'openrouter', failureSummary: 'Out of credits with OpenRouter',
-      failureMessage: 'This request requires more credits.',
-    },
-  ]);
+  const turnRuns = vi.fn(async (): Promise<TurnRun[]> => opts.runs ?? [PAY_RUN]);
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -109,6 +110,39 @@ describe('SessionsView — NOT DELIVERED + Retry', () => {
     expect(w.find('[data-testid="delivery-banner"]').exists()).toBe(false);
     expect(w.find('[data-testid="undelivered-retry"]').exists()).toBe(false);
     expect(startStream).toHaveBeenCalledTimes(1);
+    w.unmount();
+  });
+
+  it('a send while a Retry is still being dispatched is queued — one startStream, no second run', async () => {
+    setConnectionState('ready');
+    let resolveRetry!: (id: string) => void;
+    const { w, startStream, appendMessage } = await mountView({
+      startStream: () => new Promise<string>((r) => { resolveRetry = r; }),
+    });
+    await w.find('[data-testid="delivery-banner-retry"]').trigger('click');
+    await flushPromises();
+    expect(startStream).toHaveBeenCalledTimes(1);
+
+    // Enter while the Retry's startStream has not resolved yet.
+    w.findComponent(ChatInput).vm.$emit('send', 'and one more thing');
+    await flushPromises();
+    expect(startStream).toHaveBeenCalledTimes(1);
+    expect(appendMessage).not.toHaveBeenCalled();
+    expect(w.findComponent(ChatInput).props('queueDepth')).toBe(1);
+
+    resolveRetry('chat-retry-1');
+    await flushPromises();
+    expect(startStream).toHaveBeenCalledTimes(1);
+    w.unmount();
+  });
+
+  it('session_full is reported only by its own banner — no NOT DELIVERED badge, no delivery banner', async () => {
+    setConnectionState('ready');
+    const { w } = await mountView({
+      runs: [{ ...PAY_RUN, failureCode: 'session_full', failureSummary: "The conversation no longer fits the model's context window" }],
+    });
+    expect(w.find('[data-testid="undelivered-badge"]').exists()).toBe(false);
+    expect(w.find('[data-testid="delivery-banner"]').exists()).toBe(false);
     w.unmount();
   });
 });

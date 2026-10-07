@@ -44,6 +44,15 @@ export interface DeliveryFailure {
 export const STOPPED_CODE = 'stopped';
 
 /**
+ * session_full is NOT a delivery failure the surface reports here: the
+ * conversation no longer fits the context window, a Retry cannot work,
+ * and MessageList already has its own session-full banner with the way
+ * out. Reporting it as NOT DELIVERED too said the same thing three ways
+ * and held the send queue for nothing.
+ */
+export const SESSION_FULL_CODE = 'session_full';
+
+/**
  * Auto-retry backoff for TRANSIENT failures: three attempts after 2s, 8s
  * and 30s, then the message is surfaced as NOT DELIVERED. A
  * user_actionable failure (out of credits, bad key, unknown model) is
@@ -119,6 +128,7 @@ export interface WireClosedDelivery {
 export function failureFromClosed(p: WireClosedDelivery): DeliveryFailure | null {
   if (p.delivered !== false || !p.turn_span_id) return null;
   if (p.reason === 'completed') return null;
+  if (p.failure_code === SESSION_FULL_CODE) return null;
   if (p.reason === 'stop-called') {
     return {
       turnSpanId: p.turn_span_id,
@@ -163,6 +173,7 @@ export function undeliveredFromRuns(
   for (const [span, { run, index }] of latestBySpan) {
     if (index < lastDeliveredIndex) continue;
     if (run.delivered) continue;
+    if (run.failureCode === SESSION_FULL_CODE) continue;
     if (run.outcome === 'failed') {
       out.set(span, {
         turnSpanId: span,

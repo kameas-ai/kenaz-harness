@@ -247,4 +247,18 @@ describe('useSession — undelivered messages + retry', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(startStream).toHaveBeenCalledTimes(2); // the old timer never fired
   });
+
+  it('session_full is not a NOT DELIVERED failure: no badge entry, no delivery banner, its own banner via errorKind', async () => {
+    const { api } = boot();
+    await settle();
+    rt.emit('llm:stream-closed', {
+      ...PAY_CLOSE, sub_id: 'chat-1', error_kind: 'session_full',
+      failure_code: 'session_full', message: 'session full',
+    });
+    await settle();
+    expect(api().undelivered.value.size).toBe(0);
+    expect(api().deliveryFailure.value).toBeNull();
+    expect(api().errorKind.value).toBe('session_full');
+    expect(api().error.value).toBe('session full');
+  });
 });

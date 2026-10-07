@@ -493,8 +493,14 @@ const breadcrumbAncestorCount = computed(
   () => session.session.value?.branchDepth,
 );
 
+// A Retry being dispatched counts as streaming: until its startStream
+// resolves there is no subscription id yet, and a send in that window
+// would start a second, concurrent run instead of queueing
+// (undelivered-message-retry review fix).
 const isStreaming = computed(
-  () => session.streamSubscriptionId.value !== null,
+  () =>
+    session.streamSubscriptionId.value !== null ||
+    session.retryInFlight.value,
 );
 
 // "Thinking…" — stream is open but no chunks have arrived yet.

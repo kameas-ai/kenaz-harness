@@ -238,6 +238,13 @@ export interface UseSessionResult {
   /** Non-null while a transient failure waits for its automatic retry. */
   autoRetry: Ref<AutoRetryState | null>;
   /**
+   * True while a Retry's startStream is being dispatched — before the
+   * subscription id exists. The surface must count it as streaming (and
+   * queue a send) or a send in that window starts a second, concurrent
+   * run.
+   */
+  retryInFlight: Ref<boolean>;
+  /**
    * Re-run the turn of the newest user message WITHOUT appending a new
    * one: the same LLM_StartStream dispatch a fresh send makes (same
    * lockdown/allow-list/permission gating), which resolves the newest
@@ -327,7 +334,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
   /** Automatic retries already spent on the current failing turn. */
   let autoRetryAttempts = 0;
   /** True between retry() starting a dispatch and it settling. */
-  let retryInFlight = false;
+  const retryInFlight = ref(false);
   /** The provider/model the last turn was dispatched with — reused by auto-retry. */
   let lastDispatch: { profileID: string; modelOverride?: string } | null = null;
 
@@ -998,7 +1005,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
         // behaviour, now prefixed with the classified reason.
         const summary = payload.failure_summary;
         error.value =
-          summary && !payload.message.startsWith(summary)
+          summary && !payload.error_kind && !payload.message.startsWith(summary)
             ? `${summary}. ${payload.message}`
             : payload.message;
         // A session that ran out of context is not a failed send: the
@@ -1138,8 +1145,8 @@ export function useSession(id: Ref<string>): UseSessionResult {
   ) {
     const sid = id.value;
     if (!sid) return;
-    if (streamSubscriptionId.value !== null || retryInFlight) return;
-    retryInFlight = true;
+    if (streamSubscriptionId.value !== null || retryInFlight.value) return;
+    retryInFlight.value = true;
     if (!automatic) {
       // A manual Retry starts a fresh automatic-retry budget.
       autoRetryAttempts = 0;
@@ -1181,7 +1188,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
         message: msg,
       });
     } finally {
-      retryInFlight = false;
+      retryInFlight.value = false;
     }
   }
 
@@ -1458,6 +1465,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     undelivered,
     deliveryFailure,
     autoRetry,
+    retryInFlight,
     retry,
     refresh,
     send,
