@@ -229,6 +229,13 @@ type Store interface {
 	// session, oldest first. Empty (not an error) for a session with no
 	// recorded runs — every turn before migration 0342 is in that state.
 	ListTurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error)
+
+	// RecordTurnRunOutcome stamps the terminal outcome onto an already-
+	// recorded run (migration 0344). Updating a run id that was never
+	// recorded is a no-op, not an error: the turn -> run link is
+	// best-effort observability, so a run whose RecordTurnRun failed has
+	// no row to annotate and the outcome is simply not kept.
+	RecordTurnRunOutcome(ctx context.Context, sessionID, runID string, o TurnRunOutcome) error
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
@@ -563,6 +570,18 @@ func (s *memStore) RecordTurnRun(_ context.Context, tr TurnRun) error {
 		return ErrSessionNotFound
 	}
 	s.turnRuns[tr.RunID] = tr
+	return nil
+}
+
+func (s *memStore) RecordTurnRunOutcome(_ context.Context, sessionID, runID string, o TurnRunOutcome) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tr, ok := s.turnRuns[runID]
+	if !ok || tr.SessionID != sessionID {
+		return nil
+	}
+	tr.Outcome = o
+	s.turnRuns[runID] = tr
 	return nil
 }
 
@@ -1361,7 +1380,9 @@ func (s *sqlStore) RecordTurnRun(ctx context.Context, tr TurnRun) error {
 // empty slice.
 func (s *sqlStore) ListTurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error) {
 	rows, err := s.db.Reader().Query(ctx, `
-        SELECT run_id, turn_span_id, graph_id, spec_digest, created_at
+        SELECT run_id, turn_span_id, graph_id, spec_digest, created_at,
+               outcome, delivered, failure_class, failure_code, failure_status,
+               failure_provider, failure_summary, failure_message, finished_at
         FROM session_turn_runs
         WHERE session_id = ?
         ORDER BY created_at ASC, run_id ASC
@@ -1373,17 +1394,49 @@ func (s *sqlStore) ListTurnRuns(ctx context.Context, sessionID string) ([]TurnRu
 	out := make([]TurnRun, 0)
 	for rows.Next() {
 		var (
-			tr        TurnRun
-			createdNS int64
+			tr         TurnRun
+			createdNS  int64
+			delivered  sql.NullInt64
+			finishedNS sql.NullInt64
 		)
-		if err := rows.Scan(&tr.RunID, &tr.TurnSpanID, &tr.GraphID, &tr.SpecDigest, &createdNS); err != nil {
+		if err := rows.Scan(&tr.RunID, &tr.TurnSpanID, &tr.GraphID, &tr.SpecDigest, &createdNS,
+			&tr.Outcome.Outcome, &delivered, &tr.Outcome.FailureClass, &tr.Outcome.FailureCode,
+			&tr.Outcome.FailureStatus, &tr.Outcome.FailureProvider, &tr.Outcome.FailureSummary,
+			&tr.Outcome.FailureMessage, &finishedNS); err != nil {
 			return nil, err
 		}
 		tr.SessionID = sessionID
 		tr.CreatedAt = time.Unix(0, createdNS)
+		tr.Outcome.Delivered = delivered.Valid && delivered.Int64 != 0
+		if finishedNS.Valid {
+			tr.Outcome.FinishedAt = time.Unix(0, finishedNS.Int64)
+		}
 		out = append(out, tr)
 	}
 	return out, rows.Err()
+}
+
+// RecordTurnRunOutcome stamps a run's terminal outcome onto its
+// session_turn_runs row (migration sessions/0344-turn-run-outcome). A
+// plain UPDATE keyed by (run_id, session_id): a run that was never
+// recorded has no row and the call is a no-op — see the Store doc.
+func (s *sqlStore) RecordTurnRunOutcome(ctx context.Context, sessionID, runID string, o TurnRunOutcome) error {
+	delivered := 0
+	if o.Delivered {
+		delivered = 1
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		_, err := tx.Exec(ctx, `
+            UPDATE session_turn_runs SET
+                outcome = ?, delivered = ?, failure_class = ?, failure_code = ?,
+                failure_status = ?, failure_provider = ?, failure_summary = ?,
+                failure_message = ?, finished_at = ?
+            WHERE run_id = ? AND session_id = ?
+        `, o.Outcome, delivered, o.FailureClass, o.FailureCode, o.FailureStatus,
+			o.FailureProvider, o.FailureSummary, o.FailureMessage, o.FinishedAt.UnixNano(),
+			runID, sessionID)
+		return err
+	})
 }
 
 // DeleteStreamCheckpoint removes the checkpoint row for

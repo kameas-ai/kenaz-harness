@@ -10193,6 +10193,28 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 	return out, nil
 }
 
+// RunTurnSpans implements llm.TurnRunSpanReader: the turn spans some
+// chat run was already dispatched for (session_turn_runs), so a Retry of
+// an undelivered turn is not re-announced to fleet context-sync.
+func (r *sessionHistoryReader) RunTurnSpans(ctx context.Context, sessionID string) (map[string]llm.TurnRunState, error) {
+	if r == nil || r.mgr == nil {
+		return nil, nil
+	}
+	runs, err := r.mgr.ListTurnRuns(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	// ListTurnRuns is oldest first, so the last write per span wins: the
+	// map holds each span's NEWEST run.
+	out := make(map[string]llm.TurnRunState, len(runs))
+	for _, tr := range runs {
+		if tr.TurnSpanID != "" {
+			out[tr.TurnSpanID] = llm.TurnRunState{Outcome: tr.Outcome.Outcome, Delivered: tr.Outcome.Delivered}
+		}
+	}
+	return out, nil
+}
+
 // sessionSyncAppendHook is the callback fired by llmHistoryWriter after each
 // successful AppendEntry call. It is set once at boot by the context-sync
 // wiring block in New() before any chat session starts; no concurrent-write

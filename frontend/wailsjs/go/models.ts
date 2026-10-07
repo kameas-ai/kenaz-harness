@@ -7349,6 +7349,14 @@ export namespace sessions {
 	    graphId: string;
 	    specDigest: string;
 	    createdAt: string;
+	    outcome: string;
+	    delivered: boolean;
+	    failureClass?: string;
+	    failureCode?: string;
+	    failureStatus?: number;
+	    failureProvider?: string;
+	    failureSummary?: string;
+	    failureMessage?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new TurnRun(source);
@@ -7361,6 +7369,14 @@ export namespace sessions {
 	        this.graphId = source["graphId"];
 	        this.specDigest = source["specDigest"];
 	        this.createdAt = source["createdAt"];
+	        this.outcome = source["outcome"];
+	        this.delivered = source["delivered"];
+	        this.failureClass = source["failureClass"];
+	        this.failureCode = source["failureCode"];
+	        this.failureStatus = source["failureStatus"];
+	        this.failureProvider = source["failureProvider"];
+	        this.failureSummary = source["failureSummary"];
+	        this.failureMessage = source["failureMessage"];
 	    }
 	}
 

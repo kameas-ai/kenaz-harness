@@ -172,7 +172,9 @@ const sqlInitSchema = `
 // migrations_session_turn_runs.go; artifacts-as-units-01DOGF0C landed
 // in the units block as units/1104 instead). 0343 is the per-run
 // resolved graph spec, agent_graph_run_specs (see
-// migrations_agent_graph_run_specs.go).
+// migrations_agent_graph_run_specs.go). 0344 adds each chat run's
+// terminal outcome (delivered / failure class) to session_turn_runs
+// (undelivered-message-retry — see migrations_turn_run_outcome.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -248,6 +250,7 @@ func Migrations() []migrations.Migration {
 		migration0341(),
 		migration0342(),
 		migration0343(),
+		migration0344(),
 	}
 }
 

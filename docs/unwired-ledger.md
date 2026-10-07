@@ -594,6 +594,39 @@ left these latents:
    correct for the token (never send to the unverified), but a behaviour
    change: such an engine keeps running until it idle-exits. Same owner.
 
+### 2026-10-07 (undelivered-message-retry review, informational) · Retry on a scheduled session's undelivered prompt runs it attended, without the schedule's tool allowlist
+
+**Owner**: toolset/containment follow-up (alec) — decided by the B-3
+attended-semantics ruling. **Ungated.**
+
+Retry re-dispatches the newest user row through the ordinary interactive
+`LLM_StartStream` path. In a session a schedule created, that row can be a
+scheduled (possibly model-written — `scheduled_chat_runs.created_by`)
+prompt whose original run was unattended and constrained by the
+schedule's `tool_allowlist`. Retrying it from the chat surface re-runs
+that prompt interactively, with the session's normal tool catalog and the
+attended confirm ladder rather than the schedule's allowlist. This is the
+same posture as the user typing into that session — the human is present
+and every confirm/containment gate applies — so it is not a bypass, but
+it changes which tools the prompt can reach. Blocker: B-3 has not ruled
+whether attended re-runs of scheduled prompts inherit the schedule's
+allowlist. Owner change that closes this: the B-3 ruling, then either
+carry the allowlist onto the retried run or document "attended = session
+catalog".
+
+### 2026-10-07 (undelivered-message-retry review, pre-existing) · `provider:auth-resumed` is not filtered by session
+
+**Owner**: alec (chat surface). **Ungated.**
+
+`useSession.ts`'s `provider:auth-resumed` handler adopts
+`payload.new_sub_id` as the active stream for WHICHEVER session view is
+mounted — it never compares `payload.session_id` (which
+`AuthResumedPayload` carries) to the current session. With two sessions
+on one profile, rotating a key in one can point the other view's stream
+guard at the wrong run and clear its banner. Pre-existing (not introduced
+by undelivered-message-retry); found in its review. Fix: early-return when
+`payload.session_id` is set and differs from `id.value`, with a test.
+
 ### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event; the two pull surfaces are count-only stubs
 
 ### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event (item 1 downgraded 2026-10-05: no fleet event-stream exists); the two pull surfaces are count-only stubs

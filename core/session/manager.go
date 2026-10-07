@@ -507,6 +507,18 @@ func (m *Manager) RecordTurnRun(ctx context.Context, sessionID, turnSpanID, runI
 	})
 }
 
+// RecordTurnOutcome stamps a chat run's terminal outcome onto its
+// recorded turn -> run row (undelivered-message-retry, migration 0344).
+// The signature matches chat.TurnRunRecorder so production wiring passes
+// *Manager directly. FinishedAt is stamped from the manager clock.
+func (m *Manager) RecordTurnOutcome(ctx context.Context, sessionID, runID string, o TurnRunOutcome) error {
+	if sessionID == "" || runID == "" {
+		return errors.New("session: record turn outcome: session id and run id required")
+	}
+	o.FinishedAt = m.now()
+	return m.store.RecordTurnRunOutcome(ctx, sessionID, runID, o)
+}
+
 // ListTurnRuns returns a session's recorded turn -> run mappings, oldest
 // first. Read by Sessions_TurnRuns to link transcript turns to their
 // run graphs.

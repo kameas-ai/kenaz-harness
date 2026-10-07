@@ -61,6 +61,34 @@ type StreamClosedPayload struct {
 	// string-matching Message on the frontend: the copy is a sentence
 	// meant for humans and it will be reworded.
 	ErrorKind string `json:"error_kind,omitempty"`
+
+	// TurnSpanID is the id of the persisted user message this run
+	// answered (undelivered-message-retry). It lets the surface put the
+	// NOT DELIVERED state on the right message without a reload.
+	TurnSpanID string `json:"turn_span_id,omitempty"`
+	// Delivered reports whether the model accepted the request: true
+	// once any model output streamed, or on a clean completion. False on
+	// a failure before the first token (a 402 on the response line) — the
+	// user's message never reached the model. Always present on the wire.
+	Delivered bool `json:"delivered"`
+	// FailureClass is llm.FailureClass for a failed run:
+	// "user_actionable" (never auto-retry), "transient" (auto-retry with
+	// backoff is allowed), "unknown". Empty for a non-failure close.
+	FailureClass string `json:"failure_class,omitempty"`
+	// FailureCode is the stable sub-discriminator (llm.FailureCode*:
+	// "payment_required", "auth_invalid", "rate_limited", …). Key UI
+	// affordances off this, never off Message.
+	FailureCode string `json:"failure_code,omitempty"`
+	// FailureStatus is the provider's HTTP status, when it sent one.
+	FailureStatus int `json:"failure_status,omitempty"`
+	// FailureProvider is the adapter kind the request went to.
+	FailureProvider string `json:"failure_provider,omitempty"`
+	// FailureSummary is one-line copy, e.g. "Out of credits with
+	// OpenRouter".
+	FailureSummary string `json:"failure_summary,omitempty"`
+	// FailureMessage is the provider's own explanation, sanitized
+	// (llm.SanitizeProviderMessage: credential shapes redacted, capped).
+	FailureMessage string `json:"failure_message,omitempty"`
 }
 
 // StreamClosedErrorKindSessionFull marks a terminal close caused by the
@@ -129,6 +157,13 @@ type StreamBridge struct {
 	// is the un-persisted tail, which is what an interrupted move
 	// actually contains.
 	segmentStart int
+	// modelResponded flips true on the first event that only the model
+	// can produce — text, reasoning, a tool call, usage, finish. It is
+	// the "delivered" signal (undelivered-message-retry): a run that
+	// fails while it is still false failed before the model accepted the
+	// request. Move boundaries do NOT count — the journal announces them
+	// before the provider is called.
+	modelResponded bool
 	// hasToolEvent flips true on the first StreamEventTool so the
 	// runner knows tool_use already executed; a continuation prompt
 	// would then double-bill, so the resume button is suppressed and
@@ -167,6 +202,11 @@ func (b *StreamBridge) Emit(ev coreag.StreamEvent) {
 	// with a final batch of deltas.
 	b.mu.Lock()
 	switch ev.Kind {
+	case coreag.StreamEventText, coreag.StreamEventReasoning, coreag.StreamEventTool,
+		coreag.StreamEventUsage, coreag.StreamEventFinish:
+		b.modelResponded = true
+	}
+	switch ev.Kind {
 	case coreag.StreamEventText:
 		if ev.Text != "" {
 			b.partialText = append(b.partialText, ev.Text...)
@@ -195,6 +235,19 @@ func (b *StreamBridge) Emit(ev coreag.StreamEvent) {
 		SessionID: b.sessionID,
 		Chunk:     chunk,
 	})
+}
+
+// ModelResponded reports whether any model-produced event has streamed
+// through this bridge — i.e. whether the provider accepted the turn's
+// request (undelivered-message-retry). Safe to call concurrently with
+// Emit.
+func (b *StreamBridge) ModelResponded() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.modelResponded
 }
 
 // PartialState snapshots the accumulated text + tool-seen flag for the
@@ -315,6 +368,11 @@ type StreamClosed struct {
 	PartialFailureKind string
 	PartialRecoverable bool
 	ErrorKind          string
+	// TurnSpanID, Delivered and Failure carry the delivery outcome
+	// (undelivered-message-retry) — see StreamClosedPayload.
+	TurnSpanID string
+	Delivered  bool
+	Failure    corellm.RunFailure
 }
 
 // EmitClosedFull emits a terminal close described by c. EmitClosed and
@@ -340,6 +398,14 @@ func (b *StreamBridge) EmitClosedFull(c StreamClosed) {
 		PartialFailureKind: c.PartialFailureKind,
 		PartialRecoverable: c.PartialRecoverable,
 		ErrorKind:          c.ErrorKind,
+		TurnSpanID:         c.TurnSpanID,
+		Delivered:          c.Delivered,
+		FailureClass:       string(c.Failure.Class),
+		FailureCode:        c.Failure.Code,
+		FailureStatus:      c.Failure.Status,
+		FailureProvider:    c.Failure.Provider,
+		FailureSummary:     c.Failure.Summary,
+		FailureMessage:     c.Failure.Message,
 	})
 }
 

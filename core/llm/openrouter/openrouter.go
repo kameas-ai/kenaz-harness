@@ -1069,6 +1069,11 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		Error *struct {
 			Message string `json:"message"`
 			Type    string `json:"type"`
+			// Code is OpenRouter's upstream status for the failure (e.g.
+			// 402 insufficient credits, 429, 502). Numeric on the wire;
+			// some upstreams send a string, which decodes to a non-number
+			// and is ignored.
+			Code any `json:"code"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(trimmed, &env); err != nil {
@@ -1094,7 +1099,7 @@ func (s *chatStream) handleSSEData(raw []byte) {
 			msg = env.Error.Type + ": " + msg
 		}
 		s.mu.Lock()
-		s.finalErr = &llm.ErrTransient{Message: msg}
+		s.finalErr = classifyStreamErrorFrame(env.Error.Code, msg)
 		s.mu.Unlock()
 		s.events <- llm.StreamEvent{Kind: llm.StreamError, Err: msg}
 		return
@@ -1172,4 +1177,19 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		s.mu.Unlock()
 		s.events <- llm.StreamEvent{Kind: llm.StreamUsage, Usage: &usage}
 	}
+}
+
+// classifyStreamErrorFrame types a mid-stream error frame. When the frame
+// carries an HTTP-style status in error.code it is classified exactly
+// like the same status on the response line (llm.ClassifyStatusMessage) —
+// a 402 is ErrPaymentRequired and is never retried. A frame with no
+// usable code keeps the historical ErrTransient: an upstream failure
+// forwarded mid-stream is most often a provider hiccup.
+func classifyStreamErrorFrame(code any, msg string) error {
+	if f, ok := code.(float64); ok {
+		if status := int(f); status >= 400 && status < 600 {
+			return llm.ClassifyStatusMessage(status, msg)
+		}
+	}
+	return &llm.ErrTransient{Message: msg}
 }

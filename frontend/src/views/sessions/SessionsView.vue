@@ -29,6 +29,8 @@ import {
 } from '@/lib/fleetSession';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ComposerError from '@/components/chat/ComposerError.vue';
+import DeliveryBanner from '@/components/chat/DeliveryBanner.vue';
+import { STOPPED_CODE, type DeliveryFailure } from '@/lib/delivery';
 import ReasoningControl from '@/components/chat/ReasoningControl.vue';
 import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
@@ -492,8 +494,14 @@ const breadcrumbAncestorCount = computed(
   () => session.session.value?.branchDepth,
 );
 
+// A Retry being dispatched counts as streaming: until its startStream
+// resolves there is no subscription id yet, and a send in that window
+// would start a second, concurrent run instead of queueing
+// (undelivered-message-retry review fix).
 const isStreaming = computed(
-  () => session.streamSubscriptionId.value !== null,
+  () =>
+    session.streamSubscriptionId.value !== null ||
+    session.retryInFlight.value,
 );
 
 // "Thinking…" — stream is open but no chunks have arrived yet.
@@ -634,11 +642,71 @@ async function onSendBlocks(contentBlocks: import('@/lib/types').ContentBlock[])
   );
 }
 
+// ── undelivered-message-retry ──────────────────────────────────────
+//
+// A user message whose run failed before the model accepted it is NOT
+// DELIVERED: a sticky badge on the message (persisted, survives reload)
+// plus the composer banner, both offering Retry. Retry re-runs the SAME
+// message through the same LLM_StartStream dispatch a send uses — no new
+// user row, so the owner's 2026-10-07 workaround (retype + resend after
+// topping up OpenRouter credits) is no longer needed.
+
+const EMPTY_UNDELIVERED: ReadonlyMap<string, DeliveryFailure> = new Map();
+
+/** Badges are hidden while a turn streams: that run is delivering them. */
+const undeliveredForList = computed<ReadonlyMap<string, DeliveryFailure>>(() =>
+  isStreaming.value ? EMPTY_UNDELIVERED : session.undelivered.value,
+);
+
+/**
+ * The message Retry re-runs: the newest persisted user message, and only
+ * when it is undelivered. Retry dispatches LLM_StartStream, which resolves
+ * the newest user row server-side — so offering it on any older message
+ * would re-run the wrong one. Older undelivered messages ride along in
+ * history with the next delivered turn.
+ */
+const retryMessageId = computed<string>(() => {
+  const msgs = session.messages.value;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role !== 'user') continue;
+    return session.undelivered.value.has(msgs[i].id) ? msgs[i].id : '';
+  }
+  return '';
+});
+
+/** The composer banner: why the newest message did not reach the model. */
+const deliveryBannerFailure = computed<DeliveryFailure | null>(() => {
+  if (isStreaming.value || !retryMessageId.value) return null;
+  const f = session.undelivered.value.get(retryMessageId.value) ?? null;
+  return f && f.code !== STOPPED_CODE ? f : null;
+});
+
+async function onRetryDelivery(messageId?: string) {
+  if (!hasSession.value || !activeProvider.value) return;
+  if (messageId !== undefined && messageId !== retryMessageId.value) return;
+  if (isStreaming.value) return;
+  await session.retry(activeProvider.value.id, activeModelId.value);
+}
+
+async function onCancelDeliveryRetry() {
+  await session.cancel();
+}
+
+function onOpenProviderSettings() {
+  void router.push('/providers');
+}
+
 // Drain one queued turn each time the stream ends. Recursively re-fires
 // itself via the watch — one streaming turn at a time, in FIFO order.
+//
+// Held while the newest message is NOT DELIVERED or an automatic retry is
+// pending: draining would dispatch the queued turn into the same failure
+// (or race the automatic retry). The queue resumes on the next stream end
+// after a delivered Retry, so a retry never double-sends a queued turn.
 watch(isStreaming, async (now, prev) => {
   if (!prev || now) return; // only act on true → false transitions
   if (sendQueue.value.length === 0) return;
+  if (session.autoRetry.value || deliveryBannerFailure.value) return;
   if (!hasSession.value || !activeProvider.value) return;
   const [next, ...rest] = sendQueue.value;
   sendQueue.value = rest;
@@ -2167,6 +2235,11 @@ async function onShared() {
                 :show-token-meter="showPerMessageTokenMeter"
                 :initial-scroll-position="messageListInitialScrollPosition"
                 :turn-runs="turnRunsBySpan"
+                :undelivered="undeliveredForList"
+                :retry-message-id="retryMessageId"
+                :auto-retry="session.autoRetry.value"
+                @retry-delivery="onRetryDelivery"
+                @cancel-retry="onCancelDeliveryRetry"
                 @new-session="onNudgeNewSession"
                 @remember="onRemember"
                 @save-artifact="onSaveArtifactFromMessage"
@@ -2195,6 +2268,11 @@ async function onShared() {
             :show-token-meter="showPerMessageTokenMeter"
             :initial-scroll-position="messageListInitialScrollPosition"
             :turn-runs="turnRunsBySpan"
+            :undelivered="undeliveredForList"
+            :retry-message-id="retryMessageId"
+            :auto-retry="session.autoRetry.value"
+            @retry-delivery="onRetryDelivery"
+            @cancel-retry="onCancelDeliveryRetry"
             @new-session="onNudgeNewSession"
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"
@@ -2502,6 +2580,16 @@ async function onShared() {
         />
         <!-- ComposerError: surfaced when a knob-policy rejection (ErrUnsupportedFeature)
              stops the last message (provider-implementation-uniformity-01KQ8V4F WP08). -->
+        <DeliveryBanner
+          v-if="deliveryBannerFailure && !activeSubagentBranch"
+          :failure="deliveryBannerFailure"
+          :auto-retry="session.autoRetry.value"
+          :settings-available="!servedMode"
+          class="mx-3 mb-2"
+          @retry="onRetryDelivery()"
+          @cancel-retry="onCancelDeliveryRetry"
+          @open-settings="onOpenProviderSettings"
+        />
         <ComposerError
           v-if="composerErrorText"
           :error="composerErrorText"

@@ -33,8 +33,11 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import MessageBubble from './MessageBubble.vue';
 import MoveTrail from './MoveTrail.vue';
 import TurnRunLinks from './TurnRunLinks.vue';
+import UndeliveredBadge from './UndeliveredBadge.vue';
 import { foldedTurnCounts, projectTranscript, runIdFromLiveSpan } from '@/lib/transcript';
 import type { Artifact, MemoryScopeKind, Message } from '@/lib/types';
+import type { DeliveryFailure } from '@/lib/delivery';
+import type { AutoRetryState } from '@/lib/useSession';
 
 const props = defineProps<{
   messages: ReadonlyArray<Message>;
@@ -141,6 +144,20 @@ const props = defineProps<{
    * any caller that does not track runs) renders no strip at all.
    */
   turnRuns?: ReadonlyMap<string, string>;
+  /**
+   * User messages that did not reach the model, keyed by message id
+   * (undelivered-message-retry, `useSession().undelivered`). Each gets a
+   * sticky NOT DELIVERED badge under its bubble. Undefined / empty renders
+   * nothing (the classic golden stays byte-exact).
+   */
+  undelivered?: ReadonlyMap<string, DeliveryFailure>;
+  /**
+   * The one message a Retry re-runs — the newest user message. Only its
+   * badge carries the Retry button. Empty = no button anywhere.
+   */
+  retryMessageId?: string;
+  /** Pending automatic retry, shown on the retry target's badge. */
+  autoRetry?: AutoRetryState | null;
 }>();
 
 const emit = defineEmits<{
@@ -186,7 +203,21 @@ const emit = defineEmits<{
    * FR-021.)
    */
   (e: 'scroll-position', pos: number): void;
+  /** Retry on a NOT DELIVERED message: re-run it (no new user row). */
+  (e: 'retry-delivery', messageId: string): void;
+  /** Cancel the pending automatic retry. */
+  (e: 'cancel-retry'): void;
 }>();
+
+/**
+ * Zero-or-one NOT DELIVERED badge per row — same `v-for` (not `v-if`)
+ * reasoning as runLinkSlots below: no comment node for the common case.
+ */
+function undeliveredSlots(m: Message): DeliveryFailure[] {
+  if (m.role !== 'user' || !props.undelivered) return [];
+  const f = props.undelivered.get(m.id);
+  return f ? [f] : [];
+}
 
 function runIdFor(m: Message): string {
   if (!props.turnRuns || !m.turnSpanId) return '';
@@ -474,6 +505,15 @@ defineExpose({ scrollToBottom });
             @jump-to-summary="onJumpToSummary"
             @branch-from-turn="() => emit('branch-from-turn', item.message)"
             @resume="(mid) => emit('resume', mid)"
+          />
+          <UndeliveredBadge
+            v-for="f in undeliveredSlots(item.message)"
+            :key="`undelivered-${f.turnSpanId}`"
+            :failure="f"
+            :can-retry="retryMessageId === item.message.id"
+            :auto-retry="retryMessageId === item.message.id ? autoRetry ?? null : null"
+            @retry="emit('retry-delivery', item.message.id)"
+            @cancel-retry="emit('cancel-retry')"
           />
           <TurnRunLinks
             v-for="slot in runLinkSlots(item.message)"
