@@ -332,7 +332,27 @@ func (a *API) Forget(ctx context.Context, id string) error {
 	if a == nil || a.store == nil {
 		return ErrStoreUnavailable
 	}
-	return corememory.RemoveForSync(ctx, a.store, a.forgets, id)
+	if err := corememory.RemoveForSync(ctx, a.store, a.forgets, id); err != nil {
+		return err
+	}
+	a.dropMetrics(ctx, id)
+	return nil
+}
+
+// dropMetrics removes the narrative metrics row of a removed chunk so its
+// signals do not outlive it (memory-sync-01MEMSY01 WP09, H10). The
+// metrics store is optional; there is no production SQL store today (the
+// narrative_metrics migration is not registered — ruling A-4), so this
+// only matters once one is wired.
+func (a *API) dropMetrics(ctx context.Context, ids ...string) {
+	if a.narrativeMetrics == nil {
+		return
+	}
+	for _, id := range ids {
+		if err := a.narrativeMetrics.Delete(ctx, id); err != nil {
+			slog.WarnContext(ctx, "memory: drop narrative metrics failed", "error", err.Error())
+		}
+	}
 }
 
 // Pin sets / clears the do-not-prune flag on a chunk (Bundle E WP16).
@@ -931,6 +951,7 @@ func (a *API) ResummarizeChunk(ctx context.Context, chunkID string) (Chunk, erro
 	if err := corememory.ReplaceForSync(ctx, a.store, a.forgets, updated, chunkID); err != nil {
 		return Chunk{}, fmt.Errorf("memory: replace summarised chunk: %w", err)
 	}
+	a.dropMetrics(ctx, chunkID)
 	return toViewChunk(updated), nil
 }
 

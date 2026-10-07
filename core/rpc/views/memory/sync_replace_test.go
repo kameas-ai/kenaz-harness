@@ -282,3 +282,25 @@ func TestForget_QueuesFleetForgetOnlyForKnownIDs(t *testing.T) {
 		t.Fatal("both chunks must be gone locally")
 	}
 }
+
+// TestForget_DropsNarrativeMetrics (WP09, H10): a removed chunk's metrics
+// row does not outlive it.
+func TestForget_DropsNarrativeMetrics(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	metrics := narrative.NewMemMetricsStore()
+	f.api.narrativeMetrics = metrics
+	ctx := context.Background()
+	if err := f.store.Add(ctx, corememory.Chunk{ID: "mem-m", ScopeKind: corememory.ScopeKindGlobal, Content: "m",
+		Embedding: []float32{1, 0}, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	_ = metrics.IncrementRetrievals(ctx, "mem-m", time.Now())
+	_ = metrics.SetUserPins(ctx, "mem-m", true)
+	if err := f.api.Forget(ctx, "mem-m"); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := metrics.Get(ctx, "mem-m"); m.Retrievals != 0 || m.UserPins != 0 {
+		t.Fatalf("metrics outlived their chunk: %+v", m)
+	}
+}

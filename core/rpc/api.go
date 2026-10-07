@@ -2875,18 +2875,24 @@ func New(c *core.Core, opts ...Option) *API {
 	// v0.86.0 sweep review (L5): the same teardown forgets any hook
 	// additional_context still queued for the session in the chat runner.
 	// One hook, both duties — WithDeleteHookOpt replaces, not chains.
+	//
+	// memory-sync-01MEMSY01 WP09 (H10): deleting a session also deletes its
+	// session-scoped memory chunks — before this the delete cascade covered
+	// artifacts only and the chunks outlived their session indefinitely.
+	// Read through a.memStoreRef at call time (it is assigned later in New).
 	grants := a.confirmSessionGrants
 	chatRunnerForDelete := stack.chatRunner
-	if grants != nil || chatRunnerForDelete != nil {
-		a.sessionsAPI = sessions.WithDeleteHookOpt(a.sessionsAPI, func(sessionID string) {
-			if grants != nil {
-				grants.RevokeSession(sessionID)
-			}
-			if chatRunnerForDelete != nil {
-				chatRunnerForDelete.ForgetSession(sessionID)
-			}
-		})
-	}
+	a.sessionsAPI = sessions.WithDeleteHookOpt(a.sessionsAPI, func(sessionID string) {
+		if grants != nil {
+			grants.RevokeSession(sessionID)
+		}
+		if chatRunnerForDelete != nil {
+			chatRunnerForDelete.ForgetSession(sessionID)
+		}
+		if gone, err := corememory.DeleteSessionMemory(context.Background(), a.memStoreRef, sessionID); err != nil {
+			logging.L().Warn("memory.session_cascade_failed", "err", err.Error(), "deleted", len(gone))
+		}
+	})
 	// Wire export dependencies (Cedar gate) at boot time so the Cedar
 	// check is ready before the first Export call. The FilePicker is
 	// intentionally left nil here; it is wired per-invocation in the

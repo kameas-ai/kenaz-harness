@@ -583,6 +583,69 @@ func (s *chromemStore) SetEmbedding(_ context.Context, id string, vec []float32)
 	return fmt.Errorf("memory: chunk %q not found", id)
 }
 
+// ScopeDeleter is the optional capability that deletes every chunk in one
+// scope with a single save (memory-sync-01MEMSY01 WP09: session delete
+// cascades to its session-scoped memory).
+type ScopeDeleter interface {
+	DeleteScope(ctx context.Context, scope ScopeFilter) ([]string, error)
+}
+
+// DeleteScope implements ScopeDeleter. An empty Kind matches nothing (a
+// scope-less call must never wipe the store).
+func (s *chromemStore) DeleteScope(_ context.Context, scope ScopeFilter) ([]string, error) {
+	if scope.Kind == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var gone []string
+	kept := make([]Chunk, 0, len(s.chunks))
+	for _, c := range s.chunks {
+		if matchesScope(c, []ScopeFilter{scope}) {
+			gone = append(gone, c.ID)
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if len(gone) == 0 {
+		return nil, nil
+	}
+	prev := s.chunks
+	s.chunks = kept
+	if err := s.saveLocked(); err != nil {
+		s.chunks = prev
+		return nil, err
+	}
+	return gone, nil
+}
+
+// DeleteSessionMemory removes the session-scoped chunks of a deleted
+// session (memory-sync-01MEMSY01 WP09, H10). Chunks the user promoted
+// out of the session (project / global / long_term) are not the
+// session's anymore and are kept. Session scope never syncs, so nothing
+// is forgotten on Fleet. Returns the removed ids.
+func DeleteSessionMemory(ctx context.Context, store Store, sessionID string) ([]string, error) {
+	if store == nil || sessionID == "" {
+		return nil, nil
+	}
+	scope := ScopeFilter{Kind: ScopeKindSession, ID: sessionID}
+	if d, ok := store.(ScopeDeleter); ok {
+		return d.DeleteScope(ctx, scope)
+	}
+	chunks, err := store.List(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	var gone []string
+	for _, c := range chunks {
+		if err := store.Delete(ctx, c.ID); err != nil {
+			return gone, err
+		}
+		gone = append(gone, c.ID)
+	}
+	return gone, nil
+}
+
 // RecallFolder is the optional capability prune.Apply uses to persist a
 // collapse survivor's inherited metadata (memory-sync-01MEMSY01 WP05).
 // FoldRecall adds n to the survivor's display-only RecallFolded and raises
