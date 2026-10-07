@@ -58,7 +58,9 @@ type fakeMemoryFleet struct {
 	// the next N item-bearing pushes to answer 413.
 	failPut   int
 	status413 int
-	requests  int
+	// putLog records every enabled value a PUT /settings carried.
+	putLog   []bool
+	requests int
 	// status429 / status403 force the next N requests to fail.
 	status429, status403 int
 	pushes               []memPushRequest
@@ -146,6 +148,7 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if u.Enabled != nil {
 			f.enabled = *u.Enabled
+			f.putLog = append(f.putLog, *u.Enabled)
 		}
 		if u.Scopes != nil {
 			f.scopes = map[string]bool{}
@@ -221,6 +224,12 @@ func parseFakeCursor(c string) fakeCursor {
 	return fakeCursor{seq: n, given: true}
 }
 
+// forgedLocked mirrors stale()'s invalid_cursor arm (#191): a snapshot
+// cursor whose epoch is newer than the server's is refused with 400.
+func (f *fakeMemoryFleet) forgedLocked(c fakeCursor) bool {
+	return c.snapshot && (c.erased > f.erasedAt || c.floor > f.floor)
+}
+
 // staleLocked mirrors userState.stale (#191): a plain cursor is checked
 // against the floor; a snapshot cursor only against its embedded epoch.
 func (f *fakeMemoryFleet) staleLocked(c fakeCursor) string {
@@ -251,6 +260,10 @@ func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cu := parseFakeCursor(raw)
+	if f.forgedLocked(cu) {
+		writeJSON(w, 400, map[string]any{"code": "invalid_cursor", "message": "cursor epoch is newer than the server's"})
+		return
+	}
 	if reason := f.staleLocked(cu); reason != "" {
 		erased := ""
 		if reason == "erased" {

@@ -342,6 +342,23 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-07 (memory-sync-01MEMSY01 verify pass) · PRE-EXISTING flake: `TestStore_Add_WiresGlobalCaptureTracker`
+
+`core/memory/capture_rate_test.go` fails when the whole `core/memory`
+package runs with `-count=5` (ChunksPerMinute delta came out negative). It
+fails the same way on the base commit b2b2df75, so memory-sync did not
+introduce it. Cause: the test reads `GlobalCaptureTracker()`, a
+process-wide sliding 60 s window shared with every other test in the
+package. On repeated runs, earlier writes age out of the window between the
+test's before and after readings, so the delta it measures can go
+negative. It passes at `-count=1` (CI's setting).
+
+- **Class:** test isolation (shared global state), not a production defect.
+- **Fix shape:** inject the tracker into the store (or give it a
+  per-test reset/clock), so the test measures only its own writes.
+- **Owner:** memory follow-up mission (next one to touch
+  `core/memory/capture_rate.go`). Dated 2026-10-07.
+
 ### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
 
 1. **R1 (P2) — promote-to-team can wedge and duplicate when the user has

@@ -557,3 +557,105 @@ func seedLive(w *memWorld, prefix string, n int) {
 		w.fleet.bump(rec)
 	}
 }
+
+// R1: Enable after a failed disable clears the pending opt-out — Status
+// mirrors Fleet again and the lane makes no stray PUT enabled=false.
+func TestMemorySync_R1_EnableClearsDisablePending(t *testing.T) {
+	w := newMemWorld(t)
+	a := w.device("devA", 0)
+	a.enable()
+	w.fleet.mu.Lock()
+	w.fleet.failPut = 3
+	w.fleet.mu.Unlock()
+	if _, err := a.ms.Disable(context.Background(), true, "forget-all"); err == nil {
+		t.Fatal("setup: disable PUT should have failed")
+	}
+	a.enable()
+	if st := a.ms.state(); !st.Enabled || st.DisablePending || st.ForgetAllPending {
+		t.Fatalf("after Enable: %+v", st)
+	}
+	w.fleet.mu.Lock()
+	n := len(w.fleet.putLog)
+	w.fleet.mu.Unlock()
+	a.ms.RunOnce(context.Background())
+	w.fleet.mu.Lock()
+	stray := w.fleet.putLog[n:]
+	w.fleet.enabled = false // another device turns sync off…
+	w.fleet.mu.Unlock()
+	for _, v := range stray {
+		if !v {
+			t.Fatal("the lane sent a stray PUT enabled=false after a re-enable")
+		}
+	}
+	if s := a.ms.Status(context.Background()); s.LocalEnabled {
+		t.Fatal("Status must mirror Fleet again once the pending opt-out is cleared")
+	}
+}
+
+// R2: a failed disable PUT retries BOTH the PUT and the forget-all.
+func TestMemorySync_R2_FailedDisableRetriesForgetAll(t *testing.T) {
+	w := newMemWorld(t)
+	a := w.device("devA", 0)
+	a.enable()
+	a.add("mem-1", "global", "erase me")
+	a.sync()
+	w.fleet.mu.Lock()
+	w.fleet.failPut = 3
+	w.fleet.mu.Unlock()
+	if _, err := a.ms.Disable(context.Background(), true, "forget-all"); err == nil {
+		t.Fatal("setup: disable PUT should have failed")
+	}
+	if !a.ms.state().ForgetAllPending || w.fleet.live("mem-1") == nil {
+		t.Fatal("forget-all intent must be persisted and not yet executed")
+	}
+	reopened, err := NewMemorySync(MemorySyncConfig{Client: newTestClient(t, w.srv), Store: a.store, Clock: a.clock,
+		Outbox: a.outbox, DataDir: a.dir, Caps: func() *Capabilities { return a.caps }, Lanes: a.lanes, Now: w.wall.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.RunOnce(context.Background()) // after a restart: retry both steps
+	w.fleet.mu.Lock()
+	on := w.fleet.enabled
+	w.fleet.mu.Unlock()
+	if on || w.fleet.live("mem-1") != nil {
+		t.Fatalf("retry did not finish: fleet enabled=%v, mem-1 live=%v", on, w.fleet.live("mem-1") != nil)
+	}
+	if st := reopened.state(); st.DisablePending || st.ForgetAllPending {
+		t.Fatalf("pending flags not cleared: %+v", st)
+	}
+}
+
+// R3: a persisted cursor Fleet refuses as invalid (epoch newer than the
+// server's) restarts the snapshot from "" instead of retrying forever.
+func TestMemorySync_R3_InvalidCursorRestartsSnapshot(t *testing.T) {
+	w := newMemWorld(t)
+	b := w.device("devB", 0)
+	b.enable()
+	seedLive(w, "mem-i-", 3)
+	if err := b.ms.update(func(s *memSyncState) { s.Cursor = "s1.999.0" }); err != nil {
+		t.Fatal(err)
+	}
+	b.sync()
+	if st := b.ms.state(); st.ResetPending != "" || strings.HasPrefix(st.Cursor, "s") {
+		t.Fatalf("state after invalid cursor = %+v", st)
+	}
+	if len(b.chunks()) != 3 {
+		t.Fatalf("snapshot after restart holds %d rows, want 3", len(b.chunks()))
+	}
+}
+
+// R4: reset churn has its own lane reason.
+func TestMemorySync_R4_ResetChurnLaneReason(t *testing.T) {
+	w := newMemWorld(t)
+	b := w.device("devB", 0)
+	b.enable()
+	if err := b.ms.update(func(s *memSyncState) {
+		s.ResetPending, s.ResetRestarts, s.ResetCursor = "cursor_expired", memoryMaxResetRestarts, "s1.999.0"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.ms.RunOnce(context.Background())
+	if s := b.lanes.Snapshot(LaneMemorySync); s.Reason != "reset_churn" {
+		t.Fatalf("lane = %+v, want reset_churn", s)
+	}
+}

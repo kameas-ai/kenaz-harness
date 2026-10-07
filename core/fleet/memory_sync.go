@@ -227,6 +227,10 @@ type memSyncState struct {
 	// (the PUT failed). Local sync stays off; the lane retries the PUT and
 	// nothing re-enables this device until Fleet answers.
 	DisablePending bool `json:"disable_pending,omitempty"`
+	// ForgetAllPending: the unconfirmed opt-out also asked to delete
+	// everything from Fleet. The lane's retry finishes BOTH the PUT and the
+	// forget-all; Enable abandons both (the user changed their mind).
+	ForgetAllPending bool `json:"forget_all_pending,omitempty"`
 }
 
 // MemorySyncStatePath is the canonical state-file location under dataDir.
@@ -403,11 +407,11 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 		return
 	}
 	if st := m.state(); !st.Enabled {
-		if st.DisablePending {
-			// Finish the user's opt-out that Fleet has not confirmed. This
-			// is the only request a disabled device makes, and it can only
-			// turn sync OFF.
-			if err := m.putDisabled(ctx); err != nil {
+		if st.DisablePending || st.ForgetAllPending {
+			// Finish the user's opt-out (and delete-from-Fleet) that Fleet
+			// has not confirmed. These are the only requests a disabled
+			// device makes, and they can only turn sync OFF / erase.
+			if _, err := m.finishDisable(ctx); err != nil {
 				logging.L().Warn("fleet.memory_sync.disable_retry_failed", "err", err.Error())
 			}
 		}
@@ -486,6 +490,8 @@ func (m *MemorySync) fail(err error) {
 	case errors.As(err, new(errClockInFuture)):
 		reason = "clock_in_future"
 		backoff = 5 * time.Minute
+	case errors.Is(err, errResetChurn):
+		reason = "reset_churn"
 	}
 	m.nextAttempt = now.Add(backoff)
 	next := m.nextAttempt
@@ -650,7 +656,15 @@ func (m *MemorySync) pull(ctx context.Context) (applied, complete bool, err erro
 		q := url.Values{"cursor": {cursor}, "limit": {strconv.Itoa(memoryPullLimit)}, "device_id": {device}}
 		var resp memPullResponse
 		if err := m.doJSON(ctx, http.MethodGet, "/api/v1/memory/pull?"+q.Encode(), nil, &resp); err != nil {
-			return applied, false, err
+			if !isInvalidCursor(err) {
+				return applied, false, err
+			}
+			// Fleet refuses the cursor itself (#191: a snapshot cursor whose
+			// epoch is newer than the server's — e.g. a corrupt persisted
+			// cursor). Retrying it would fail forever: restart the snapshot
+			// from "" (bounded by the churn limit like any restart).
+			logging.L().Warn("fleet.memory_sync.invalid_cursor_restart")
+			resp = memPullResponse{Enabled: true, Reset: true, ResetReason: "cursor_expired"}
 		}
 		if !resp.Enabled {
 			return applied, false, errDisabledOnFleet
@@ -700,6 +714,12 @@ func (m *MemorySync) pull(ctx context.Context) (applied, complete bool, err erro
 	// More pages remain; the durable cursor resumes next cycle. Not
 	// complete: no push this cycle.
 	return applied, false, nil
+}
+
+// isInvalidCursor reports Fleet's 400 invalid_cursor.
+func isInvalidCursor(err error) bool {
+	var me *MemorySyncError
+	return errors.As(err, &me) && me.Status == http.StatusBadRequest && me.Code == "invalid_cursor"
 }
 
 // beginReset persists a (re)started reset: reason, erased_before, an epoch
@@ -1017,6 +1037,13 @@ func (m *MemorySync) pushBatch(ctx context.Context, entries []pushEntry) error {
 	}
 	var resp memPushResponse
 	err := m.doJSON(ctx, http.MethodPost, "/api/v1/memory/push", req, &resp)
+	if isInvalidCursor(err) {
+		// base_cursor refused (a corrupt cursor): resync rather than drop.
+		if rerr := m.beginReset(ctx, "cursor_expired", ""); rerr != nil {
+			return rerr
+		}
+		return fmt.Errorf("fleet: memory push: invalid base_cursor; resyncing")
+	}
 	var me *MemorySyncError
 	if errors.As(err, &me) && (me.Status == http.StatusBadRequest || me.Status == http.StatusRequestEntityTooLarge) {
 		// An envelope fault is a client bug, not transient: drop the
@@ -1223,6 +1250,10 @@ func (m *MemorySync) Enable(ctx context.Context, scopes []string, consentVersion
 	m.mu.Unlock()
 	if err := m.update(func(s *memSyncState) {
 		s.Enabled, s.Scopes, s.ConsentVersion = true, clean, consentVersion
+		// A re-enable supersedes any unconfirmed opt-out: without this the
+		// lane's retry PUT enabled=false could overwrite this (or another
+		// device's) re-enable, and Status would stop mirroring Fleet.
+		s.DisablePending, s.ForgetAllPending = false, false
 	}); err != nil {
 		return set, err
 	}
@@ -1257,7 +1288,10 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 	}
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
-	if err := m.update(func(s *memSyncState) { s.Enabled, s.DisablePending = false, true }); err != nil {
+	if err := m.update(func(s *memSyncState) {
+		s.Enabled, s.DisablePending = false, true
+		s.ForgetAllPending = s.ForgetAllPending || deleteFromFleet
+	}); err != nil {
 		return 0, err
 	}
 	m.invalidateSettings()
@@ -1269,14 +1303,25 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 		return 0, nil
 	}
 	m.flushForgets(ctx)
-	if err := m.putDisabled(ctx); err != nil {
-		return 0, err
+	return m.finishDisable(ctx)
+}
+
+// finishDisable completes a persisted opt-out: PUT enabled=false while
+// DisablePending, then forget-all while ForgetAllPending. Each flag is
+// cleared only once Fleet confirms its step, so a failure anywhere is
+// retried by the lane (both steps, in order). The confirmation literal was
+// checked when the user asked (Disable).
+func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
+	if m.state().DisablePending {
+		if err := m.putDisabled(ctx); err != nil {
+			return 0, err
+		}
 	}
-	if !deleteFromFleet {
+	if !m.state().ForgetAllPending {
 		return 0, nil
 	}
 	var resp memForgetAllResponse
-	if err := m.doJSON(ctx, http.MethodPost, "/api/v1/memory/forget-all", map[string]string{"confirm": confirm}, &resp); err != nil {
+	if err := m.doJSON(ctx, http.MethodPost, "/api/v1/memory/forget-all", map[string]string{"confirm": "forget-all"}, &resp); err != nil {
 		return 0, err
 	}
 	pend := m.cfg.Outbox.Pending()
@@ -1292,6 +1337,7 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 	}
 	return resp.Erased, m.update(func(s *memSyncState) {
 		s.Cursor, s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.ResetCursor, s.ResetRestarts = "", "", "", time.Time{}, "", 0
+		s.ForgetAllPending = false
 	})
 }
 
