@@ -358,3 +358,52 @@ func (p *priorReturningWorkflows) InstallMandatedWorkflow(ctx context.Context, c
 	id, _, err := p.ownerMandatedWorkflows.InstallMandatedWorkflow(ctx, cid, ver, payload)
 	return id, json.RawMessage(`{"snapshot":true}`), err
 }
+
+// Review F2: a crash AFTER the readable run saved mandated_applied.json but
+// BEFORE it cleared the pending side file must not replay that file — it
+// would re-add the key the run had just removed and report a duplicate
+// "removed" ACK + audit row.
+func TestMandated_StalePendingAfterCrashIsNotReplayed(t *testing.T) {
+	m, store, reg, _, em, dir := newQuietApplier(t)
+	ctx := context.Background()
+	if err := slashcmd.LiveRegister(store, reg, slashcmd.Skill{ID: "policy", Trigger: "policy", Kind: slashcmd.KindText,
+		Body: "mine", Source: slashcmd.SkillSourceCatalog, CatalogID: "user-cat", Version: "0.1"}); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(dir, "fleet", "mandated_applied.json")
+	pendingPath := filepath.Join(dir, "fleet", "mandated_applied.pending.json")
+	_ = os.MkdirAll(filepath.Dir(state), 0o700)
+	if err := os.WriteFile(state, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = m.Apply(ctx, []BundleMandatedItem{mandatedSkill(t, "c1", "1", "policy", "org")})
+	stale, err := os.ReadFile(pendingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(state); err != nil { // repaired
+		t.Fatal(err)
+	}
+	st, errs := m.Apply(ctx, nil) // merges pending, withdraws, restores, saves, clears
+	if len(errs) != 0 || len(st) != 1 || st[0].Status != MandatedStatusRemoved {
+		t.Fatalf("withdrawal = %+v %v", st, errs)
+	}
+	auditsBefore := len(em.snapshot())
+	// The crash: the side file is back, exactly as it was before the clear.
+	if err := os.WriteFile(pendingPath, stale, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, errs = m.Apply(ctx, nil)
+	if len(errs) != 0 || len(st) != 0 {
+		t.Fatalf("stale pending replayed: statuses=%+v errs=%v", st, errs)
+	}
+	if n := len(em.snapshot()); n != auditsBefore {
+		t.Errorf("stale pending produced %d extra audit row(s)", n-auditsBefore)
+	}
+	if sk, err := store.Get("policy"); err != nil || sk.Body != "mine" {
+		t.Errorf("user's restored skill disturbed: %+v %v", sk, err)
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Errorf("stale pending not cleared: %v", err)
+	}
+}

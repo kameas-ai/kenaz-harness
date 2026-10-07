@@ -21,6 +21,8 @@ package fleet
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -120,6 +122,8 @@ type MandatedApplier struct {
 	// loadErrReported: a corrupt/unreadable state file is surfaced in the
 	// ACK errors ONCE per process (review F5), then only logged.
 	loadErrReported bool
+	// loadedAbsorbed is the AbsorbedPending of the state file last read.
+	loadedAbsorbed string
 }
 
 // SetConsumers updates the consumers (wired at boot, possibly after the
@@ -177,6 +181,13 @@ func (r mandatedRecord) hasPrior() bool {
 type mandatedState struct {
 	Schema int                       `json:"schema"`
 	Items  map[string]mandatedRecord `json:"items"`
+	// AbsorbedPending is the sha256 of the pending side file this applied
+	// set already merged (review F2). A crash after saving this file but
+	// before clearing the side file would otherwise replay it next run —
+	// re-adding keys that run had removed, and so a duplicate "removed"
+	// ACK + audit row. A side file whose hash matches is stale: cleared,
+	// never merged. Additive; schema stays 1.
+	AbsorbedPending string `json:"absorbed_pending,omitempty"`
 }
 
 // legacyCatalogPrefix marks a seed record for a skill mandated through the
@@ -233,8 +244,18 @@ func (m *MandatedApplier) Apply(ctx context.Context, items []BundleMandatedItem)
 	// purposes (its takeover prior). It is prev — except while the state
 	// file is unreadable, when it is what this applier recorded during that
 	// window (review R3); removals still use prev only (F5).
+	absorbed := ""
 	if loadErr == nil && ready {
-		mergePending(prev, m.loadPendingLocked()) // R3
+		pending, hash := m.readPendingLocked()
+		switch {
+		case hash == "", hash == m.loadedAbsorbed:
+			// No side file, or (F2) one this applied set already merged — a
+			// crash between saving and clearing it. Never replay; it is
+			// cleared after this run's save.
+		default:
+			mergePending(prev, pending) // R3
+			absorbed = hash
+		}
 	}
 	carry := prev
 	if loadErr != nil {
@@ -328,7 +349,10 @@ func (m *MandatedApplier) Apply(ctx context.Context, items []BundleMandatedItem)
 
 	switch {
 	case persist:
-		if err := m.saveLocked(next); err != nil {
+		if absorbed == "" {
+			absorbed = m.loadedAbsorbed // nothing new merged: keep the marker
+		}
+		if err := m.saveLocked(next, absorbed); err != nil {
 			errs = append(errs, fmt.Errorf("fleet/mandated: persist applied set: %w", err))
 		} else {
 			m.clearPendingLocked()
@@ -537,6 +561,7 @@ func (m *MandatedApplier) removeSkill(localID, catalogID string) error {
 // any skills in the store already marked mandated (residue of the retired
 // mandated_skills section), so the first bundle reconciles them too.
 func (m *MandatedApplier) loadLocked(ready bool) (map[string]mandatedRecord, error) {
+	m.loadedAbsorbed = ""
 	if m.DataDir == "" {
 		out := make(map[string]mandatedRecord, len(m.mem))
 		for k, v := range m.mem {
@@ -561,6 +586,7 @@ func (m *MandatedApplier) loadLocked(ready bool) (map[string]mandatedRecord, err
 	if st.Items == nil {
 		st.Items = map[string]mandatedRecord{}
 	}
+	m.loadedAbsorbed = st.AbsorbedPending
 	return st.Items, nil
 }
 
@@ -588,7 +614,7 @@ func (m *MandatedApplier) legacySkillSeed() map[string]mandatedRecord {
 	return out
 }
 
-func (m *MandatedApplier) saveLocked(set map[string]mandatedRecord) error {
+func (m *MandatedApplier) saveLocked(set map[string]mandatedRecord, absorbed string) error {
 	if m.DataDir == "" {
 		m.mem = set
 		return nil
@@ -596,7 +622,7 @@ func (m *MandatedApplier) saveLocked(set map[string]mandatedRecord) error {
 	if err := os.MkdirAll(filepath.Join(m.DataDir, "fleet"), 0o700); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(mandatedState{Schema: 1, Items: set})
+	raw, err := json.Marshal(mandatedState{Schema: 1, Items: set, AbsorbedPending: absorbed})
 	if err != nil {
 		return err
 	}
@@ -605,19 +631,27 @@ func (m *MandatedApplier) saveLocked(set map[string]mandatedRecord) error {
 
 // loadPendingLocked reads the R3 side file; missing or unreadable is empty.
 func (m *MandatedApplier) loadPendingLocked() map[string]mandatedRecord {
+	out, _ := m.readPendingLocked()
+	return out
+}
+
+// readPendingLocked is loadPendingLocked plus the sha256 of the file's
+// bytes ("" when there is no usable side file).
+func (m *MandatedApplier) readPendingLocked() (map[string]mandatedRecord, string) {
 	out := map[string]mandatedRecord{}
 	if m.DataDir == "" {
-		return out
+		return out, ""
 	}
 	raw, err := os.ReadFile(mandatedPendingPath(m.DataDir))
 	if err != nil {
-		return out
+		return out, ""
 	}
 	var st mandatedState
 	if err := json.Unmarshal(raw, &st); err != nil || st.Items == nil {
-		return out
+		return out, ""
 	}
-	return st.Items
+	sum := sha256.Sum256(raw)
+	return st.Items, hex.EncodeToString(sum[:])
 }
 
 func (m *MandatedApplier) savePendingLocked(set map[string]mandatedRecord) error {
