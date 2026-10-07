@@ -326,3 +326,56 @@ func waitUntil(t *testing.T, timeout time.Duration, fn func() bool) bool {
 	}
 	return fn()
 }
+
+// refusingApplier reports one refused mandated item per apply.
+type refusingApplier struct{ fakeApplier }
+
+func (r *refusingApplier) ApplyBundleItems(ctx context.Context, b *Bundle) ([]error, []MandatedItemStatus) {
+	errs := r.ApplyBundle(ctx, b)
+	return errs, []MandatedItemStatus{{CatalogID: "11111111-1111-4111-8111-111111111111", Kind: "pack", Status: MandatedStatusRefused}}
+}
+
+// Review F1: after an upgrade (build version change) — or when the last
+// applied bundle had REFUSED items — the stored checksum is cleared and the
+// SAME bundle id applies once more, so a pack-capable build installs a pack
+// it previously refused without waiting for a new bundle. With the same
+// build and no refusals, nothing re-applies.
+func TestConfigPoller_ReapplyAfterBuildChangeOrRefusal(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	setTestSigningKey(t, pub)
+	b1 := buildAndSignBundle(t, priv, 1)
+	fake := &fakeFleetConfigServer{response: bundleToJSON(t, b1)}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	dataDir := t.TempDir()
+
+	run := func(build string, applier ConfigApplier, counter func() int, want int) {
+		t.Helper()
+		p := newPollerForTest(t, srv, applier, dataDir)
+		p.SetBuildVersion(build)
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		defer cancel()
+		p.Start(ctx)
+		time.Sleep(150 * time.Millisecond)
+		p.Stop()
+		if got := counter(); got != want {
+			t.Fatalf("build %q: applied %d times, want %d", build, got, want)
+		}
+		if st := p.Status(); st.LastAppliedID != 1 {
+			t.Fatalf("build %q: LastAppliedID = %d, want 1", build, st.LastAppliedID)
+		}
+	}
+
+	// v1 applies bundle 1 with a refused pack.
+	a1 := &refusingApplier{}
+	run("v1", a1, func() int { return len(a1.snapshot()) }, 1)
+	// Same build, but the last apply had refusals → re-applied once.
+	a2 := &fakeApplier{}
+	run("v1", a2, func() int { return len(a2.snapshot()) }, 1)
+	// Same build, no refusals → 304, no re-apply.
+	a3 := &fakeApplier{}
+	run("v1", a3, func() int { return len(a3.snapshot()) }, 0)
+	// Upgrade → re-applied once.
+	a4 := &fakeApplier{}
+	run("v2", a4, func() int { return len(a4.snapshot()) }, 1)
+}

@@ -55,7 +55,7 @@ type ProvisionedMCPEntry struct {
 //
 // Returns one error per malformed entry (empty RecipeID) — all other
 // well-formed entries are still applied, matching the partial-success
-// pattern used by ApplyMandatedSkills and every other ApplyBundle
+// pattern used by fleet.MandatedApplier and every other ApplyBundle
 // section. cat is required; a nil catalog is a caller bug and returns a
 // single error without touching anything.
 //

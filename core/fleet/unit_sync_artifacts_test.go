@@ -103,6 +103,11 @@ func TestUnitSyncer_PushDirty_NeverPushesArtifactUnits(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("PushDirty accepted %d nodes, want 1 (the team doc only)", n)
 	}
+	// Pushed ids are wire UUIDs (WP01): index the artifacts by theirs too.
+	for _, id := range artIDs {
+		isArtifact[syncer.WireNodeID(ctx, id)] = true
+	}
+	teamDocWire := syncer.WireNodeID(ctx, teamDoc.ID)
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	for _, req := range fake.pushRequests {
@@ -110,7 +115,7 @@ func TestUnitSyncer_PushDirty_NeverPushesArtifactUnits(t *testing.T) {
 			if isArtifact[node.ID] || node.Kind == string(units.KindArtifact) {
 				t.Errorf("artifact %s reached the fleet push request", node.ID)
 			}
-			if node.ID != teamDoc.ID {
+			if node.ID != teamDocWire {
 				t.Errorf("unexpected pushed node %s", node.ID)
 			}
 		}

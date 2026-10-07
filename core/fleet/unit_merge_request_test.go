@@ -5,8 +5,9 @@ package fleet
 // Covers:
 //   - personal→team promotion opens a merge request (and the PERSONAL source
 //     unit is never pushed as a node — only the reviewed proposal travels).
-//   - the merge-request wire body matches the fleet merge_requests object
-//     (unit_node_id, from/to_classification, proposed_version, title, body).
+//   - the merge-request wire body matches fleet's MergeRequestCreateRequest
+//     (unit_node_id as a UUID, to_classification, proposed_title/body) and the
+//     response is decoded from fleet's {"merge_request": …} envelope.
 //   - non-upward targets are rejected with ErrPromoteNotUp.
 //   - team→org promotion maps the from/to classes to the sync vocabulary.
 
@@ -42,17 +43,18 @@ func (s *mrFakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(MergeRequest{
+		// Fleet's MergeRequestResponse envelope (service/api_types.go).
+		_ = json.NewEncoder(w).Encode(map[string]any{"merge_request": MergeRequest{
 			ID:                 "mr-1",
 			UnitNodeID:         in.UnitNodeID,
-			FromClassification: in.FromClassification,
+			FromClassification: "personal",
 			ToClassification:   in.ToClassification,
-			ProposedVersion:    in.ProposedVersion,
-			Title:              in.Title,
-			Body:               in.Body,
+			ProposedVersion:    3,
+			Title:              in.ProposedTitle,
+			Body:               in.ProposedBody,
 			Status:             "open",
 			CreatedAt:          time.Now().UTC().Format(time.RFC3339),
-		})
+		}})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/context/push":
 		var req contextPushRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -78,16 +80,13 @@ func newMRTestSyncer(t *testing.T, srvURL string) (*UnitSyncer, *units.Manager) 
 	return NewUnitSyncer(client, m, NewUnitMapper("team-1"), caps, t.TempDir()), m
 }
 
-func TestCreateMergeRequestForPromote_PersonalToTeam(t *testing.T) {
+func TestCreateMergeRequestForPromote_PersonalToTeam_IsNotAMergeRequest(t *testing.T) {
 	fake := &mrFakeServer{}
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
 	syncer, mgr := newMRTestSyncer(t, srv.URL)
 	ctx := context.Background()
-
-	// A PERSONAL unit being promoted up to team. The personal unit must never be
-	// pushed as a node (NFR-005) — only the reviewed proposal travels.
 	src, err := mgr.Create(ctx, units.Unit{
 		Kind: units.KindDoc, Scope: units.ScopeProject, ScopeID: "p1",
 		Classification: units.ClassPersonal, LoadPolicy: units.LoadAlways,
@@ -96,40 +95,17 @@ func TestCreateMergeRequestForPromote_PersonalToTeam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-
-	mr, err := syncer.CreateMergeRequestForPromote(ctx, src, units.ClassTeam, "Promote my note", "please review")
-	if err != nil {
-		t.Fatalf("CreateMergeRequestForPromote: %v", err)
+	// Review F2: personal→team (and personal→org) is never a merge request —
+	// fleet's MR needs an existing node; the caller pushes at team instead.
+	for _, to := range []units.Classification{units.ClassTeam, units.ClassOrg} {
+		if _, err := syncer.CreateMergeRequestForPromote(ctx, src, to, "t", "b"); !errors.Is(err, ErrPromoteNotUp) {
+			t.Errorf("personal→%s err = %v, want ErrPromoteNotUp (team→org only)", to, err)
+		}
 	}
-	if mr.ID == "" || mr.Status != "open" {
-		t.Fatalf("unexpected MR: %+v", mr)
-	}
-
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if len(fake.requests) != 1 {
-		t.Fatalf("merge-request count = %d, want 1", len(fake.requests))
-	}
-	got := fake.requests[0]
-	// Field shapes must match the fleet merge_requests object.
-	if got.UnitNodeID != src.ID {
-		t.Errorf("unit_node_id = %q, want %q", got.UnitNodeID, src.ID)
-	}
-	if got.FromClassification != "personal" {
-		t.Errorf("from_classification = %q, want personal", got.FromClassification)
-	}
-	if got.ToClassification != string(ClassTeamShared) {
-		t.Errorf("to_classification = %q, want %q", got.ToClassification, ClassTeamShared)
-	}
-	if got.ProposedVersion != src.Version {
-		t.Errorf("proposed_version = %d, want %d", got.ProposedVersion, src.Version)
-	}
-	if got.Title != "Promote my note" || got.Body != "please review" {
-		t.Errorf("title/body = %q/%q", got.Title, got.Body)
-	}
-	// The personal source was NEVER pushed as a node.
-	if len(fake.pushNodes) != 0 {
-		t.Errorf("personal unit pushed as node(s) %v — must never happen", fake.pushNodes)
+	if len(fake.requests) != 0 || len(fake.pushNodes) != 0 {
+		t.Fatalf("requests=%d pushes=%v — nothing may travel", len(fake.requests), fake.pushNodes)
 	}
 }
 
@@ -149,15 +125,12 @@ func TestCreateMergeRequestForPromote_TeamToOrg(t *testing.T) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	got := fake.requests[0]
-	if got.FromClassification != string(ClassTeamShared) {
-		t.Errorf("from = %q, want team_shared", got.FromClassification)
-	}
 	if got.ToClassification != string(ClassOrgShared) {
 		t.Errorf("to = %q, want org_shared", got.ToClassification)
 	}
 	// Empty title/body default to the source's.
-	if got.Title != "team doc" || got.Body != "shared" {
-		t.Errorf("defaulted title/body = %q/%q, want team doc/shared", got.Title, got.Body)
+	if got.ProposedTitle != "team doc" || got.ProposedBody != "shared" {
+		t.Errorf("defaulted title/body = %q/%q, want team doc/shared", got.ProposedTitle, got.ProposedBody)
 	}
 }
 

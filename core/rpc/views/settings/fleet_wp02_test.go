@@ -54,12 +54,15 @@ func TestApplyBundle_CedarDeltaUnwiredEngine_Fails(t *testing.T) {
 	}
 }
 
-// mandated_skills present with no skill refs wired must fail the same way.
+// A mandated skill item with no skill refs wired must fail the same way
+// (named fleet.ErrMandatedConsumerUnwired, WP02).
 func TestApplyBundle_MandatedSkillsUnwiredRefs_Fails(t *testing.T) {
 	applier := &compositeConfigApplier{state: &fleetState{}}
 	b := &fleet.Bundle{
-		BundleID:       1,
-		MandatedSkills: []json.RawMessage{json.RawMessage(`{"id":"s1"}`)},
+		BundleID: 1,
+		MandatedItems: []fleet.BundleMandatedItem{{
+			CatalogID: "c1", Kind: fleet.MandatedKindSkill, Version: "1", Payload: json.RawMessage(`{"id":"s1"}`),
+		}},
 	}
 	errs := applier.ApplyBundle(context.Background(), b)
 	if len(errs) == 0 {

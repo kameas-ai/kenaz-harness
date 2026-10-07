@@ -95,7 +95,7 @@ func (a *API) Catalog_Publish(ctx context.Context, input PublishInput) (CatalogI
 	if a.signer == nil {
 		return CatalogItemView{}, fmt.Errorf("catalog: signer not configured")
 	}
-	kind := corefleet.CatalogItemKind(input.Kind)
+	kind := corefleet.CatalogKindForCapability(input.Kind) // "agent_pack" → fleet "pack"
 	vis := corefleet.CatalogVisibility(input.Visibility)
 	payload := []byte(input.PayloadJSON)
 
@@ -125,7 +125,7 @@ func (a *API) Catalog_List(ctx context.Context, filter CatalogFilter) ([]Catalog
 		return nil, corefleet.ErrFleetDisabled
 	}
 	items, err := a.client.List(ctx, corefleet.CatalogFilter{
-		Kind:       corefleet.CatalogItemKind(filter.Kind),
+		Kind:       corefleet.CatalogKindForCapability(filter.Kind),
 		Visibility: corefleet.CatalogVisibility(filter.Visibility),
 	})
 	if err != nil {
@@ -196,7 +196,16 @@ func (a *API) Catalog_Install(ctx context.Context, catalogID, version string) er
 
 // Catalog_Uninstall implements CatalogAPI.
 func (a *API) Catalog_Uninstall(_ context.Context, kind, catalogID, version string) error {
-	return a.client.Uninstall(a.dataDir, corefleet.CatalogItemKind(kind), catalogID, version)
+	// The frontend speaks capability kinds ("agent_pack"); residue lives
+	// under the catalog kind it was downloaded as. Remove both spellings
+	// (Uninstall is idempotent on a missing directory).
+	if err := a.client.Uninstall(a.dataDir, corefleet.CatalogKindForCapability(kind), catalogID, version); err != nil {
+		return err
+	}
+	if wire := corefleet.CatalogKindForCapability(kind); string(wire) != kind {
+		return a.client.Uninstall(a.dataDir, corefleet.CatalogItemKind(kind), catalogID, version)
+	}
+	return nil
 }
 
 // Catalog_Installed implements CatalogAPI.
@@ -235,7 +244,7 @@ func (a *API) Catalog_Unpublish(ctx context.Context, catalogID string) error {
 func catalogItemToView(it corefleet.CatalogItem, installed bool) CatalogItemView {
 	v := CatalogItemView{
 		ID:          it.ID,
-		Kind:        string(it.Kind),
+		Kind:        corefleet.CapabilityKindForCatalog(it.Kind), // fleet "pack" → "agent_pack"
 		Slug:        it.Slug,
 		Version:     it.Version,
 		Description: it.Description,

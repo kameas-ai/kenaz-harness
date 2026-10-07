@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -169,7 +170,7 @@ func (es *EventStream) Replay(ctx context.Context, sinceSeq uint64, apply func(E
 		if err := es.client.endpointUnsupported(FeatureContextEventStream); err != nil {
 			return err
 		}
-		path := fmt.Sprintf("/api/v1/context/replay?stream_id=%s&since=%d", es.streamID, nextSeq)
+		path := fmt.Sprintf("/api/v1/context/replay?stream_id=%s&since=%d", url.QueryEscape(es.streamID), nextSeq)
 		resp, err := es.client.Get(ctx, path)
 		if err != nil {
 			return fmt.Errorf("fleet: context replay GET: %w", err)
@@ -226,7 +227,7 @@ func (es *EventStream) Replay(ctx context.Context, sinceSeq uint64, apply func(E
 
 // DeleteRemote sends DELETE /api/v1/context/<streamID> to purge all events.
 func (es *EventStream) DeleteRemote(ctx context.Context) error {
-	path := "/api/v1/context/" + es.streamID
+	path := "/api/v1/context/" + url.PathEscape(es.streamID)
 	resp, err := es.client.Delete(ctx, path)
 	if err != nil {
 		return fmt.Errorf("fleet: context delete: %w", err)

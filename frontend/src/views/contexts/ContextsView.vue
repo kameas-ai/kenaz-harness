@@ -32,10 +32,9 @@
  *     the "hidden vs broken" doctrine below).
  *   - First-publish confirm: "This entry will be visible to your org" so
  *     users don't accidentally publish secrets into a shared layer (NFR-006).
- *   - `publish` calls `client.contexts.publish` with a deterministic nodeID
- *     derived from the path (sha-ish stable ID approach: md5-hex of the path
- *     is not available in the browser; instead we use btoa(path) as the ID,
- *     which is stable across sessions for the same file path).
+ *   - `publish` calls `client.contexts.publish` with the path as the LOCAL
+ *     node id; the Go sync layer maps it to a stable per-install UUID
+ *     (core/fleet/wire_id.go) — fleet only accepts UUID node ids.
  *
  * WP16 additions (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-11):
  *   - Rename / delete are inline row affordances in `ContextTree` — this view
@@ -301,7 +300,7 @@ const publishFellBackToOrg = computed(
     publishResult.value.effective_layer === 'org',
 );
 
-/** Stable node ID for the selected file (btoa of path; shared with the folder batch). */
+/** Local node ID for the selected file (its path; shared with the folder batch). */
 const selectedNodeID = computed(() => (selectedPath.value ? contextNodeID(selectedPath.value) : ''));
 
 async function loadSyncStatus() {
@@ -856,6 +855,14 @@ onBeforeUnmount(() => {
       </span>
       <span v-if="syncStatus && syncStatus.pull_count > 0" data-testid="context-sync-pull-count">
         {{ syncStatus.pull_count }} shared entr{{ syncStatus.pull_count === 1 ? 'y' : 'ies' }} received
+      </span>
+      <span
+        v-if="syncStatus && (syncStatus.skipped_unknown_kinds ?? 0) > 0"
+        class="text-ink-subtle"
+        data-testid="context-sync-skipped-kinds"
+        title="Shared items of kinds Knowledge › Curated does not show (library units, other sources, or kinds this version does not know). They are skipped, not lost."
+      >
+        {{ syncStatus.skipped_unknown_kinds }} item{{ syncStatus.skipped_unknown_kinds === 1 ? '' : 's' }} of other kinds skipped
       </span>
       <span v-if="syncStatus && syncStatus.last_pull_err" class="text-signal-danger" data-testid="context-sync-pull-err">
         Pull error: {{ syncStatus.last_pull_err }}

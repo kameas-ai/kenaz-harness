@@ -45,7 +45,7 @@ func TestPoller_FiresAtLeastOnce(t *testing.T) {
 	fake.addPullResponse(contextPullResponse{
 		Nodes: []ContextPulledNode{
 			{
-				ID: "poller-n1", Kind: "fact", Title: "Poller entry",
+				ID: "poller-n1", Kind: "guidance", Title: "Poller entry",
 				Body: "body", Classification: ClassTeamShared,
 				Version: 1, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 			},
@@ -108,7 +108,7 @@ func TestPoller_StopsOnContextCancel(t *testing.T) {
 	fake.addPullResponse(contextPullResponse{
 		Nodes: []ContextPulledNode{
 			{
-				ID: "stop-n1", Kind: "fact", Title: "Stop entry",
+				ID: "stop-n1", Kind: "guidance", Title: "Stop entry",
 				Body: "b", Classification: ClassTeamShared,
 				Version: 1, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 			},
@@ -166,7 +166,7 @@ func TestPoller_DoubleStartNoOp(t *testing.T) {
 		fake.addPullResponse(contextPullResponse{
 			Nodes: []ContextPulledNode{
 				{
-					ID: "dup-n1", Kind: "fact", Title: "Dup",
+					ID: "dup-n1", Kind: "guidance", Title: "Dup",
 					Body: "b", Classification: ClassTeamShared,
 					Version: 1, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 				},
@@ -246,7 +246,7 @@ func TestAuditEmitter_PushEntry(t *testing.T) {
 	entry := ContextNodeEntry{
 		ID:      "audit-push-n1",
 		Layer:   contextpack.LayerTeam,
-		Kind:    "fact",
+		Kind:    "guidance",
 		Title:   "Audit push entry",
 		Body:    "body",
 		TeamID:  &teamID,
@@ -276,7 +276,7 @@ func TestAuditEmitter_PullDelta(t *testing.T) {
 	fake.addPullResponse(contextPullResponse{
 		Nodes: []ContextPulledNode{
 			{
-				ID: "audit-pull-n1", Kind: "fact", Title: "Audit pull",
+				ID: "audit-pull-n1", Kind: "guidance", Title: "Audit pull",
 				Body: "b", Classification: ClassTeamShared,
 				Version: 1, UpdatedAt: "2026-07-05T10:00:00Z",
 			},
@@ -412,7 +412,7 @@ func TestAuditEmitter_NilEmitter_NoOp(t *testing.T) {
 	fake.addPullResponse(contextPullResponse{
 		Nodes: []ContextPulledNode{
 			{
-				ID: "nil-em-n1", Kind: "fact", Title: "Nil emitter",
+				ID: "nil-em-n1", Kind: "guidance", Title: "Nil emitter",
 				Body: "b", Classification: ClassTeamShared,
 				Version: 1, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 			},
@@ -442,7 +442,7 @@ func TestAuditEmitter_NilEmitter_NoOp(t *testing.T) {
 	entry := ContextNodeEntry{
 		ID:     "nil-push-n1",
 		Layer:  contextpack.LayerTeam,
-		Kind:   "fact",
+		Kind:   "guidance",
 		Title:  "nil push",
 		Body:   "b",
 		TeamID: &teamID,

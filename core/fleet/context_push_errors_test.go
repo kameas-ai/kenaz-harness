@@ -45,15 +45,17 @@ func TestContextPush_NoRejectedField_IsFullSuccess(t *testing.T) {
 }
 
 func TestContextPush_OwnNodeRejected_IsFailure(t *testing.T) {
-	s := pushRig(t, 200, `{"accepted_nodes":0,"accepted_edges":0,"conflicts":[],"rejected":[{"id":"n1","kind":"node","reason":"not_permitted"}]}`)
-	res, err := s.PushEntry(context.Background(), teamEntry("n1"), nil)
+	// Fleet keys rejections by the WIRE id; a UUID local id passes through.
+	const n1 = "6b2f6f0e-1c1a-4a57-9a51-0d6b1a9e0003"
+	s := pushRig(t, 200, `{"accepted_nodes":0,"accepted_edges":0,"conflicts":[],"rejected":[{"id":"`+n1+`","kind":"node","reason":"not_permitted"}]}`)
+	res, err := s.PushEntry(context.Background(), teamEntry(n1), nil)
 	if res != nil || !errors.Is(err, ErrContextPushRejected) {
 		t.Fatalf("res=%+v err=%v, want ErrContextPushRejected — a 200 with the node rejected is not success", res, err)
 	}
 	if !strings.Contains(err.Error(), "not_permitted") {
 		t.Errorf("error copy %q should name the reason", err.Error())
 	}
-	if st := s.Status(); !strings.Contains(st.LastPushErr, "node n1 not_permitted") {
+	if st := s.Status(); !strings.Contains(st.LastPushErr, "node "+n1+" not_permitted") {
 		t.Fatalf("LastPushErr = %q, want the rejection surfaced", st.LastPushErr)
 	}
 }

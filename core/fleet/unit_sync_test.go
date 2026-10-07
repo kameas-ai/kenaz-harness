@@ -79,8 +79,9 @@ func TestUnitSyncer_PushDirty_PersonalNeverPushed(t *testing.T) {
 		t.Fatalf("push requests = %d, want 1", len(fake.pushRequests))
 	}
 	pushed := fake.pushRequests[0].Nodes
-	if len(pushed) != 1 || pushed[0].ID != teamU.ID {
-		t.Fatalf("pushed nodes = %+v, want only team unit %q", pushed, teamU.ID)
+	// The node id on the wire is the unit's wire UUID, not its ULID (WP01).
+	if len(pushed) != 1 || pushed[0].ID != syncer.WireNodeID(ctx, teamU.ID) || !IsWireUUID(pushed[0].ID) {
+		t.Fatalf("pushed nodes = %+v, want only team unit %q as its wire UUID", pushed, teamU.ID)
 	}
 	if pushed[0].Classification != ClassTeamShared {
 		t.Errorf("pushed classification = %q, want team_shared", pushed[0].Classification)
@@ -91,9 +92,11 @@ func TestUnitSyncer_PushDirty_PersonalNeverPushed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSyncState: %v", err)
 	}
-	if st.SyncedServerVersion != teamU.Version || st.SyncedLocalVersion != teamU.Version || st.NodeID != teamU.ID {
+	// The sidecar records the WIRE id the unit was pushed under, so the pull
+	// path's GetSyncStateByNodeID resolves fleet's echo back to this unit.
+	if st.SyncedServerVersion != teamU.Version || st.SyncedLocalVersion != teamU.Version || st.NodeID != pushed[0].ID {
 		t.Errorf("sidecar = %+v, want synced_server_version=%d synced_local_version=%d node_id=%q",
-			st, teamU.Version, teamU.Version, teamU.ID)
+			st, teamU.Version, teamU.Version, pushed[0].ID)
 	}
 }
 

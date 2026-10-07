@@ -77,9 +77,29 @@ allow_values=$(grep -vE '^[[:space:]]*(#|$)' "$ALLOW_FILE" | awk '{print $1}' ||
 kind_values=$(printf '%s\n' "$kinds" | awk '{print $2}')
 
 # ── 1. catalog kind -> install kind ─────────────────────────────────────
+# The fleet WIRE kind and the harness install kind are the same string for
+# every kind except one (fleet wire-contract WP04, 2026-10-06): fleet's
+# "pack" is the harness's "agent_pack", translated at the catalog boundary
+# by core/fleet CatalogKindForCapability / CapabilityKindForCatalog. The
+# translation is only honoured while that code still exists — a removed
+# translation turns "pack" back into an unmapped kind.
+install_kind_for_catalog() {
+  case "$1" in
+    pack)
+      if grep -qE 'capabilityKindAgentPack[[:space:]]*=[[:space:]]*"agent_pack"' "$CATALOG_FILE" \
+        && grep -qE '^func CapabilityKindForCatalog\(' "$CATALOG_FILE"; then
+        echo "agent_pack"
+      else
+        echo "pack"
+      fi
+      ;;
+    *) echo "$1" ;;
+  esac
+}
 while IFS= read -r cv; do
   [[ -z "$cv" ]] && continue
-  if ! printf '%s\n' "$kind_values" | grep -qx "$cv"; then
+  iv=$(install_kind_for_catalog "$cv")
+  if ! printf '%s\n' "$kind_values" | grep -qx "$iv"; then
     violation "core/fleet CatalogItemKind \"${cv}\" has no install.Kind in ${KIND_FILE} — the catalog can advertise it with no install path."
   fi
 done <<< "$catalog_values"

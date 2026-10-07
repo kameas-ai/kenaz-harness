@@ -50,7 +50,8 @@ func TestChassis_CatalogList_SkillInstalledStateIsWiredToSkillStore(t *testing.T
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/catalog/list":
 			meta := item
 			meta.PayloadBytes = nil
-			_ = json.NewEncoder(w).Encode([]corefleet.CatalogItem{meta})
+			// Fleet's real list shape: {"items":[...]} (handlers_catalog.go:110).
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []corefleet.CatalogItem{meta}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/catalog/"+catID+"@"+ver:
 			_ = json.NewEncoder(w).Encode(item)
 		default:

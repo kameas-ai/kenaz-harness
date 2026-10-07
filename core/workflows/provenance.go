@@ -36,12 +36,17 @@ import (
 const (
 	ProvenanceBuiltin = "builtin"
 	ProvenanceCatalog = "catalog"
+	// ProvenanceMandated marks a fleet catalog workflow installed because
+	// the org MANDATED it (bundle mandated_items, owner ruling 2026-10-06
+	// WP02). Reconciliation removes it when the mandate is withdrawn — and
+	// only while its provenance still says so.
+	ProvenanceMandated = "mandated"
 )
 
 // InstallProvenance records where an installed workflow came from.
 type InstallProvenance struct {
 	WorkflowID string `json:"workflow_id"`
-	// Source is ProvenanceBuiltin or ProvenanceCatalog.
+	// Source is ProvenanceBuiltin, ProvenanceCatalog or ProvenanceMandated.
 	Source string `json:"source"`
 	// CatalogID is the fleet catalog item id (catalog installs only).
 	CatalogID string `json:"catalog_id,omitempty"`

@@ -168,7 +168,7 @@ func TestMergeBridge_PulledEntriesInList(t *testing.T) {
 
 	pullBody := `{
 		"nodes": [
-			{"id": "team-1", "kind": "fact", "title": "Team entry", "body": "b",
+			{"id": "team-1", "kind": "guidance", "title": "Team entry", "body": "b",
 			 "classification": "team_shared", "version": 1,
 			 "updated_at": "2026-07-05T10:00:00Z"},
 			{"id": "org-1", "kind": "guidance", "title": "Org entry", "body": "b",
@@ -216,10 +216,10 @@ func TestMergeBridge_TombstonesExcluded(t *testing.T) {
 
 	pullBody := `{
 		"nodes": [
-			{"id": "alive-1", "kind": "fact", "title": "Alive", "body": "b",
+			{"id": "alive-1", "kind": "guidance", "title": "Alive", "body": "b",
 			 "classification": "team_shared", "version": 1,
 			 "updated_at": "2026-07-05T10:00:00Z"},
-			{"id": "dead-1", "kind": "fact", "title": "Dead", "body": "b",
+			{"id": "dead-1", "kind": "guidance", "title": "Dead", "body": "b",
 			 "classification": "team_shared", "version": 2,
 			 "updated_at": "2026-07-05T10:00:01Z",
 			 "deleted_at": "2026-07-05T10:00:01Z"}
@@ -247,5 +247,70 @@ func TestMergeBridge_TombstonesExcluded(t *testing.T) {
 	}
 	if paths[0] != "team/_fleet/alive-1" {
 		t.Errorf("path=%q, want team/_fleet/alive-1", paths[0])
+	}
+}
+
+// TestMergeBridge_OwnPublishedEntriesNotDuplicated — review F3. A file the
+// user shared comes back on the next pull; it must not list a second time
+// as "<layer>/_fleet/<uuid>". Guard 1: the pulled id is this install's wire
+// id for an existing local path. Guard 2: the node is owned by the
+// signed-in user and a local file with the same title exists (published
+// from the user's other install, whose salt derives a different id).
+func TestMergeBridge_OwnPublishedEntriesNotDuplicated(t *testing.T) {
+	dataDir := t.TempDir()
+	ownID := fleet.NewWireIDs(dataDir).For(fleet.WireLaneCurated, "guidance/style.md")
+	pullBody := `{"nodes":[
+		{"id":"` + ownID + `","kind":"guidance","title":"style","body":"b","classification":"org_shared","owner_user_id":"me","version":1,"updated_at":"2026-10-06T10:00:00Z"},
+		{"id":"6b2f6f0e-0000-4000-8000-0000000000c1","kind":"guidance","title":"notes","body":"b","classification":"org_shared","owner_user_id":"me","version":1,"updated_at":"2026-10-06T10:00:00Z"},
+		{"id":"6b2f6f0e-0000-4000-8000-0000000000c2","kind":"guidance","title":"elsewhere","body":"b","classification":"org_shared","owner_user_id":"me","version":1,"updated_at":"2026-10-06T10:00:00Z"},
+		{"id":"6b2f6f0e-0000-4000-8000-0000000000c3","kind":"guidance","title":"notes","body":"b","classification":"org_shared","owner_user_id":"colleague","version":1,"updated_at":"2026-10-06T10:00:00Z"}
+	],"cursor":"c"}`
+
+	stub := &pullOnlyServer{}
+	stub.queue(pullBody)
+	srv := httptest.NewServer(stub)
+	t.Cleanup(srv.Close)
+	if err := fleet.SaveTokens(fleet.TokenSet{AccessToken: "at-own", RefreshToken: "rt-own", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("SaveTokens: %v", err)
+	}
+	t.Cleanup(func() { _ = fleet.ClearTokens() })
+	fleet.SeedFleetConfigForTesting(srv.URL, fleet.FleetConfig{Issuer: srv.URL, ClientID: "own", APIBaseURL: srv.URL, FetchedAt: time.Now()})
+	client := fleet.BuildClientForTesting(srv.URL, &http.Client{Timeout: 5 * time.Second})
+	caps := fleet.NewCapabilityPoller(nil, t.TempDir())
+	caps.ForceSetCurrentForTesting(fleet.Capabilities{Tier: "team", Enabled: map[fleet.Capability]bool{fleet.CapSharedTeamGraph: true}, FetchedAt: time.Now(), Source: "test"})
+	syncer := fleet.NewContextGraphSyncer(client, dataDir, caps)
+	if _, err := syncer.PullDelta(context.Background()); err != nil {
+		t.Fatalf("PullDelta: %v", err)
+	}
+
+	lib, err := corecontexts.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"guidance/style.md", "notes.md"} {
+		if err := lib.Save(p, "local"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api := contextsview.New(lib).WithSyncer(syncer).WithSelfUserID(func() string { return "me" })
+	tree, err := api.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, p := range collectBridgeLeafPaths(tree) {
+		got[p] = true
+	}
+	if got["org/_fleet/"+ownID] {
+		t.Error("this install's own shared file listed twice (guard 1)")
+	}
+	if got["org/_fleet/6b2f6f0e-0000-4000-8000-0000000000c1"] {
+		t.Error("own entry from another install with a local copy listed twice (guard 2)")
+	}
+	if !got["org/_fleet/6b2f6f0e-0000-4000-8000-0000000000c2"] {
+		t.Error("own entry with NO local copy was hidden")
+	}
+	if !got["org/_fleet/6b2f6f0e-0000-4000-8000-0000000000c3"] {
+		t.Error("a colleague's entry with a matching title was hidden")
 	}
 }

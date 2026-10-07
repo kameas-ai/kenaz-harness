@@ -34,6 +34,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
@@ -87,21 +90,57 @@ func (h *HandoffHandler) ListTeam(ctx context.Context) ([]TeamMember, error) {
 		return nil, ErrFleetDisabled
 	}
 
-	resp, err := h.client.Get(ctx, "/api/v1/team/members")
-	if err != nil {
-		return nil, fmt.Errorf("fleet: list team: %w", err)
+	if err := h.client.endpointUnsupported(FeatureTeamMembers); err != nil {
+		return nil, err
 	}
-	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fleet: list team: status %d", resp.StatusCode)
-	}
+	const teamMembersPath = "/api/v1/team/members"
+	// Fleet paginates the roster out-of-band (kenaz-fleet
+	// handlers_team_members.go): the body stays a BARE array, ?limit= (max
+	// 1000) sizes a page, and X-Next-Cursor carries the next page's cursor
+	// (absent on the last page). Follow it until absent. The server already
+	// excludes the caller — no client-side filtering.
 	var members []TeamMember
-	if err := json.Unmarshal(body, &members); err != nil {
-		return nil, fmt.Errorf("fleet: list team: parse: %w", err)
+	cursor := ""
+	seen := map[string]bool{}
+	for page := 0; page < teamMembersMaxPages; page++ {
+		q := url.Values{}
+		q.Set("limit", strconv.Itoa(teamMembersPageLimit))
+		if cursor != "" {
+			q.Set("cursor", cursor)
+		}
+		resp, err := h.client.Get(ctx, teamMembersPath+"?"+q.Encode())
+		if err != nil {
+			return nil, fmt.Errorf("fleet: list team: %w", err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), body) {
+			return nil, h.client.markEndpointUnsupported(FeatureTeamMembers, teamMembersPath)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("fleet: list team: status %d", resp.StatusCode)
+		}
+		var pageMembers []TeamMember
+		if err := json.Unmarshal(body, &pageMembers); err != nil {
+			return nil, fmt.Errorf("fleet: list team: parse: %w", err)
+		}
+		members = append(members, pageMembers...)
+		next := strings.TrimSpace(resp.Header.Get(teamMembersCursorHeader))
+		if next == "" || seen[next] {
+			return members, nil // last page (or a server repeating a cursor)
+		}
+		seen[next] = true
+		cursor = next
 	}
-	return members, nil
+	return members, fmt.Errorf("fleet: list team: more than %d pages", teamMembersMaxPages)
 }
+
+// Roster pagination (kenaz-fleet handlers_team_members.go).
+const (
+	teamMembersPageLimit    = 500
+	teamMembersMaxPages     = 100
+	teamMembersCursorHeader = "X-Next-Cursor"
+)
 
 // ShareSession re-encrypts session events with the recipient's public key and
 // routes them through fleet handoff. plainEvents must already be decrypted
@@ -236,7 +275,7 @@ func (h *HandoffHandler) AcceptShare(ctx context.Context, inboxItemID string) ([
 	if err := h.client.endpointUnsupported(FeatureTeamHandoff); err != nil {
 		return nil, err
 	}
-	resp, err := h.client.Get(ctx, "/api/v1/handoff/"+inboxItemID)
+	resp, err := h.client.Get(ctx, "/api/v1/handoff/"+url.PathEscape(inboxItemID))
 	if err != nil {
 		return nil, fmt.Errorf("fleet: accept share: GET: %w", err)
 	}
@@ -294,12 +333,21 @@ type publicKeyResponse struct {
 
 // fetchRecipientPublicKey retrieves the recipient's X25519 public key from fleet.
 func (h *HandoffHandler) fetchRecipientPublicKey(ctx context.Context, recipientUserID string) ([]byte, error) {
-	resp, err := h.client.Get(ctx, "/api/v1/identity/public-key?user_id="+recipientUserID)
+	if err := h.client.endpointUnsupported(FeatureIdentityPublicKey); err != nil {
+		return nil, err
+	}
+	const publicKeyPath = "/api/v1/identity/public-key"
+	resp, err := h.client.Get(ctx, publicKeyPath+"?user_id="+url.QueryEscape(recipientUserID))
 	if err != nil {
 		return nil, fmt.Errorf("fleet: fetch public key: %w", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	// A plain mux 404 means the ROUTE does not exist (latch); a JSON 404
+	// is the application saying this recipient has no key.
+	if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), body) {
+		return nil, h.client.markEndpointUnsupported(FeatureIdentityPublicKey, publicKeyPath)
+	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, ErrHandoffRecipientNotFound
 	}
