@@ -26,6 +26,12 @@ type CatalogItemView struct {
 	// <dataDir>/installed/ — residue nothing consumes, which the UI offers
 	// to remove but does not call "installed" (see docs/unwired-ledger.md).
 	Installed bool `json:"installed"`
+	// Lifecycle / LifecycleReason / SupersededBy: the version's org
+	// lifecycle from the unsigned catalog wire (skill-library-01SKLIB01
+	// WP02); "" = active / pre-0114 fleet.
+	Lifecycle       string `json:"lifecycle,omitempty"`
+	LifecycleReason string `json:"lifecycle_reason,omitempty"`
+	SupersededBy    string `json:"superseded_by,omitempty"`
 }
 
 // PublishInput is the form the frontend submits when publishing an item.

@@ -89,6 +89,7 @@ func (s fleetCatalogSeam) List(ctx context.Context, kind string) ([]capabilities
 		out = append(out, capabilitiesview.CatalogEntry{
 			ID: it.ID, Slug: it.Slug, Version: it.Version,
 			Description: it.Description, Visibility: string(it.Visibility),
+			Lifecycle: it.Lifecycle, LifecycleReason: it.LifecycleReason, SupersededBy: it.SupersededBy,
 		})
 	}
 	return out, nil
@@ -96,8 +97,20 @@ func (s fleetCatalogSeam) List(ctx context.Context, kind string) ([]capabilities
 
 func (s fleetCatalogSeam) Fetch(ctx context.Context, id, version string) ([]byte, string, error) {
 	item, err := corefleet.FetchCatalogItem(ctx, s.client, id, version)
+	if errors.Is(err, corefleet.ErrCatalogItemRevoked) {
+		// skill-library-01SKLIB01 WP01: a revoked version is a named,
+		// terminal install failure ("revoked by your org"), never a raw
+		// status string. The fleet-free providers see install.ErrRevoked.
+		return nil, "", install.MarkRevoked(err)
+	}
 	if err != nil {
 		return nil, "", err
+	}
+	if item.IsRevoked() {
+		// Fleet answers 200 (not 410) to a caller holding catalog:manage —
+		// forensic access for admins. That is not an install grant: an
+		// admin's device refuses a revoked version the same way.
+		return nil, "", install.MarkRevoked(fmt.Errorf("%w (%s@%s)", corefleet.ErrCatalogItemRevoked, id, version))
 	}
 	return item.PayloadBytes, item.Signature, nil
 }

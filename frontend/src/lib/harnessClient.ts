@@ -5590,7 +5590,7 @@ export function fakeFleetSession(
     tokensUsable: false,
     claims: { hasSubject: false, hasOrgClaim: false },
     capabilities: { tier: '', enabled: {}, fetchedAt: '', source: 'default-deny' },
-    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane } },
+    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane }, catalogRevocation: { ...lane } },
     updatedAt: '',
     ...overrides,
   };

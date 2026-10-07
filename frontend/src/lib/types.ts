@@ -4667,6 +4667,12 @@ export interface FleetSyncView {
   contextSync: FleetSyncLaneView;
   unitPoll: FleetSyncLaneView;
   telemetry: FleetSyncLaneView;
+  /**
+   * The catalog revocation sweep (skill-library-01SKLIB01 WP03): removing
+   * the user's own copies of catalog versions the org revoked. Optional for
+   * a backend that predates the lane.
+   */
+  catalogRevocation?: FleetSyncLaneView;
 }
 
 /**
@@ -4848,6 +4854,10 @@ export interface CatalogItemView {
   published_at?: string;
   /** true when this version is installed in the local DataDir. */
   installed: boolean;
+  /** Org lifecycle of this version; absent = active (skill-library-01SKLIB01). */
+  lifecycle?: string;
+  lifecycle_reason?: string;
+  superseded_by?: string;
 }
 
 // ── Sync types (fleet-share-and-sync-01NDFSEX14 WP05) ───────────────────────
@@ -5156,6 +5166,14 @@ export interface CapabilityItem {
   read_only?: boolean;
   read_only_reason?: string;
   requirements?: CapabilityRequirement[];
+  /**
+   * The fleet catalog version's org lifecycle (skill-library-01SKLIB01):
+   * "deprecated", "revoked", or a future state shown verbatim. Absent =
+   * active / not a catalog item. Mirrors install.Item.Lifecycle.
+   */
+  lifecycle?: string;
+  lifecycle_reason?: string;
+  superseded_by?: string;
 }
 
 /** A source a provider could not list — rendered as a reason row (P-5). */

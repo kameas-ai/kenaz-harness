@@ -3537,6 +3537,21 @@ func New(c *core.Core, opts ...Option) *API {
 	// mandated provenance, and are removed when no longer mandated.
 	if wfImpl, ok := a.workflowsAPI.(*workflowsview.API); ok && wfImpl != nil && a.settingsImpl != nil {
 		a.settingsImpl.SetMandatedWorkflows(mandatedWorkflowsAdapter{wf: wfImpl})
+		// skill-library-01SKLIB01 WP03: the catalog revocation sweep's
+		// workflow half (user catalog installs only, provenance re-checked
+		// at removal).
+		a.settingsImpl.SetRevocationWorkflows(revocationWorkflowsAdapter{wf: wfImpl})
+	}
+	if a.settingsImpl != nil {
+		// A revocation uninstall repaints an open Capabilities surface the
+		// same way any other uninstall does.
+		pub := chatBrokerAdapter{broker: a.broker}
+		a.settingsImpl.SetRevocationAnnouncer(func(t corefleet.RevocationTarget) {
+			pub.Emit(install.TopicCapabilityUninstalled, install.Event{
+				Kind: install.Kind(corefleet.CapabilityKindForCatalog(t.Kind)), ID: t.CatalogID,
+				Version: t.Version, Installed: false, Via: "revoked",
+			})
+		})
 	}
 
 	// Auto-update subsystem (mission auto-update, v0.4.0 WP03).
@@ -11988,10 +12003,33 @@ func (e *auditArchiverEmitter) Emit(_ context.Context, ev contextaudit.Event) er
 // fleet.MandatedWorkflows (core/fleet must not import the view).
 type mandatedWorkflowsAdapter struct{ wf *workflowsview.API }
 
-func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (string, bool, error) {
+func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (string, json.RawMessage, error) {
 	return m.wf.InstallMandatedDocument(ctx, payload, catalogID, version)
 }
 
-func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, restoreCatalog bool) error {
-	return m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID, restoreCatalog)
+func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (corefleet.MandatedWorkflowRemoval, error) {
+	out, err := m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID, prior, legacyRestore)
+	return corefleet.MandatedWorkflowRemoval{Restored: out.Restored, RestoreRefused: out.RestoreRefused}, err
+}
+
+// revocationWorkflowsAdapter adapts the workflows view to
+// fleet.RevocationWorkflows (skill-library-01SKLIB01 WP03).
+type revocationWorkflowsAdapter struct{ wf *workflowsview.API }
+
+func (r revocationWorkflowsAdapter) CatalogInstalledWorkflows(ctx context.Context) ([]corefleet.RevocationTarget, error) {
+	ins, err := r.wf.CatalogInstalls(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]corefleet.RevocationTarget, 0, len(ins))
+	for _, in := range ins {
+		out = append(out, corefleet.RevocationTarget{
+			Kind: corefleet.CatalogKindWorkflow, CatalogID: in.CatalogID, Version: in.Version, LocalID: in.WorkflowID,
+		})
+	}
+	return out, nil
+}
+
+func (r revocationWorkflowsAdapter) RemoveRevokedWorkflow(ctx context.Context, workflowID, catalogID string) (bool, error) {
+	return r.wf.RemoveRevokedCatalogDocument(ctx, workflowID, catalogID)
 }

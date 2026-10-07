@@ -244,6 +244,9 @@ func (failingProvenance) Get(string) (corewf.InstallProvenance, bool, error) {
 }
 func (failingProvenance) Put(corewf.InstallProvenance) error { return errors.New("disk full") }
 func (failingProvenance) Remove(string) error                { return nil }
+func (failingProvenance) List() ([]corewf.InstallProvenance, error) {
+	return nil, nil
+}
 
 // Re-review low 1: when the provenance write fails after Save, the row this
 // install CREATED is removed (no installed-with-no-record template), and a

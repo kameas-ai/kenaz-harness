@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 
@@ -27,6 +26,10 @@ import (
 // SkillSyncMaxPayloadBytes is the enforced cap for a single skill payload
 // (NFR-003: ≤ 256KB).
 const SkillSyncMaxPayloadBytes = 256 * 1024
+
+// defaultSkillPublishVersion is the catalog version a skill with no version
+// publishes as.
+const defaultSkillPublishVersion = "1.0.0"
 
 // ── WP03: Publish (push-up) ──────────────────────────────────────────────────
 
@@ -65,6 +68,20 @@ func PublishSkill(
 		return CatalogItem{}, fmt.Errorf("fleet/skills: unknown visibility %q", visibility)
 	}
 
+	// Effective catalog version and slug FIRST, stamped into the skill, THEN
+	// marshal (skill-library-01SKLIB01 WP05, fleet H5; audit §4.1 item 2):
+	// the payload bytes the org reviews (and pins by sha256) must say the
+	// same version — and carry the same trigger — as the catalog row. The
+	// old order marshalled first, so an empty Version published payload
+	// version "" under catalog version "1.0.0".
+	if skill.Version == "" {
+		skill.Version = defaultSkillPublishVersion
+	}
+	if skill.Trigger == "" {
+		skill.Trigger = skill.ID
+	}
+	slug, version := skill.Trigger, skill.Version
+
 	payload, err := json.Marshal(skill)
 	if err != nil {
 		return CatalogItem{}, fmt.Errorf("fleet/skills: marshal skill: %w", err)
@@ -72,15 +89,6 @@ func PublishSkill(
 	if len(payload) > SkillSyncMaxPayloadBytes {
 		return CatalogItem{}, fmt.Errorf("%w: skill %q is %d bytes (max %d)",
 			ErrCatalogPayloadTooLarge, skill.ID, len(payload), SkillSyncMaxPayloadBytes)
-	}
-
-	slug := skill.Trigger
-	if slug == "" {
-		slug = skill.ID
-	}
-	version := skill.Version
-	if version == "" {
-		version = "1.0.0"
 	}
 
 	return client.Publish(ctx, signer, CatalogKindSkill, slug, version, skill.Description, visibility, payload)
@@ -99,6 +107,11 @@ var ErrCatalogPayloadMalformed = errors.New("fleet/catalog: payload is not in th
 // installs nothing: install-framework-01DOGF0B's providers fetch here in
 // Provider.Verify, the framework verifies the bytes once
 // (CatalogSignatureVerdict), and Provider.Install consumes the same bytes.
+//
+// A revoked version (fleet S3: 410 with code "item_revoked", for callers
+// without catalog:manage) is ErrCatalogItemRevoked — a named, terminal
+// error, never an opaque "status 410" (skill-library-01SKLIB01 WP01). Any
+// other non-200 is a *CatalogStatusError.
 func FetchCatalogItem(ctx context.Context, client *Client, catalogID, version string) (CatalogItem, error) {
 	if client == nil || client.isNop {
 		return CatalogItem{}, ErrFleetDisabled
@@ -110,8 +123,11 @@ func FetchCatalogItem(ctx context.Context, client *Client, catalogID, version st
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return CatalogItem{}, fmt.Errorf("fleet/catalog: fetch %s@%s: status %d: %s", catalogID, version, resp.StatusCode, body)
+		se := newCatalogStatusError(fmt.Sprintf("fetch %s@%s", catalogID, version), resp)
+		if se.Status == http.StatusGone && se.Code == catalogCodeItemRevoked {
+			return CatalogItem{}, fmt.Errorf("%w (%s@%s)", ErrCatalogItemRevoked, catalogID, version)
+		}
+		return CatalogItem{}, se
 	}
 	var item CatalogItem
 	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {

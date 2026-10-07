@@ -119,6 +119,18 @@ type Item struct {
 	ReadOnly       bool          `json:"read_only,omitempty"`
 	ReadOnlyReason string        `json:"read_only_reason,omitempty"`
 	Requirements   []Requirement `json:"requirements,omitempty"`
+	// Lifecycle is the catalog version's org lifecycle for a fleet catalog
+	// item — "deprecated", "revoked", or a future state shown verbatim
+	// (skill-library-01SKLIB01 WP02). Empty = active or not a catalog item.
+	// Pixels only: a deprecated item stays installable and a deprecated
+	// org-required copy stays installed; a revoked version's Install is
+	// disabled (its fetch fails with ErrRevoked anyway).
+	Lifecycle string `json:"lifecycle,omitempty"`
+	// LifecycleReason is the org's reason, when fleet sends one.
+	LifecycleReason string `json:"lifecycle_reason,omitempty"`
+	// SupersededBy names the newer catalog version a deprecated one points
+	// at, when the org set one.
+	SupersededBy string `json:"superseded_by,omitempty"`
 }
 
 // Filter narrows List. Zero fields match everything.
@@ -255,4 +267,25 @@ var (
 	ErrKindMismatch = errors.New("install: provider kind does not match registration")
 	// ErrDuplicateProvider: a provider is already registered for the kind.
 	ErrDuplicateProvider = errors.New("install: provider already registered for this kind")
+	// ErrRevoked: the org revoked the requested catalog version
+	// (skill-library-01SKLIB01 WP01). Terminal: the install fails with the
+	// cause's user-facing copy and is never retried. Providers mark a
+	// source's own revoked error with MarkRevoked.
+	ErrRevoked = errors.New("install: this version was revoked by your org")
 )
+
+// MarkRevoked wraps cause so errors.Is(err, ErrRevoked) holds while the
+// message stays the cause's own (the user-facing "revoked by your org"
+// copy, not a doubled prefix). nil stays nil.
+func MarkRevoked(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	return revokedError{cause}
+}
+
+type revokedError struct{ cause error }
+
+func (e revokedError) Error() string        { return e.cause.Error() }
+func (e revokedError) Unwrap() error        { return e.cause }
+func (e revokedError) Is(target error) bool { return target == ErrRevoked }

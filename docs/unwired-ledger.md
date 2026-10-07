@@ -342,6 +342,61 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-07 (skill-library-01SKLIB01 residuals + review F4–F6, feat/skill-library) · six accepted, none introduced as regressions
+
+1. **OQ-1 — the revocation sweep covers skills + workflows only.**
+   Catalog-installed packs and bundles have no consumer install record
+   carrying a catalog id (both kinds are still allowlisted in
+   `check-install-provider-coverage.sh` — there is no pack/bundle
+   provider), so `RevocationSweeper` has nothing to diff for them; a
+   revoked pack/bundle the user downloaded stays as `installed/` residue.
+   **Blocker:** install-framework Phase 3 (pack/bundle providers).
+   **Owner:** the mission that registers those providers adds a
+   `RevocationWorkflows`-shaped source for each kind.
+2. **`CatalogItem.LifecycleReason` has no producer on the live wire.**
+   Fleet main (@ b57b2ec) sends `lifecycle`, `superseded_by` (+
+   `revoked_at` on list) on `GET /catalog/list` and the fetch, but
+   `lifecycle_reason` only on `GET /catalog/entries/{kind}/{slug}`. The
+   harness decodes it forward-compatibly and the chip tooltip shows it
+   when present, so today the tooltip never carries the admin's reason —
+   not a lie (nothing claims a reason), but a consumer without a
+   producer. **Owner:** fleet (add `lifecycle_reason` to
+   `CatalogItemMetaAPI` / `CatalogFetchResponse`, additive), or a harness
+   follow-up that reads the entries detail for deprecated rows.
+3. **A user cannot move their catalog install of a skill from v1 to v2.**
+   Each version is its own catalog id, so `LiveRegister` refuses v2 over
+   v1 under the same store id (`ErrSkillIDCollision`), and
+   `SkillProvider.Update` never offers one (`newestByID` keys on the
+   per-version id). Pre-existing since per-version ids; surfaced, not
+   introduced, by this mission (the mandated path was fixed in WP04 —
+   mandates may take over any catalog-provenance copy). **Owner:** the
+   OQ-4 follow-up ("nudge toward `superseded_by`"), which needs
+   entry-level grouping of versions anyway.
+4. **Review F4 — the mandated-workflow read-only guard fails OPEN on an
+   unreadable provenance file.** `isOrgMandated` reads an unreadable
+   `install_provenance.json` as "not mandated", so Save / ScheduleSet /
+   ScheduleClear are allowed while it is broken. Deliberately matches
+   the pre-existing `Delete` posture (the install-collision checks fail
+   closed on their own, and the provenance store logs the breakage at
+   WARN once). **Owner:** skill-library follow-up — decide fail-closed
+   for all four mutators together, not one at a time.
+5. **Review F5 — a FAILED v2 promote removes v1 until the retry.** When
+   v2's install fails in the same bundle that drops v1, v1 is not "seen"
+   and the reconcile removes it; the bundle error retries and v2 lands
+   on a later poll. Pre-existing since v0.91 (the applier cannot know a
+   failed item's local id when its payload did not decode). **Owner:**
+   skill-library follow-up — keep v1 when a failed item shares its
+   catalog entry (needs fleet to send the entry slug in the envelope,
+   which is a signed-wire change under the §5.4 rule).
+6. **Review F6 — the revocation sweep's skill removal is check-then-act.**
+   `uninstallLocked` re-reads the skill and then `LiveUnregister`s it; a
+   mandate landing between the two could in principle be removed. The
+   window is two local file ops inside one sweep and the config poller
+   that applies mandates runs the sweep on its own goroutine AFTER apply,
+   so the two never interleave today; the workflow side is atomic under
+   `installMu`. **Owner:** skill-library follow-up, if the sweep ever
+   moves off the config poller's goroutine.
+
 ### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
 
 1. **R1 (P2) — promote-to-team can wedge and duplicate when the user has
@@ -359,14 +414,55 @@ prose and in a TS union; they do not call `MoveKinds()`.
    content relabelled as a catalog install**, not the user's earlier
    version/edits (skills restore properly). **Owner:** skill-library
    mission (01SKLIB01) WP04 territory.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP04, `fix(fleet): WP04 —
+   > superseded removals stay quiet locally …`):** a mandate that takes
+   > over the user's catalog install now returns an opaque snapshot of the
+   > user's copy (stored document incl. edits + its install provenance),
+   > persisted as `prior_workflow` in `mandated_applied.json`; withdrawal
+   > restores that copy under its original catalog id/version. A v0.91
+   > record (flag only, no snapshot) keeps the old relabel — the only thing
+   > it makes possible. Also fixed in the same change: a mandate may now
+   > take over a catalog/mandated row of ANY catalog id (every version has
+   > its own id), so a v1→v2 promote updates in place instead of failing
+   > as a collision and deleting the workflow. Pinned by
+   > `TestInstallMandatedDocument_TakeoverRestoredOnWithdrawal` (real
+   > sqlite, file provenance), `TestRemoveMandatedDocument_LegacyRecordRelabels`,
+   > `TestInstallMandatedDocument_PromoteUpdatesInPlace`. Review F3
+   > (2026-10-07): the restore now runs the Cedar save gate; a refused
+   > restore deletes the mandated copy and audits `restore_refused`
+   > (`TestRemoveMandatedDocument_RestoreRefusedByPolicyDeletes`).
 3. **R3 (P3) — a takeover while mandated_applied.json is unreadable (F5
    path) never persists PriorSkill**, so a later withdrawal deletes
    rather than restores. Needs the F5 corruption AND a takeover in the
    same window. **Owner:** same as R2.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP04):** while the state
+   > file is unreadable the applier still never overwrites it (F5), but
+   > records what it applied — takeover priors included — in
+   > `fleet/mandated_applied.pending.json`, carries it across further
+   > unreadable runs, merges it into the applied set on the first readable
+   > run (file rewritten OR deleted), and clears it after a successful
+   > save. Removals stay skipped while unreadable (F5 unchanged). Pinned by
+   > `TestMandated_TakeoverDuringUnreadableStatePersistsPrior` (real
+   > files; fails with the merge removed).
 4. **Mandated workflows are delete-protected but not edit/unschedule-
    protected** (accepted "not done"): a weak guarantee for
    compliance-type workflows. **Owner:** skill-library mission, with the
    read-only UI treatment.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP02, `feat(frontend):
+   > WP02 — Deprecated/Revoked chips …`):** the workflows view refuses
+   > Save, ScheduleSet and ScheduleClear (as well as Delete) for a workflow
+   > whose provenance is `mandated`, with `ErrWorkflowOrgManaged`; a user
+   > catalog re-install can no longer relabel the org's copy as the user's
+   > (it had been able to, which also silently ended the delete guard);
+   > the mandate's own removal disarms the schedule directly. `Summary`
+   > carries `orgManaged`; the Library hides Edit / Edit on canvas /
+   > Delete and says why, the Schedules tab offers no Schedule/Unschedule,
+   > and the Capabilities workflow row is read-only. Pinned by
+   > `TestMandatedWorkflow_EditAndScheduleGuarded` (real sqlite store,
+   > file provenance) and `WorkflowsView.orgManaged.spec.ts`. The guard is view-level: a
+   > 2026-10-07 grep found no `Store.Save` caller outside the workflows
+   > view and `core/workflows` itself, so a future writer that bypasses
+   > the view must re-check provenance.
 
 ### 2026-10-06 (newly-live fleet routes verification, pre-v0.91.0) · four latent gaps, all verified non-firing today
 

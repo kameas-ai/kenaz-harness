@@ -113,3 +113,18 @@ func TestAPI_CatalogUnpublish_FleetDisabled(t *testing.T) {
 		t.Errorf("Catalog_Unpublish with nil client = %v, want ErrFleetDisabled", err)
 	}
 }
+
+// skill-library-01SKLIB01 WP02: the catalog-only rows carry the version's
+// lifecycle; active and pre-0114 (no key) carry none.
+func TestCatalogItemToView_Lifecycle(t *testing.T) {
+	if v := catalogItemToView(corefleet.CatalogItem{ID: "a"}, false); v.Lifecycle != "" {
+		t.Errorf("pre-0114 item labelled %q", v.Lifecycle)
+	}
+	if v := catalogItemToView(corefleet.CatalogItem{ID: "a", Lifecycle: corefleet.CatalogLifecycleActive}, false); v.Lifecycle != "" {
+		t.Errorf("active item labelled %q", v.Lifecycle)
+	}
+	v := catalogItemToView(corefleet.CatalogItem{ID: "d", Lifecycle: "deprecated", SupersededBy: "n"}, false)
+	if v.Lifecycle != "deprecated" || v.SupersededBy != "n" {
+		t.Errorf("deprecated view = %+v", v)
+	}
+}

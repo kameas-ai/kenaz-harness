@@ -96,6 +96,10 @@ type FleetSyncView struct {
 	ContextSync FleetSyncLaneView `json:"contextSync"`
 	UnitPoll    FleetSyncLaneView `json:"unitPoll"`
 	Telemetry   FleetSyncLaneView `json:"telemetry"`
+	// CatalogRevocation is the catalog revocation sweep
+	// (skill-library-01SKLIB01 WP03): uninstalling the user's own copies
+	// of versions the org revoked.
+	CatalogRevocation FleetSyncLaneView `json:"catalogRevocation"`
 }
 
 // FleetSessionView is the wire shape of Settings_FleetSession and the
@@ -324,7 +328,7 @@ func applyClaimFallbacks(v *FleetSessionView, c fleet.TokenClaims) {
 
 func emptySyncView() FleetSyncView {
 	unknown := FleetSyncLaneView{Status: string(fleet.LaneUnknown)}
-	return FleetSyncView{ContextSync: unknown, UnitPoll: unknown, Telemetry: unknown}
+	return FleetSyncView{ContextSync: unknown, UnitPoll: unknown, Telemetry: unknown, CatalogRevocation: unknown}
 }
 
 func syncViewFromLanes(l *fleet.SyncLanes) FleetSyncView {
@@ -335,6 +339,8 @@ func syncViewFromLanes(l *fleet.SyncLanes) FleetSyncView {
 		ContextSync: laneToView(l.Snapshot(fleet.LaneContextSync)),
 		UnitPoll:    laneToView(l.Snapshot(fleet.LaneUnitPoll)),
 		Telemetry:   laneToView(l.Snapshot(fleet.LaneTelemetry)),
+
+		CatalogRevocation: laneToView(l.Snapshot(fleet.LaneCatalogRevocation)),
 	}
 }
 

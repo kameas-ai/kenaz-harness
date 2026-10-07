@@ -64,6 +64,9 @@ type ProvenanceStore interface {
 	Get(workflowID string) (InstallProvenance, bool, error)
 	Put(p InstallProvenance) error
 	Remove(workflowID string) error
+	// List returns every record (any order) — the revocation sweep's
+	// enumeration of catalog installs (skill-library-01SKLIB01 WP03).
+	List() ([]InstallProvenance, error)
 }
 
 // provenanceFileName is the side file under the data directory.
@@ -195,6 +198,22 @@ func (s *fileProvenanceStore) Put(p InstallProvenance) error {
 		return s.fail("put", err)
 	}
 	return nil
+}
+
+// List implements ProvenanceStore. An unreadable file is an error, never an
+// empty list: a caller deciding what to remove must not read "unknown" as
+// "nothing installed".
+func (s *fileProvenanceStore) List() ([]InstallProvenance, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureLoaded(); err != nil {
+		return nil, s.fail("list", err)
+	}
+	out := make([]InstallProvenance, 0, len(s.recs))
+	for _, r := range s.recs {
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 // Remove implements ProvenanceStore. Removing an absent record is a no-op.

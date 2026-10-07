@@ -25,6 +25,10 @@ type Summary struct {
 	Version     int    `json:"version"`
 	StepCount   int    `json:"stepCount"`
 	Source      string `json:"source"` // "builtin" | "user" | "project"
+	// OrgManaged: required by the user's org (bundle mandated_items). The
+	// UI renders it read-only; Save / Delete / ScheduleSet / ScheduleClear
+	// refuse it with ErrWorkflowOrgManaged (skill-library-01SKLIB01).
+	OrgManaged bool `json:"orgManaged,omitempty"`
 }
 
 // Input mirrors core/workflows.Input on the wire.

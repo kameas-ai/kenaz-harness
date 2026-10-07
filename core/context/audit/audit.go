@@ -397,6 +397,29 @@ const (
 	// Payload: FleetSkillUninstalledPayload.
 	KindFleetSkillUninstalled Kind = "fleet.skill_uninstalled"
 
+	// ── Fleet catalog lifecycle (skill-library-01SKLIB01) ───────────────────
+
+	// KindFleetCatalogRevokedUninstalled fires when the revocation sweep
+	// uninstalls a copy the USER installed from the catalog (skill
+	// Source=catalog, or a workflow with catalog provenance) because the
+	// org revoked that version (WP03, fleet ruling OQ-5 = H4a). Never fires
+	// for an org-mandated or user-authored item. Payload:
+	// FleetCatalogRevokedUninstalledPayload.
+	KindFleetCatalogRevokedUninstalled Kind = "fleet.catalog_revoked_uninstalled"
+
+	// KindFleetMandatedItemRemoved fires when the org stops requiring an
+	// item and the bundle reconcile uninstalls (or hands back) the local
+	// copy (WP04). Payload: FleetMandatedItemPayload.
+	KindFleetMandatedItemRemoved Kind = "fleet.mandated_item_removed"
+
+	// KindFleetMandatedItemUpgraded fires instead of a removal when the
+	// org promoted a required item to a new version that took over the
+	// same local skill/workflow in the same bundle (v1→v2): locally it was
+	// an upgrade, nothing was uninstalled — even though the ACK still says
+	// "removed" for v1, which fleet groups as "superseded" (WP04, H3).
+	// Payload: FleetMandatedItemPayload.
+	KindFleetMandatedItemUpgraded Kind = "fleet.mandated_item_upgraded"
+
 	// ── ACP envelope audit kind (acp-orchestration-integration-01NDFSEX06) ──
 
 	// KindACPEnvelope fires once per ACP envelope exchanged (sent or received).
@@ -1870,6 +1893,44 @@ type FleetSkillInstalledPayload struct {
 	Version string `json:"version,omitempty"`
 	// Trigger is the slash-command trigger (no leading slash).
 	Trigger string `json:"trigger"`
+}
+
+// FleetCatalogRevokedUninstalledPayload carries the audit signalling for
+// KindFleetCatalogRevokedUninstalled. Catalog metadata only — never the
+// payload.
+type FleetCatalogRevokedUninstalledPayload struct {
+	// CatalogID is the revoked catalog version's id.
+	CatalogID string `json:"catalog_id"`
+	// Kind is the catalog kind ("skill" | "workflow").
+	Kind string `json:"kind"`
+	// Version is the installed (revoked) version.
+	Version string `json:"version,omitempty"`
+	// LocalID is the skill store id / workflow id that was removed.
+	LocalID string `json:"local_id"`
+	// Reason is always "revoked".
+	Reason string `json:"reason"`
+}
+
+// FleetMandatedItemPayload carries the audit signalling for
+// KindFleetMandatedItemRemoved and KindFleetMandatedItemUpgraded.
+type FleetMandatedItemPayload struct {
+	// CatalogID / Version identify the mandated version that ended.
+	CatalogID string `json:"catalog_id"`
+	Kind      string `json:"kind"`
+	Version   string `json:"version,omitempty"`
+	// LocalID is the skill store id / workflow id.
+	LocalID string `json:"local_id,omitempty"`
+	// ToCatalogID / ToVersion: the version that took over LocalID (upgrade
+	// only).
+	ToCatalogID string `json:"to_catalog_id,omitempty"`
+	ToVersion   string `json:"to_version,omitempty"`
+	// Restored is true when the removal handed the user's own earlier copy
+	// back instead of deleting (removal only).
+	Restored bool `json:"restored,omitempty"`
+	// RestoreRefused is the policy reason a snapshotted earlier copy was
+	// NOT restored (the save gate denied it); the mandated copy was deleted
+	// instead (removal only).
+	RestoreRefused string `json:"restore_refused,omitempty"`
 }
 
 // FleetSkillUninstalledPayload carries the audit signalling for
