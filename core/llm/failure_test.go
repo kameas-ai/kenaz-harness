@@ -45,9 +45,6 @@ func TestClassifyFailure_StatusTable(t *testing.T) {
 			if f.Status != tc.status {
 				t.Fatalf("status lost: got %d want %d", f.Status, tc.status)
 			}
-			if f.Retryable() != (tc.wantClass == FailureTransient) {
-				t.Fatalf("Retryable()=%v for class %s", f.Retryable(), f.Class)
-			}
 			if f.Message != "upstream says no" {
 				t.Fatalf("provider message not carried: %q", f.Message)
 			}
@@ -69,7 +66,7 @@ func TestClassifyFailure_OpenRouterOutOfCreditsCopy(t *testing.T) {
 	if f.Provider != "openrouter" {
 		t.Fatalf("provider from decoration = %q", f.Provider)
 	}
-	if f.Class != FailureUserActionable || f.Retryable() {
+	if f.Class != FailureUserActionable {
 		t.Fatalf("402 must be user_actionable and not retryable: %+v", f)
 	}
 }
@@ -98,7 +95,7 @@ func TestClassifyFailure_NetworkAndUnknown(t *testing.T) {
 		t.Fatalf("deadline: %+v", f)
 	}
 	f = ClassifyFailure(errors.New("something odd"), "openai")
-	if f.Class != FailureUnknown || f.Retryable() {
+	if f.Class != FailureUnknown {
 		t.Fatalf("untyped error must be unknown and not retryable: %+v", f)
 	}
 	if f.Message != "" {

@@ -71,10 +71,6 @@ type RunFailure struct {
 	Summary string
 }
 
-// Retryable reports whether a later retry of the same request can
-// succeed without the user changing anything.
-func (f RunFailure) Retryable() bool { return f.Class == FailureTransient }
-
 // ClassifyFailure maps a model-request error onto a RunFailure.
 // providerKind is the adapter kind of the profile the request targeted;
 // it is used for the copy when the error itself does not name a

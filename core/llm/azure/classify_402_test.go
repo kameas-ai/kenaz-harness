@@ -21,7 +21,7 @@ func TestClassifyStatus_402IsPaymentRequired(t *testing.T) {
 		t.Fatalf("status = %d", pay.Status)
 	}
 	f := llm.ClassifyFailure(err, Kind)
-	if f.Class != llm.FailureUserActionable || f.Retryable() {
+	if f.Class != llm.FailureUserActionable {
 		t.Fatalf("402 must be user_actionable: %+v", f)
 	}
 	for status, want := range map[int]llm.FailureClass{
