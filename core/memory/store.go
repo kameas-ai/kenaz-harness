@@ -33,6 +33,10 @@ import (
 // claude-mem's behaviour: the same content can be re-pinned later.
 const DedupWindow = 30 * time.Second
 
+// ErrEmbeddingRequired is returned by Add for a chunk with no embedding
+// that is not explicitly EmbedPending.
+var ErrEmbeddingRequired = errors.New("memory: chunk embedding required")
+
 // ErrDuplicate is returned by Add when a chunk with the same scope +
 // content hash was added inside DedupWindow.
 var ErrDuplicate = errors.New("memory: duplicate chunk within dedup window")
@@ -236,8 +240,13 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	if chunk.ID == "" {
 		return errors.New("memory: chunk id required")
 	}
-	if len(chunk.Embedding) == 0 {
-		return errors.New("memory: chunk embedding required")
+	// The embedding invariant holds for every user/capture path. The one
+	// explicit exception (memory-sync-01MEMSY01 WP06, H5) is a chunk that
+	// says so: EmbedPending — content that arrived without a vector
+	// (embeddings never travel over Fleet memory sync) and will be indexed
+	// by DrainEmbedPending when a real embedder exists.
+	if len(chunk.Embedding) == 0 && !chunk.EmbedPending {
+		return ErrEmbeddingRequired
 	}
 	if chunk.ScopeKind == "" {
 		chunk.ScopeKind = ScopeKindSession
@@ -390,9 +399,11 @@ func (s *chromemStore) Query(_ context.Context, embedding []float32, k int, scop
 	defer s.mu.RUnlock()
 	results := make([]Result, 0, len(s.chunks))
 	for _, c := range s.chunks {
-		if len(c.Embedding) != len(embedding) {
+		if len(c.Embedding) == 0 || len(c.Embedding) != len(embedding) {
 			// Mismatched dims usually means the user switched embedder
-			// models; skip the row instead of crashing the query.
+			// models; an empty vector is an EmbedPending chunk (pulled,
+			// not yet indexed). Skip either instead of crashing the
+			// query — the chunk stays visible to List / prelude.
 			continue
 		}
 		if !matchesScope(c, scopes) {
@@ -546,6 +557,30 @@ func (s *chromemStore) MarkAccessed(_ context.Context, ids []string, at time.Tim
 		return nil
 	}
 	return s.saveLocked()
+}
+
+// EmbeddingSetter is the optional capability DrainEmbedPending uses to
+// index an EmbedPending chunk (memory-sync-01MEMSY01 WP06). It clears
+// EmbedPending and does not schedule a push (embeddings never sync).
+type EmbeddingSetter interface {
+	SetEmbedding(ctx context.Context, id string, vec []float32) error
+}
+
+// SetEmbedding implements EmbeddingSetter.
+func (s *chromemStore) SetEmbedding(_ context.Context, id string, vec []float32) error {
+	if len(vec) == 0 {
+		return errors.New("memory: set embedding: empty vector")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.chunks {
+		if s.chunks[i].ID == id {
+			s.chunks[i].Embedding = vec
+			s.chunks[i].EmbedPending = false
+			return s.saveLocked()
+		}
+	}
+	return fmt.Errorf("memory: chunk %q not found", id)
 }
 
 // RecallFolder is the optional capability prune.Apply uses to persist a

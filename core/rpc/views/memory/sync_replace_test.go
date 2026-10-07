@@ -230,3 +230,25 @@ func TestResummarize_PromoterPath_ForgetsReplacedID(t *testing.T) {
 		t.Fatalf("persisted forgets = %v, want [mem-fb]", forgets)
 	}
 }
+
+// TestResummarize_PendingChunkOnNoopDevice (WP06): a chunk pulled from Fleet
+// with no vector, on a device with no real embedder, still re-summarizes —
+// the new record inherits EmbedPending instead of failing the add.
+func TestResummarize_PendingChunkOnNoopDevice(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	f.api.embedder = corememory.NoopEmbedder{}
+	ctx := context.Background()
+	if err := f.store.Add(ctx, corememory.Chunk{ID: "mem-pulled", ScopeKind: corememory.ScopeKindGlobal,
+		Content: "pulled content without a vector", EmbedPending: true, CreatedAt: time.Now().UTC(),
+		SyncedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.api.ResummarizeChunk(ctx, "mem-pulled")
+	if err != nil {
+		t.Fatalf("ResummarizeChunk: %v", err)
+	}
+	if c := f.reopenedChunks(t)[got.ID]; !c.EmbedPending || len(c.Embedding) != 0 {
+		t.Fatalf("new record must stay EmbedPending: %+v", c)
+	}
+}

@@ -911,10 +911,16 @@ func (a *API) ResummarizeChunk(ctx context.Context, chunkID string) (Chunk, erro
 	if a.embedder != nil {
 		if _, ok := a.embedder.(corememory.NoopEmbedder); !ok {
 			vecs, embedErr := a.embedder.Embed(ctx, []string{newContent})
-			if embedErr == nil && len(vecs) > 0 {
+			if embedErr == nil && len(vecs) > 0 && len(vecs[0]) > 0 {
 				updated.Embedding = vecs[0]
+				updated.EmbedPending = false
 			}
 		}
+	}
+	// A chunk pulled from Fleet may have no vector yet (WP06): the
+	// re-summary inherits that state instead of failing the add.
+	if len(updated.Embedding) == 0 {
+		updated.EmbedPending = true
 	}
 
 	// New record first, then the old one goes (a failed add loses nothing).
