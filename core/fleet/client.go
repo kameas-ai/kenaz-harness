@@ -67,6 +67,11 @@ type Client struct {
 
 	// authOK is the SetAuthOKHook callback (fleet-session-truth-01DOGF0A).
 	authOK atomic.Pointer[func()]
+
+	// keyReg records the outcome of the most recent device-key
+	// registration (enroll / PUT keys) for the session snapshot
+	// (device-keys-handoff-01DEVKH01 WP02). Mutex-guarded inside.
+	keyReg keyRegState
 }
 
 // SetSessionBroker wires the session sink into the client. When set, a

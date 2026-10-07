@@ -7402,6 +7402,22 @@ export namespace settings {
 	        this.configDistributionEnabled = source["configDistributionEnabled"];
 	    }
 	}
+	export class FleetDeviceKeysView {
+	    status: string;
+	    message?: string;
+	    handoffFingerprint?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetDeviceKeysView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.message = source["message"];
+	        this.handoffFingerprint = source["handoffFingerprint"];
+	    }
+	}
 	export class FleetHealthView {
 	    configDistributionEnabled: boolean;
 	    configSource: string;
@@ -7598,6 +7614,7 @@ export namespace settings {
 	    capabilities: CapabilitiesView;
 	    profile?: FleetProfileInfo;
 	    sync: FleetSyncView;
+	    deviceKeys?: FleetDeviceKeysView;
 	    updatedAt: string;
 	
 	    static createFrom(source: any = {}) {
@@ -7621,6 +7638,7 @@ export namespace settings {
 	        this.capabilities = this.convertValues(source["capabilities"], CapabilitiesView);
 	        this.profile = this.convertValues(source["profile"], FleetProfileInfo);
 	        this.sync = this.convertValues(source["sync"], FleetSyncView);
+	        this.deviceKeys = this.convertValues(source["deviceKeys"], FleetDeviceKeysView);
 	        this.updatedAt = source["updatedAt"];
 	    }
 	

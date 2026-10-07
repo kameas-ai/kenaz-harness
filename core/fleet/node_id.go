@@ -92,3 +92,17 @@ func ClearNodeID(dataDir string) error {
 	}
 	return nil
 }
+
+// ReadNodeID returns the persisted node id under dataDir, or "" when none
+// exists. Unlike NodeID it never mints one — used where creating an id
+// would be wrong (self-unenroll on sign-out names the node that enrolled).
+func ReadNodeID(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(nodeIDFilePath(dataDir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}

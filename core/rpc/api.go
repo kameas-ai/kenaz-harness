@@ -4509,10 +4509,18 @@ func New(c *core.Core, opts ...Option) *API {
 			}
 
 			a.contextSyncAPI = &contextsyncview.Impl{
-				Session:  &sessionSyncBackendAdapter{ss: sessionSyncer, breaker: appendBreaker},
-				Project:  &projectSyncBackendAdapter{ps: projectSyncer},
-				Handoff:  &handoffBackendAdapter{hh: handoffHandler},
-				Recovery: &recoveryBackendAdapter{},
+				Session: &sessionSyncBackendAdapter{ss: sessionSyncer, breaker: appendBreaker},
+				Project: &projectSyncBackendAdapter{ps: projectSyncer},
+				Handoff: &handoffBackendAdapter{hh: handoffHandler},
+				Recovery: &recoveryBackendAdapter{
+					client:  flCl,
+					dataDir: flDataDir,
+					onNodeRemoved: func() {
+						if a.settingsImpl != nil {
+							a.settingsImpl.FleetNodeRemoved()
+						}
+					},
+				},
 				// fleet-enforcement-truth-01PMZ505 WP13 (owner ruling
 				// G-7): a.cedarGate() is the SAME process-singleton every
 				// other gate site consults (nil-safe — degrades to

@@ -58,7 +58,28 @@ const (
 	// refresh keeps the old scope set. Telemetry export is off until a fresh
 	// sign-in. Never a forced sign-out: everything else keeps working.
 	FleetReasonNeedsReauth = "needs_reauth"
+	// FleetReasonNodeRemoved: an org admin removed this device (fleet 403
+	// node_removed, contract §10.1). TERMINAL signed-out state: tokens,
+	// the identity cache and node_id.txt are cleared, and the next sign-in
+	// enrolls under a fresh node id (device-keys-handoff-01DEVKH01 WP02).
+	FleetReasonNodeRemoved = "node_removed"
 )
+
+// fleetNodeRemovedCopy is the signed-out message for FleetReasonNodeRemoved.
+const fleetNodeRemovedCopy = "This device was removed from your organization by an org admin. Sign in again to re-register it as a new device."
+
+// FleetDeviceKeysView is this device's key-registration outcome
+// (device-keys-handoff-01DEVKH01 WP02): whether it registered a handoff key
+// with fleet at the last enroll, and if not, why it cannot receive shared
+// sessions (human copy).
+type FleetDeviceKeysView struct {
+	// Status is registered | too_many_devices | invalid_key | unavailable.
+	Status string `json:"status"`
+	// Message is human copy for a non-registered status.
+	Message string `json:"message,omitempty"`
+	// HandoffFingerprint is sha256:<hex> of the registered handoff key.
+	HandoffFingerprint string `json:"handoffFingerprint,omitempty"`
+}
 
 // FleetSessionClaims reports which identity claims the access token carries.
 // HasOrgClaim false while signed in is the B3a "no_resource_owner_claim"
@@ -132,7 +153,10 @@ type FleetSessionView struct {
 	Capabilities CapabilitiesView   `json:"capabilities"`
 	Profile      *FleetProfileInfo  `json:"profile,omitempty"`
 	Sync         FleetSyncView      `json:"sync"`
-	UpdatedAt    string             `json:"updatedAt"`
+	// DeviceKeys is the last device-key registration outcome; absent until
+	// an enroll attempted one this process.
+	DeviceKeys *FleetDeviceKeysView `json:"deviceKeys,omitempty"`
+	UpdatedAt  string               `json:"updatedAt"`
 }
 
 // sessionTrack is fleetState's record of the session's recent transitions.
@@ -163,6 +187,11 @@ type sessionTrack struct {
 	// while no usable session exists (shown on the signed-out state).
 	signInReason string
 	signInErr    string
+	// nodeRemoved is set by a 403 node_removed (device-keys-handoff-
+	// 01DEVKH01 WP02): an org admin removed this device. Terminal until an
+	// explicit sign-in — enroll is refused locally meanwhile (fleet: "stop
+	// enrolling"), even where tokens are externally owned and survive.
+	nodeRemoved bool
 }
 
 // FleetSession returns the current fleet-session snapshot (FR-1). Cheap and
@@ -232,6 +261,12 @@ func (a *API) fleetSessionSnapshot() FleetSessionView {
 	switch {
 	case tr.signingIn:
 		v.State = FleetSessionSigningIn
+	case tr.nodeRemoved:
+		v.State = FleetSessionSignedOut
+		v.Reason = FleetReasonNodeRemoved
+		v.Message = fleetNodeRemovedCopy
+		v.AutoRetry = false
+		v.TokensUsable = false
 	case !ts.Usable():
 		v.State = FleetSessionSignedOut
 		if ts.Present {
@@ -290,6 +325,13 @@ func (a *API) fleetSessionSnapshot() FleetSessionView {
 		v.Capabilities = capabilitiesToView(poller.Current())
 	}
 	v.Sync = syncViewFromLanes(lanes)
+	if kr := client.KeyRegistration(); kr.Status != "" {
+		v.DeviceKeys = &FleetDeviceKeysView{
+			Status:             kr.Status,
+			Message:            kr.Message,
+			HandoffFingerprint: kr.HandoffFingerprint,
+		}
+	}
 	return v
 }
 
@@ -382,6 +424,8 @@ func classifyEnrollError(err error) (reason string, expired bool) {
 		return "", false
 	case errors.Is(err, fleet.ErrTokenExpired), errors.Is(err, fleet.ErrNotSignedIn):
 		return FleetReasonSessionExpired, true
+	case errors.Is(err, fleet.ErrNodeRemoved):
+		return FleetReasonNodeRemoved, true
 	case errors.Is(err, fleet.ErrUserNotProvisioned):
 		return FleetReasonNotProvisioned, false
 	case errors.Is(err, fleet.ErrProfileNotConfigured):

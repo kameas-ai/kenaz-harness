@@ -8,8 +8,11 @@ package rpc
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 )
 
@@ -177,7 +180,27 @@ func (a *handoffBackendAdapter) AcceptShare(ctx context.Context, inboxItemID str
 
 // recoveryBackendAdapter implements contextsyncview.RecoveryBackend by
 // delegating to the context_crypto.go package-level functions.
-type recoveryBackendAdapter struct{}
+//
+// Importing a recovery code replaces the context seed, which changes this
+// device's derived handoff key (seed + node id). The adapter therefore
+// re-registers the device keys via PUT /api/v1/me/nodes/{node_id}/keys —
+// the exact use case fleet's contract names for that route
+// (device-keys-handoff-01DEVKH01 WP02, spec §4 consequence (a)). A 403
+// node_removed there takes the same terminal sign-out as enroll.
+type recoveryBackendAdapter struct {
+	// client / dataDir are nil/"" when fleet is not wired; the import then
+	// stays local and the next enroll registers the new key.
+	client  *corefleet.Client
+	dataDir string
+	// onNodeRemoved applies the node_removed sign-out (settings API).
+	onNodeRemoved func()
+	// register is the PUT seam (nil → client.RegisterDeviceKeys); tests
+	// substitute it.
+	register func(ctx context.Context, nodeID string) error
+}
+
+// recoveryReRegisterTimeout bounds the post-import PUT keys.
+const recoveryReRegisterTimeout = 15 * time.Second
 
 func (r *recoveryBackendAdapter) GenerateRecoveryCode() (string, error) {
 	seed, err := corefleet.SeedKey()
@@ -192,5 +215,44 @@ func (r *recoveryBackendAdapter) ApplyRecoveryCode(code string) error {
 	if err != nil {
 		return err
 	}
-	return corefleet.StoreContextSeed(seed)
+	if err := corefleet.StoreContextSeed(seed); err != nil {
+		return err
+	}
+	r.reRegisterKeys()
+	return nil
+}
+
+// reRegisterKeys pushes the post-import handoff key to fleet. Best-effort:
+// the import itself already succeeded locally, and the next enroll sends
+// the same derived key; failures are logged and recorded in the client's
+// KeyRegistration (surfaced on the session snapshot).
+func (r *recoveryBackendAdapter) reRegisterKeys() {
+	if r == nil || r.client == nil || r.client.IsNop() {
+		return
+	}
+	nodeID := corefleet.ReadNodeID(r.dataDir)
+	if nodeID == "" {
+		return // never enrolled on this install: enroll registers keys
+	}
+	if ok, _ := r.client.SignedIn(context.Background()); !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), recoveryReRegisterTimeout)
+	defer cancel()
+	register := r.register
+	if register == nil {
+		register = r.client.RegisterDeviceKeys
+	}
+	err := register(ctx, nodeID)
+	switch {
+	case err == nil:
+		logging.L().Info("rpc.context_sync.recovery_keys_reregistered")
+	case errors.Is(err, corefleet.ErrNodeRemoved):
+		logging.L().Warn("rpc.context_sync.recovery_keys_node_removed")
+		if r.onNodeRemoved != nil {
+			r.onNodeRemoved()
+		}
+	default:
+		logging.L().Warn("rpc.context_sync.recovery_keys_reregister_failed", "err", err.Error())
+	}
 }
