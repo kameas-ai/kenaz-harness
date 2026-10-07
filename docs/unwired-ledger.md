@@ -518,9 +518,15 @@ Per-device handoff keys + v2 wrap-to-all + accept-persists shipped
    tokens (served / brokered mode) `ClearTokens` is a no-op. Since review
    fix #5 (2026-10-07) the block is DURABLE (`<dataDir>/fleet/node_removed`,
    honoured by every enroll path incl. cmd/servedfleet's supervisor, cleared
-   only by an explicit sign-in), but in served mode that sign-in — and so
-   recovery — is the host's re-authorization. **Owner:** served-mode
-   boundary owner.
+   only by an explicit sign-in). **Served-mode gap (verify pass,
+   2026-10-07):** a served guest has no sign-in of its own and NO code path
+   clears the marker when the host re-authorizes — a removed served guest
+   stays blocked until someone deletes `<dataDir>/fleet/node_removed` by
+   hand. Fix shape: clear the marker when the served supervisor observes a
+   NEW identity (different user/node) from the host. **Owner:** served-mode
+   boundary owner. Also low: a crash between `sessions.Create` and the first
+   `importing` ledger write leaves an empty "Shared by…" session (never a
+   second transcript); owner: same mission follow-up.
 
 ### 2026-10-06 (newly-live fleet routes verification, pre-v0.91.0) · four latent gaps, all verified non-firing today
 
