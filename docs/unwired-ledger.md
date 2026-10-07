@@ -342,6 +342,46 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · `MemorySync` has no `Stop`; nothing on the shutdown path cancels it
+
+`buildMemorySync` (`core/rpc/api.go`, the `ms.Start(context.Background())`
+line near the end of the constructor) starts the memory-sync cycle loop
+under a context that is never cancelled. `MemorySync.Start`
+(`core/fleet/memory_sync.go`) is the only lifecycle method the type has —
+it spawns one goroutine with a `time.Ticker` and returns only on
+`ctx.Done()`. `API.Shutdown` stops every other scheduler and poller by
+name (workflow, compaction, chat-cron, settings/ctx-graph/unit syncers,
+audit archiver + sweeper, Cedar decision writer) and delegates the fleet
+pollers to `settingsImpl.StopFleetBackground`; neither function mentions
+`memorySync`. It is the only background lane in the constructor with no
+stop.
+
+**Blast radius:** harmless in production — the interval is 2 minutes,
+`RunOnce` short-circuits on `fleet_disabled` / `not_entitled` / disabled
+state before doing I/O, and process exit reaps the goroutine. In tests it
+leaks one goroutine per `API` instance constructed with a real memory
+store (129 `MemorySync.Start.func1` frames in the v0.93.0 CI goroutine
+dump of the core/rpc timeout — not the cause of that timeout, but noise
+that hides a real hang). After `StopFleetBackground` on sign-out the
+loop keeps ticking against a signed-out client and records
+`not_entitled` on every cycle.
+
+**Fix shape:** add `(*MemorySync).Stop()` (cancel the Start context, wait
+for the goroutine; idempotent + nil-safe like every sibling), hold the
+cancel in `buildMemorySync`, and call it from BOTH `API.Shutdown` and the
+sign-out path (`StopFleetBackground` or wherever `SetMemorySync` is
+undone), with a `goleak`-style or `runtime.NumGoroutine` assertion in the
+`buildMemorySync` test so the leak cannot come back silently.
+**Owner:** memory-sync follow-up (01MEMSY01 residuals).
+
+**Cosmetic, same lane:** after a `node_removed` sign-out the memory lane
+board reads `not_entitled` rather than `signed_out`. `RunOnce` checks
+`m.entitled()` (capability poller, which `StopFleetBackground` has just
+nil'd → default-deny) BEFORE any fleet call, so the `ErrNotSignedIn`
+branch that records `signed_out` is never reached. Correct behaviour,
+misleading label; fold into the Stop fix (a stopped lane should record
+nothing) rather than reorder the checks.
+
 ### 2026-10-07 (v0.93.0 CI) · core/rpc test package is at the 10-minute cliff
 
 core/rpc ran 580.9s under `-race -short` on the self-hosted ARM runner in
