@@ -160,9 +160,11 @@ func (s *stubProjectBackend) IsSyncEnabled(projectID string) bool {
 }
 
 type stubHandoffBackend struct {
-	err    error
-	shared []string // sessionID sent via ShareSession
-	events [][]contextsync.SessionEventRecord
+	err     error
+	shared  []string // sessionID sent via ShareSession
+	events  [][]contextsync.SessionEventRecord
+	accepts int
+	deleted []string
 }
 
 func (s *stubHandoffBackend) RecipientDevices(_ context.Context, _ string) ([]contextsync.RecipientDeviceView, error) {
@@ -208,14 +210,43 @@ func (s *stubHandoffBackend) Inbox(_ context.Context) ([]contextsync.InboxItemRe
 	}, nil
 }
 
-func (s *stubHandoffBackend) AcceptShare(_ context.Context, _ string) ([]contextsync.SessionEventRecord, error) {
+func (s *stubHandoffBackend) AcceptShare(_ context.Context, id string) (contextsync.AcceptedShareRecord, error) {
 	if s.err != nil {
-		return nil, s.err
+		return contextsync.AcceptedShareRecord{}, s.err
 	}
-	return []contextsync.SessionEventRecord{
+	s.accepts++
+	return contextsync.AcceptedShareRecord{InboxItemID: id, SessionID: "remote-s", Events: []contextsync.SessionEventRecord{
 		{Seq: 1, Bytes: []byte("decrypted")},
 		{Seq: 2, Bytes: []byte("decrypted")},
-	}, nil
+	}}, nil
+}
+
+func (s *stubHandoffBackend) DeleteShare(_ context.Context, id string) error {
+	s.deleted = append(s.deleted, id)
+	return nil
+}
+
+// stubAcceptStore records persists; Lookup answers from what it stored.
+type stubAcceptStore struct {
+	stored map[string]contextsync.AcceptedSessionView
+	err    error
+}
+
+func (a *stubAcceptStore) Lookup(_ context.Context, id string) (contextsync.AcceptedSessionView, bool) {
+	v, ok := a.stored[id]
+	return v, ok
+}
+
+func (a *stubAcceptStore) Persist(_ context.Context, rec contextsync.AcceptedShareRecord) (contextsync.AcceptedSessionView, error) {
+	if a.err != nil {
+		return contextsync.AcceptedSessionView{}, a.err
+	}
+	if a.stored == nil {
+		a.stored = map[string]contextsync.AcceptedSessionView{}
+	}
+	v := contextsync.AcceptedSessionView{LocalSessionID: "local-" + rec.InboxItemID, EventCount: len(rec.Events)}
+	a.stored[rec.InboxItemID] = v
+	return v, nil
 }
 
 type stubRecoveryBackend struct{ err error }
@@ -361,16 +392,44 @@ func TestImpl_Handoff_Inbox(t *testing.T) {
 	}
 }
 
+// OQ-1/OQ-2: accept persists a real local session, then deletes the fleet
+// copy; a second accept is a local no-op (no fetch, no delete).
 func TestImpl_Handoff_Accept(t *testing.T) {
 	hb := &stubHandoffBackend{}
-	im := &contextsync.Impl{Handoff: hb}
+	store := &stubAcceptStore{}
+	im := &contextsync.Impl{Handoff: hb, Accepted: store}
 
 	accepted, err := im.Handoff_Accept(context.Background(), "item-1")
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
-	if accepted.EventCount != 2 {
-		t.Errorf("expected 2 events, got %d", accepted.EventCount)
+	if accepted.LocalSessionID != "local-item-1" || accepted.EventCount != 2 || accepted.AlreadyAccepted {
+		t.Errorf("accepted = %+v", accepted)
+	}
+	if len(hb.deleted) != 1 || hb.deleted[0] != "item-1" {
+		t.Fatalf("delete-after-persist = %v", hb.deleted)
+	}
+	again, err := im.Handoff_Accept(context.Background(), "item-1")
+	if err != nil || !again.AlreadyAccepted || again.LocalSessionID != "local-item-1" {
+		t.Fatalf("re-accept = %+v, %v", again, err)
+	}
+	if hb.accepts != 1 || len(hb.deleted) != 1 {
+		t.Fatalf("re-accept must not fetch or delete: accepts=%d deletes=%v", hb.accepts, hb.deleted)
+	}
+}
+
+func TestImpl_Handoff_Accept_PersistFailure_KeepsFleetCopy(t *testing.T) {
+	hb := &stubHandoffBackend{}
+	im := &contextsync.Impl{Handoff: hb, Accepted: &stubAcceptStore{err: errors.New("disk full")}}
+	if _, err := im.Handoff_Accept(context.Background(), "item-9"); err == nil {
+		t.Fatal("persist failure must surface")
+	}
+	if len(hb.deleted) != 0 {
+		t.Fatal("never delete the fleet copy when the local copy was not saved")
+	}
+	im = &contextsync.Impl{Handoff: hb}
+	if _, err := im.Handoff_Accept(context.Background(), "item-9"); !errors.Is(err, contextsync.ErrHandoffAcceptUnavailable) {
+		t.Fatalf("no store: %v", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
@@ -26,6 +27,10 @@ type Impl struct {
 	// 2026-10-06 item 1, which hardcoded nil events). nil → Handoff_Share
 	// refuses rather than posting an empty handoff.
 	SessionEvents SessionEventLoader
+
+	// Accepted persists accepted handoffs as local sessions (WP05). nil →
+	// Handoff_Accept refuses rather than decrypting into nowhere.
+	Accepted AcceptedSessionStore
 
 	// Gate is the Cedar policy gate consulted before the two DESTRUCTIVE
 	// ContextSync operations — SessionSync_DeleteRemote and
@@ -240,28 +245,57 @@ func (im *Impl) Handoff_Inbox(ctx context.Context) ([]InboxItemView, error) {
 			SenderUserID: it.SenderUserID,
 			SenderEmail:  it.SenderEmail,
 			ReceivedAt:   it.ReceivedAt,
+
+			Undecryptable: it.Undecryptable,
 		})
 	}
 	return out, nil
 }
 
-// Handoff_Accept decrypts the inbox item. Returns a view with the event count;
-// no content crosses the RPC boundary.
+// ErrHandoffAcceptUnavailable means the local accepted-session store is
+// not wired, so an accept would have nowhere to persist.
+var ErrHandoffAcceptUnavailable = errors.New("contextsync: accepted-session store not wired — cannot accept")
+
+// Handoff_Accept decrypts the inbox item with this device's key, persists
+// it as a NEW local session with provenance (sender, inbox item id), then
+// deletes the fleet copy (OQ-1: recipient-only, idempotent). A second
+// accept of the same item returns the existing local session without any
+// network call (OQ-2). No content crosses the RPC boundary. Backend errors
+// are returned unwrapped: their text is the human copy the inbox shows.
 func (im *Impl) Handoff_Accept(ctx context.Context, inboxItemID string) (AcceptedSessionView, error) {
 	if im.Handoff == nil {
 		return AcceptedSessionView{}, ErrContextSyncUnavailable
 	}
-	records, err := im.Handoff.AcceptShare(ctx, inboxItemID)
-	if err != nil {
-		return AcceptedSessionView{}, fmt.Errorf("contextsync: accept share: %w", err)
+	if im.Accepted == nil {
+		return AcceptedSessionView{}, ErrHandoffAcceptUnavailable
 	}
-	// LocalSessionID is empty in v0.21.0 — a future WP wires session
-	// persistence so the caller gets a real ID. For now the event count
-	// tells the UI the operation succeeded.
-	return AcceptedSessionView{
-		LocalSessionID: "",
-		EventCount:     len(records),
-	}, nil
+	if prev, ok := im.Accepted.Lookup(ctx, inboxItemID); ok {
+		prev.AlreadyAccepted = true
+		return prev, nil
+	}
+	rec, err := im.Handoff.AcceptShare(ctx, inboxItemID)
+	if err != nil {
+		return AcceptedSessionView{}, err
+	}
+	view, err := im.Accepted.Persist(ctx, rec)
+	if err != nil {
+		return AcceptedSessionView{}, fmt.Errorf("contextsync: save shared session: %w", err)
+	}
+	// Persisted locally: remove the fleet copy. Best-effort — the local
+	// copy is authoritative now, the item expires in 7 days regardless,
+	// and a re-accept is a local no-op.
+	if err := im.Handoff.DeleteShare(ctx, inboxItemID); err != nil {
+		logging.L().Warn("contextsync.handoff.delete_after_accept_failed", "err", err.Error())
+	}
+	return view, nil
+}
+
+// Handoff_Delete dismisses an inbox item without accepting it.
+func (im *Impl) Handoff_Delete(ctx context.Context, inboxItemID string) error {
+	if im.Handoff == nil {
+		return ErrContextSyncUnavailable
+	}
+	return im.Handoff.DeleteShare(ctx, inboxItemID)
 }
 
 // ── Recovery ──────────────────────────────────────────────────────────────────

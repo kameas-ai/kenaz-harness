@@ -4515,6 +4515,9 @@ func New(c *core.Core, opts ...Option) *API {
 				// device-keys-handoff-01DEVKH01 WP04: Handoff_Share sends
 				// the REAL session (unwired-ledger 2026-10-06 item 1).
 				SessionEvents: newHandoffSessionLoader(c),
+				// device-keys-handoff-01DEVKH01 WP05: accepted handoffs
+				// become real local sessions (OQ-2).
+				Accepted: newHandoffAcceptStore(chassisSessions(c), flDataDir),
 				Recovery: &recoveryBackendAdapter{
 					client:  flCl,
 					dataDir: flDataDir,

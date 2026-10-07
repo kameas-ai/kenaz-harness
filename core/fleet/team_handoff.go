@@ -32,6 +32,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
@@ -65,6 +66,11 @@ type InboxItem struct {
 	SenderUserID string    `json:"sender_user_id"`
 	SenderEmail  string    `json:"sender_email"`
 	ReceivedAt   time.Time `json:"received_at"`
+	// Undecryptable is fleet's flag (contract §10.3): none of the item's
+	// key wraps targets a still-active device key of this user (the key it
+	// was sent to was revoked / its device unenrolled). Such an item can
+	// never be opened on any device.
+	Undecryptable bool `json:"undecryptable,omitempty"`
 }
 
 // HandoffHandler manages team session handoffs.
@@ -72,6 +78,15 @@ type HandoffHandler struct {
 	client  *Client
 	emitter contextaudit.Emitter
 	caps    *Capabilities
+
+	// inboxMu guards senderEmails: inbox item id → sender email from the
+	// last Inbox() listing, so an accept can attribute the new local
+	// session (GET /handoff/{id} carries only the sender's user id).
+	inboxMu      sync.Mutex
+	senderEmails map[string]string
+
+	// sleep waits out a fetch Retry-After (tests substitute it).
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 // NewHandoffHandler constructs a HandoffHandler.
@@ -165,77 +180,20 @@ func (h *HandoffHandler) Inbox(ctx context.Context) ([]InboxItem, error) {
 	if err := json.Unmarshal(body, &items); err != nil {
 		return nil, fmt.Errorf("fleet: inbox: parse: %w", err)
 	}
+	h.inboxMu.Lock()
+	if h.senderEmails == nil {
+		h.senderEmails = map[string]string{}
+	}
+	for _, it := range items {
+		if it.SenderEmail != "" {
+			h.senderEmails[it.InboxItemID] = it.SenderEmail
+		}
+	}
+	h.inboxMu.Unlock()
 	return items, nil
 }
 
-// acceptHandoffResponse is the envelope returned by GET /api/v1/handoff/{id}.
-type acceptHandoffResponse struct {
-	SessionID          string      `json:"session_id"`
-	SenderUserID       string      `json:"sender_user_id"`
-	EphemeralPublicKey []byte      `json:"ephemeral_public_key"`
-	Events             []wireEvent `json:"events"`
-}
-
-// AcceptShare fetches the handoff payload for inboxItemID, decrypts it with
-// the current user's private key, and returns the plain SessionEventRecords.
-// The caller is responsible for persisting them as a new local session.
-//
-// Privacy invariant: returned plaintext event bytes are never logged.
-func (h *HandoffHandler) AcceptShare(ctx context.Context, inboxItemID string) ([]SessionEventRecord, error) {
-	if h.client == nil || h.client.isNop {
-		return nil, ErrFleetDisabled
-	}
-
-	if err := h.client.endpointUnsupported(FeatureTeamHandoff); err != nil {
-		return nil, err
-	}
-	resp, err := h.client.Get(ctx, "/api/v1/handoff/"+url.PathEscape(inboxItemID))
-	if err != nil {
-		return nil, fmt.Errorf("fleet: accept share: GET: %w", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), body) {
-		return nil, h.client.markEndpointUnsupported(FeatureTeamHandoff, "/api/v1/handoff/{id}")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fleet: accept share: status %d", resp.StatusCode)
-	}
-
-	var payload acceptHandoffResponse
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("fleet: accept share: parse: %w", err)
-	}
-
-	// Derive the same handoff key using our private key + sender's ephemeral pubkey.
-	handoffKey, err := h.deriveReceiveKey(payload.EphemeralPublicKey)
-	if err != nil {
-		return nil, fmt.Errorf("fleet: accept share: derive key: %w", err)
-	}
-
-	// Decrypt all events.
-	records := make([]SessionEventRecord, 0, len(payload.Events))
-	for _, we := range payload.Events {
-		pt, err := Decrypt(handoffKey, we.EncryptedPayload, we.Nonce)
-		if err != nil {
-			return nil, fmt.Errorf("fleet: accept share: decrypt seq=%d: %w", we.Seq, err)
-		}
-		records = append(records, SessionEventRecord{Seq: we.Seq, Bytes: pt})
-	}
-
-	logging.L().Info("fleet.handoff.session_accepted",
-		"inbox_item_id", shortID(inboxItemID),
-		"session_id", shortID(payload.SessionID),
-		"sender", shortID(payload.SenderUserID),
-		"events", len(records),
-	)
-	h.emitAudit(ctx, contextaudit.KindFleetSessionSharedInbound, contextaudit.FleetSessionHandoffPayload{
-		SessionID:       payload.SessionID,
-		RecipientUserID: payload.SenderUserID,
-		InboxItemID:     inboxItemID,
-	})
-	return records, nil
-}
+// AcceptShare / DeleteShare live in handoff_receive.go.
 
 // ── key exchange helpers ──────────────────────────────────────────────────────
 
@@ -357,31 +315,6 @@ func (h *HandoffHandler) RecipientDevices(ctx context.Context, recipientUserID s
 		out = append(out, RecipientDevice{KeyID: k.KeyID, Fingerprint: fp, CreatedAt: k.CreatedAt})
 	}
 	return out, nil
-}
-
-// deriveReceiveKey derives the same handoff key as the sender by performing
-// X25519 ECDH with our seed-derived private key and the sender's ephemeral
-// public key, then running the same HKDF step used in deriveHandoffKey.
-//
-// Key agreement symmetry (Diffie-Hellman):
-//
-//	sender:   sharedSecret = ephemeralPriv.ECDH(recipientPub)
-//	receiver: sharedSecret = recipientPriv.ECDH(ephemeralPub)
-//	          ⟹ both sides derive the same sharedSecret → same AEAD key.
-//
-// The recipient's private key is deterministically derived from the device
-// context seed via LoadOwnHandoffPrivKey. The corresponding public key is
-// what the fleet identity service returns for this user ID; the sender fetches
-// it via fetchRecipientPublicKey, so both sides use the same key material.
-func (h *HandoffHandler) deriveReceiveKey(ephemeralPubKeyBytes []byte) ([]byte, error) {
-	// Load our per-device (seed + node id) X25519 private key.
-	recipientPriv, err := LoadOwnHandoffPrivKey(h.client.dataDir)
-	if err != nil {
-		return nil, fmt.Errorf("load own handoff private key: %w", err)
-	}
-	// X25519 ECDH: recipientPriv · ephemeralPub == ephemeralPriv · recipientPub,
-	// then the same HKDF step as deriveHandoffKey.
-	return deriveV1DirectKey(recipientPriv, ephemeralPubKeyBytes)
 }
 
 // ── audit helper ──────────────────────────────────────────────────────────────

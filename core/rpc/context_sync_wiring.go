@@ -174,10 +174,15 @@ type handoffSessionLoader struct {
 // newHandoffSessionLoader binds the loader to the chassis session manager
 // (nil chassis → a loader that refuses, never an empty share).
 func newHandoffSessionLoader(c *core.Core) *handoffSessionLoader {
+	return &handoffSessionLoader{sessions: chassisSessions(c)}
+}
+
+// chassisSessions is the chassis session manager, or nil without a chassis.
+func chassisSessions(c *core.Core) *session.Manager {
 	if c == nil {
-		return &handoffSessionLoader{}
+		return nil
 	}
-	return &handoffSessionLoader{sessions: c.SessionManager()}
+	return c.SessionManager()
 }
 
 func (l *handoffSessionLoader) LoadSessionEvents(ctx context.Context, sessionID string) ([]contextsyncview.SessionEventRecord, error) {
@@ -220,21 +225,33 @@ func (a *handoffBackendAdapter) Inbox(ctx context.Context) ([]contextsyncview.In
 			SenderUserID: it.SenderUserID,
 			SenderEmail:  it.SenderEmail,
 			ReceivedAt:   receivedAt,
+
+			Undecryptable: it.Undecryptable,
 		})
 	}
 	return out, nil
 }
 
-func (a *handoffBackendAdapter) AcceptShare(ctx context.Context, inboxItemID string) ([]contextsyncview.SessionEventRecord, error) {
-	records, err := a.hh.AcceptShare(ctx, inboxItemID)
+func (a *handoffBackendAdapter) AcceptShare(ctx context.Context, inboxItemID string) (contextsyncview.AcceptedShareRecord, error) {
+	acc, err := a.hh.AcceptShare(ctx, inboxItemID)
 	if err != nil {
-		return nil, err
+		return contextsyncview.AcceptedShareRecord{}, err
 	}
-	out := make([]contextsyncview.SessionEventRecord, 0, len(records))
-	for _, r := range records {
-		out = append(out, contextsyncview.SessionEventRecord{Seq: r.Seq, Bytes: r.Bytes})
+	out := contextsyncview.AcceptedShareRecord{
+		InboxItemID:  acc.InboxItemID,
+		SessionID:    acc.SessionID,
+		SenderUserID: acc.SenderUserID,
+		SenderEmail:  acc.SenderEmail,
+		Events:       make([]contextsyncview.SessionEventRecord, 0, len(acc.Events)),
+	}
+	for _, r := range acc.Events {
+		out.Events = append(out.Events, contextsyncview.SessionEventRecord{Seq: r.Seq, Bytes: r.Bytes})
 	}
 	return out, nil
+}
+
+func (a *handoffBackendAdapter) DeleteShare(ctx context.Context, inboxItemID string) error {
+	return a.hh.DeleteShare(ctx, inboxItemID)
 }
 
 // ── recoveryBackendAdapter ────────────────────────────────────────────────────

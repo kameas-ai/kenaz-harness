@@ -2131,6 +2131,8 @@ export namespace contextsync {
 	export class AcceptedSessionView {
 	    localSessionID: string;
 	    eventCount: number;
+	    title: string;
+	    alreadyAccepted: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AcceptedSessionView(source);
@@ -2140,6 +2142,8 @@ export namespace contextsync {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.localSessionID = source["localSessionID"];
 	        this.eventCount = source["eventCount"];
+	        this.title = source["title"];
+	        this.alreadyAccepted = source["alreadyAccepted"];
 	    }
 	}
 	export class ArtifactClassOptionsView {
@@ -2162,6 +2166,7 @@ export namespace contextsync {
 	    senderUserID: string;
 	    senderEmail: string;
 	    receivedAt: string;
+	    undecryptable: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new InboxItemView(source);
@@ -2174,6 +2179,7 @@ export namespace contextsync {
 	        this.senderUserID = source["senderUserID"];
 	        this.senderEmail = source["senderEmail"];
 	        this.receivedAt = source["receivedAt"];
+	        this.undecryptable = source["undecryptable"];
 	    }
 	}
 	export class ProjectSyncStatus {

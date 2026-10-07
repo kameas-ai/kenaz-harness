@@ -17,9 +17,12 @@ package fleet
 // testdata/handoff/PROVENANCE.md.
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 )
@@ -173,4 +176,68 @@ func regenHandoffSendFixtures(t *testing.T, keys []fleetPublicKeyEntry) {
 		Details: map[string]any{"retry_after_seconds": 1800},
 	})
 }
-func regenHandoffReceiveFixtures(t *testing.T, keys []fleetPublicKeyEntry) {}
+
+// fxPlainEvents are the fixture handoff's plaintext events (the
+// core/session "kenaz.handoff.event" v1 shape).
+var fxPlainEvents = []string{
+	`{"v":1,"role":"user","content":"Can you check the deploy?","created_at":"2026-10-07T08:00:00Z","title":"Deploy check"}`,
+	`{"v":1,"role":"assistant","content":"The deploy is green.","move":{"kind":"final","index":0,"turn_seq":1},"created_at":"2026-10-07T08:00:05Z"}`,
+}
+
+const (
+	fxItemWrapped = "e1f2a3b4-c5d6-4e7f-8a9b-0c1d2e3f4a5b"
+	fxItemDirect  = "f0e1d2c3-b4a5-4968-8776-5a4b3c2d1e0f"
+	fxSessionID   = "4be0643f1d98573b97cdca98a65347dd"
+)
+
+func regenHandoffReceiveFixtures(t *testing.T, keys []fleetPublicKeyEntry) {
+	received := time.Date(2026, 10, 7, 8, 1, 0, 0, time.UTC)
+	writeFixture(t, "inbox.json", []fleetHandoffInboxItem{
+		{InboxItemID: fxItemWrapped, SessionID: fxSessionID, SenderUserID: fxSenderUser, SenderEmail: "alice@example.com", ReceivedAt: received},
+		{InboxItemID: fxItemDirect, SessionID: fxSessionID, SenderUserID: fxSenderUser, SenderEmail: "alice@example.com",
+			ReceivedAt: received.Add(-time.Hour), Undecryptable: true},
+	})
+	// wrapped (v2): one content key, a wrap per device key.
+	ck := make([]byte, 32)
+	_, _ = rand.Read(ck)
+	var evs []fleetHandoffEventWire
+	for i, pt := range fxPlainEvents {
+		ct, nonce, err := sealHandoffEvent(ck, fxSessionID, uint64(i+1), []byte(pt))
+		if err != nil {
+			t.Fatal(err)
+		}
+		evs = append(evs, fleetHandoffEventWire{Seq: uint64(i + 1), EncryptedPayload: ct, Nonce: nonce})
+	}
+	rawEvs, _ := json.Marshal(evs)
+	var recips []fleetHandoffRecipientOut
+	for _, k := range keys {
+		w, err := wrapContentKey(rand.Reader, k.PublicKey, k.KeyID, ck)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recips = append(recips, fleetHandoffRecipientOut{KeyID: k.KeyID, Fingerprint: k.Fingerprint,
+			EphemeralPublicKey: w.EphemeralPublicKey, WrappedKey: w.WrappedKey, WrapNonce: w.WrapNonce})
+	}
+	sort.Slice(recips, func(i, j int) bool { return recips[i].Fingerprint < recips[j].Fingerprint })
+	writeFixture(t, "handoff_wrapped.json", fleetHandoffGetResponse{InboxItemID: fxItemWrapped, SessionID: fxSessionID,
+		SenderUserID: fxSenderUser, Mode: "wrapped", Recipients: recips, Events: rawEvs})
+	// direct (legacy v1) to key A only.
+	eph, _ := ecdh.X25519().GenerateKey(rand.Reader)
+	pub, _ := ecdh.X25519().NewPublicKey(keys[0].PublicKey)
+	shared, _ := eph.ECDH(pub)
+	v1key, _ := hkdf32(shared, string(LabelHandoffKey))
+	var devs []fleetHandoffEventWire
+	for i, pt := range fxPlainEvents {
+		ct, nonce, err := Encrypt(v1key, []byte(pt))
+		if err != nil {
+			t.Fatal(err)
+		}
+		devs = append(devs, fleetHandoffEventWire{Seq: uint64(i + 1), EncryptedPayload: ct, Nonce: nonce})
+	}
+	rawDev, _ := json.Marshal(devs)
+	writeFixture(t, "handoff_direct.json", fleetHandoffGetResponse{InboxItemID: fxItemDirect, SessionID: fxSessionID,
+		SenderUserID: fxSenderUser, Mode: "direct", EphemeralPublicKey: eph.PublicKey().Bytes(),
+		Recipients: []fleetHandoffRecipientOut{{KeyID: keys[0].KeyID, Fingerprint: keys[0].Fingerprint, EphemeralPublicKey: eph.PublicKey().Bytes()}},
+		Events:     rawDev})
+	writeFixture(t, "handoff_not_found.json", fleetErrorResponse{Code: "handoff_not_found", Message: "handoff not found"})
+}

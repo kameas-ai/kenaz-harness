@@ -52,6 +52,9 @@ type InboxItemView struct {
 	SenderUserID string `json:"senderUserID"`
 	SenderEmail  string `json:"senderEmail"`
 	ReceivedAt   string `json:"receivedAt"` // RFC3339
+	// Undecryptable: none of the item's key wraps targets a still-active
+	// device key of this user — it can never be opened (fleet §10.3).
+	Undecryptable bool `json:"undecryptable"`
 }
 
 // RecipientDeviceView is one receiving device of a teammate.
@@ -68,6 +71,12 @@ type AcceptedSessionView struct {
 	LocalSessionID string `json:"localSessionID"`
 	// EventCount is the number of replayed events.
 	EventCount int `json:"eventCount"`
+	// Title is the new local session's name.
+	Title string `json:"title"`
+	// AlreadyAccepted is true when this inbox item was accepted before on
+	// this device: LocalSessionID is that earlier copy and nothing was
+	// fetched or written (OQ-2 dedupe by inbox item id).
+	AlreadyAccepted bool `json:"alreadyAccepted"`
 }
 
 // ContextSyncAPI is the view-scoped interface for the fleet context-sync
@@ -113,9 +122,13 @@ type ContextSyncAPI interface {
 	// Handoff_Inbox returns the current contents of the fleet handoff inbox.
 	Handoff_Inbox(ctx context.Context) ([]InboxItemView, error)
 
-	// Handoff_Accept decrypts an inbox item and returns a view with the count
-	// of decrypted events and an opaque local session ID for persistence.
+	// Handoff_Accept decrypts an inbox item, persists it as a NEW local
+	// session (deduped by inbox item id), deletes the fleet copy, and
+	// returns the local session id.
 	Handoff_Accept(ctx context.Context, inboxItemID string) (AcceptedSessionView, error)
+
+	// Handoff_Delete dismisses an inbox item without accepting it.
+	Handoff_Delete(ctx context.Context, inboxItemID string) error
 
 	// ContextSync_GenerateRecoveryCode mints a recovery code for the device
 	// context seed. The code is displayed once and must be acknowledged.
@@ -162,7 +175,31 @@ type HandoffBackend interface {
 	// events (loaded by the Impl from the local store before calling the backend).
 	ShareSession(ctx context.Context, sessionID, recipientUserID string, plainEvents []SessionEventRecord) error
 	Inbox(ctx context.Context) ([]InboxItemRecord, error)
-	AcceptShare(ctx context.Context, inboxItemID string) ([]SessionEventRecord, error)
+	// AcceptShare fetches and decrypts one item with THIS device's key.
+	AcceptShare(ctx context.Context, inboxItemID string) (AcceptedShareRecord, error)
+	// DeleteShare removes an item from the inbox (idempotent).
+	DeleteShare(ctx context.Context, inboxItemID string) error
+}
+
+// AcceptedShareRecord is a decrypted inbox item. Privacy: Events are
+// plaintext transcript content — persisted, never logged or returned.
+type AcceptedShareRecord struct {
+	InboxItemID  string
+	SessionID    string
+	SenderUserID string
+	SenderEmail  string
+	Events       []SessionEventRecord
+}
+
+// AcceptedSessionStore persists an accepted handoff as a new local session
+// with provenance, deduped by inbox item id (OQ-2).
+type AcceptedSessionStore interface {
+	// Lookup returns the local session an earlier accept of inboxItemID
+	// created, if that session still exists.
+	Lookup(ctx context.Context, inboxItemID string) (AcceptedSessionView, bool)
+	// Persist writes rec as a new local session (or returns the existing
+	// one when it was accepted concurrently).
+	Persist(ctx context.Context, rec AcceptedShareRecord) (AcceptedSessionView, error)
 }
 
 // SessionEventLoader loads a LOCAL session as self-contained handoff
@@ -222,4 +259,6 @@ type InboxItemRecord struct {
 	SenderUserID string
 	SenderEmail  string
 	ReceivedAt   string // RFC3339
+	// Undecryptable mirrors fleet's inbox flag.
+	Undecryptable bool
 }

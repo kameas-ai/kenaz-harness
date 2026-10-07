@@ -117,3 +117,13 @@ core/rpc/views/agentgraph/chat/interrupt.go:AppendEntry:2
 #     kenaz__fork_conversation, both via branches.API.CreateBranch.
 #     Owner: alec. ---
 core/conversation/manager.go:ReplayTranscript:1
+
+# --- ReplayTranscript, second caller (ADDED 2026-10-07,
+#     device-keys-handoff-01DEVKH01 WP05): accepting a teammate's shared
+#     session writes it as a NEW local session through the same faithful
+#     replay seam the fork uses — one call site, never a new writer. The
+#     rows come from session.DecodeHandoffTranscript (display layer only:
+#     no model-layer tool args); moves are re-linked by ReplayTranscript's
+#     own span remap. Persisted once per inbox item (deduped by
+#     handoffAcceptStore's ledger), never per tick. Owner: alec (handoff v2). ---
+core/rpc/handoff_accept.go:ReplayTranscript:1
