@@ -30,6 +30,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -376,9 +378,9 @@ func TestWireContract_PlantedLegacyIDs_FleetRefuses(t *testing.T) {
 // same (install, lane, local id) is stable; a different install or lane
 // gives a different id; UUIDs and "_fleet/<uuid>" paths pass through.
 func TestWireIDs_StableAndInstallScoped(t *testing.T) {
-	a := newWireIDsFromInstall("INSTALL-A")
-	a2 := newWireIDsFromInstall("INSTALL-A")
-	b := newWireIDsFromInstall("INSTALL-B")
+	a := newWireIDsFromSalt([]byte("salt-A"))
+	a2 := newWireIDsFromSalt([]byte("salt-A"))
+	b := newWireIDsFromSalt([]byte("salt-B"))
 	const path = "guidance/style.md"
 	if a.For(WireLaneCurated, path) != a2.For(WireLaneCurated, path) {
 		t.Error("same install + lane + id is not stable")
@@ -399,9 +401,36 @@ func TestWireIDs_StableAndInstallScoped(t *testing.T) {
 	if a.For(WireLaneCurated, "") != "" {
 		t.Error("empty local id must map to empty")
 	}
-	// Persisted install id: two derivers over one dataDir agree.
+	// Persisted install secret: two derivers over one dataDir agree.
 	dir := t.TempDir()
-	if NewWireIDs(dir).For(WireLaneCurated, path) != NewWireIDs(dir).For(WireLaneCurated, path) {
+	first := NewWireIDs(dir).For(WireLaneCurated, path)
+	if first != NewWireIDs(dir).For(WireLaneCurated, path) {
 		t.Error("derivation not stable across restarts of the same profile")
+	}
+	// The salt is a separate 0600 secret; node_id.txt is not an input, so
+	// regenerating it does not re-mint wire ids.
+	st, err := os.Stat(filepath.Join(dir, "fleet", "wire_id_salt"))
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("salt file: %v mode=%v, want 0600", err, st)
+	}
+	if _, err := NodeID(dir); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Join(dir, "fleet", "node_id.txt"))
+	if _, err := NodeID(dir); err != nil {
+		t.Fatal(err)
+	}
+	if NewWireIDs(dir).For(WireLaneCurated, path) != first {
+		t.Error("regenerating node_id.txt re-minted wire ids")
+	}
+	nid, _ := NodeID(dir)
+	if raw, _ := os.ReadFile(filepath.Join(dir, "fleet", "wire_id_salt")); strings.Contains(string(raw), nid) {
+		t.Error("salt derived from the transmitted node id")
+	}
+	// A malformed salt file is never overwritten.
+	_ = os.WriteFile(filepath.Join(dir, "fleet", "wire_id_salt"), []byte("garbage\n"), 0o600)
+	_ = NewWireIDs(dir)
+	if raw, _ := os.ReadFile(filepath.Join(dir, "fleet", "wire_id_salt")); string(raw) != "garbage\n" {
+		t.Error("malformed salt file was overwritten")
 	}
 }
