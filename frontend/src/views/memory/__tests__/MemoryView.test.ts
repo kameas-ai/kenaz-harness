@@ -349,6 +349,26 @@ describe('MemoryView', () => {
     expect(listChunks).toHaveBeenCalledTimes(1);
   });
 
+  // memory-sync-01MEMSY01 WP03 (spec OQ-2): long_term finally has a
+  // producer — a global chunk promotes into it with an empty scope id.
+  it('promotes a global chunk to long_term', async () => {
+    const chunks: MemoryChunk[] = [
+      makeChunk({ id: 'chunk-lt', scopeKind: 'global', scopeId: '' }),
+    ];
+    const { wrapper, promoteScope } = mountWith({ chunks });
+    await flushPromises();
+    await wrapper.find('[data-testid="memory-promote-chunk-lt"]').trigger('click');
+    await wrapper
+      .find('[data-testid="memory-promote-chunk-lt-long_term"]')
+      .trigger('click');
+    await flushPromises();
+    await wrapper
+      .find('[data-testid="memory-promote-confirm"]')
+      .trigger('click');
+    await flushPromises();
+    expect(promoteScope).toHaveBeenCalledWith('chunk-lt', 'long_term', '');
+  });
+
   it('promotes a session chunk to project, resolving the project id from the chunk', async () => {
     const chunks: MemoryChunk[] = [
       makeChunk({
@@ -401,17 +421,19 @@ describe('MemoryView', () => {
     ).toBe(false);
   });
 
-  it('disables Promote scope when the chunk is already global', async () => {
+  // Since memory-sync-01MEMSY01 WP03 global promotes to long_term, so the
+  // widest tier with no further target is long_term.
+  it('disables Promote scope when the chunk is already long_term', async () => {
     const chunks: MemoryChunk[] = [
       makeChunk({
-        id: 'chunk-global',
-        scopeKind: 'global',
+        id: 'chunk-lt-top',
+        scopeKind: 'long_term',
         scopeId: '',
       }),
     ];
     const { wrapper } = mountWith({ chunks });
     await flushPromises();
-    const btn = wrapper.find('[data-testid="memory-promote-chunk-global"]');
+    const btn = wrapper.find('[data-testid="memory-promote-chunk-lt-top"]');
     expect(btn.exists()).toBe(true);
     expect(btn.attributes('disabled')).toBeDefined();
   });

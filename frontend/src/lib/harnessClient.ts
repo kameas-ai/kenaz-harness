@@ -2629,8 +2629,8 @@ export interface PermissionsClient {
  * Scope (WP06): RememberMessage accepts a third arg, one of
  * `'session' | 'project' | 'global'`, defaulting to `'session'` when
  * the caller omits it. PromoteScope moves an existing chunk to a wider
- * scope (move semantics — the original row is deleted and re-inserted
- * with a new ID; UI must refresh after the call).
+ * scope in place and resolves to the SAME id (memory-sync-01MEMSY01
+ * WP03; UI must still refresh after the call to pick up the new scope).
  */
 export interface MemoryClient {
   listChunks(filter?: MemoryListFilter): Promise<MemoryChunk[]>;

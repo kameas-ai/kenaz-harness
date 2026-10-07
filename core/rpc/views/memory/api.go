@@ -198,8 +198,9 @@ type MemoryAPI interface {
 	// empty. Returns the new chunk's ID.
 	RememberMessage(ctx context.Context, sessionID, messageID, scope string) (string, error)
 	// PromoteScope moves the chunk with chunkID to (newScopeKind,
-	// newScopeID). Move semantics: the original row is deleted, a new
-	// row is inserted with a new ID. Returns the new chunk's ID.
+	// newScopeID) in place. newScopeKind is one of global, long_term,
+	// project, session. The id is kept (it is the chunk's Fleet origin
+	// id, memory-sync-01MEMSY01 WP03); the returned id equals chunkID.
 	PromoteScope(ctx context.Context, chunkID, newScopeKind, newScopeID string) (string, error)
 	// Forget deletes the chunk with the given id.
 	Forget(ctx context.Context, id string) error

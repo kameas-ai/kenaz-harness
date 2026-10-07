@@ -46,12 +46,12 @@ type Store interface {
 	Close() error
 }
 
-// ScopePromoter is the optional capability the rpc/memory view uses
-// to implement move semantics for "promote to project/global". The
-// chromem-go-replacement store implements it; future backends should
-// satisfy this interface so the view layer keeps the same contract.
+// ScopePromoter is the optional capability the rpc/memory view uses to
+// change a chunk's scope ("promote to project/global/long_term", or a
+// demotion). The scope changes in place and the id is kept — it is the
+// chunk's origin id for Fleet memory sync (memory-sync-01MEMSY01 WP03).
 type ScopePromoter interface {
-	PromoteScope(ctx context.Context, oldID, newID, newScopeKind, newScopeID string) error
+	PromoteScope(ctx context.Context, id, newScopeKind, newScopeID string) error
 }
 
 // PruneCapable is the optional capability the prune sweep uses to
@@ -408,18 +408,28 @@ type GateSetter interface {
 	SetGate(g MemoryWriteGate)
 }
 
-// PromoteScope deletes the chunk with oldID and inserts a copy with
-// newID and the supplied (kind, id) scope. Atomic under s.mu — the
-// store is observed in the pre- or post-state, never with both rows.
+// PromoteScope moves chunk id to the (kind, id) scope IN PLACE: the id is
+// the chunk's origin id on Fleet and must survive a scope change
+// (memory-sync-01MEMSY01 WP03, contract H1 — "promote keeps the id and
+// pushes a scope_kind field with a fresh HLC"). Until v0.91.0 this minted a
+// new id and deleted the old row, which on Fleet would have read as a new
+// record plus an orphan. The scope change is stamped (ScopeHLC) and marked
+// for push; content, embedding, recall and pin state are untouched. A
+// no-op move (same kind + id) changes nothing.
+//
+// Demotion is the same operation: moving a synced chunk out of the synced
+// scopes pushes the scope_kind change, Fleet tombstones it left_sync_scope
+// and other devices delete their copies, while this device keeps its chunk
+// (ruling OQ-B).
 //
 // TODO(audit-wired): emit a `memory.scoped` audit event after a
-// successful promote. Payload: {old_chunk_id, new_chunk_id, scope_kind,
-// scope_id}. Same emitter-not-wired blocker as projects.Create and
-// attachments.Add — a process-wide event.Emitter has not been threaded
-// through the rpc layer yet.
-func (s *chromemStore) PromoteScope(_ context.Context, oldID, newID, newScopeKind, newScopeID string) error {
-	if oldID == "" || newID == "" {
-		return errors.New("memory: promote: ids required")
+// successful promote. Payload: {chunk_id, scope_kind, scope_id}. Same
+// emitter-not-wired blocker as projects.Create and attachments.Add — a
+// process-wide event.Emitter has not been threaded through the rpc layer
+// yet.
+func (s *chromemStore) PromoteScope(_ context.Context, id, newScopeKind, newScopeID string) error {
+	if id == "" {
+		return errors.New("memory: promote: id required")
 	}
 	switch newScopeKind {
 	case ScopeKindGlobal, ScopeKindProject, ScopeKindSession, ScopeKindLongTerm:
@@ -430,28 +440,29 @@ func (s *chromemStore) PromoteScope(_ context.Context, oldID, newID, newScopeKin
 	defer s.mu.Unlock()
 	idx := -1
 	for i, c := range s.chunks {
-		if c.ID == oldID {
+		if c.ID == id {
 			idx = i
 			break
 		}
 	}
 	if idx < 0 {
-		return fmt.Errorf("memory: chunk %q not found", oldID)
+		return fmt.Errorf("memory: chunk %q not found", id)
 	}
-	moved := s.chunks[idx]
-	moved.ID = newID
+	prev := s.chunks[idx]
+	if prev.ScopeKind == newScopeKind && prev.ScopeID == newScopeID {
+		return nil
+	}
+	moved := prev
 	moved.ScopeKind = newScopeKind
 	moved.ScopeID = newScopeID
-	moved.ScopeHLC = s.tickLocked()
-	touchLocked(&moved)
 	if newScopeKind == ScopeKindProject {
 		moved.ProjectID = newScopeID
 	}
-	prev := append([]Chunk(nil), s.chunks...)
-	s.chunks = append(s.chunks[:idx], s.chunks[idx+1:]...)
-	s.chunks = append(s.chunks, moved)
+	moved.ScopeHLC = s.tickLocked()
+	touchLocked(&moved)
+	s.chunks[idx] = moved
 	if err := s.saveLocked(); err != nil {
-		s.chunks = prev
+		s.chunks[idx] = prev
 		return err
 	}
 	return nil

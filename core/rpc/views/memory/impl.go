@@ -284,34 +284,33 @@ func (a *API) RememberMessage(ctx context.Context, sessionID, messageID, scope s
 	return id, nil
 }
 
-// PromoteScope moves a chunk to a new scope. It deletes the original
-// row and inserts a new chunk with a new ID, the same content +
-// embedding, and the new (kind, id) scope. Atomic under the store's
-// mutex: callers see either the old chunk or the new one, never both.
+// PromoteScope moves a chunk to a new scope in place and returns its id,
+// which is unchanged (memory-sync-01MEMSY01 WP03, contract H1: the id is
+// the chunk's Fleet origin id and must survive promotion). long_term is a
+// valid target — it was unreachable from this RPC until WP03, which left
+// Fleet's long_term sync scope with no producer (spec OQ-2). global and
+// long_term are harness-wide, so their scope id is always empty.
 func (a *API) PromoteScope(ctx context.Context, chunkID, newScopeKind, newScopeID string) (string, error) {
 	if a == nil || a.store == nil {
 		return "", ErrStoreUnavailable
 	}
 	switch newScopeKind {
-	case corememory.ScopeKindGlobal, corememory.ScopeKindProject, corememory.ScopeKindSession:
+	case corememory.ScopeKindGlobal, corememory.ScopeKindLongTerm,
+		corememory.ScopeKindProject, corememory.ScopeKindSession:
 	default:
 		return "", fmt.Errorf("%w: %q", ErrInvalidScope, newScopeKind)
 	}
-	if newScopeKind == corememory.ScopeKindGlobal {
+	if newScopeKind == corememory.ScopeKindGlobal || newScopeKind == corememory.ScopeKindLongTerm {
 		newScopeID = ""
 	}
 	mover, ok := a.store.(corememory.ScopePromoter)
 	if !ok {
 		return "", errors.New("memory: store does not support scope promotion")
 	}
-	newID, err := newChunkID()
-	if err != nil {
+	if err := mover.PromoteScope(ctx, chunkID, newScopeKind, newScopeID); err != nil {
 		return "", err
 	}
-	if err := mover.PromoteScope(ctx, chunkID, newID, newScopeKind, newScopeID); err != nil {
-		return "", err
-	}
-	return newID, nil
+	return chunkID, nil
 }
 
 // Forget removes the chunk with id from the store. Bare wrapper around
@@ -578,7 +577,7 @@ func buildScopeFilter(scope string) []corememory.ScopeFilter {
 	switch scope {
 	case "":
 		return nil
-	case corememory.ScopeKindGlobal, corememory.ScopeKindProject, corememory.ScopeKindSession:
+	case corememory.ScopeKindGlobal, corememory.ScopeKindLongTerm, corememory.ScopeKindProject, corememory.ScopeKindSession:
 		return []corememory.ScopeFilter{{Kind: scope}}
 	default:
 		return nil

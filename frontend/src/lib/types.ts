@@ -1923,13 +1923,16 @@ export interface CostEstimate {
 }
 
 /**
- * MemoryScopeKind — the three scope tiers used by long-term memory.
+ * MemoryScopeKind — the scope tiers used by long-term memory.
  * Mirrors core/memory.ScopeKind. "session" is the chat-local default;
  * "project" survives between sister sessions of the same project;
- * "global" is harness-wide. Promotion is monotonic
- * (session → project → global); demotion isn't supported.
+ * "global" is harness-wide; "long_term" is the harness-wide tier loaded
+ * into the session prelude and resistant to pruning. The UI promotes
+ * session → project → global → long_term; the id is kept across a
+ * promotion (memory-sync-01MEMSY01 WP03 — it is the chunk's Fleet origin
+ * id). Remember (capture) accepts only global / project / session.
  */
-export type MemoryScopeKind = 'global' | 'project' | 'session';
+export type MemoryScopeKind = 'global' | 'long_term' | 'project' | 'session';
 
 /**
  * MemoryChunk — one persisted memory. In the hooks-driven architecture
