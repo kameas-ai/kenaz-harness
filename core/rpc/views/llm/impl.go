@@ -229,6 +229,19 @@ type SessionMessageReader interface {
 	ListMessages(ctx context.Context, sessionID string) ([]SessionMessage, error)
 }
 
+// TurnRunSpanReader is an optional extension of SessionMessageReader:
+// the turn span ids (user message ids) that some chat run has already
+// been dispatched for (session_turn_runs). StartStream uses it so a turn
+// RE-run without a new append — the Retry of a message that was not
+// delivered (undelivered-message-retry) — is not reported to fleet
+// context-sync a second time. A failed-before-the-first-token run writes
+// no spanned row, so the row-based turnAlreadySpanned check alone cannot
+// see that the turn was already announced. Readers that do not implement
+// it (test fakes) keep the row-based check only.
+type TurnRunSpanReader interface {
+	RunTurnSpans(ctx context.Context, sessionID string) (map[string]bool, error)
+}
+
 // SessionContextReader exposes the session's optional starting context
 // (Mission A). buildMessages prepends a system role message when the
 // session was configured with kind=system. user_seed sessions surface
@@ -1007,15 +1020,31 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 	// failed run wrote NO spanned row re-announces if re-run without a new
 	// append — no live caller does that (every caller appends first; the
 	// keychain redrive bypasses this path with Announce=false).
+	//
+	// Retry (undelivered-message-retry): re-dispatching a turn whose run
+	// failed before the model accepted it is exactly this call with no
+	// new append — the newest user row is still the undelivered one, so
+	// it is resolved and re-run by reference, with the same span and no
+	// second user row. That closes the residual above: a run is recorded
+	// in session_turn_runs at StartStream, so a turn that was ever
+	// dispatched is not announced again (TurnRunSpanReader).
 	var turn UserTurn
 	if a.history != nil && sessionID != "" {
 		if stored, herr := a.history.ListMessages(ctx, sessionID); herr == nil {
 			for i := len(stored) - 1; i >= 0; i-- {
 				if stored[i].Role == "user" {
+					announce := !turnAlreadySpanned(stored, stored[i].ID)
+					if announce {
+						if rr, ok := a.history.(TurnRunSpanReader); ok {
+							if spans, rerr := rr.RunTurnSpans(ctx, sessionID); rerr == nil && spans[stored[i].ID] {
+								announce = false
+							}
+						}
+					}
 					turn = UserTurn{
 						MessageID: stored[i].ID,
 						Text:      stored[i].Content,
-						Announce:  !turnAlreadySpanned(stored, stored[i].ID),
+						Announce:  announce,
 					}
 					break
 				}

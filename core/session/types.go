@@ -136,6 +136,35 @@ type TurnRun struct {
 	GraphID    string
 	SpecDigest string
 	CreatedAt  time.Time
+	// Outcome is the run's terminal outcome (migration 0344); the zero
+	// value — Outcome == "" — means in flight, or a run that predates
+	// the column. See TurnRunOutcome.
+	Outcome TurnRunOutcome
+}
+
+// Turn-run outcome values (migration sessions/0344-turn-run-outcome).
+const (
+	TurnOutcomeCompleted = "completed"
+	TurnOutcomeFailed    = "failed"
+	TurnOutcomeStopped   = "stopped"
+)
+
+// TurnRunOutcome is how one chat run ended (undelivered-message-retry,
+// dogfood 2026-10-07). Delivered answers "did the model accept the
+// request": false on a run that failed before any streamed output — the
+// state the chat surface renders as NOT DELIVERED on the user's message.
+// The Failure* fields are empty unless Outcome == TurnOutcomeFailed;
+// FailureMessage is already sanitized (llm.SanitizeProviderMessage).
+type TurnRunOutcome struct {
+	Outcome         string
+	Delivered       bool
+	FailureClass    string
+	FailureCode     string
+	FailureStatus   int
+	FailureProvider string
+	FailureSummary  string
+	FailureMessage  string
+	FinishedAt      time.Time
 }
 
 // ContextKind values for Record.ContextKind. Validated at the manager
