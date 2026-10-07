@@ -775,8 +775,9 @@ func TestInstallMandatedDocument_TakeoverRestoredOnWithdrawal(t *testing.T) {
 		t.Fatalf("mandated content not installed: name %q", w.Name)
 	}
 
-	restored, err := api.RemoveMandatedDocument(ctx, id, "cat-v2", prior, false)
-	if err != nil || !restored {
+	out, err := api.RemoveMandatedDocument(ctx, id, "cat-v2", prior, false)
+	if err != nil || !out.Restored {
+		restored := out.Restored
 		t.Fatalf("withdraw: restored=%v err=%v", restored, err)
 	}
 	w, err := store.Load(ctx, id)
@@ -809,8 +810,9 @@ func TestRemoveMandatedDocument_LegacyRecordRelabels(t *testing.T) {
 	if _, err := api.InstallDocument(ctx, doc, DocumentOrigin{CatalogID: "cat-l", Version: "1", Mandated: true}); err != nil {
 		t.Fatal(err)
 	}
-	restored, err := api.RemoveMandatedDocument(ctx, "legacy-flow", "cat-l", nil, true)
-	if err != nil || !restored {
+	out, err := api.RemoveMandatedDocument(ctx, "legacy-flow", "cat-l", nil, true)
+	if err != nil || !out.Restored {
+		restored := out.Restored
 		t.Fatalf("legacy restore: %v %v", restored, err)
 	}
 	if p, _, _ := prov.Get("legacy-flow"); p.Source != corewf.ProvenanceCatalog {

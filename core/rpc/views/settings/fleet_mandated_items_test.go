@@ -48,14 +48,14 @@ func (f *fakeMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, catal
 	return doc.ID, nil, nil
 }
 
-func (f *fakeMandatedWorkflows) RemoveMandatedWorkflow(_ context.Context, workflowID, catalogID string, _ json.RawMessage, _ bool) (bool, error) {
+func (f *fakeMandatedWorkflows) RemoveMandatedWorkflow(_ context.Context, workflowID, catalogID string, _ json.RawMessage, _ bool) (fleet.MandatedWorkflowRemoval, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.installed[workflowID] == catalogID {
 		delete(f.installed, workflowID)
 	}
 	f.removed = append(f.removed, workflowID)
-	return false, nil
+	return fleet.MandatedWorkflowRemoval{}, nil
 }
 
 func (f *fakeMandatedWorkflows) snapshot() (map[string]string, []string) {

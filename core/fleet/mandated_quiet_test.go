@@ -26,6 +26,7 @@ type ownerMandatedWorkflows struct {
 	mu      sync.Mutex
 	owner   map[string]string // workflow id -> mandating catalog id
 	removes []removeCall
+	refuse  string // when set, a restore with a snapshot is refused by policy
 }
 
 type removeCall struct {
@@ -48,15 +49,18 @@ func (o *ownerMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, cata
 	return doc.ID, nil, nil
 }
 
-func (o *ownerMandatedWorkflows) RemoveMandatedWorkflow(_ context.Context, id, catalogID string, prior json.RawMessage, legacy bool) (bool, error) {
+func (o *ownerMandatedWorkflows) RemoveMandatedWorkflow(_ context.Context, id, catalogID string, prior json.RawMessage, legacy bool) (MandatedWorkflowRemoval, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.removes = append(o.removes, removeCall{id, catalogID, prior, legacy})
 	if o.owner[id] != catalogID {
-		return false, nil
+		return MandatedWorkflowRemoval{}, nil
 	}
 	delete(o.owner, id)
-	return len(prior) > 0 || legacy, nil
+	if o.refuse != "" && len(prior) > 0 {
+		return MandatedWorkflowRemoval{RestoreRefused: o.refuse}, nil
+	}
+	return MandatedWorkflowRemoval{Restored: len(prior) > 0 || legacy}, nil
 }
 
 func (o *ownerMandatedWorkflows) snapshot() []removeCall {
@@ -317,4 +321,40 @@ func TestMandated_TakeoverDuringUnreadableStatePersistsPrior(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Review F3: a restore the policy gate refused is still a removal for the
+// ACK, and the LOCAL audit row says the restore was refused (and why) —
+// never a silent drop.
+func TestMandated_RestoreRefusedByPolicyIsAudited(t *testing.T) {
+	m, _, _, wf, em, _ := newQuietApplier(t)
+	wf.refuse = "strict mode forbids shell steps"
+	ctx := context.Background()
+	m.Workflows = &priorReturningWorkflows{ownerMandatedWorkflows: wf}
+	_, _ = m.Apply(ctx, []BundleMandatedItem{{CatalogID: "w1", Kind: MandatedKindWorkflow, Version: "1", Payload: json.RawMessage(`{"id":"flow"}`)}})
+	st, errs := m.Apply(ctx, nil)
+	if len(errs) != 0 || len(st) != 1 || st[0].Status != MandatedStatusRemoved {
+		t.Fatalf("withdrawal = %+v %v", st, errs)
+	}
+	var found bool
+	for _, ev := range em.snapshot() {
+		if p, ok := ev.payload.(contextaudit.FleetMandatedItemPayload); ok && ev.kind == contextaudit.KindFleetMandatedItemRemoved {
+			found = true
+			if p.Restored || p.RestoreRefused != "strict mode forbids shell steps" {
+				t.Errorf("removal audit = %+v, want restore_refused with the policy reason", p)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no removal audit row")
+	}
+}
+
+// priorReturningWorkflows reports a takeover snapshot on install, so the
+// withdrawal has something to restore.
+type priorReturningWorkflows struct{ *ownerMandatedWorkflows }
+
+func (p *priorReturningWorkflows) InstallMandatedWorkflow(ctx context.Context, cid, ver string, payload []byte) (string, json.RawMessage, error) {
+	id, _, err := p.ownerMandatedWorkflows.InstallMandatedWorkflow(ctx, cid, ver, payload)
+	return id, json.RawMessage(`{"snapshot":true}`), err
 }

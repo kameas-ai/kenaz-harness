@@ -83,9 +83,20 @@ type MandatedWorkflows interface {
 	// otherwise: the user or another install now owns it). A non-empty
 	// prior restores the user's own copy; legacyRestore (a v0.91 record:
 	// takeover recorded, no snapshot) hands the current content back as a
-	// catalog install; otherwise it is deleted. restored reports whether
-	// the user got a copy back.
-	RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (restored bool, err error)
+	// catalog install; otherwise it is deleted. The result says whether
+	// the user got a copy back, or why policy refused to restore it.
+	RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (MandatedWorkflowRemoval, error)
+}
+
+// MandatedWorkflowRemoval is the outcome of ending a workflow mandate.
+type MandatedWorkflowRemoval struct {
+	// Restored: the user's own earlier copy was handed back.
+	Restored bool
+	// RestoreRefused is set when a snapshot existed but the policy save
+	// gate refused to write it back (e.g. a shell step under strict mode):
+	// the mandated copy was deleted instead, and the reason is audited —
+	// never dropped silently.
+	RestoreRefused string
 }
 
 // MandatedApplier dispatches + reconciles mandated items. Keep ONE instance
@@ -298,14 +309,14 @@ func (m *MandatedApplier) Apply(ctx context.Context, items []BundleMandatedItem)
 			}
 			st.Status = MandatedStatusRemoved
 			audits = append(audits, mandatedAudit{upgraded: true, from: old, to: nr})
-		} else if restored, err := m.remove(ctx, old); err != nil {
+		} else if out, err := m.remove(ctx, old); err != nil {
 			st.Status = MandatedStatusFailed
 			st.Error = err.Error()
 			errs = append(errs, err)
 			next[key] = old // still installed: retry the removal next bundle
 		} else {
 			st.Status = MandatedStatusRemoved
-			audits = append(audits, mandatedAudit{from: old, restored: restored})
+			audits = append(audits, mandatedAudit{from: old, restored: out.Restored, restoreRefused: out.RestoreRefused})
 		}
 		// A legacy seed (pre-envelope mandate) has no fleet catalog id to
 		// report against; its removal is local bookkeeping only.
@@ -342,10 +353,11 @@ func (m *MandatedApplier) Apply(ctx context.Context, items []BundleMandatedItem)
 
 // mandatedAudit is one local reconcile event (WP04).
 type mandatedAudit struct {
-	upgraded bool
-	from     mandatedRecord
-	to       mandatedRecord
-	restored bool
+	upgraded       bool
+	from           mandatedRecord
+	to             mandatedRecord
+	restored       bool
+	restoreRefused string
 }
 
 func (m *MandatedApplier) emitAuditsLocked(ctx context.Context, audits []mandatedAudit) {
@@ -361,8 +373,9 @@ func (m *MandatedApplier) emitAuditsLocked(ctx context.Context, audits []mandate
 				"from_catalog_id", a.from.CatalogID, "to_catalog_id", a.to.CatalogID)
 		} else {
 			p.Restored = a.restored
+			p.RestoreRefused = a.restoreRefused
 			logging.L().Info("fleet.mandated.removed", "kind", a.from.Kind, "local_id", a.from.LocalID,
-				"catalog_id", a.from.CatalogID, "restored", a.restored)
+				"catalog_id", a.from.CatalogID, "restored", a.restored, "restore_refused", a.restoreRefused != "")
 		}
 		if m.Emitter != nil {
 			_ = m.Emitter.EmitFleetEvent(ctx, kind, p)
@@ -443,24 +456,25 @@ func (m *MandatedApplier) install(ctx context.Context, it BundleMandatedItem, pr
 	}
 }
 
-// remove ends the mandate r recorded. restored reports whether the user's
-// own earlier copy was handed back instead of deleted.
-func (m *MandatedApplier) remove(ctx context.Context, r mandatedRecord) (bool, error) {
+// remove ends the mandate r recorded: whether the user's own earlier copy
+// was handed back instead of deleted, or why restoring it was refused.
+func (m *MandatedApplier) remove(ctx context.Context, r mandatedRecord) (MandatedWorkflowRemoval, error) {
 	switch r.Kind {
 	case MandatedKindSkill:
-		return m.endSkillMandate(r.LocalID, r.CatalogID, r.PriorSkill)
+		restored, err := m.endSkillMandate(r.LocalID, r.CatalogID, r.PriorSkill)
+		return MandatedWorkflowRemoval{Restored: restored}, err
 	case MandatedKindWorkflow:
 		if m.Workflows == nil {
-			return false, fmt.Errorf("%w: cannot remove workflow %s", ErrMandatedConsumerUnwired, r.CatalogID)
+			return MandatedWorkflowRemoval{}, fmt.Errorf("%w: cannot remove workflow %s", ErrMandatedConsumerUnwired, r.CatalogID)
 		}
-		restored, err := m.Workflows.RemoveMandatedWorkflow(ctx, r.LocalID, r.CatalogID, r.PriorWorkflow, r.legacyWorkflowRestore())
+		out, err := m.Workflows.RemoveMandatedWorkflow(ctx, r.LocalID, r.CatalogID, r.PriorWorkflow, r.legacyWorkflowRestore())
 		if err != nil {
-			return false, fmt.Errorf("fleet/mandated: remove workflow %s: %w", r.CatalogID, err)
+			return MandatedWorkflowRemoval{}, fmt.Errorf("fleet/mandated: remove workflow %s: %w", r.CatalogID, err)
 		}
-		return restored, nil
+		return out, nil
 	default:
 		// Never installed (refused kinds are never recorded); nothing to do.
-		return false, nil
+		return MandatedWorkflowRemoval{}, nil
 	}
 }
 

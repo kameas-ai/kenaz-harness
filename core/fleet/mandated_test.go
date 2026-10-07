@@ -43,8 +43,8 @@ func (r *recordingMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, 
 	return "wf", nil, nil
 }
 
-func (r *recordingMandatedWorkflows) RemoveMandatedWorkflow(context.Context, string, string, json.RawMessage, bool) (bool, error) {
-	return false, nil
+func (r *recordingMandatedWorkflows) RemoveMandatedWorkflow(context.Context, string, string, json.RawMessage, bool) (MandatedWorkflowRemoval, error) {
+	return MandatedWorkflowRemoval{}, nil
 }
 
 func (r *recordingMandatedWorkflows) payloads() [][]byte {

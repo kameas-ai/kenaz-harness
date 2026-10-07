@@ -1927,6 +1927,10 @@ type FleetMandatedItemPayload struct {
 	// Restored is true when the removal handed the user's own earlier copy
 	// back instead of deleting (removal only).
 	Restored bool `json:"restored,omitempty"`
+	// RestoreRefused is the policy reason a snapshotted earlier copy was
+	// NOT restored (the save gate denied it); the mandated copy was deleted
+	// instead (removal only).
+	RestoreRefused string `json:"restore_refused,omitempty"`
 }
 
 // FleetSkillUninstalledPayload carries the audit signalling for

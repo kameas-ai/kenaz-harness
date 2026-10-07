@@ -10,8 +10,12 @@ package workflows
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
+
+	cedargo "github.com/cedar-policy/cedar-go"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 
 	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
@@ -187,5 +191,59 @@ func TestRevokedCatalogDocument_OnlyUserCatalogInstalls(t *testing.T) {
 	// Idempotent.
 	if removed, err := api.RemoveRevokedCatalogDocument(ctx, "user-cat", "c-rev"); err != nil || removed {
 		t.Fatalf("second removal: removed=%v err=%v", removed, err)
+	}
+}
+
+// strictShellGate denies a workflow save carrying a shell step while the
+// mode is strict — the shipped bundle's strict arm, reduced to its rule.
+type strictShellGate struct{}
+
+func (strictShellGate) Evaluate(_ context.Context, _ cedargo.EntityUID, action string, _ cedargo.EntityUID, attrs map[cedargo.String]cedargo.Value) cedar.Decision {
+	mode, _ := attrs[cedargo.String("mode")].(cedargo.String)
+	kinds, _ := attrs[cedargo.String("step_kinds")].(cedargo.String)
+	if action == cedar.ActionWorkflowSave && string(mode) == "strict" && strings.Contains(string(kinds), "shell") {
+		return cedar.Decision{Outcome: cedar.Deny, Action: action, Reason: "strict mode forbids shell steps"}
+	}
+	return cedar.Decision{Outcome: cedar.Allow, Action: action}
+}
+
+// Review F3 (skill-library-01SKLIB01): restoring the user's snapshotted copy
+// on mandate withdrawal goes through the Cedar save gate. A shell-step copy
+// snapshotted under permissive mode is REFUSED once strict mode is on: the
+// mandated copy is deleted (not left, not replaced by the ungated
+// snapshot), and the refusal is reported so the caller audits it.
+func TestRemoveMandatedDocument_RestoreRefusedByPolicyDeletes(t *testing.T) {
+	store := newWP07TestStore(t)
+	prov := corewf.NewFileProvenanceStore(t.TempDir())
+	var mu sync.Mutex
+	mode := "permissive"
+	api := New(Config{Engine: corewf.NewEngine(), Store: store, Provenance: prov, Cedar: strictShellGate{},
+		CedarModeFn: func() string { mu.Lock(); defer mu.Unlock(); return mode }})
+	ctx := context.Background()
+	user := []byte("id: sh-flow\nname: Mine\nversion: 1\nsteps:\n  - name: a\n    kind: shell\n    cmd: echo\n")
+	org := []byte("id: sh-flow\nname: ORG\nversion: 2\nsteps:\n  - name: b\n    kind: model_turn\n    user_prompt: hi\n")
+	if _, err := api.InstallDocument(ctx, user, DocumentOrigin{CatalogID: "cat-u", Slug: "sh-flow", Version: "1"}); err != nil {
+		t.Fatalf("permissive user install: %v", err)
+	}
+	_, prior, err := api.InstallMandatedDocument(ctx, org, "cat-m", "2")
+	if err != nil || len(prior) == 0 {
+		t.Fatalf("takeover: prior=%d err=%v", len(prior), err)
+	}
+	mu.Lock()
+	mode = "strict"
+	mu.Unlock()
+
+	out, err := api.RemoveMandatedDocument(ctx, "sh-flow", "cat-m", prior, false)
+	if err != nil {
+		t.Fatalf("withdrawal: %v", err)
+	}
+	if out.Restored || out.RestoreRefused == "" {
+		t.Fatalf("outcome = %+v, want restore refused with a reason", out)
+	}
+	if _, err := store.Load(ctx, "sh-flow"); !errors.Is(err, corewf.ErrWorkflowNotFound) {
+		t.Fatalf("after a refused restore the workflow must be gone (neither the mandate nor the ungated snapshot): %v", err)
+	}
+	if _, ok, _ := prov.Get("sh-flow"); ok {
+		t.Error("provenance survived the refused-restore delete")
 	}
 }

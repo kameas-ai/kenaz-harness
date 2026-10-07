@@ -12007,8 +12007,9 @@ func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, c
 	return m.wf.InstallMandatedDocument(ctx, payload, catalogID, version)
 }
 
-func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (bool, error) {
-	return m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID, prior, legacyRestore)
+func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (corefleet.MandatedWorkflowRemoval, error) {
+	out, err := m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID, prior, legacyRestore)
+	return corefleet.MandatedWorkflowRemoval{Restored: out.Restored, RestoreRefused: out.RestoreRefused}, err
 }
 
 // revocationWorkflowsAdapter adapts the workflows view to

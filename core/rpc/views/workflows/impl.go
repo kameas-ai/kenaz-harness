@@ -1105,30 +1105,39 @@ func (a *API) InstallMandatedDocument(ctx context.Context, payload []byte, catal
 // written by v0.91 has no snapshot, only legacyRestore=true: that path can
 // only relabel the current (mandated) content as a catalog install, which
 // is what it did then. Otherwise the workflow is deleted (schedule
-// disarmed first). restored reports whether the user's copy was handed back.
-func (a *API) RemoveMandatedDocument(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (bool, error) {
+// disarmed first). The result reports whether the user's copy was handed
+// back — or, when the policy save gate refuses the snapshot (a shell step
+// under strict mode, or a snapshot edited on disk), that the restore was
+// refused: the mandated copy is then DELETED, never left in place and
+// never silently dropped — the caller audits the refusal.
+func (a *API) RemoveMandatedDocument(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (MandatedRemoval, error) {
 	if a == nil || a.cfg.Disabled {
-		return false, ErrFeatureDisabled
+		return MandatedRemoval{}, ErrFeatureDisabled
 	}
 	if a.cfg.Provenance == nil {
-		return false, fmt.Errorf("workflows: remove mandated %q: no install provenance store wired", workflowID)
+		return MandatedRemoval{}, fmt.Errorf("workflows: remove mandated %q: no install provenance store wired", workflowID)
 	}
 	p, ok, err := a.cfg.Provenance.Get(workflowID)
 	if err != nil {
-		return false, err
+		return MandatedRemoval{}, err
 	}
 	if !ok || p.Source != corewf.ProvenanceMandated || p.CatalogID != catalogID {
-		return false, nil
+		return MandatedRemoval{}, nil
 	}
+	var out MandatedRemoval
 	if len(prior) > 0 {
-		if err := a.restorePriorWorkflow(ctx, workflowID, prior); err != nil {
-			return false, err
+		refused, err := a.restorePriorWorkflow(ctx, workflowID, prior)
+		if err != nil {
+			return MandatedRemoval{}, err
 		}
-		return true, nil
-	}
-	if legacyRestore {
+		if refused == "" {
+			return MandatedRemoval{Restored: true}, nil
+		}
+		slog.Warn("workflows.mandated.restore_refused_by_policy", "workflow_id", workflowID, "reason", refused)
+		out.RestoreRefused = refused // fall through: delete the mandated copy
+	} else if legacyRestore {
 		p.Source = corewf.ProvenanceCatalog
-		return true, a.cfg.Provenance.Put(p)
+		return MandatedRemoval{Restored: true}, a.cfg.Provenance.Put(p)
 	}
 	if a.scheduler != nil {
 		// Directly, not via ScheduleClear: that public path refuses a
@@ -1136,42 +1145,54 @@ func (a *API) RemoveMandatedDocument(ctx context.Context, workflowID, catalogID 
 		_ = a.scheduler.Unregister(ctx, workflowID) // no schedule is not an error here
 	}
 	if err := a.deleteWorkflow(ctx, workflowID); err != nil && !errors.Is(err, corewf.ErrWorkflowNotFound) {
-		return false, err
+		return MandatedRemoval{}, err
 	}
-	return false, nil
+	return out, nil
+}
+
+// MandatedRemoval is RemoveMandatedDocument's outcome.
+type MandatedRemoval struct {
+	Restored       bool
+	RestoreRefused string // the policy gate's reason, when it refused the restore
 }
 
 // restorePriorWorkflow writes the user's snapshotted copy back under id and
-// its original provenance. The schedule is left as it is: the mandate kept
-// the user's schedule state throughout.
-func (a *API) restorePriorWorkflow(ctx context.Context, id string, prior json.RawMessage) error {
+// its original provenance — through the same Cedar save gate any save takes
+// (review F3: a snapshot predating strict mode, or edited inside
+// mandated_applied.json, must not restore ungated). refused is the gate's
+// reason when it denies; nothing is written then. The schedule is left as
+// it is: the mandate kept the user's schedule state throughout.
+func (a *API) restorePriorWorkflow(ctx context.Context, id string, prior json.RawMessage) (refused string, err error) {
 	var snap mandatedPriorWorkflow
 	if err := json.Unmarshal(prior, &snap); err != nil {
-		return fmt.Errorf("workflows: restore %q: %w", id, err)
+		return "", fmt.Errorf("workflows: restore %q: %w", id, err)
 	}
 	w, err := decodeWorkflowDocument([]byte(snap.Document))
 	if err != nil {
-		return fmt.Errorf("workflows: restore %q: %w", id, err)
+		return "", fmt.Errorf("workflows: restore %q: %w", id, err)
 	}
 	if w.ID != id {
-		return fmt.Errorf("workflows: restore %q: snapshot holds %q", id, w.ID)
+		return "", fmt.Errorf("workflows: restore %q: snapshot holds %q", id, w.ID)
+	}
+	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cedarMode(), corewf.CollectStepKinds(w)); gerr != nil {
+		return gerr.Error(), nil
 	}
 	a.installMu.Lock()
 	defer a.installMu.Unlock()
 	saved, err := a.cfg.Store.Save(ctx, w)
 	if err != nil {
-		return fmt.Errorf("workflows: restore %q: %w", id, err)
+		return "", fmt.Errorf("workflows: restore %q: %w", id, err)
 	}
 	snap.Provenance.WorkflowID = id
 	if err := a.cfg.Provenance.Put(snap.Provenance); err != nil {
-		return fmt.Errorf("workflows: restore %q: record provenance: %w", id, err)
+		return "", fmt.Errorf("workflows: restore %q: record provenance: %w", id, err)
 	}
 	a.mu.Lock()
 	a.byID[saved.ID] = saved
 	a.source[saved.ID] = "user"
 	a.mu.Unlock()
 	corewf.EmitSaved(ctx, a.cfg.Audit, saved)
-	return nil
+	return "", nil
 }
 
 // CatalogInstall is one workflow the USER installed from the fleet catalog
