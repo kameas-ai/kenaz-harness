@@ -33,14 +33,14 @@ import (
 // delivered (a later delivered run carried it in history).
 //
 // Columns (all additive, all defaulted, so every pre-0344 row — and any
-// run still in flight — reads as outcome '' = "unknown", which the
+// run still in flight — reads as an empty outcome = "unknown", which the
 // surface renders as nothing at all, never as NOT DELIVERED):
 //
-//   - outcome          '' | 'completed' | 'failed' | 'stopped'
+//   - outcome          empty | 'completed' | 'failed' | 'stopped'
 //   - delivered        NULL (unknown) | 0 | 1 — whether the model
 //     accepted the request (any streamed output, or a completion)
 //   - failure_class    llm.FailureClass ('user_actionable' | 'transient' |
-//     'unknown'); '' unless outcome='failed'
+//     'unknown'); empty unless outcome='failed'
 //   - failure_code     llm.FailureCode* (payment_required, rate_limited…)
 //   - failure_status   provider HTTP status, 0 when none
 //   - failure_provider adapter kind ("openrouter")

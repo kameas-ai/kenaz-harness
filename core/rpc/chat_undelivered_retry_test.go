@@ -266,4 +266,3 @@ func countUserRows(t *testing.T, mgr *session.Manager, sid string) int {
 	}
 	return n
 }
-
