@@ -162,10 +162,14 @@ func (h *HandoffHandler) ShareSession(ctx context.Context, sessionID, recipientU
 	}
 
 	// Fetch recipient's public key from the identity service.
-	recipientPubKey, err := h.fetchRecipientPublicKey(ctx, recipientUserID)
+	recipientKeys, err := h.fetchRecipientKeys(ctx, recipientUserID)
 	if err != nil {
 		return fmt.Errorf("fleet: share session: %w", err)
 	}
+	// Interim (WP03): v1 direct mode addresses the newest key only; fleet
+	// accepts it only for single-key recipients. WP04 replaces this with
+	// the v2 wrap-to-all send.
+	recipientPubKey := recipientKeys[0].PublicKey
 
 	// Derive a ephemeral per-handoff key via ECDH + HKDF.
 	handoffKey, ephemeralPubKeyBytes, err := deriveHandoffKey(recipientPubKey)
@@ -325,14 +329,69 @@ func (h *HandoffHandler) AcceptShare(ctx context.Context, inboxItemID string) ([
 
 // ── key exchange helpers ──────────────────────────────────────────────────────
 
-// publicKeyResponse is the JSON shape returned by the identity service.
-type publicKeyResponse struct {
-	UserID    string `json:"user_id"`
-	PublicKey []byte `json:"public_key"` // X25519 public key bytes
+// publicKeyEntry is one active handoff device key of a user (fleet
+// contract §10.2 public_keys[]). PublicKey is base64 std on the wire
+// (fleet encodes []byte), decoded by encoding/json.
+type publicKeyEntry struct {
+	KeyID       string    `json:"key_id"`
+	NodeID      string    `json:"node_id"`
+	PublicKey   []byte    `json:"public_key"`
+	Fingerprint string    `json:"fingerprint"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
-// fetchRecipientPublicKey retrieves the recipient's X25519 public key from fleet.
-func (h *HandoffHandler) fetchRecipientPublicKey(ctx context.Context, recipientUserID string) ([]byte, error) {
+// publicKeyResponse is GET /api/v1/identity/public-key: the newest active
+// key at top level (v1 back-compat) plus public_keys[] — EVERY active
+// device key, which a v2 sender must wrap to.
+type publicKeyResponse struct {
+	UserID      string           `json:"user_id"`
+	PublicKey   []byte           `json:"public_key"`
+	Fingerprint string           `json:"fingerprint"`
+	PublicKeys  []publicKeyEntry `json:"public_keys"`
+}
+
+// RecipientDevice is one receiving device of a teammate, for the share
+// dialog's trust display (fleet is a trusted key directory: show
+// fingerprints). No key bytes leave core/fleet.
+type RecipientDevice struct {
+	KeyID       string
+	Fingerprint string
+	CreatedAt   time.Time
+}
+
+// ErrHandoffRecipientKeyInvalid means fleet returned a key entry that is
+// not a usable 32-byte X25519 key or whose fingerprint does not match its
+// bytes — refused rather than encrypted to.
+var ErrHandoffRecipientKeyInvalid = errors.New("fleet: handoff recipient key invalid")
+
+// validateKeySet checks every entry: 32-byte X25519 point, non-empty
+// key_id, and fingerprint == sha256:<hex> of the key (fleet computes it the
+// same way — a mismatch means a corrupted directory answer).
+func validateKeySet(keys []publicKeyEntry) error {
+	seen := map[string]bool{}
+	for _, k := range keys {
+		if k.KeyID == "" || seen[k.KeyID] {
+			return fmt.Errorf("%w: missing or duplicate key_id", ErrHandoffRecipientKeyInvalid)
+		}
+		seen[k.KeyID] = true
+		if _, err := ecdh.X25519().NewPublicKey(k.PublicKey); err != nil {
+			return fmt.Errorf("%w: %v", ErrHandoffRecipientKeyInvalid, err)
+		}
+		if k.Fingerprint != "" && k.Fingerprint != KeyFingerprint(k.PublicKey) {
+			return fmt.Errorf("%w: fingerprint mismatch", ErrHandoffRecipientKeyInvalid)
+		}
+	}
+	return nil
+}
+
+// fetchRecipientKeys retrieves the recipient's FULL active handoff key set
+// (device-keys-handoff-01DEVKH01 FR-3). The uniform JSON 404
+// public_key_not_found (missing / other-org / suspended / keyless user)
+// stays ErrHandoffRecipientNotFound; a plain mux 404 latches the route as
+// unsupported. When public_keys is absent (pre-#182 fleet) the top-level
+// key is returned with an empty KeyID — usable by nothing in v2, so the
+// caller reports it as not receivable.
+func (h *HandoffHandler) fetchRecipientKeys(ctx context.Context, recipientUserID string) ([]publicKeyEntry, error) {
 	if err := h.client.endpointUnsupported(FeatureIdentityPublicKey); err != nil {
 		return nil, err
 	}
@@ -358,10 +417,36 @@ func (h *HandoffHandler) fetchRecipientPublicKey(ctx context.Context, recipientU
 	if err := json.Unmarshal(body, &pkResp); err != nil {
 		return nil, fmt.Errorf("fleet: fetch public key: parse: %w", err)
 	}
-	if len(pkResp.PublicKey) == 0 {
+	keys := pkResp.PublicKeys
+	if keys == nil && len(pkResp.PublicKey) > 0 {
+		keys = []publicKeyEntry{{PublicKey: pkResp.PublicKey, Fingerprint: pkResp.Fingerprint}}
+	}
+	if len(keys) == 0 {
 		return nil, ErrHandoffRecipientNotFound
 	}
-	return pkResp.PublicKey, nil
+	return keys, nil
+}
+
+// RecipientDevices lists the teammate's receiving devices (key ids +
+// fingerprints) for the share dialog. ErrHandoffRecipientNotFound when the
+// teammate has no active key.
+func (h *HandoffHandler) RecipientDevices(ctx context.Context, recipientUserID string) ([]RecipientDevice, error) {
+	if h.client == nil || h.client.isNop {
+		return nil, ErrFleetDisabled
+	}
+	keys, err := h.fetchRecipientKeys(ctx, recipientUserID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RecipientDevice, 0, len(keys))
+	for _, k := range keys {
+		fp := k.Fingerprint
+		if fp == "" {
+			fp = KeyFingerprint(k.PublicKey)
+		}
+		out = append(out, RecipientDevice{KeyID: k.KeyID, Fingerprint: fp, CreatedAt: k.CreatedAt})
+	}
+	return out, nil
 }
 
 // deriveHandoffKey generates an ephemeral X25519 key pair, performs ECDH with
