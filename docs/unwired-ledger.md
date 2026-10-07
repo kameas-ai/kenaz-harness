@@ -368,6 +368,30 @@ prose and in a TS union; they do not call `MoveKinds()`.
    compliance-type workflows. **Owner:** skill-library mission, with the
    read-only UI treatment.
 
+### 2026-10-06 (newly-live fleet routes verification, pre-v0.91.0) · four latent gaps, all verified non-firing today
+
+Fleet deployed audit/append, identity/public-key, handoff/*, context
+streams and team/members (#180-#183); the harness's 404-latches stop
+firing. A six-family verification (no crash/corrupt/loop anywhere)
+left these latents:
+
+1. **Handoff_Share hardcodes nil events** (contextsync/impl.go:186) —
+   once ANY recipient registers a device key, every share 422s
+   handoff_empty; today unreachable (empty roster: can_receive=false
+   for all, no keys registered). **MUST fix before key registration
+   ships** — wire real session-event loading. **Owner:** device-keys
+   /handoff v2 mission.
+2. **EventStream backfill has no 1000-event/2MiB-per-event client caps
+   and sends no client_event_id** (context_sync.go:314-332, 250-268) —
+   latent, no live backfill caller (both Toggles pass nil). **Owner:**
+   context-streams mission.
+3. **Server-seq cursor discipline**: when SessionSync_ResumeFrom gains
+   a real applier, persist fleet's next_seq — never the local message
+   count (the hook posts wire seq=1 per event; server assigns arrival
+   order). **Owner:** context-streams mission.
+4. Cosmetic: handoff 409 recipient_keys_stale / recipient_no_key / 422
+   map to raw "status NNN" in the share dialog. **Owner:** v2 mission.
+
 ### 2026-10-05 (engine-ports review residuals, fix/engine-ports) · two accepted lane-scan edges
 
 1. A slow OUR engine with NO engine.port record (failed write or garbage
