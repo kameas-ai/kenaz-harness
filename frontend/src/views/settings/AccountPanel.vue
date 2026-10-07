@@ -63,6 +63,11 @@ const tierLabel = computed(() => identity.value?.tier ?? '');
 const rolesLabel = computed(() => formatRoles(identity.value?.roles));
 /** Primary name line: display name, else nothing (email has its own row). */
 const nameLabel = computed(() => identity.value?.displayName?.trim() ?? '');
+/** This device's registered handoff-key fingerprint (sha256:<hex>). */
+const handoffFingerprint = computed(() => {
+  const dk = fleet.session.value?.deviceKeys;
+  return dk?.status === 'registered' ? dk.handoffFingerprint ?? '' : '';
+});
 
 /** Not-provisioned, from the session (mount) or from the last action. */
 const signupRequired = computed(
@@ -376,6 +381,17 @@ async function refreshIdentity() {
         <span class="identity-label">Role</span>
         <span class="identity-value" data-testid="identity-roles">{{ rolesLabel }}</span>
       </div>
+      <!-- device-keys-handoff-01DEVKH01 review fix #4: this device's own
+           handoff-key fingerprint, so a teammate can compare it out of band
+           with what their share dialog lists for you. -->
+      <div v-if="handoffFingerprint" class="identity-row">
+        <span class="identity-label" title="Teammates' share dialogs list this fingerprint for this device">
+          Device key
+        </span>
+        <span class="identity-value fingerprint" data-testid="identity-device-fingerprint">
+          {{ handoffFingerprint }}
+        </span>
+      </div>
     </div>
 
     <div class="panel-actions">
@@ -587,5 +603,10 @@ async function refreshIdentity() {
   margin-top: 0.35rem;
   color: var(--accent);
   text-decoration: underline;
+}
+.fingerprint {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  word-break: break-all;
 }
 </style>
