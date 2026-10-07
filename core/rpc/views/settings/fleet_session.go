@@ -261,7 +261,7 @@ func (a *API) fleetSessionSnapshot() FleetSessionView {
 	switch {
 	case tr.signingIn:
 		v.State = FleetSessionSigningIn
-	case tr.nodeRemoved:
+	case tr.nodeRemoved || fleet.NodeRemovedMarked(dataDir):
 		v.State = FleetSessionSignedOut
 		v.Reason = FleetReasonNodeRemoved
 		v.Message = fleetNodeRemovedCopy

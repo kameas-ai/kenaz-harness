@@ -213,3 +213,54 @@ func TestFleetSignOut_NoNode_NoUnenroll(t *testing.T) {
 		t.Fatal("sign-out minted a node id")
 	}
 }
+
+// Review fix #5: the node_removed state is DURABLE. A restart (fresh API
+// over the same data dir, external tokens still answering — the served
+// supervisor's situation) refuses enroll without any request and shows
+// node_removed, until an explicit sign-in clears the marker.
+func TestNodeRemoved_SurvivesRestart_UntilSignIn(t *testing.T) {
+	r, f := newRemovalRig(t)
+	ctx := context.Background()
+	if _, err := r.api.FleetRefreshIdentity(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.remove(fleet.ReadNodeID(r.dataDir))
+	if _, err := r.api.FleetRefreshIdentity(ctx); !errors.Is(err, fleet.ErrNodeRemoved) {
+		t.Fatalf("err = %v", err)
+	}
+	if !fleet.NodeRemovedMarked(r.dataDir) {
+		t.Fatal("node_removed marker not persisted")
+	}
+
+	// "Restart": a brand-new API over the same data dir.
+	api2 := &API{}
+	api2.SetFleetClient(fleet.NewClientForTestingWithDataDir(f.srv.URL, r.dataDir), r.dataDir)
+	t.Cleanup(api2.StopFleetBackground)
+	n := len(f.enrolls())
+	if _, err := api2.FleetRefreshIdentity(ctx); !errors.Is(err, fleet.ErrNodeRemoved) {
+		t.Fatalf("enroll after restart: %v (the supervisor path calls this)", err)
+	}
+	if got := len(f.enrolls()); got != n {
+		t.Fatalf("enroll requests after restart: %d -> %d, want none", n, got)
+	}
+	if fleet.ReadNodeID(r.dataDir) != "" {
+		t.Fatal("refused enroll must not mint a node id")
+	}
+	if v := snap(t, api2); v.State != FleetSessionSignedOut || v.Reason != FleetReasonNodeRemoved {
+		t.Fatalf("snapshot after restart = %s/%s", v.State, v.Reason)
+	}
+
+	// Explicit sign-in clears it and enrolls under a fresh node id.
+	api2.fleet.signInFlow = func(context.Context, fleet.EnvProfile) (fleet.TokenSet, error) {
+		return fleet.TokenSet{AccessToken: jwtFor("sub-alice", "zitadel-org-1")}, nil
+	}
+	if _, err := api2.FleetSignIn(ctx); err != nil {
+		t.Fatalf("sign-in: %v", err)
+	}
+	if fleet.NodeRemovedMarked(r.dataDir) {
+		t.Fatal("sign-in must clear the marker")
+	}
+	if v := snap(t, api2); v.State != FleetSessionSignedIn {
+		t.Fatalf("after sign-in: %s/%s", v.State, v.Reason)
+	}
+}

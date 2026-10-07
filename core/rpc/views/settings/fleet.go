@@ -1013,8 +1013,12 @@ func (a *API) runSignIn(ctx context.Context) (FleetIdentity, error) {
 	// after an admin removal; node_id.txt was cleared, so this enroll
 	// mints a fresh node id.
 	a.fleet.sess.nodeRemoved = false
+	dataDirForMarker := a.fleet.dataDir
 	a.startFleetBackgroundLocked()
 	a.fleet.mu.Unlock()
+	if err := fleet.ClearNodeRemoved(dataDirForMarker); err != nil {
+		logging.L().Warn("fleet.rpc.sign_in.clear_node_removed_failed", "err", err.Error())
+	}
 	id, err := a.fleetEnroll(ctx)
 	if err != nil {
 		logging.L().Error("fleet.rpc.sign_in.enroll_failed", "err", err.Error())
@@ -1216,6 +1220,12 @@ func (a *API) selfUnenroll(ctx context.Context) {
 // from wire_id_salt which is NOT touched), and leave a signed-out snapshot
 // whose reason is node_removed. No self-unenroll: the node is already gone.
 func (a *API) handleNodeRemoved() {
+	// Durable marker FIRST: whatever fails below (keychain delete, file
+	// removal) or however the process restarts, enroll stays refused until
+	// an explicit sign-in (review fix #5).
+	if err := fleet.MarkNodeRemoved(a.fleetDataDir()); err != nil {
+		logging.L().Warn("fleet.node_removed.mark_failed", "err", err.Error())
+	}
 	a.StopFleetBackground()
 	if err := fleet.ClearTokens(); err != nil {
 		logging.L().Warn("fleet.node_removed.clear_tokens_partial", "err", err.Error())
@@ -1302,7 +1312,7 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	}
 	if a.fleet != nil {
 		a.fleet.mu.RLock()
-		removed := a.fleet.sess.nodeRemoved
+		removed := a.fleet.sess.nodeRemoved || fleet.NodeRemovedMarked(a.fleet.dataDir)
 		a.fleet.mu.RUnlock()
 		if removed {
 			// Stop enrolling after node_removed until an explicit sign-in

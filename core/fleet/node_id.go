@@ -106,3 +106,47 @@ func ReadNodeID(dataDir string) string {
 	}
 	return strings.TrimSpace(string(data))
 }
+
+// nodeRemovedMarkerPath is the durable "an org admin removed this device"
+// marker (device-keys-handoff-01DEVKH01 review fix #5).
+func nodeRemovedMarkerPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "node_removed")
+}
+
+// MarkNodeRemoved persists the node_removed terminal state so that a
+// restart, a served-mode supervisor tick or a partially-failed ClearTokens
+// cannot re-enroll (under a freshly minted node id) without an explicit
+// sign-in. Cleared only by ClearNodeRemoved from the sign-in flow.
+func MarkNodeRemoved(dataDir string) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		return fmt.Errorf("fleet: mark node removed: %w", err)
+	}
+	stamp := time.Now().UTC().Format(time.RFC3339) + "\n"
+	if err := os.WriteFile(nodeRemovedMarkerPath(dataDir), []byte(stamp), 0o600); err != nil {
+		return fmt.Errorf("fleet: mark node removed: %w", err)
+	}
+	return nil
+}
+
+// NodeRemovedMarked reports whether the node_removed marker is present.
+func NodeRemovedMarked(dataDir string) bool {
+	if dataDir == "" {
+		return false
+	}
+	_, err := os.Stat(nodeRemovedMarkerPath(dataDir))
+	return err == nil
+}
+
+// ClearNodeRemoved removes the marker (explicit sign-in only).
+func ClearNodeRemoved(dataDir string) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.Remove(nodeRemovedMarkerPath(dataDir)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("fleet: clear node removed: %w", err)
+	}
+	return nil
+}
