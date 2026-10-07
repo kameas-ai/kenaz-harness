@@ -226,11 +226,6 @@ func (h *HandoffHandler) AcceptShare(ctx context.Context, inboxItemID string) (A
 		"mode", payload.Mode,
 		"events", len(records),
 	)
-	h.emitAudit(ctx, contextaudit.KindFleetSessionSharedInbound, contextaudit.FleetSessionHandoffPayload{
-		SessionID:       payload.SessionID,
-		RecipientUserID: payload.SenderUserID,
-		InboxItemID:     inboxItemID,
-	})
 	return AcceptedHandoff{
 		InboxItemID:  inboxItemID,
 		SessionID:    payload.SessionID,
@@ -269,4 +264,24 @@ func (h *HandoffHandler) DeleteShare(ctx context.Context, inboxItemID string) er
 		return nil
 	}
 	return mapHandoffHTTPError(resp.StatusCode, resp.Header, body)
+}
+
+// RecordAccepted emits the inbound-share audit event. Called by the RPC
+// layer AFTER the share was persisted as a local session (review fix #10:
+// it used to fire at decrypt time, with the sender in RecipientUserID).
+// RecipientUserID is this user, from the cached enroll identity.
+func (h *HandoffHandler) RecordAccepted(ctx context.Context, inboxItemID, sessionID, senderUserID, localSessionID string) {
+	me := ""
+	if h.client != nil && h.client.dataDir != "" {
+		if id, err := LoadIdentity(h.client.dataDir); err == nil {
+			me = id.UserID
+		}
+	}
+	h.emitAudit(ctx, contextaudit.KindFleetSessionSharedInbound, contextaudit.FleetSessionHandoffPayload{
+		SessionID:       sessionID,
+		RecipientUserID: me,
+		SenderUserID:    senderUserID,
+		InboxItemID:     inboxItemID,
+		LocalSessionID:  localSessionID,
+	})
 }

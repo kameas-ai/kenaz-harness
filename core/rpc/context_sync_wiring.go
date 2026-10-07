@@ -254,6 +254,10 @@ func (a *handoffBackendAdapter) DeleteShare(ctx context.Context, inboxItemID str
 	return a.hh.DeleteShare(ctx, inboxItemID)
 }
 
+func (a *handoffBackendAdapter) RecordAccepted(ctx context.Context, rec contextsyncview.AcceptedShareRecord, localSessionID string) {
+	a.hh.RecordAccepted(ctx, rec.InboxItemID, rec.SessionID, rec.SenderUserID, localSessionID)
+}
+
 // ── recoveryBackendAdapter ────────────────────────────────────────────────────
 
 // recoveryBackendAdapter implements contextsyncview.RecoveryBackend by

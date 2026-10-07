@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 )
 
 // recipientDevice is a HandoffHandler for one of the recipient's devices:
@@ -184,5 +186,39 @@ func TestHandoffInbox_UndecryptableFlag(t *testing.T) {
 	items, err := recipientDevice(t, f, fxNodeB).Inbox(context.Background())
 	if err != nil || len(items) != 1 || !items[0].Undecryptable {
 		t.Fatalf("inbox = %+v, %v", items, err)
+	}
+}
+
+// Review fix #10: decrypting emits NO inbound audit; RecordAccepted (called
+// after the persist) emits it with the sender in SenderUserID and this
+// user in RecipientUserID.
+func TestHandoffInboundAudit_AfterPersist_CorrectFields(t *testing.T) {
+	f, sender, _ := sendRig(t)
+	f.setKeys(fxRecipientUser, fxKeySet(t))
+	res, err := sender.ShareSession(context.Background(), "sess_aud", fxRecipientUser, plainEvents(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := recipientDevice(t, f, fxNodeA)
+	if err := SaveIdentity(dev.client.dataDir, Identity{UserID: fxRecipientUser}); err != nil {
+		t.Fatal(err)
+	}
+	em := dev.emitter.(*fakeEmitter)
+	got, err := dev.AcceptShare(context.Background(), res.InboxItemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(em.snapshot()); n != 0 {
+		t.Fatalf("AcceptShare emitted %d audit events; inbound audit belongs after persist", n)
+	}
+	dev.RecordAccepted(context.Background(), got.InboxItemID, got.SessionID, got.SenderUserID, "local-1")
+	evs := em.snapshot()
+	if len(evs) != 1 || evs[0].Kind != contextaudit.KindFleetSessionSharedInbound {
+		t.Fatalf("audit = %+v", evs)
+	}
+	var p contextaudit.FleetSessionHandoffPayload
+	_ = json.Unmarshal(evs[0].Payload, &p)
+	if p.SenderUserID != fakeSender || p.RecipientUserID != fxRecipientUser || p.InboxItemID != res.InboxItemID || p.LocalSessionID != "local-1" {
+		t.Fatalf("payload = %+v", p)
 	}
 }

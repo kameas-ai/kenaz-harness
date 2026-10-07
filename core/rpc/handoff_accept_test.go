@@ -148,3 +148,53 @@ func TestHandoffAccept_BadPayload_LeavesNoSession(t *testing.T) {
 		t.Fatalf("fallback title = %q", title)
 	}
 }
+
+// Review fix #7(a): a crash at either window inside Persist — after the
+// provenance record, before or after the transcript replay — must never
+// produce a SECOND session for the same inbox item: the retry replaces the
+// interrupted import.
+func TestHandoffAccept_CrashMidImport_NoDuplicateSession(t *testing.T) {
+	for _, stage := range []string{"before_replay", "after_replay"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx := context.Background()
+			mgr, closeDB := openHandoffSnapshot(t, t.TempDir())
+			defer closeDB()
+			dataDir := t.TempDir()
+			rec := shareRecordFor(t, mgr, "seed-session-1", "inbox-crash")
+			before, _ := mgr.List(ctx)
+
+			persistStageHook = func(s string) {
+				if s == stage {
+					panic("simulated crash at " + s)
+				}
+			}
+			func() {
+				defer func() { _ = recover() }()
+				_, _ = newHandoffAcceptStore(mgr, dataDir).Persist(ctx, rec)
+			}()
+			persistStageHook = nil
+			t.Cleanup(func() { persistStageHook = nil })
+
+			// "Restart": a fresh store over the same ledger file + database.
+			store := newHandoffAcceptStore(mgr, dataDir)
+			if _, ok := store.Lookup(ctx, "inbox-crash"); ok {
+				t.Fatal("an interrupted import must not look accepted")
+			}
+			v, err := store.Persist(ctx, rec)
+			if err != nil || v.AlreadyAccepted {
+				t.Fatalf("retry = %+v, %v", v, err)
+			}
+			after, _ := mgr.List(ctx)
+			if len(after) != len(before)+1 {
+				t.Fatalf("sessions %d -> %d after crash + retry, want exactly one new", len(before), len(after))
+			}
+			rows, _ := mgr.ListMessages(ctx, v.LocalSessionID)
+			if len(rows) != len(rec.Events) {
+				t.Fatalf("retried import rows = %d, want %d", len(rows), len(rec.Events))
+			}
+			if again, err := store.Persist(ctx, rec); err != nil || !again.AlreadyAccepted || again.LocalSessionID != v.LocalSessionID {
+				t.Fatalf("third persist = %+v, %v", again, err)
+			}
+		})
+	}
+}

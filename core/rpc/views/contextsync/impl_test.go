@@ -160,11 +160,14 @@ func (s *stubProjectBackend) IsSyncEnabled(projectID string) bool {
 }
 
 type stubHandoffBackend struct {
-	err     error
-	shared  []string // sessionID sent via ShareSession
-	events  [][]contextsync.SessionEventRecord
-	accepts int
-	deleted []string
+	err         error
+	shared      []string // sessionID sent via ShareSession
+	events      [][]contextsync.SessionEventRecord
+	accepts     int
+	deleted     []string
+	deleteErr   error
+	deleteCalls int
+	audited     []string
 }
 
 func (s *stubHandoffBackend) RecipientDevices(_ context.Context, _ string) ([]contextsync.RecipientDeviceView, error) {
@@ -222,8 +225,16 @@ func (s *stubHandoffBackend) AcceptShare(_ context.Context, id string) (contexts
 }
 
 func (s *stubHandoffBackend) DeleteShare(_ context.Context, id string) error {
+	s.deleteCalls++
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	s.deleted = append(s.deleted, id)
 	return nil
+}
+
+func (s *stubHandoffBackend) RecordAccepted(_ context.Context, rec contextsync.AcceptedShareRecord, local string) {
+	s.audited = append(s.audited, rec.InboxItemID+"->"+local)
 }
 
 // stubAcceptStore records persists; Lookup answers from what it stored.
@@ -232,8 +243,19 @@ func (s *stubHandoffBackend) DeleteShare(_ context.Context, id string) error {
 // round trip is driven over the v0.91.0 snapshot in
 // core/rpc/handoff_accept_test.go.
 type stubAcceptStore struct {
-	stored map[string]contextsync.AcceptedSessionView
-	err    error
+	stored    map[string]contextsync.AcceptedSessionView
+	err       error
+	fleetGone map[string]bool
+}
+
+func (a *stubAcceptStore) FleetCopyDeleted(_ context.Context, id string) bool { return a.fleetGone[id] }
+
+func (a *stubAcceptStore) MarkFleetCopyDeleted(_ context.Context, id string) error {
+	if a.fleetGone == nil {
+		a.fleetGone = map[string]bool{}
+	}
+	a.fleetGone[id] = true
+	return nil
 }
 
 func (a *stubAcceptStore) Lookup(_ context.Context, id string) (contextsync.AcceptedSessionView, bool) {
@@ -420,6 +442,40 @@ func TestImpl_Handoff_Accept(t *testing.T) {
 	if hb.accepts != 1 || len(hb.deleted) != 1 {
 		t.Fatalf("re-accept must not fetch or delete: accepts=%d deletes=%v", hb.accepts, hb.deleted)
 	}
+	// Review fix #10: audited once, after the persist, never on re-open.
+	if len(hb.audited) != 1 || hb.audited[0] != "item-1->local-item-1" {
+		t.Fatalf("audit = %v", hb.audited)
+	}
+}
+
+// Review fix #7(b): a failed post-accept DELETE is retried on the next
+// re-open (AlreadyAccepted), and only until it succeeds.
+func TestImpl_Handoff_Accept_RetriesFailedDelete(t *testing.T) {
+	hb := &stubHandoffBackend{deleteErr: errors.New("fleet down")}
+	store := &stubAcceptStore{}
+	im := &contextsync.Impl{Handoff: hb, Accepted: store}
+	if _, err := im.Handoff_Accept(context.Background(), "item-2"); err != nil {
+		t.Fatalf("a failed DELETE must not fail the accept: %v", err)
+	}
+	if store.fleetGone["item-2"] {
+		t.Fatal("must not mark the fleet copy deleted when DELETE failed")
+	}
+	hb.deleteErr = nil
+	again, err := im.Handoff_Accept(context.Background(), "item-2")
+	if err != nil || !again.AlreadyAccepted {
+		t.Fatalf("re-open = %+v, %v", again, err)
+	}
+	if len(hb.deleted) != 1 || !store.fleetGone["item-2"] {
+		t.Fatalf("re-open must retry the DELETE: deleted=%v", hb.deleted)
+	}
+	calls := hb.deleteCalls
+	_, _ = im.Handoff_Accept(context.Background(), "item-2")
+	if hb.deleteCalls != calls {
+		t.Fatal("no DELETE once the fleet copy is gone")
+	}
+	if hb.accepts != 1 {
+		t.Fatalf("re-opens must not re-fetch: %d", hb.accepts)
+	}
 }
 
 func TestImpl_Handoff_Accept_PersistFailure_KeepsFleetCopy(t *testing.T) {
@@ -428,8 +484,8 @@ func TestImpl_Handoff_Accept_PersistFailure_KeepsFleetCopy(t *testing.T) {
 	if _, err := im.Handoff_Accept(context.Background(), "item-9"); err == nil {
 		t.Fatal("persist failure must surface")
 	}
-	if len(hb.deleted) != 0 {
-		t.Fatal("never delete the fleet copy when the local copy was not saved")
+	if len(hb.deleted) != 0 || len(hb.audited) != 0 {
+		t.Fatal("never delete the fleet copy (or audit an inbound share) when the local copy was not saved")
 	}
 	im = &contextsync.Impl{Handoff: hb}
 	if _, err := im.Handoff_Accept(context.Background(), "item-9"); !errors.Is(err, contextsync.ErrHandoffAcceptUnavailable) {

@@ -179,6 +179,8 @@ type HandoffBackend interface {
 	AcceptShare(ctx context.Context, inboxItemID string) (AcceptedShareRecord, error)
 	// DeleteShare removes an item from the inbox (idempotent).
 	DeleteShare(ctx context.Context, inboxItemID string) error
+	// RecordAccepted audits an inbound share AFTER it was persisted locally.
+	RecordAccepted(ctx context.Context, rec AcceptedShareRecord, localSessionID string)
 }
 
 // AcceptedShareRecord is a decrypted inbox item. Privacy: Events are
@@ -198,8 +200,15 @@ type AcceptedSessionStore interface {
 	// created, if that session still exists.
 	Lookup(ctx context.Context, inboxItemID string) (AcceptedSessionView, bool)
 	// Persist writes rec as a new local session (or returns the existing
-	// one when it was accepted concurrently).
+	// one when it was accepted concurrently). Idempotent on the inbox item
+	// id: the provenance record is written BEFORE the transcript, so a
+	// crash mid-import can never yield a second session.
 	Persist(ctx context.Context, rec AcceptedShareRecord) (AcceptedSessionView, error)
+	// FleetCopyDeleted reports whether the post-accept fleet DELETE for
+	// inboxItemID has succeeded.
+	FleetCopyDeleted(ctx context.Context, inboxItemID string) bool
+	// MarkFleetCopyDeleted records that the fleet copy is gone.
+	MarkFleetCopyDeleted(ctx context.Context, inboxItemID string) error
 }
 
 // SessionEventLoader loads a LOCAL session as self-contained handoff

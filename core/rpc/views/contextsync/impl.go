@@ -257,11 +257,13 @@ func (im *Impl) Handoff_Inbox(ctx context.Context) ([]InboxItemView, error) {
 var ErrHandoffAcceptUnavailable = errors.New("contextsync: accepted-session store not wired — cannot accept")
 
 // Handoff_Accept decrypts the inbox item with this device's key, persists
-// it as a NEW local session with provenance (sender, inbox item id), then
-// deletes the fleet copy (OQ-1: recipient-only, idempotent). A second
-// accept of the same item returns the existing local session without any
-// network call (OQ-2). No content crosses the RPC boundary. Backend errors
-// are returned unwrapped: their text is the human copy the inbox shows.
+// it as a NEW local session with provenance (sender, inbox item id), audits
+// the inbound share, then deletes the fleet copy (OQ-1, owner-ruled: one
+// accept per user — the item leaves the user's other devices too). A
+// second accept of the same item returns the existing local session with
+// no fetch; if the earlier fleet DELETE had failed, it is retried then.
+// No content crosses the RPC boundary. Backend errors are returned
+// unwrapped: their text is the human copy the inbox shows.
 func (im *Impl) Handoff_Accept(ctx context.Context, inboxItemID string) (AcceptedSessionView, error) {
 	if im.Handoff == nil {
 		return AcceptedSessionView{}, ErrContextSyncUnavailable
@@ -270,6 +272,7 @@ func (im *Impl) Handoff_Accept(ctx context.Context, inboxItemID string) (Accepte
 		return AcceptedSessionView{}, ErrHandoffAcceptUnavailable
 	}
 	if prev, ok := im.Accepted.Lookup(ctx, inboxItemID); ok {
+		im.deleteFleetCopy(ctx, inboxItemID)
 		prev.AlreadyAccepted = true
 		return prev, nil
 	}
@@ -281,13 +284,28 @@ func (im *Impl) Handoff_Accept(ctx context.Context, inboxItemID string) (Accepte
 	if err != nil {
 		return AcceptedSessionView{}, fmt.Errorf("contextsync: save shared session: %w", err)
 	}
-	// Persisted locally: remove the fleet copy. Best-effort — the local
-	// copy is authoritative now, the item expires in 7 days regardless,
-	// and a re-accept is a local no-op.
+	if !view.AlreadyAccepted {
+		im.Handoff.RecordAccepted(ctx, rec, view.LocalSessionID)
+	}
+	im.deleteFleetCopy(ctx, inboxItemID)
+	return view, nil
+}
+
+// deleteFleetCopy removes the fleet copy of an accepted (persisted) item
+// unless that already succeeded. Best-effort: the local copy is
+// authoritative, the item expires in 7 days regardless, and the next
+// re-open retries a failed delete.
+func (im *Impl) deleteFleetCopy(ctx context.Context, inboxItemID string) {
+	if im.Accepted.FleetCopyDeleted(ctx, inboxItemID) {
+		return
+	}
 	if err := im.Handoff.DeleteShare(ctx, inboxItemID); err != nil {
 		logging.L().Warn("contextsync.handoff.delete_after_accept_failed", "err", err.Error())
+		return
 	}
-	return view, nil
+	if err := im.Accepted.MarkFleetCopyDeleted(ctx, inboxItemID); err != nil {
+		logging.L().Warn("contextsync.handoff.mark_deleted_failed", "err", err.Error())
+	}
 }
 
 // Handoff_Delete dismisses an inbox item without accepting it.
