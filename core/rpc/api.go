@@ -4185,6 +4185,18 @@ func New(c *core.Core, opts ...Option) *API {
 			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps).
 				WithAuditEmitter(&contextSyncAuditBridge{impl: a.auditImpl})
 			impl.WithSyncer(ctxSyncer)
+			// Review F3: hide pulled copies of the user's own entries.
+			selfDataDir := flDataDir
+			impl.WithSelfUserID(func() string {
+				if selfDataDir == "" {
+					return ""
+				}
+				id, err := corefleet.LoadIdentity(selfDataDir)
+				if err != nil {
+					return ""
+				}
+				return id.UserID
+			})
 
 			// FR-012: wire the library merger so each successful PullDelta
 			// applies team/org entries to the local context library. The

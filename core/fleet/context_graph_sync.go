@@ -264,6 +264,8 @@ type ContextNodeEntry struct {
 	ServerVersion int `json:"server_version,omitempty"`
 	// DeletedAt is non-nil when the entry is a server-side tombstone.
 	DeletedAt *string `json:"deleted_at,omitempty"`
+	// OwnerUserID is the fleet user who owns the node (pulled entries only).
+	OwnerUserID string `json:"owner_user_id,omitempty"`
 }
 
 // ContextSyncStatus classifies the local sync state of an entry.
@@ -732,6 +734,7 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 			SyncStatus:     SyncStatusSynced,
 			ServerVersion:  n.Version,
 			DeletedAt:      n.DeletedAt,
+			OwnerUserID:    n.OwnerUserID,
 		}
 		s.upsertPulledLocked(entry)
 	}
