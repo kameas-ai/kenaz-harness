@@ -9,6 +9,9 @@ export const CAPABILITY_KEYS = [
   'iso_distribution',
   'team_graph_sharing',
   'cross_team_graph_isolation',
+  'cedar_preset_policies',
+  'cedar_custom_policies',
+  // Transition aliases (fleet phase 2 drops these wire names):
   'opa_preset_policies',
   'opa_custom_rego',
   'attestation_tpm',

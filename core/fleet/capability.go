@@ -29,6 +29,13 @@ const (
 	// The Go identifier is kept to avoid churning every call site.
 	CapSharedTeamGraph             Capability = "team_graph_sharing"
 	CapCrossTeamGraphIsolation     Capability = "cross_team_graph_isolation"
+	// Cedar policy capabilities. Renamed from the opa_* wire names on
+	// 2026-10-07 (owner-approved; the engine has been Cedar all along).
+	// Fleet phase 1 grants BOTH names; harness gates accept either until
+	// fleet phase 2 drops opa_*. The deprecated constants stay until then.
+	CapCedarPresetPolicies         Capability = "cedar_preset_policies"
+	CapCedarCustomPolicies         Capability = "cedar_custom_policies"
+	// Deprecated: transition aliases for the pre-rename wire names.
 	CapOPAPresetPolicies           Capability = "opa_preset_policies"
 	CapOPACustomRego               Capability = "opa_custom_rego"
 	CapAttestationTPM              Capability = "attestation_tpm"
@@ -94,6 +101,8 @@ func AllCapabilities() []Capability {
 		CapISODistribution,
 		CapSharedTeamGraph,
 		CapCrossTeamGraphIsolation,
+		CapCedarPresetPolicies,
+		CapCedarCustomPolicies,
 		CapOPAPresetPolicies,
 		CapOPACustomRego,
 		CapAttestationTPM,
