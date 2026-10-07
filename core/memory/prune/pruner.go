@@ -137,18 +137,40 @@ func (p *Pruner) Plan(ctx context.Context, scope ...memory.ScopeFilter) (Decisio
 // recall + last-accessed inheritance for Collapsed survivors. The
 // returned Decision matches what the store now reflects.
 //
-// Apply is best-effort against the underlying Store contract: when
-// the store does not satisfy memory.PruneCapable, collapse-survivor
-// metadata cannot be merged and the call returns ErrNoCapable. Drops
-// fall back to per-id Delete in that case.
+// Collapse inheritance is persisted through memory.RecallFolder when the
+// store implements it (the chromem store does). The inherited recall lands
+// in the survivor's display-only RecallFolded — NEVER RecallOwn, which is
+// this device's pushed G-counter (memory-sync-01MEMSY01 WP05, H4): folding
+// there would re-report recalls another device already pushed, and a
+// retried push would no longer be idempotent. Stores without the
+// capability keep their survivors unchanged (the drops still apply).
+//
+// Prune is device-local: drops are plain Deletes and never reach the
+// Fleet forget outbox (ruling: automatic prune sends nothing).
 func (p *Pruner) Apply(ctx context.Context, scope ...memory.ScopeFilter) (Decision, error) {
-	dec, err := p.Plan(ctx, scope...)
-	if err != nil {
-		return Decision{}, err
+	if p == nil || p.store == nil {
+		return Decision{}, errors.New("prune: store is nil")
 	}
+	chunks, err := p.store.List(ctx, scope...)
+	if err != nil {
+		return Decision{}, fmt.Errorf("prune: list: %w", err)
+	}
+	byID := make(map[string]memory.Chunk, len(chunks))
+	for _, c := range chunks {
+		byID[c.ID] = c
+	}
+	dec := p.plan(chunks)
 	for _, id := range dec.Dropped {
 		if delErr := p.store.Delete(ctx, id); delErr != nil {
 			return dec, fmt.Errorf("prune: delete %s: %w", id, delErr)
+		}
+	}
+	if folder, ok := p.store.(memory.RecallFolder); ok {
+		for dropped, survivor := range dec.Collapsed {
+			d := byID[dropped]
+			if err := folder.FoldRecall(ctx, survivor, d.RecallCount, d.LastAccessed); err != nil {
+				return dec, fmt.Errorf("prune: fold %s into %s: %w", dropped, survivor, err)
+			}
 		}
 	}
 	return dec, nil
@@ -387,8 +409,11 @@ func (p *Pruner) collapse(chunks []memory.Chunk, dec *Decision) []memory.Chunk {
 				if sim < p.rules.CollapseCosine {
 					continue
 				}
-				// Drop b, fold its metadata into a.
+				// Drop b, fold its metadata into a. The fold is
+				// display/score-only (RecallFolded), never the
+				// survivor's pushed RecallOwn (H4).
 				dropMask[b] = true
+				chunks[a].RecallFolded += chunks[b].RecallCount
 				chunks[a].RecallCount += chunks[b].RecallCount
 				if chunks[b].LastAccessed.After(chunks[a].LastAccessed) {
 					chunks[a].LastAccessed = chunks[b].LastAccessed

@@ -548,6 +548,35 @@ func (s *chromemStore) MarkAccessed(_ context.Context, ids []string, at time.Tim
 	return s.saveLocked()
 }
 
+// RecallFolder is the optional capability prune.Apply uses to persist a
+// collapse survivor's inherited metadata (memory-sync-01MEMSY01 WP05).
+// FoldRecall adds n to the survivor's display-only RecallFolded and raises
+// LastAccessed to at when later. It does not mark the chunk for push:
+// nothing it changes is a pushed counter.
+type RecallFolder interface {
+	FoldRecall(ctx context.Context, id string, n int, at time.Time) error
+}
+
+// FoldRecall implements RecallFolder.
+func (s *chromemStore) FoldRecall(_ context.Context, id string, n int, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.chunks {
+		if s.chunks[i].ID != id {
+			continue
+		}
+		if n > 0 {
+			s.chunks[i].RecallFolded += n
+			normalizeRecall(&s.chunks[i])
+		}
+		if at.After(s.chunks[i].LastAccessed) {
+			s.chunks[i].LastAccessed = at
+		}
+		return s.saveLocked()
+	}
+	return fmt.Errorf("memory: chunk %q not found", id)
+}
+
 // cosineSimilarity computes the cosine of the angle between a and b.
 // Returns 0 for zero-magnitude inputs (instead of NaN) so callers can
 // safely sort the result.
