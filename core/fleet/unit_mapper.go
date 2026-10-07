@@ -34,6 +34,7 @@ package fleet
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -63,25 +64,52 @@ type unitMetaEnvelope struct {
 // scopes team_shared rows by team).
 type UnitMapper struct {
 	teamID *string
-	// canLoadAlways reports whether the signed-in user may push
+	// roleCheck reports whether the signed-in user may push
 	// load_policy=always (fleet: org_admin / org_owner only — 403
-	// load_policy_requires_admin otherwise). nil = not allowed.
-	canLoadAlways func() bool
+	// load_policy_requires_admin otherwise) and whether the identity's
+	// roles are KNOWN at all. nil = no identity source wired (tests /
+	// offline): treated as known non-admin.
+	roleCheck func() (isAdmin, rolesKnown bool)
 }
 
-// SetLoadAlwaysAllowed wires the admin check consulted when a unit with
-// load_policy=always is pushed. Without it (or when it returns false) the
-// unit goes on the wire as on_demand — never a whole-batch 403.
+// ErrLoadPolicyRolesUnknown: a load_policy=always unit cannot be pushed yet
+// because the enrolled identity carries no roles (a pre-roles enroll), so
+// whether the user is an org admin is unknown. Downgrading it to on_demand
+// would silently rewrite an admin's policy on the server (review F9); the
+// unit is held back — kept dirty, counted — until a re-enroll brings roles.
+var ErrLoadPolicyRolesUnknown = errors.New("fleet: load_policy=always unit held: identity roles unknown (re-sign-in to refresh)")
+
+// SetRoleCheck wires the admin check consulted when a unit with
+// load_policy=always is pushed.
+func (m *UnitMapper) SetRoleCheck(f func() (isAdmin, rolesKnown bool)) {
+	m.roleCheck = f
+}
+
+// SetLoadAlwaysAllowed is SetRoleCheck for a check whose roles are always
+// known.
 func (m *UnitMapper) SetLoadAlwaysAllowed(f func() bool) {
-	m.canLoadAlways = f
+	m.roleCheck = func() (bool, bool) { return f(), true }
 }
 
-// wireLoadPolicy is the load_policy a unit is pushed with.
-func (m *UnitMapper) wireLoadPolicy(lp units.LoadPolicy) string {
-	if lp == units.LoadAlways && (m.canLoadAlways == nil || !m.canLoadAlways()) {
-		return string(units.LoadOnDemand)
+// wireLoadPolicy is the load_policy a unit is pushed with: always only for
+// an admin; a known non-admin pushes on_demand (fleet would 403 always);
+// unknown roles hold the unit back (ErrLoadPolicyRolesUnknown).
+func (m *UnitMapper) wireLoadPolicy(lp units.LoadPolicy) (string, error) {
+	if lp != units.LoadAlways {
+		return string(lp), nil
 	}
-	return string(lp)
+	isAdmin, known := false, true
+	if m.roleCheck != nil {
+		isAdmin, known = m.roleCheck()
+	}
+	switch {
+	case !known:
+		return "", ErrLoadPolicyRolesUnknown
+	case isAdmin:
+		return string(lp), nil
+	default:
+		return string(units.LoadOnDemand), nil
+	}
 }
 
 // NewUnitMapper constructs a UnitMapper. teamID may be empty (no team
@@ -141,7 +169,10 @@ func (m *UnitMapper) MapUnitToNode(u units.Unit) (contextNodeInput, bool, error)
 	if err := checkMetadataNotCapability(u.Metadata); err != nil {
 		return contextNodeInput{}, false, fmt.Errorf("fleet: MapUnitToNode %s: %w", u.ID, err)
 	}
-	loadPolicy := m.wireLoadPolicy(u.LoadPolicy)
+	loadPolicy, err := m.wireLoadPolicy(u.LoadPolicy)
+	if err != nil {
+		return contextNodeInput{}, false, fmt.Errorf("fleet: MapUnitToNode %s: %w", u.ID, err)
+	}
 	meta, err := foldUnitMetadata(u, loadPolicy)
 	if err != nil {
 		return contextNodeInput{}, false, fmt.Errorf("fleet: MapUnitToNode: %w", err)

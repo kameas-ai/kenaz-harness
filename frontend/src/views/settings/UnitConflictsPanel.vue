@@ -134,6 +134,13 @@ async function submitResolve() {
       Skipped: {{ syncStatus?.skippedUnknownKinds ?? 0 }} pulled item(s) of other kinds,
       {{ syncStatus?.skippedInvalid ?? 0 }} invalid, {{ syncStatus?.pushRefused ?? 0 }} not shareable (kept local).
     </p>
+    <p
+      v-if="(syncStatus?.pushHeldLoadAlways ?? 0) > 0"
+      class="text-xs text-signal-warn"
+      data-testid="unit-sync-held-load-always"
+    >
+      {{ syncStatus?.pushHeldLoadAlways }} always-loaded item(s) not shared yet: your account's role is unknown. Sign out and back in to refresh it.
+    </p>
 
     <!-- Conflict list -->
     <div>

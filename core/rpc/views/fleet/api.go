@@ -72,6 +72,9 @@ type UnitSyncStatusView struct {
 	// PushRefused counts dirty units refused before the wire (artifact /
 	// unknown kind, capability word in metadata); they stay dirty.
 	PushRefused int `json:"pushRefused"`
+	// PushHeldLoadAlways counts load_policy=always units held back because
+	// the identity carries no roles (re-sign-in to refresh) — review F9.
+	PushHeldLoadAlways int `json:"pushHeldLoadAlways"`
 }
 
 // FleetAPI is the view-scoped RPC surface for fleet telemetry consent and

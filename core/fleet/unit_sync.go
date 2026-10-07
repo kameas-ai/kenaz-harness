@@ -104,6 +104,9 @@ type UnitSyncer struct {
 	// pushRefused counts dirty units refused BEFORE the wire (non-pushable
 	// kind, capability word in metadata); they stay dirty.
 	pushRefused int
+	// pushHeldLoadAlways counts load_policy=always units held back because
+	// the identity's roles are unknown (review F9); they stay dirty.
+	pushHeldLoadAlways int
 
 	stopCh chan struct{}
 	once   sync.Once
@@ -248,6 +251,13 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 
 	for _, u := range dirty {
 		node, ok, err := s.mapper.MapUnitToNode(u)
+		if errors.Is(err, ErrLoadPolicyRolesUnknown) {
+			logging.L().Warn("fleet.unit.push.held_load_always", "unit_id", u.ID)
+			s.mu.Lock()
+			s.pushHeldLoadAlways++
+			s.mu.Unlock()
+			continue
+		}
 		if errors.Is(err, ErrUnitKindNotPushable) || errors.Is(err, ErrKindNotKnowledge) {
 			// Refused before the wire (fleet would 400 the WHOLE batch):
 			// skip this unit, keep it dirty, keep pushing the rest.
@@ -794,6 +804,7 @@ type UnitSyncStatus struct {
 	SkippedUnknownKinds int `json:"skipped_unknown_kinds"`
 	SkippedInvalid      int `json:"skipped_invalid"`
 	PushRefused         int `json:"push_refused"`
+	PushHeldLoadAlways  int `json:"push_held_load_always"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -812,6 +823,7 @@ func (s *UnitSyncer) Status() UnitSyncStatus {
 		SkippedUnknownKinds: s.skippedUnknownKinds,
 		SkippedInvalid:      s.skippedInvalid,
 		PushRefused:         s.pushRefused,
+		PushHeldLoadAlways:  s.pushHeldLoadAlways,
 	}
 }
 

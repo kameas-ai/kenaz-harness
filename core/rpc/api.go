@@ -4303,20 +4303,22 @@ func New(c *core.Core, opts ...Option) *API {
 			// for everyone else the mapper sends on_demand. Read live so a
 			// role change after boot takes effect.
 			adminDataDir := flDataDir
-			unitMapper.SetLoadAlwaysAllowed(func() bool {
+			// Review F9: roles ABSENT (pre-roles enroll, or no identity) is
+			// "unknown", not "non-admin" — such units are held, not downgraded.
+			unitMapper.SetRoleCheck(func() (bool, bool) {
 				if adminDataDir == "" {
-					return false
+					return false, false
 				}
 				id, err := corefleet.LoadIdentity(adminDataDir)
-				if err != nil {
-					return false
+				if err != nil || len(id.Roles) == 0 {
+					return false, false
 				}
 				for _, r := range id.Roles {
 					if r == "org_admin" || r == "org_owner" {
-						return true
+						return true, true
 					}
 				}
-				return false
+				return false, true
 			})
 			unitSyncer := corefleet.NewUnitSyncer(flCl, a.unitsMgr, unitMapper, caps, flDataDir)
 			// fleet-session-truth-01DOGF0A FR-6: the poll reports into the

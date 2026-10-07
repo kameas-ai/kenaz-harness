@@ -334,6 +334,7 @@ func (f *Impl) Unit_SyncStatus(_ context.Context) (UnitSyncStatusView, error) {
 		SkippedUnknownKinds: st.SkippedUnknownKinds,
 		SkippedInvalid:      st.SkippedInvalid,
 		PushRefused:         st.PushRefused,
+		PushHeldLoadAlways:  st.PushHeldLoadAlways,
 	}
 	if !st.LastPullAt.IsZero() {
 		v.LastPullAt = st.LastPullAt.UTC().Format(time.RFC3339)

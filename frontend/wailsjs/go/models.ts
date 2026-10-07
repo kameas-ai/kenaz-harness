@@ -3156,6 +3156,7 @@ export namespace fleet {
 	    skippedUnknownKinds: number;
 	    skippedInvalid: number;
 	    pushRefused: number;
+	    pushHeldLoadAlways: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new UnitSyncStatusView(source);
@@ -3173,6 +3174,7 @@ export namespace fleet {
 	        this.skippedUnknownKinds = source["skippedUnknownKinds"];
 	        this.skippedInvalid = source["skippedInvalid"];
 	        this.pushRefused = source["pushRefused"];
+	        this.pushHeldLoadAlways = source["pushHeldLoadAlways"];
 	    }
 	}
 

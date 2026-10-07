@@ -327,3 +327,38 @@ func TestPulledNodeToUnit_UnitEnvelopeStrict(t *testing.T) {
 		t.Errorf("top-level scope not authoritative: %+v", u)
 	}
 }
+
+// Review F9: with identity roles ABSENT, a load_policy=always unit is held
+// (kept dirty, counted) — never silently downgraded to on_demand — while
+// on_demand units still push.
+func TestUnitSyncer_PushDirty_RolesUnknown_HoldsAlwaysUnits(t *testing.T) {
+	srv := &lanePullServer{}
+	hs := httptest.NewServer(srv)
+	defer hs.Close()
+	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
+	store := &stubDirtyStore{dirty: []units.Unit{
+		{ID: "always", Kind: units.KindDoc, Scope: units.ScopeGlobal, Classification: units.ClassTeam, LoadPolicy: units.LoadAlways},
+		{ID: "lazy", Kind: units.KindDoc, Scope: units.ScopeGlobal, Classification: units.ClassTeam, LoadPolicy: units.LoadOnDemand},
+	}}
+	mapper := NewUnitMapper("")
+	mapper.SetRoleCheck(func() (bool, bool) { return false, false })
+	s := NewUnitSyncer(makeTestClient(t, hs.URL), store, mapper, makeCapPollerWithTeamCap(t), t.TempDir())
+	if _, err := s.PushDirty(context.Background()); err != nil {
+		t.Fatalf("PushDirty: %v", err)
+	}
+	if _, pushes := srv.snapshot(); pushes != 1 {
+		t.Errorf("pushes = %d, want 1 (the on_demand unit)", pushes)
+	}
+	if st := s.Status(); st.PushHeldLoadAlways != 1 {
+		t.Errorf("PushHeldLoadAlways = %d, want 1", st.PushHeldLoadAlways)
+	}
+	// Known non-admin → downgraded; admin → always.
+	mapper.SetRoleCheck(func() (bool, bool) { return false, true })
+	if n, _, _ := mapper.MapUnitToNode(store.dirty[0]); n.LoadPolicy != "on_demand" {
+		t.Errorf("known non-admin load_policy = %q, want on_demand", n.LoadPolicy)
+	}
+	mapper.SetRoleCheck(func() (bool, bool) { return true, true })
+	if n, _, _ := mapper.MapUnitToNode(store.dirty[0]); n.LoadPolicy != "always" {
+		t.Errorf("admin load_policy = %q, want always", n.LoadPolicy)
+	}
+}

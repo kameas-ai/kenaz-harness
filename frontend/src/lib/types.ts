@@ -4800,6 +4800,8 @@ export interface UnitSyncStatusView {
   skippedInvalid?: number;
   /** Dirty units refused before the wire (artifact / capability metadata). */
   pushRefused?: number;
+  /** load_policy=always units held: identity roles unknown (re-sign-in). */
+  pushHeldLoadAlways?: number;
 }
 
 // ── Catalog types (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────
