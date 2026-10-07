@@ -14,9 +14,8 @@ package fleet
 //	  encrypted_payload = XChaCha20-Poly1305.Seal(content_key, nonce[24], plaintext,
 //	                                              aad = session_id + ":" + decimal(seq))
 //	  content_key = 32 random bytes, no KDF over it.
-//	v1 (legacy direct mode, ACCEPT ONLY):
-//	  key = HKDF-SHA256(X25519(eph, recipient), salt=nil, info="handoff-v1"); events sealed
-//	  directly under key, no AAD.
+//	v1 (legacy direct mode, info "handoff-v1"): NOT implemented — the v1
+//	  send never produced a real item; send and accept arms are both deleted.
 //
 // TestHandoffV2Vectors pins every info string and AAD against golden bytes
 // AND an independent in-test reconstruction (manual HKDF + HChaCha20), so a
@@ -157,18 +156,4 @@ func sealHandoffEvent(contentKey []byte, sessionID string, seq uint64, plaintext
 // than it was sealed under fails authentication (no reorder/transplant).
 func openHandoffEvent(contentKey []byte, sessionID string, seq uint64, ciphertext, nonce []byte) ([]byte, error) {
 	return DecryptAAD(contentKey, ciphertext, nonce, handoffEventAAD(sessionID, seq))
-}
-
-// deriveV1DirectKey derives the legacy v1 direct-mode event key on the
-// RECEIVE side: HKDF(X25519(our_priv, eph), info="handoff-v1").
-func deriveV1DirectKey(priv *ecdh.PrivateKey, ephPub []byte) ([]byte, error) {
-	pub, err := ecdh.X25519().NewPublicKey(ephPub)
-	if err != nil {
-		return nil, fmt.Errorf("fleet: handoff v1: ephemeral key: %w", err)
-	}
-	shared, err := priv.ECDH(pub)
-	if err != nil {
-		return nil, fmt.Errorf("fleet: handoff v1: ECDH: %w", err)
-	}
-	return hkdf32(shared, string(LabelHandoffKey))
 }

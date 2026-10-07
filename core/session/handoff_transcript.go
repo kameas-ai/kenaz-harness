@@ -19,8 +19,13 @@ package session
 //	  "move": {"kind","index","turn_seq"},                 // absent on classic rows
 //	  "omitted_media": 2,              // image/document/generated-image blocks NOT shipped
 //	  "created_at": "RFC3339Nano",
-//	  "title": "..."                   // seq 1 only: the sender's session name
+//	  "title": "...",                  // seq 1 only: the sender's session name
+//	  "event_count": N                 // seq 1 only, REQUIRED: total events
 //	}
+//
+// event_count rides inside the seq-1 ciphertext, so the AEAD authenticates
+// it: a server (or anyone) dropping TAIL events — which per-event
+// session:seq AADs cannot detect — fails the decode.
 //
 // Redaction (spec §4 two-layer rule): what is shared is what the user can
 // read and export — the DISPLAY layer. Model-layer raw tool arguments
@@ -90,6 +95,7 @@ type HandoffEvent struct {
 	OmittedMedia int               `json:"omitted_media,omitempty"`
 	CreatedAt    string            `json:"created_at,omitempty"`
 	Title        string            `json:"title,omitempty"`
+	EventCount   int               `json:"event_count,omitempty"`
 }
 
 // HandoffTranscript is a decoded shared session.
@@ -157,6 +163,7 @@ func EncodeHandoffTranscript(title string, msgs []Message) ([][]byte, error) {
 		}
 		if i == 0 {
 			ev.Title = title
+			ev.EventCount = len(msgs)
 		}
 		b, err := json.Marshal(ev)
 		if err != nil {
@@ -186,6 +193,13 @@ func DecodeHandoffTranscript(payloads [][]byte) (HandoffTranscript, error) {
 			return HandoffTranscript{}, fmt.Errorf("%w: event %d role %q", ErrHandoffEventInvalid, i+1, ev.Role)
 		}
 		evs = append(evs, ev)
+	}
+	if len(evs) == 0 {
+		return HandoffTranscript{}, fmt.Errorf("%w: no events", ErrHandoffEventInvalid)
+	}
+	if evs[0].EventCount != len(evs) {
+		return HandoffTranscript{}, fmt.Errorf("%w: %d events received, the sender sent %d (truncated or padded)",
+			ErrHandoffEventInvalid, len(evs), evs[0].EventCount)
 	}
 	msgs, err := handoffMessages(evs)
 	if err != nil {

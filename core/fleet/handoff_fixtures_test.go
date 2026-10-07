@@ -139,7 +139,6 @@ func TestHandoffFleetFixtures_InboxAndAccept(t *testing.T) {
 	for _, tc := range []struct{ fixture, node string }{
 		{"handoff_wrapped.json", fxNodeA},
 		{"handoff_wrapped.json", fxNodeB},
-		{"handoff_direct.json", fxNodeA},
 	} {
 		srv := fixtureServer(t, http.StatusOK, tc.fixture)
 		fake := &fakeV2Fleet{srv: srv}
@@ -150,10 +149,6 @@ func TestHandoffFleetFixtures_InboxAndAccept(t *testing.T) {
 		if len(got.Events) != len(fxPlainEvents) || string(got.Events[1].Bytes) != fxPlainEvents[1] || got.SessionID != fxSessionID {
 			t.Fatalf("%s on %s: %+v", tc.fixture, tc.node, got)
 		}
-	}
-	direct := &fakeV2Fleet{srv: fixtureServer(t, http.StatusOK, "handoff_direct.json")}
-	if _, err := recipientDevice(t, direct, fxNodeB).AcceptShare(context.Background(), "x"); !errors.Is(err, ErrHandoffNotForThisDevice) {
-		t.Fatalf("direct item on device B: %v", err)
 	}
 	gone := &fakeV2Fleet{srv: fixtureServer(t, http.StatusNotFound, "handoff_not_found.json")}
 	if _, err := recipientDevice(t, gone, fxNodeA).AcceptShare(context.Background(), "x"); !errors.Is(err, ErrHandoffItemGone) {

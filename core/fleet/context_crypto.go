@@ -63,14 +63,9 @@ const (
 	LabelSessionEvents DeriveLabel = "session-events-v1"
 	// LabelProjectEvents is the HKDF label for project event stream keys.
 	LabelProjectEvents DeriveLabel = "project-events-v1"
-	// LabelHandoffKey is the HKDF label of the LEGACY v1 "direct" handoff
-	// mode: the AEAD key events are sealed under directly is
-	// HKDF(X25519(eph, recipient), info="handoff-v1"). The harness no
-	// longer SENDS v1 (device-keys-handoff-01DEVKH01 OQ-8); it is kept for
-	// ACCEPTING mode:"direct" items, which fleet still stores while a v0.91
-	// sender addresses a single-key recipient (fleet contract §10.3, O5 —
-	// we tell fleet when the accept arm can die).
-	LabelHandoffKey DeriveLabel = "handoff-v1"
+	// HEADSTONE: LabelHandoffKey ("handoff-v1", the legacy v1 direct-mode
+	// key) is DELETED (review fix #9, 2026-10-07) with both the v1 send
+	// (OQ-8) and the v1 accept arm — no v1 item ever reached an inbox.
 	// LabelHandoffWrapV2 is the PINNED v2 key-wrap HKDF info (fleet
 	// contract §10.3 "PINNED v2 wrap construction"):
 	// kek = HKDF-SHA256(ikm=X25519(eph, recipient), salt=nil,

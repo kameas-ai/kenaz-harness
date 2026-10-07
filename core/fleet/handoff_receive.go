@@ -6,9 +6,15 @@ package fleet
 // GET /api/v1/handoff/{id} returns every key wrap of the item; this device
 // picks the entry whose fingerprint matches ITS OWN handoff key
 // (seed + node id), unwraps the content key (aad = key_id) and opens each
-// event (aad = session_id:seq). Legacy mode "direct" items (a v0.91
-// single-key sender; fleet still stores them until we signal O5) use the
-// v1 derivation with the same device key.
+// event (aad = session_id:seq). Events must arrive as seq 1..N exactly; the
+// count N itself is authenticated inside the seq-1 event (core/session
+// event_count), so tail truncation fails the persist.
+//
+// HEADSTONE (review fix #9, 2026-10-07): the legacy v1 mode "direct" accept
+// arm is DELETED. The v1 send never produced a real item (it always posted
+// nil events → 422 handoff_empty), and a hand-made v1 item would not carry
+// the self-contained event format anyway. Fleet was told O5 (drop direct
+// acceptance). Any non-"wrapped" mode is refused with update-the-app copy.
 //
 // The fetch is rate limited fleet-side (burst 5, 30/min → 429 +
 // Retry-After); it is retried at most twice, waiting the advertised time
@@ -51,7 +57,7 @@ type AcceptedHandoff struct {
 	SenderUserID string
 	// SenderEmail comes from the last Inbox() listing; may be empty.
 	SenderEmail string
-	// Mode is "wrapped" (v2) or "direct" (legacy v1).
+	// Mode is always "wrapped" (v2) — the only mode accepted.
 	Mode string
 	// Events are plaintext, seq-ordered. Privacy: never logged.
 	Events []SessionEventRecord
@@ -66,13 +72,12 @@ type handoffGetRecipient struct {
 }
 
 type handoffGetResponse struct {
-	InboxItemID        string                `json:"inbox_item_id"`
-	SessionID          string                `json:"session_id"`
-	SenderUserID       string                `json:"sender_user_id"`
-	Mode               string                `json:"mode"`
-	EphemeralPublicKey []byte                `json:"ephemeral_public_key"`
-	Recipients         []handoffGetRecipient `json:"recipients"`
-	Events             []wireEvent           `json:"events"`
+	InboxItemID  string                `json:"inbox_item_id"`
+	SessionID    string                `json:"session_id"`
+	SenderUserID string                `json:"sender_user_id"`
+	Mode         string                `json:"mode"`
+	Recipients   []handoffGetRecipient `json:"recipients"`
+	Events       []wireEvent           `json:"events"`
 }
 
 func defaultSleep(ctx context.Context, d time.Duration) error {
@@ -136,6 +141,21 @@ func (h *HandoffHandler) fetchHandoff(ctx context.Context, inboxItemID string) (
 	}
 }
 
+// ErrHandoffEventsOutOfOrder: the item's events are not exactly seq 1..N
+// (reordered, gapped or duplicated) — refused before anything is persisted.
+var ErrHandoffEventsOutOfOrder = &HandoffError{Code: "events_out_of_order",
+	msg: "This shared session arrived incomplete or out of order, so it wasn't opened. Ask the sender to share it again."}
+
+// checkContiguousSeqs requires events to be exactly seq 1..N in order.
+func checkContiguousSeqs(events []wireEvent) error {
+	for i, e := range events {
+		if e.Seq != uint64(i+1) {
+			return ErrHandoffEventsOutOfOrder
+		}
+	}
+	return nil
+}
+
 // AcceptShare fetches inboxItemID, decrypts it with THIS device's handoff
 // key and returns the plaintext events for the caller to persist. It does
 // not delete the item (the caller deletes after a successful persist —
@@ -160,55 +180,36 @@ func (h *HandoffHandler) AcceptShare(ctx context.Context, inboxItemID string) (A
 	}
 	ownFP := KeyFingerprint(priv.PublicKey().Bytes())
 
-	records := make([]SessionEventRecord, 0, len(payload.Events))
-	switch payload.Mode {
-	case "wrapped":
-		var mine *handoffGetRecipient
-		for i := range payload.Recipients {
-			if payload.Recipients[i].Fingerprint == ownFP {
-				mine = &payload.Recipients[i]
-				break
-			}
-		}
-		if mine == nil {
-			return AcceptedHandoff{}, ErrHandoffNotForThisDevice
-		}
-		ck, err := unwrapContentKey(priv, mine.EphemeralPublicKey, mine.WrappedKey, mine.WrapNonce, mine.KeyID)
-		if err != nil {
-			return AcceptedHandoff{}, &HandoffError{Code: "decrypt_failed", cause: err,
-				msg: "This shared session couldn't be decrypted on this device."}
-		}
-		for _, we := range payload.Events {
-			pt, err := openHandoffEvent(ck, payload.SessionID, we.Seq, we.EncryptedPayload, we.Nonce)
-			if err != nil {
-				return AcceptedHandoff{}, &HandoffError{Code: "decrypt_failed", cause: err,
-					msg: "This shared session couldn't be decrypted on this device (it may have been altered)."}
-			}
-			records = append(records, SessionEventRecord{Seq: we.Seq, Bytes: pt})
-		}
-	case "direct":
-		// Legacy v1 single-key item: only openable by the device whose key
-		// it was addressed to.
-		for _, r := range payload.Recipients {
-			if r.Fingerprint != "" && r.Fingerprint != ownFP {
-				return AcceptedHandoff{}, ErrHandoffNotForThisDevice
-			}
-		}
-		key, err := deriveV1DirectKey(priv, payload.EphemeralPublicKey)
-		if err != nil {
-			return AcceptedHandoff{}, &HandoffError{Code: "decrypt_failed", cause: err,
-				msg: "This shared session couldn't be decrypted on this device."}
-		}
-		for _, we := range payload.Events {
-			pt, err := Decrypt(key, we.EncryptedPayload, we.Nonce)
-			if err != nil {
-				return AcceptedHandoff{}, ErrHandoffNotForThisDevice
-			}
-			records = append(records, SessionEventRecord{Seq: we.Seq, Bytes: pt})
-		}
-	default:
+	if payload.Mode != "wrapped" {
 		return AcceptedHandoff{}, &HandoffError{Code: "unknown_mode",
-			msg: "This shared session uses a format this version of the app can't open. Update the app and try again."}
+			msg: "This shared session uses a format this version of the app can't open. Ask the sender to update the app and share it again."}
+	}
+	if err := checkContiguousSeqs(payload.Events); err != nil {
+		return AcceptedHandoff{}, err
+	}
+	var mine *handoffGetRecipient
+	for i := range payload.Recipients {
+		if payload.Recipients[i].Fingerprint == ownFP {
+			mine = &payload.Recipients[i]
+			break
+		}
+	}
+	if mine == nil {
+		return AcceptedHandoff{}, ErrHandoffNotForThisDevice
+	}
+	ck, err := unwrapContentKey(priv, mine.EphemeralPublicKey, mine.WrappedKey, mine.WrapNonce, mine.KeyID)
+	if err != nil {
+		return AcceptedHandoff{}, &HandoffError{Code: "decrypt_failed", cause: err,
+			msg: "This shared session couldn't be decrypted on this device."}
+	}
+	records := make([]SessionEventRecord, 0, len(payload.Events))
+	for _, we := range payload.Events {
+		pt, err := openHandoffEvent(ck, payload.SessionID, we.Seq, we.EncryptedPayload, we.Nonce)
+		if err != nil {
+			return AcceptedHandoff{}, &HandoffError{Code: "decrypt_failed", cause: err,
+				msg: "This shared session couldn't be decrypted on this device (it may have been altered)."}
+		}
+		records = append(records, SessionEventRecord{Seq: we.Seq, Bytes: pt})
 	}
 	if len(records) == 0 {
 		return AcceptedHandoff{}, &HandoffError{Code: "handoff_empty", msg: "This shared session is empty."}

@@ -74,7 +74,7 @@ const (
 	// cross-checked by the manual reconstruction in the same test.
 	wantHandoffPubHex = "d7e2ae10aed065c2f17b4da6163751e004bb4882a43a878eb997c992e2573d48"
 	wantWrappedHex    = "8b138215fcdf1c85fa531eb77353af58d0e9a2122476130d9f92489bda6b5b592a4427e8001318c90b8e8c034d95d2f0"
-	wantEventCTHex    = "638406f60ad31ba1e01f277b32ede0d24d67901a0cf0242e6bc4b23dc6257c21bcd427b0f647210fcfdb3df5aa0f586123c4dd4348c1a8"
+	wantEventCTHex    = "638406f60ad31ba1e01f277b32ede0d24d67901a0cf0242e6bc4b23dc6257c21bcd427b0f64770befeaa68b1a7f78c41a4760cc1d86c062a7360e32e06079161e6b0a1459f76ac"
 )
 
 func TestHandoffV2Vectors(t *testing.T) {
@@ -131,7 +131,7 @@ func TestHandoffV2Vectors(t *testing.T) {
 
 	// ── event: Seal(ck, nonce, pt, aad=session_id+":"+decimal(seq)) ──
 	evNonce := fill(0x44, 24)
-	pt := []byte(`{"v":1,"role":"user","content":"hello"}`)
+	pt := []byte(`{"v":1,"role":"user","content":"hello","event_count":1}`)
 	ct, err := sealXAAD(contentKey, evNonce, pt, handoffEventAAD(vecSessionID, vecSeq))
 	if err != nil {
 		t.Fatal(err)
@@ -148,15 +148,6 @@ func TestHandoffV2Vectors(t *testing.T) {
 	got, err := openHandoffEvent(contentKey, vecSessionID, vecSeq, ct, evNonce)
 	if err != nil || !bytes.Equal(got, pt) {
 		t.Fatalf("open event: %v", err)
-	}
-
-	// ── v1 direct (accept-only legacy): HKDF(X25519, "handoff-v1") ──
-	v1, err := deriveV1DirectKey(priv, eph.PublicKey().Bytes())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(v1, manualHKDF32(shared, "handoff-v1")) {
-		t.Fatal("v1 direct key disagrees with HKDF(shared, handoff-v1)")
 	}
 }
 

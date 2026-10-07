@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
 )
 
 // The v2 send is covered by handoff_send_test.go and the end-to-end

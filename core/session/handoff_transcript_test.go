@@ -79,17 +79,34 @@ func TestHandoffTranscript_RoundTrip(t *testing.T) {
 
 func TestHandoffTranscript_RejectsBadEvents(t *testing.T) {
 	for name, p := range map[string]string{
-		"version":    `{"v":2,"role":"user","content":"x"}`,
-		"no version": `{"role":"user","content":"x"}`,
-		"role":       `{"v":1,"role":"root","content":"x"}`,
-		"kind":       `{"v":1,"role":"assistant","move":{"kind":"bogus","index":0}}`,
-		"index":      `{"v":1,"role":"assistant","move":{"kind":"final","index":-1}}`,
-		"forward":    `{"v":1,"role":"assistant","move":{"kind":"final","index":0,"turn_seq":5}}`,
-		"json":       `{"v":1,`,
+		"version":     `{"v":2,"role":"user","content":"x","event_count":1}`,
+		"no version":  `{"role":"user","content":"x","event_count":1}`,
+		"role":        `{"v":1,"role":"root","content":"x","event_count":1}`,
+		"kind":        `{"v":1,"role":"assistant","move":{"kind":"bogus","index":0},"event_count":1}`,
+		"index":       `{"v":1,"role":"assistant","move":{"kind":"final","index":-1},"event_count":1}`,
+		"forward":     `{"v":1,"role":"assistant","move":{"kind":"final","index":0,"turn_seq":5},"event_count":1}`,
+		"json":        `{"v":1,`,
+		"no count":    `{"v":1,"role":"user","content":"x"}`,
+		"wrong count": `{"v":1,"role":"user","content":"x","event_count":3}`,
 	} {
 		_, err := DecodeHandoffTranscript([][]byte{[]byte(p)})
 		if !errors.Is(err, ErrHandoffEventInvalid) && !errors.Is(err, ErrHandoffEventVersion) {
 			t.Errorf("%s: err = %v", name, err)
 		}
+	}
+}
+
+// Review fix #2: tail truncation is detected via the AEAD-covered
+// event_count on seq 1.
+func TestHandoffTranscript_TailTruncationDetected(t *testing.T) {
+	payloads, err := EncodeHandoffTranscript("t", handoffSample())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payloads[0]), `"event_count":5`) {
+		t.Fatalf("seq 1 lacks event_count: %s", payloads[0])
+	}
+	if _, err := DecodeHandoffTranscript(payloads[:4]); !errors.Is(err, ErrHandoffEventInvalid) {
+		t.Fatalf("dropped tail must fail: %v", err)
 	}
 }

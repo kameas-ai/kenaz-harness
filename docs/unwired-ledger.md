@@ -497,10 +497,10 @@ Per-device handoff keys + v2 wrap-to-all + accept-persists shipped
    (core/fleet/testdata/handoff/PROVENANCE.md); recording needs a live
    Team-tier bearer token the implementing agent must not handle.
    **Owner:** alec — re-record from dev and diff.
-3. **v1 "direct" accept arm is transitional.** Fleet keeps storing v1
-   items until WE signal O5; remove `AcceptShare`'s `direct` case only
-   after a release in which every active device sends v2, coordinated with
-   fleet. **Owner:** alec + fleet.
+3. ~~**v1 "direct" accept arm is transitional.**~~ **CLOSED 2026-10-07**
+   (review fix #9): the arm is deleted — the v1 send never produced a real
+   item (nil events → 422), so nothing could be accepted through it. The
+   coordinator signalled fleet O5 (drop direct-mode acceptance).
 4. **Signing key is registered; nothing shows it.** `signing_public_key`
    now goes up at enroll (audit batches become verifiable, fleet §8.3), but
    the Compliance panel does not surface verified/unverified (OQ-10 ruled

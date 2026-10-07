@@ -8,8 +8,6 @@ package fleet
 import (
 	"bytes"
 	"context"
-	"crypto/ecdh"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -74,55 +72,56 @@ func TestHandoffRoundTrip_EachDeviceAccepts(t *testing.T) {
 	}
 }
 
-// buildDirectItem constructs what a v0.91 (v1) sender produced for a
-// single-key recipient: HKDF(X25519(eph, pub), "handoff-v1"), events sealed
-// directly, no AAD.
-func buildDirectItem(t *testing.T, recipientPub []byte, keyID string, evs []SessionEventRecord) *fakeStoredItem {
-	t.Helper()
-	eph, err := ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pub, _ := ecdh.X25519().NewPublicKey(recipientPub)
-	shared, _ := eph.ECDH(pub)
-	key, err := DeriveKey(shared, LabelHandoffKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wire []fleetHandoffEventWire
-	for _, e := range evs {
-		ct, nonce, err := Encrypt(key, e.Bytes)
-		if err != nil {
-			t.Fatal(err)
-		}
-		wire = append(wire, fleetHandoffEventWire{Seq: e.Seq, EncryptedPayload: ct, Nonce: nonce})
-	}
-	raw, _ := json.Marshal(wire)
-	return &fakeStoredItem{
-		ID: uuid.NewString(), SessionID: "sess_v1", Sender: fakeSender, Recipient: fxRecipientUser, Mode: "direct",
-		EphTop: eph.PublicKey().Bytes(), Events: raw, ReceivedAt: time.Now().UTC(),
-		Recipients: []fleetHandoffRecipientOut{{KeyID: keyID, Fingerprint: KeyFingerprint(recipientPub), EphemeralPublicKey: eph.PublicKey().Bytes()}},
-	}
-}
-
-func TestHandoffAccept_LegacyDirectItem(t *testing.T) {
+// Review fix #9: the v1 "direct" accept arm is gone — a direct-mode item
+// is refused with update-the-app copy, never decrypted.
+func TestHandoffAccept_DirectModeRefused(t *testing.T) {
 	f := newFakeV2Fleet(t)
 	withExternalToken(t, "tok-direct")
 	keys := fxKeySet(t)
 	f.setKeys(fxRecipientUser, keys[:1])
-	evs := plainEvents(2)
-	it := buildDirectItem(t, keys[0].PublicKey, keys[0].KeyID, evs)
+	ev, _ := json.Marshal([]fleetHandoffEventWire{{Seq: 1, EncryptedPayload: bytes.Repeat([]byte{1}, 32), Nonce: make([]byte, 24)}})
+	it := &fakeStoredItem{ID: uuid.NewString(), SessionID: "s", Sender: fakeSender, Recipient: fxRecipientUser,
+		Mode: "direct", EphTop: keys[0].PublicKey, Events: ev, ReceivedAt: time.Now().UTC(),
+		Recipients: []fleetHandoffRecipientOut{{KeyID: keys[0].KeyID, Fingerprint: keys[0].Fingerprint, EphemeralPublicKey: keys[0].PublicKey}}}
 	f.addDirectItem(it)
+	_, err := recipientDevice(t, f, fxNodeA).AcceptShare(context.Background(), it.ID)
+	var he *HandoffError
+	if !errors.As(err, &he) || he.Code != "unknown_mode" {
+		t.Fatalf("err = %v", err)
+	}
+}
 
-	got, err := recipientDevice(t, f, fxNodeA).AcceptShare(context.Background(), it.ID)
-	if err != nil {
-		t.Fatalf("v1 direct accept: %v", err)
-	}
-	if got.Mode != "direct" || len(got.Events) != 2 || !bytes.Equal(got.Events[1].Bytes, evs[1].Bytes) {
-		t.Fatalf("direct = %+v", got)
-	}
-	if _, err := recipientDevice(t, f, fxNodeB).AcceptShare(context.Background(), it.ID); !errors.Is(err, ErrHandoffNotForThisDevice) {
-		t.Fatalf("direct item on another device: %v", err)
+// Review fix #2(a): events must be exactly seq 1..N — reorder / gap /
+// duplicate is refused before decryption or persistence.
+func TestHandoffAccept_NonContiguousSeqsRefused(t *testing.T) {
+	for name, seqs := range map[string][]uint64{
+		"reordered": {2, 1, 3},
+		"gap":       {1, 3},
+		"duplicate": {1, 1, 2},
+		"from zero": {0, 1},
+	} {
+		f, sender, _ := sendRig(t)
+		f.setKeys(fxRecipientUser, fxKeySet(t))
+		res, err := sender.ShareSession(context.Background(), "sess_seq", fxRecipientUser, plainEvents(len(seqs)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		for _, it := range f.items {
+			if it.ID != res.InboxItemID {
+				continue
+			}
+			var evs []fleetHandoffEventWire
+			_ = json.Unmarshal(it.Events, &evs)
+			for i := range evs {
+				evs[i].Seq = seqs[i]
+			}
+			it.Events, _ = json.Marshal(evs)
+		}
+		f.mu.Unlock()
+		if _, err := recipientDevice(t, f, fxNodeA).AcceptShare(context.Background(), res.InboxItemID); !errors.Is(err, ErrHandoffEventsOutOfOrder) {
+			t.Errorf("%s: err = %v", name, err)
+		}
 	}
 }
 
