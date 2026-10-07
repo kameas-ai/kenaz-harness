@@ -53,6 +53,7 @@ import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
 import AdviceChip from '@/components/chat/AdviceChip.vue';
 import AdviceAutoActedBanner from '@/components/chat/AdviceAutoActedBanner.vue';
 import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
+import HandoffInboxPanel from '@/views/sessions/HandoffInboxPanel.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
@@ -1592,6 +1593,13 @@ onMounted(() => {
   void loadInbox();
 });
 
+/** Inbox panel (device-keys-handoff-01DEVKH01 WP06): open / dismiss. */
+const inboxOpen = ref(false);
+function onInboxOpened(localSessionID: string) {
+  inboxOpen.value = false;
+  void router.push(`/sessions/${localSessionID}`);
+}
+
 const isSyncEnabled = computed(() => syncStatus.value?.enabled ?? false);
 
 /**
@@ -1770,14 +1778,27 @@ async function onShared() {
         >
           Purge remote
         </button>
-        <!-- Inbox badge (shown when there are pending handoff items) -->
-        <span
-          v-if="inboxItems.length > 0"
-          class="ml-auto rounded-full bg-accent px-2 py-0.5 font-ui text-[10px] text-white"
-          data-testid="session-inbox-badge"
-        >
-          {{ inboxItems.length }} shared
-        </span>
+        <!-- Inbox badge (shown when there are pending handoff items); opens
+             the inbox panel (device-keys-handoff-01DEVKH01 WP06). -->
+        <div v-if="inboxItems.length > 0" class="relative ml-auto">
+          <button
+            type="button"
+            class="rounded-full bg-accent px-2 py-0.5 font-ui text-[10px] text-white"
+            data-testid="session-inbox-badge"
+            :aria-expanded="inboxOpen"
+            @click="inboxOpen = !inboxOpen"
+          >
+            {{ inboxItems.length }} shared
+          </button>
+          <HandoffInboxPanel
+            v-if="inboxOpen"
+            class="absolute right-0 top-full z-30 mt-1"
+            :items="inboxItems"
+            @opened="onInboxOpened"
+            @changed="loadInbox"
+            @close="inboxOpen = false"
+          />
+        </div>
       </div>
     </div>
 

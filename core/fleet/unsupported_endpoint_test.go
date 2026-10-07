@@ -221,7 +221,7 @@ func TestHandoff_Plain404_UnsupportedOnce_NoFurtherHTTP(t *testing.T) {
 	if _, err := h.AcceptShare(context.Background(), "item-1"); !errors.Is(err, ErrEndpointUnsupported) {
 		t.Fatalf("AcceptShare err = %v, want ErrEndpointUnsupported", err)
 	}
-	if err := h.ShareSession(context.Background(), "s", "u", nil); !errors.Is(err, ErrEndpointUnsupported) {
+	if _, err := h.ShareSession(context.Background(), "s", "u", nil); !errors.Is(err, ErrEndpointUnsupported) {
 		t.Fatalf("ShareSession err = %v, want ErrEndpointUnsupported", err)
 	}
 	if got := f.total(); got != 1 {
@@ -441,7 +441,7 @@ func TestTeamMembersAndPublicKey_Plain404_Latched(t *testing.T) {
 		if _, err := h.ListTeam(context.Background()); !errors.Is(err, ErrEndpointUnsupported) {
 			t.Fatalf("ListTeam %d: err = %v, want ErrEndpointUnsupported", i, err)
 		}
-		if _, err := h.fetchRecipientPublicKey(context.Background(), "u1"); !errors.Is(err, ErrEndpointUnsupported) {
+		if _, err := h.fetchRecipientKeys(context.Background(), "u1"); !errors.Is(err, ErrEndpointUnsupported) {
 			t.Fatalf("public key %d: err = %v, want ErrEndpointUnsupported", i, err)
 		}
 	}
@@ -456,10 +456,10 @@ func TestPublicKey_JSON404_IsRecipientNotFound(t *testing.T) {
 	withExternalToken(t, "tok")
 	f := newCountingFleet(t, http.StatusNotFound, `{"code":"not_found","message":"no key"}`, "application/json")
 	h := NewHandoffHandler(makeTestClient(t, f.srv.URL), nil, nil)
-	if _, err := h.fetchRecipientPublicKey(context.Background(), "u1"); !errors.Is(err, ErrHandoffRecipientNotFound) {
+	if _, err := h.fetchRecipientKeys(context.Background(), "u1"); !errors.Is(err, ErrHandoffRecipientNotFound) {
 		t.Fatalf("err = %v, want ErrHandoffRecipientNotFound", err)
 	}
-	if _, err := h.fetchRecipientPublicKey(context.Background(), "u1"); errors.Is(err, ErrEndpointUnsupported) {
+	if _, err := h.fetchRecipientKeys(context.Background(), "u1"); errors.Is(err, ErrEndpointUnsupported) {
 		t.Fatal("a JSON 404 latched the route unsupported")
 	}
 }

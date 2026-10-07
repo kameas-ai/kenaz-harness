@@ -281,6 +281,59 @@ func (m *Manager) ReplayTranscript(ctx context.Context, sessionID string, src []
 	return out, nil
 }
 
+// handoffMessages turns decoded shared-session events into Messages for
+// ReplayTranscript (device-keys-handoff-01DEVKH01 WP05). It lives HERE
+// because it stamps move metadata, and this file is the only place allowed
+// to (check-single-move-writer.sh). It writes nothing itself: persistence
+// goes through ReplayTranscript → AppendMessage, the sanctioned seam.
+//
+// The move contract is enforced exactly as AppendTranscriptEntry does
+// (known kind, index >= 0, a turn span), and model-layer tool args are
+// NEVER set — a shared copy carries the display layer only, so the
+// recipient's model history drops each shipped tool_call/tool_result pair
+// rather than reconstructing arguments it was never sent.
+//
+// Each message gets the synthetic source id handoff-seq-<n>; a move's span
+// points at handoff-seq-<turn_seq>, which ReplayTranscript remaps to the
+// destination's fresh user-row id. A move whose opening row was not
+// shipped (turn_seq 0) keeps a stable placeholder span so it stays a
+// coherent move rather than degrading to a classic row.
+func handoffMessages(evs []HandoffEvent) ([]Message, error) {
+	out := make([]Message, 0, len(evs))
+	for i, ev := range evs {
+		seq := uint64(i + 1)
+		msg := Message{
+			ID:      handoffSourceID(seq),
+			Role:    Role(ev.Role),
+			Content: handoffDisplayContent(ev),
+		}
+		for _, tc := range ev.ToolCalls {
+			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: tc.ID, Name: tc.Name, Result: tc.Result, IsError: tc.IsError})
+		}
+		if ev.Move != nil {
+			kind := MoveKind(ev.Move.Kind)
+			if !kind.known() {
+				return nil, fmt.Errorf("%w: event %d: %v %q", ErrHandoffEventInvalid, seq, ErrUnknownMoveKind, ev.Move.Kind)
+			}
+			if ev.Move.Index < 0 {
+				return nil, fmt.Errorf("%w: event %d: %v", ErrHandoffEventInvalid, seq, ErrNegativeMoveIndex)
+			}
+			if ev.Move.TurnSeq >= seq {
+				return nil, fmt.Errorf("%w: event %d: turn_seq %d does not precede it", ErrHandoffEventInvalid, seq, ev.Move.TurnSeq)
+			}
+			idx := ev.Move.Index
+			msg.moveKind = kind
+			msg.moveIndex = &idx
+			msg.moveTurnSpanID = "handoff-unlinked-turn"
+			if ev.Move.TurnSeq > 0 {
+				msg.moveTurnSpanID = handoffSourceID(ev.Move.TurnSeq)
+			}
+		}
+		out = append(out, msg)
+	}
+	return out, nil
+}
+
 // ---- read accessors ----------------------------------------------------
 
 // MoveKind returns the entry's move classification, or the empty

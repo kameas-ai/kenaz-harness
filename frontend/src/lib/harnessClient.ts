@@ -213,6 +213,7 @@ import type {
   FleetTeamMemberView,
   FleetInboxItemView,
   FleetAcceptedSessionView,
+  FleetRecipientDeviceView,
   ComplianceStatus,
 } from './types';
 
@@ -1106,8 +1107,10 @@ interface WailsBindingsLike {
   ProjectSync_SetArtifactClass(projectID: string, opts: FleetArtifactClassOptionsView): Promise<FleetProjectSyncStatus>;
   Handoff_ListTeam(): Promise<FleetTeamMemberView[]>;
   Handoff_Share(sessionID: string, recipientUserID: string): Promise<void>;
+  Handoff_RecipientDevices(recipientUserID: string): Promise<FleetRecipientDeviceView[]>;
   Handoff_Inbox(): Promise<FleetInboxItemView[]>;
   Handoff_Accept(inboxItemID: string): Promise<FleetAcceptedSessionView>;
+  Handoff_Delete(inboxItemID: string): Promise<void>;
   ContextSync_GenerateRecoveryCode(): Promise<string>;
   ContextSync_ApplyRecoveryCode(code: string): Promise<void>;
   // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ─────────────────
@@ -4125,8 +4128,10 @@ export interface HarnessClient {
   ProjectSync_SetArtifactClass(projectID: string, opts: FleetArtifactClassOptionsView): Promise<FleetProjectSyncStatus>;
   Handoff_ListTeam(): Promise<FleetTeamMemberView[]>;
   Handoff_Share(sessionID: string, recipientUserID: string): Promise<void>;
+  Handoff_RecipientDevices(recipientUserID: string): Promise<FleetRecipientDeviceView[]>;
   Handoff_Inbox(): Promise<FleetInboxItemView[]>;
   Handoff_Accept(inboxItemID: string): Promise<FleetAcceptedSessionView>;
+  Handoff_Delete(inboxItemID: string): Promise<void>;
   ContextSync_GenerateRecoveryCode(): Promise<string>;
   ContextSync_ApplyRecoveryCode(code: string): Promise<void>;
 }
@@ -4187,7 +4192,7 @@ const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
   'Unit_ResolveLoadable', 'Catalog_List', 'Catalog_Installed', 'Sync_Status',
   'Sync_PendingMCPSecrets', 'Sites_List', 'Tasks_List', 'Tasks_Tail',
   'Tasks_ListBySession', 'ACP_ListPeers', 'ACP_ListTraces', 'Handoff_ListTeam',
-  'Handoff_Inbox',
+  'Handoff_Inbox', 'Handoff_RecipientDevices',
 ]);
 
 /**
@@ -5039,8 +5044,10 @@ export function createHarnessClient(): HarnessClient {
     ProjectSync_SetArtifactClass: (projectID, opts) => b().ProjectSync_SetArtifactClass(projectID, opts),
     Handoff_ListTeam: () => b().Handoff_ListTeam(),
     Handoff_Share: (sessionID, recipientUserID) => b().Handoff_Share(sessionID, recipientUserID),
+    Handoff_RecipientDevices: (recipientUserID) => b().Handoff_RecipientDevices(recipientUserID),
     Handoff_Inbox: () => b().Handoff_Inbox(),
     Handoff_Accept: (inboxItemID) => b().Handoff_Accept(inboxItemID),
+    Handoff_Delete: (inboxItemID) => b().Handoff_Delete(inboxItemID),
     ContextSync_GenerateRecoveryCode: () => b().ContextSync_GenerateRecoveryCode(),
     ContextSync_ApplyRecoveryCode: (code) => b().ContextSync_ApplyRecoveryCode(code),
   };
@@ -7033,10 +7040,15 @@ export function createFakeHarnessClient(
     }),
     Handoff_ListTeam: async (): Promise<FleetTeamMemberView[]> => [],
     Handoff_Share: noop,
+    Handoff_RecipientDevices: async (_recipientUserID: string): Promise<FleetRecipientDeviceView[]> => [],
     Handoff_Inbox: async (): Promise<FleetInboxItemView[]> => [],
     Handoff_Accept: async (_inboxItemID: string): Promise<FleetAcceptedSessionView> => ({
+      localSessionID: '',
       eventCount: 0,
+      title: '',
+      alreadyAccepted: false,
     }),
+    Handoff_Delete: noop,
     ContextSync_GenerateRecoveryCode: async (): Promise<string> => '',
     ContextSync_ApplyRecoveryCode: noop,
   };

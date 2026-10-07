@@ -4715,7 +4715,7 @@ export interface FleetSyncView {
  */
 export interface FleetSessionView {
   state: FleetSessionState;
-  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled */
+  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled | node_removed */
   reason?: string;
   /** Raw error text behind `reason` (humanize before showing). */
   message?: string;
@@ -4735,7 +4735,21 @@ export interface FleetSessionView {
   capabilities: CapabilitiesView;
   profile?: FleetProfileInfo;
   sync: FleetSyncView;
+  /**
+   * This device's key-registration outcome at the last enroll
+   * (device-keys-handoff-01DEVKH01). Absent until an enroll ran.
+   */
+  deviceKeys?: FleetDeviceKeysView;
   updatedAt: string;
+}
+
+/** Mirrors settings.FleetDeviceKeysView. */
+export interface FleetDeviceKeysView {
+  /** registered | too_many_devices | invalid_key | unavailable */
+  status: string;
+  /** Human copy when this device cannot receive shared sessions. */
+  message?: string;
+  handoffFingerprint?: string;
 }
 
 /**
@@ -5103,24 +5117,50 @@ export interface FleetTeamMemberView {
 
 /**
  * FleetInboxItemView — one item in the handoff inbox (Handoff_Inbox).
- * Mirrors contextsync.InboxItemView.
+ * Mirrors contextsync.InboxItemView EXACTLY (the previous shape here —
+ * itemID/fromUserID/sessionTitle — never matched the wire; nothing read
+ * it beyond the item count).
  */
 export interface FleetInboxItemView {
-  itemID: string;
-  fromUserID: string;
-  fromDisplayName: string;
-  sessionTitle: string;
+  inboxItemID: string;
+  sessionID: string;
+  senderUserID: string;
+  senderEmail: string;
   /** RFC3339 timestamp when the share was received. */
   receivedAt: string;
+  /**
+   * None of the item's key wraps targets a still-active device key of
+   * this user (the device it was sent to was removed / its key rotated):
+   * it can never be opened (device-keys-handoff-01DEVKH01).
+   */
+  undecryptable: boolean;
 }
 
 /**
  * FleetAcceptedSessionView — returned by Handoff_Accept.
- * Mirrors contextsync.AcceptedSessionView.
- * Only the event count crosses the RPC boundary — no session content.
+ * Mirrors contextsync.AcceptedSessionView. No session content crosses the
+ * RPC boundary — only the new local session's id and title.
  */
 export interface FleetAcceptedSessionView {
+  /** The new local session holding the shared transcript. */
+  localSessionID: string;
   eventCount: number;
+  title: string;
+  /** True when this item was accepted before on this device (no re-fetch). */
+  alreadyAccepted: boolean;
+}
+
+/**
+ * FleetRecipientDeviceView — one receiving device of a teammate
+ * (Handoff_RecipientDevices). Mirrors contextsync.RecipientDeviceView.
+ * Fleet is a trusted key directory; the fingerprint is what a cautious
+ * user compares out of band.
+ */
+export interface FleetRecipientDeviceView {
+  keyID: string;
+  /** sha256:<hex> of the device's handoff public key. */
+  fingerprint: string;
+  createdAt?: string;
 }
 
 /**

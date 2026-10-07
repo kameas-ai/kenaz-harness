@@ -22,10 +22,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
@@ -61,50 +63,79 @@ const (
 	LabelSessionEvents DeriveLabel = "session-events-v1"
 	// LabelProjectEvents is the HKDF label for project event stream keys.
 	LabelProjectEvents DeriveLabel = "project-events-v1"
-	// LabelHandoffKey is the HKDF label for deriving the symmetric AEAD
-	// key from an X25519 shared secret during team session handoff.
-	LabelHandoffKey DeriveLabel = "handoff-v1"
-	// LabelHandoffIdentity is the HKDF label for deriving the per-device
-	// X25519 private key scalar used as the recipient identity key.
-	LabelHandoffIdentity DeriveLabel = "handoff-identity-v1"
+	// HEADSTONE: LabelHandoffKey ("handoff-v1", the legacy v1 direct-mode
+	// key) is DELETED (review fix #9, 2026-10-07) with both the v1 send
+	// (OQ-8) and the v1 accept arm — no v1 item ever reached an inbox.
+	// LabelHandoffWrapV2 is the PINNED v2 key-wrap HKDF info (fleet
+	// contract §10.3 "PINNED v2 wrap construction"):
+	// kek = HKDF-SHA256(ikm=X25519(eph, recipient), salt=nil,
+	// info="kenaz-handoff-v2-wrap", L=32). Never change it — every
+	// in-flight inbox item would become undecryptable.
+	LabelHandoffWrapV2 DeriveLabel = "kenaz-handoff-v2-wrap"
+
+	// HEADSTONE (device-keys-handoff-01DEVKH01 WP01, 2026-10-07):
+	// LabelHandoffIdentity ("handoff-identity-v1") is DELETED. It derived
+	// the handoff identity from the seed ALONE, so two installs sharing a
+	// seed (recovery-code import) derived the SAME key — the multi-device
+	// collision per-device keys exist to kill. Clean cutover, no fallback:
+	// the harness never uploaded a v1-derived public key anywhere (fleet's
+	// key routes shipped with #182), so no inbox item in any environment is
+	// wrapped to one. The v2 derivation is handoffIdentityV2Info below.
 )
 
-// SeedKey ensures a context seed exists in the OS keychain. If no seed exists,
-// it generates a fresh 32-byte random seed and persists it. Returns the seed
-// bytes. Safe to call multiple times; subsequent calls are idempotent.
-func SeedKey() ([]byte, error) {
-	svc := paths.FleetKeychainService()
-	existing, err := keyring.Get(svc, contextSeedAccount)
-	if err == nil && existing != "" {
-		seed, decErr := base64.StdEncoding.DecodeString(existing)
-		if decErr != nil {
-			return nil, fmt.Errorf("fleet: context seed decode: %w", decErr)
-		}
-		if len(seed) != seedSize {
-			return nil, fmt.Errorf("fleet: context seed bad length %d (want %d)", len(seed), seedSize)
-		}
-		return seed, nil
+// handoffIdentityV2Info is the HKDF info prefix of the per-device handoff
+// identity: handoff_priv = HKDF-SHA256(ikm=seed, salt=nil,
+// info="kenaz-handoff-identity-v2:"+node_id, L=32). Device-salted by the
+// node id, so a recovery-code import on a second install yields a
+// DIFFERENT key (by design; fleet makes no promise that an import recovers
+// items wrapped to another device), while the same seed + node id always
+// re-derives the same key (re-enroll is a fleet no-op, not a rotation).
+const handoffIdentityV2Info = "kenaz-handoff-identity-v2:"
+
+// hkdf32 expands ikm into 32 bytes with HKDF-SHA256, salt=nil and the
+// given info string. It is the labeled-derive helper for DYNAMIC labels
+// (the per-device identity) and for ECDH shared secrets; DeriveKey keeps
+// the fixed-label stream keys.
+func hkdf32(ikm []byte, info string) ([]byte, error) {
+	r := hkdf.New(sha256.New, ikm, nil, []byte(info))
+	out := make([]byte, 32)
+	if _, err := io.ReadFull(r, out); err != nil {
+		return nil, fmt.Errorf("fleet: HKDF expand: %w", err)
 	}
-	// Generate a fresh seed.
-	seed := make([]byte, seedSize)
-	if _, err := rand.Read(seed); err != nil {
-		return nil, fmt.Errorf("fleet: generate context seed: %w", err)
-	}
-	encoded := base64.StdEncoding.EncodeToString(seed)
-	if err := keyring.Set(svc, contextSeedAccount, encoded); err != nil {
-		return nil, fmt.Errorf("fleet: persist context seed: %w", err)
-	}
-	logging.L().Info("fleet.context_crypto.seed_generated")
-	return seed, nil
+	return out, nil
 }
 
-// LoadContextSeed reads the seed from the OS keychain without generating one.
-// Returns ErrContextSeedNotFound when no seed exists.
-func LoadContextSeed() ([]byte, error) {
-	svc := paths.FleetKeychainService()
-	existing, err := keyring.Get(svc, contextSeedAccount)
-	if err != nil || existing == "" {
-		return nil, ErrContextSeedNotFound
+// ErrKeychainUnavailable is returned when the OS keychain answered with
+// anything other than "not found" (locked keychain, denied prompt,
+// transient backend error). The seed is a ROOT secret: such an error must
+// never be read as "no seed yet" — minting a replacement would make every
+// synced stream undecryptable and silently rotate the handoff key.
+var ErrKeychainUnavailable = errors.New("fleet: OS keychain unavailable")
+
+// seedMu serialises every read-modify-write of the context seed, so two
+// first-run callers (enroll + sync enable) cannot each mint a seed and
+// race last-write-wins on a root secret.
+var seedMu sync.Mutex
+
+// seedKeyringGet / seedKeyringSet are the keychain seam for the seed (a
+// test substitutes a failing backend; production is core/keyring).
+var (
+	seedKeyringGet = keyring.Get
+	seedKeyringSet = keyring.Set
+)
+
+// readSeedLocked reads the stored seed. (nil, nil) means DEFINITELY absent
+// (keyring.ErrNotFound, or an empty value that cannot be a seed); any other
+// keychain error is ErrKeychainUnavailable. Caller holds seedMu.
+func readSeedLocked() ([]byte, error) {
+	existing, err := seedKeyringGet(paths.FleetKeychainService(), contextSeedAccount)
+	switch {
+	case errors.Is(err, keyring.ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("%w: %v", ErrKeychainUnavailable, err)
+	case existing == "":
+		return nil, nil
 	}
 	seed, decErr := base64.StdEncoding.DecodeString(existing)
 	if decErr != nil {
@@ -116,15 +147,60 @@ func LoadContextSeed() ([]byte, error) {
 	return seed, nil
 }
 
+// SeedKey ensures a context seed exists in the OS keychain and returns it.
+// It generates one ONLY when the keychain says the seed is definitely
+// absent (keyring.ErrNotFound); any other keychain error is returned as
+// ErrKeychainUnavailable and nothing is written. Serialised: concurrent
+// first-run callers get the same seed.
+func SeedKey() ([]byte, error) {
+	seedMu.Lock()
+	defer seedMu.Unlock()
+	seed, err := readSeedLocked()
+	if err != nil {
+		return nil, err
+	}
+	if seed != nil {
+		return seed, nil
+	}
+	seed = make([]byte, seedSize)
+	if _, err := rand.Read(seed); err != nil {
+		return nil, fmt.Errorf("fleet: generate context seed: %w", err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(seed)
+	if err := seedKeyringSet(paths.FleetKeychainService(), contextSeedAccount, encoded); err != nil {
+		return nil, fmt.Errorf("fleet: persist context seed: %w", err)
+	}
+	logging.L().Info("fleet.context_crypto.seed_generated")
+	return seed, nil
+}
+
+// LoadContextSeed reads the seed from the OS keychain without generating one.
+// Returns ErrContextSeedNotFound when no seed exists and
+// ErrKeychainUnavailable (wrapped) when the keychain could not be read.
+func LoadContextSeed() ([]byte, error) {
+	seedMu.Lock()
+	defer seedMu.Unlock()
+	seed, err := readSeedLocked()
+	if err != nil {
+		return nil, err
+	}
+	if seed == nil {
+		return nil, ErrContextSeedNotFound
+	}
+	return seed, nil
+}
+
 // StoreContextSeed writes a raw seed to the OS keychain, overwriting any
-// existing value. Used by UseRecoveryCode to import a seed from another device.
+// existing value. Used by UseRecoveryCode to import a seed from another
+// device — an explicit user action, the only sanctioned overwrite.
 func StoreContextSeed(seed []byte) error {
 	if len(seed) != seedSize {
 		return fmt.Errorf("fleet: seed must be %d bytes, got %d", seedSize, len(seed))
 	}
-	svc := paths.FleetKeychainService()
+	seedMu.Lock()
+	defer seedMu.Unlock()
 	encoded := base64.StdEncoding.EncodeToString(seed)
-	if err := keyring.Set(svc, contextSeedAccount, encoded); err != nil {
+	if err := seedKeyringSet(paths.FleetKeychainService(), contextSeedAccount, encoded); err != nil {
 		return fmt.Errorf("fleet: persist imported context seed: %w", err)
 	}
 	logging.L().Info("fleet.context_crypto.seed_imported")
@@ -146,21 +222,26 @@ func DeriveKey(seed []byte, label DeriveLabel) ([]byte, error) {
 	return key, nil
 }
 
-// LoadOwnHandoffPrivKey derives a deterministic X25519 private key for this
-// device from the context seed. The corresponding public key is what fleet's
-// identity service registers on behalf of this user; the sender fetches it
-// via fetchRecipientPublicKey to derive the handoff AEAD key.
-//
-// Derivation: HKDF(seed, label=LabelHandoffIdentity) → 32 raw scalar bytes →
-// X25519 private key (the Go standard library accepts raw 32-byte scalars).
+// ErrHandoffIdentityUnavailable is returned when the device handoff
+// identity cannot be derived because there is no persistent node id (no
+// data dir). Deriving from a transient node id would mint a key nobody can
+// ever re-derive, so it is refused.
+var ErrHandoffIdentityUnavailable = errors.New("fleet: handoff identity unavailable: no data dir for a persistent node id")
+
+// DeriveHandoffPrivKey derives the per-device X25519 handoff identity from
+// the context seed and the device's node id (device-keys-handoff-01DEVKH01
+// FR-1): HKDF-SHA256(seed, salt=nil, info="kenaz-handoff-identity-v2:"+
+// nodeID) → 32 raw scalar bytes → X25519 private key (crypto/ecdh clamps).
 //
 // Privacy invariant: the private key bytes are never logged.
-func LoadOwnHandoffPrivKey() (*ecdh.PrivateKey, error) {
-	seed, err := LoadContextSeed()
-	if err != nil {
-		return nil, fmt.Errorf("fleet: load own handoff priv key: %w", err)
+func DeriveHandoffPrivKey(seed []byte, nodeID string) (*ecdh.PrivateKey, error) {
+	if len(seed) != seedSize {
+		return nil, fmt.Errorf("fleet: handoff identity: seed must be %d bytes", seedSize)
 	}
-	scalar, err := DeriveKey(seed, LabelHandoffIdentity)
+	if strings.TrimSpace(nodeID) == "" {
+		return nil, ErrHandoffIdentityUnavailable
+	}
+	scalar, err := hkdf32(seed, handoffIdentityV2Info+nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("fleet: derive handoff identity scalar: %w", err)
 	}
@@ -169,6 +250,82 @@ func LoadOwnHandoffPrivKey() (*ecdh.PrivateKey, error) {
 		return nil, fmt.Errorf("fleet: build X25519 private key: %w", err)
 	}
 	return priv, nil
+}
+
+// LoadOwnHandoffPrivKey derives this device's handoff identity from the
+// keychain seed and the persistent node id under dataDir. Returns
+// ErrContextSeedNotFound (wrapped) when no seed exists yet — enroll mints
+// one (OQ-4), so a signed-in device normally has it.
+//
+// Privacy invariant: the private key bytes are never logged.
+func LoadOwnHandoffPrivKey(dataDir string) (*ecdh.PrivateKey, error) {
+	if strings.TrimSpace(dataDir) == "" {
+		return nil, ErrHandoffIdentityUnavailable
+	}
+	seed, err := LoadContextSeed()
+	if err != nil {
+		return nil, fmt.Errorf("fleet: load own handoff priv key: %w", err)
+	}
+	nodeID, err := NodeID(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: load own handoff priv key: node id: %w", err)
+	}
+	return DeriveHandoffPrivKey(seed, nodeID)
+}
+
+// KeyFingerprint is "sha256:<hex>" of a raw public key — the format fleet
+// stores in device_keys.fingerprint and returns in public_keys[] and
+// handoff recipients[] (same as the signing key's, signing.go).
+func KeyFingerprint(pub []byte) string {
+	sum := sha256.Sum256(pub)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// EncryptAAD seals plaintext with XChaCha20-Poly1305 under key with
+// additional data aad and a fresh random 24-byte nonce.
+//
+// Privacy invariant: plaintext bytes are never logged.
+func EncryptAAD(key, plaintext, aad []byte) (ciphertext, nonce []byte, err error) {
+	nonce = make([]byte, chacha20poly1305.NonceSizeX)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, nil, fmt.Errorf("fleet: generate nonce: %w", err)
+	}
+	ct, err := sealXAAD(key, nonce, plaintext, aad)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ct, nonce, nil
+}
+
+// DecryptAAD opens an XChaCha20-Poly1305 ciphertext bound to aad. Any
+// authentication failure (wrong key, tampered bytes, different aad) is
+// ErrDecryptionFailed.
+func DecryptAAD(key, ciphertext, nonce, aad []byte) ([]byte, error) {
+	aead, err := chacha20poly1305.NewX(key)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: build cipher for decrypt: %w", err)
+	}
+	if len(nonce) != aead.NonceSize() {
+		return nil, ErrDecryptionFailed
+	}
+	pt, err := aead.Open(nil, nonce, ciphertext, aad)
+	if err != nil {
+		return nil, ErrDecryptionFailed
+	}
+	return pt, nil
+}
+
+// sealXAAD is the deterministic core of EncryptAAD (explicit nonce) — the
+// golden-vector tests drive it directly.
+func sealXAAD(key, nonce, plaintext, aad []byte) ([]byte, error) {
+	aead, err := chacha20poly1305.NewX(key)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: build cipher: %w", err)
+	}
+	if len(nonce) != aead.NonceSize() {
+		return nil, fmt.Errorf("fleet: nonce must be %d bytes", aead.NonceSize())
+	}
+	return aead.Seal(nil, nonce, plaintext, aad), nil
 }
 
 // Encrypt encrypts plaintext with XChaCha20-Poly1305 using key.

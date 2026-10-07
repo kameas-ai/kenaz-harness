@@ -8,9 +8,14 @@ package rpc
 
 import (
 	"context"
+	"errors"
+	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // ── sessionSyncBackendAdapter ─────────────────────────────────────────────────
@@ -136,7 +141,71 @@ func (a *handoffBackendAdapter) ShareSession(ctx context.Context, sessionID, rec
 	for _, r := range plainEvents {
 		fleet = append(fleet, corefleet.SessionEventRecord{Seq: r.Seq, Bytes: r.Bytes})
 	}
-	return a.hh.ShareSession(ctx, sessionID, recipientUserID, fleet)
+	_, err := a.hh.ShareSession(ctx, sessionID, recipientUserID, fleet)
+	return err
+}
+
+func (a *handoffBackendAdapter) RecipientDevices(ctx context.Context, recipientUserID string) ([]contextsyncview.RecipientDeviceView, error) {
+	devs, err := a.hh.RecipientDevices(ctx, recipientUserID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]contextsyncview.RecipientDeviceView, 0, len(devs))
+	for _, d := range devs {
+		v := contextsyncview.RecipientDeviceView{KeyID: d.KeyID, Fingerprint: d.Fingerprint}
+		if !d.CreatedAt.IsZero() {
+			v.CreatedAt = d.CreatedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// ── handoffSessionLoader ──────────────────────────────────────────────────────
+
+// handoffSessionLoader implements contextsyncview.SessionEventLoader over
+// the real session manager: the session's full transcript (ListMessages —
+// the same row set a conversation fork replays) serialized by
+// session.EncodeHandoffTranscript into self-contained, versioned events.
+type handoffSessionLoader struct {
+	sessions *session.Manager
+}
+
+// newHandoffSessionLoader binds the loader to the chassis session manager
+// (nil chassis → a loader that refuses, never an empty share).
+func newHandoffSessionLoader(c *core.Core) *handoffSessionLoader {
+	return &handoffSessionLoader{sessions: chassisSessions(c)}
+}
+
+// chassisSessions is the chassis session manager, or nil without a chassis.
+func chassisSessions(c *core.Core) *session.Manager {
+	if c == nil {
+		return nil
+	}
+	return c.SessionManager()
+}
+
+func (l *handoffSessionLoader) LoadSessionEvents(ctx context.Context, sessionID string) ([]contextsyncview.SessionEventRecord, error) {
+	if l == nil || l.sessions == nil {
+		return nil, contextsyncview.ErrHandoffLoaderUnavailable
+	}
+	rec, err := l.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := l.sessions.ListMessages(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	payloads, err := session.EncodeHandoffTranscript(rec.Name, msgs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]contextsyncview.SessionEventRecord, len(payloads))
+	for i, p := range payloads {
+		out[i] = contextsyncview.SessionEventRecord{Seq: uint64(i + 1), Bytes: p}
+	}
+	return out, nil
 }
 
 func (a *handoffBackendAdapter) Inbox(ctx context.Context) ([]contextsyncview.InboxItemRecord, error) {
@@ -156,28 +225,64 @@ func (a *handoffBackendAdapter) Inbox(ctx context.Context) ([]contextsyncview.In
 			SenderUserID: it.SenderUserID,
 			SenderEmail:  it.SenderEmail,
 			ReceivedAt:   receivedAt,
+
+			Undecryptable: it.Undecryptable,
 		})
 	}
 	return out, nil
 }
 
-func (a *handoffBackendAdapter) AcceptShare(ctx context.Context, inboxItemID string) ([]contextsyncview.SessionEventRecord, error) {
-	records, err := a.hh.AcceptShare(ctx, inboxItemID)
+func (a *handoffBackendAdapter) AcceptShare(ctx context.Context, inboxItemID string) (contextsyncview.AcceptedShareRecord, error) {
+	acc, err := a.hh.AcceptShare(ctx, inboxItemID)
 	if err != nil {
-		return nil, err
+		return contextsyncview.AcceptedShareRecord{}, err
 	}
-	out := make([]contextsyncview.SessionEventRecord, 0, len(records))
-	for _, r := range records {
-		out = append(out, contextsyncview.SessionEventRecord{Seq: r.Seq, Bytes: r.Bytes})
+	out := contextsyncview.AcceptedShareRecord{
+		InboxItemID:  acc.InboxItemID,
+		SessionID:    acc.SessionID,
+		SenderUserID: acc.SenderUserID,
+		SenderEmail:  acc.SenderEmail,
+		Events:       make([]contextsyncview.SessionEventRecord, 0, len(acc.Events)),
+	}
+	for _, r := range acc.Events {
+		out.Events = append(out.Events, contextsyncview.SessionEventRecord{Seq: r.Seq, Bytes: r.Bytes})
 	}
 	return out, nil
+}
+
+func (a *handoffBackendAdapter) DeleteShare(ctx context.Context, inboxItemID string) error {
+	return a.hh.DeleteShare(ctx, inboxItemID)
+}
+
+func (a *handoffBackendAdapter) RecordAccepted(ctx context.Context, rec contextsyncview.AcceptedShareRecord, localSessionID string) {
+	a.hh.RecordAccepted(ctx, rec.InboxItemID, rec.SessionID, rec.SenderUserID, localSessionID)
 }
 
 // ── recoveryBackendAdapter ────────────────────────────────────────────────────
 
 // recoveryBackendAdapter implements contextsyncview.RecoveryBackend by
 // delegating to the context_crypto.go package-level functions.
-type recoveryBackendAdapter struct{}
+//
+// Importing a recovery code replaces the context seed, which changes this
+// device's derived handoff key (seed + node id). The adapter therefore
+// re-registers the device keys via PUT /api/v1/me/nodes/{node_id}/keys —
+// the exact use case fleet's contract names for that route
+// (device-keys-handoff-01DEVKH01 WP02, spec §4 consequence (a)). A 403
+// node_removed there takes the same terminal sign-out as enroll.
+type recoveryBackendAdapter struct {
+	// client / dataDir are nil/"" when fleet is not wired; the import then
+	// stays local and the next enroll registers the new key.
+	client  *corefleet.Client
+	dataDir string
+	// onNodeRemoved applies the node_removed sign-out (settings API).
+	onNodeRemoved func()
+	// register is the PUT seam (nil → client.RegisterDeviceKeys); tests
+	// substitute it.
+	register func(ctx context.Context, nodeID string) error
+}
+
+// recoveryReRegisterTimeout bounds the post-import PUT keys.
+const recoveryReRegisterTimeout = 15 * time.Second
 
 func (r *recoveryBackendAdapter) GenerateRecoveryCode() (string, error) {
 	seed, err := corefleet.SeedKey()
@@ -192,5 +297,44 @@ func (r *recoveryBackendAdapter) ApplyRecoveryCode(code string) error {
 	if err != nil {
 		return err
 	}
-	return corefleet.StoreContextSeed(seed)
+	if err := corefleet.StoreContextSeed(seed); err != nil {
+		return err
+	}
+	r.reRegisterKeys()
+	return nil
+}
+
+// reRegisterKeys pushes the post-import handoff key to fleet. Best-effort:
+// the import itself already succeeded locally, and the next enroll sends
+// the same derived key; failures are logged and recorded in the client's
+// KeyRegistration (surfaced on the session snapshot).
+func (r *recoveryBackendAdapter) reRegisterKeys() {
+	if r == nil || r.client == nil || r.client.IsNop() {
+		return
+	}
+	nodeID := corefleet.ReadNodeID(r.dataDir)
+	if nodeID == "" {
+		return // never enrolled on this install: enroll registers keys
+	}
+	if ok, _ := r.client.SignedIn(context.Background()); !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), recoveryReRegisterTimeout)
+	defer cancel()
+	register := r.register
+	if register == nil {
+		register = r.client.RegisterDeviceKeys
+	}
+	err := register(ctx, nodeID)
+	switch {
+	case err == nil:
+		logging.L().Info("rpc.context_sync.recovery_keys_reregistered")
+	case errors.Is(err, corefleet.ErrNodeRemoved):
+		logging.L().Warn("rpc.context_sync.recovery_keys_node_removed")
+		if r.onNodeRemoved != nil {
+			r.onNodeRemoved()
+		}
+	default:
+		logging.L().Warn("rpc.context_sync.recovery_keys_reregister_failed", "err", err.Error())
+	}
 }

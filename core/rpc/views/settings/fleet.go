@@ -931,11 +931,14 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 	a.fleet.signIn = nil
 	a.fleet.sess.signingIn = false
 	if err != nil {
-		reason := FleetReasonSignInFailed
-		if errors.Is(err, context.Canceled) {
+		reason, msg := FleetReasonSignInFailed, err.Error()
+		switch {
+		case errors.Is(err, context.Canceled):
 			reason = FleetReasonSignInCancelled
+		case errors.Is(err, fleet.ErrNodeRemoved):
+			reason, msg = FleetReasonNodeRemoved, fleetNodeRemovedCopy
 		}
-		a.fleet.sess.signInReason, a.fleet.sess.signInErr = reason, err.Error()
+		a.fleet.sess.signInReason, a.fleet.sess.signInErr = reason, msg
 	}
 	a.fleet.mu.Unlock()
 	call.id, call.err = id, err
@@ -1006,8 +1009,16 @@ func (a *API) runSignIn(ctx context.Context) (FleetIdentity, error) {
 	a.fleet.mu.Lock()
 	a.fleet.sess.expired = false
 	a.fleet.sess.autoRetryStopped = false
+	// An explicit sign-in is the "re-authorized sign-in" fleet requires
+	// after an admin removal; node_id.txt was cleared, so this enroll
+	// mints a fresh node id.
+	a.fleet.sess.nodeRemoved = false
+	dataDirForMarker := a.fleet.dataDir
 	a.startFleetBackgroundLocked()
 	a.fleet.mu.Unlock()
+	if err := fleet.ClearNodeRemoved(dataDirForMarker); err != nil {
+		logging.L().Warn("fleet.rpc.sign_in.clear_node_removed_failed", "err", err.Error())
+	}
 	id, err := a.fleetEnroll(ctx)
 	if err != nil {
 		logging.L().Error("fleet.rpc.sign_in.enroll_failed", "err", err.Error())
@@ -1135,6 +1146,14 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 		logging.L().Warn("fleet.rpc.sign_out.disabled_by_env")
 		return fleet.ErrFleetDisabled
 	}
+	// Self-unenroll while the tokens still authenticate: fleet revokes
+	// this node's device keys, so a signed-out device stops counting
+	// toward the 16-active-handoff-key cap (fleet answers 2026-10-07:
+	// dormant devices count until unenrolled). Best-effort and bounded —
+	// sign-out never fails or stalls on it. Explicit sign-out only; not
+	// on app quit (device-keys-handoff-01DEVKH01 OQ-9).
+	a.selfUnenroll(ctx)
+
 	// Stop pollers + watcher + clear caches before removing tokens so
 	// in-flight requests have a chance to complete.
 	a.StopFleetBackground()
@@ -1165,6 +1184,84 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 	a.runSessionResetHooks()
 	a.publishFleetSession("sign_out")
 	return signOutErr
+}
+
+// selfUnenrollTimeout bounds the sign-out DELETE /me/nodes/{id}.
+const selfUnenrollTimeout = 5 * time.Second
+
+// selfUnenroll revokes this device's fleet registration (and with it its
+// device keys) on explicit sign-out. Never mints a node id; skipped when
+// there is no enrolled node or no usable session.
+func (a *API) selfUnenroll(ctx context.Context) {
+	c := a.fleetClient()
+	if c == nil || c.IsNop() {
+		return
+	}
+	nodeID := fleet.ReadNodeID(a.fleetDataDir())
+	if nodeID == "" {
+		return
+	}
+	if ok, _ := c.SignedIn(ctx); !ok {
+		return
+	}
+	uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), selfUnenrollTimeout)
+	defer cancel()
+	if err := c.UnenrollNode(uctx, nodeID); err != nil {
+		logging.L().Warn("fleet.rpc.sign_out.unenroll_failed", "err", err.Error())
+		return
+	}
+	logging.L().Info("fleet.rpc.sign_out.unenrolled")
+}
+
+// handleNodeRemoved is the terminal sign-out for 403 node_removed (fleet
+// contract §10.1, device-keys-handoff-01DEVKH01 WP02): stop the background
+// lanes, clear the tokens, the cached identity AND node_id.txt (so the next
+// sign-in enrolls under a fresh node id — wire-id-safe, wire ids derive
+// from wire_id_salt which is NOT touched), and leave a signed-out snapshot
+// whose reason is node_removed. No self-unenroll: the node is already gone.
+func (a *API) handleNodeRemoved() {
+	// Durable marker FIRST: whatever fails below (keychain delete, file
+	// removal) or however the process restarts, enroll stays refused until
+	// an explicit sign-in (review fix #5).
+	if err := fleet.MarkNodeRemoved(a.fleetDataDir()); err != nil {
+		logging.L().Warn("fleet.node_removed.mark_failed", "err", err.Error())
+	}
+	a.StopFleetBackground()
+	if err := fleet.ClearTokens(); err != nil {
+		logging.L().Warn("fleet.node_removed.clear_tokens_partial", "err", err.Error())
+	}
+	if a.fleet != nil {
+		a.fleet.lanes.Reset()
+	}
+	if dataDir := a.fleetDataDir(); dataDir != "" {
+		if err := os.Remove(fleet.IdentityFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
+			logging.L().Warn("fleet.node_removed.remove_identity_failed", "err", err.Error())
+		}
+		if err := fleet.ClearNodeID(dataDir); err != nil {
+			logging.L().Warn("fleet.node_removed.clear_node_id_failed", "err", err.Error())
+		}
+	}
+	if a.fleet != nil {
+		a.fleet.mu.Lock()
+		a.fleet.sess.nodeRemoved = true
+		a.fleet.sess.autoRetryStopped = true
+		a.fleet.sess.signInReason = FleetReasonNodeRemoved
+		a.fleet.sess.signInErr = fleetNodeRemovedCopy
+		a.fleet.mu.Unlock()
+	}
+	a.runSessionResetHooks()
+	a.publishFleetSession("node_removed")
+}
+
+// FleetNodeRemoved applies the node_removed terminal sign-out for a 403
+// that arrived OUTSIDE enroll — PUT /me/nodes/{id}/keys after a
+// recovery-code import (core/rpc wiring). Same handling as enroll.
+func (a *API) FleetNodeRemoved() {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	logging.L().Warn("fleet.rpc.node_removed")
+	a.handleNodeRemoved()
 }
 
 // FleetSignedIn reports whether a valid (non-expired) fleet session exists.
@@ -1213,6 +1310,16 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		logging.L().Warn("fleet.rpc.enroll.no_client")
 		return FleetIdentity{}, fleet.ErrFleetDisabled
 	}
+	if a.fleet != nil {
+		a.fleet.mu.RLock()
+		removed := a.fleet.sess.nodeRemoved || fleet.NodeRemovedMarked(a.fleet.dataDir)
+		a.fleet.mu.RUnlock()
+		if removed {
+			// Stop enrolling after node_removed until an explicit sign-in
+			// (fleet contract §10.1) — no network, no fresh node id.
+			return FleetIdentity{}, fleet.ErrNodeRemoved
+		}
+	}
 	dataDir := a.fleetDataDir()
 	nodeID, nodeIDErr := fleet.NodeID(dataDir)
 	if nodeIDErr != nil {
@@ -1229,6 +1336,13 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	// out" (fleet-session-truth-01DOGF0A FR-3), and the snapshot can only
 	// say so if the failure is recorded.
 	if err != nil {
+		if errors.Is(err, fleet.ErrNodeRemoved) {
+			// Terminal for this node id: sign out, clear identity +
+			// node_id.txt, show "removed by admin" (fleet contract §10.1).
+			logging.L().Warn("fleet.rpc.enroll.node_removed")
+			a.handleNodeRemoved()
+			return FleetIdentity{}, err
+		}
 		a.recordEnrollOutcome(nil, err)
 		a.publishFleetSession("enroll_failed")
 		logging.L().Error("fleet.rpc.enroll.failed", "err", err.Error())

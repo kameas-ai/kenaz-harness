@@ -2021,6 +2021,12 @@ type FleetSessionHandoffPayload struct {
 	RecipientUserID string `json:"recipient_user_id"`
 	// InboxItemID is the fleet inbox item ID (non-empty on inbound shares).
 	InboxItemID string `json:"inbox_item_id,omitempty"`
+	// SenderUserID is the opaque user ID of the sender (inbound shares;
+	// device-keys-handoff-01DEVKH01 review fix #10 — previously the sender
+	// was written into RecipientUserID).
+	SenderUserID string `json:"sender_user_id,omitempty"`
+	// LocalSessionID is the local session an inbound share was saved as.
+	LocalSessionID string `json:"local_session_id,omitempty"`
 }
 
 // ── Fleet audit-archival payloads (fleet-audit-archival-01NDFSEX13) ──────────

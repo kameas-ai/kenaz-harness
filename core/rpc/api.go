@@ -4509,10 +4509,24 @@ func New(c *core.Core, opts ...Option) *API {
 			}
 
 			a.contextSyncAPI = &contextsyncview.Impl{
-				Session:  &sessionSyncBackendAdapter{ss: sessionSyncer, breaker: appendBreaker},
-				Project:  &projectSyncBackendAdapter{ps: projectSyncer},
-				Handoff:  &handoffBackendAdapter{hh: handoffHandler},
-				Recovery: &recoveryBackendAdapter{},
+				Session: &sessionSyncBackendAdapter{ss: sessionSyncer, breaker: appendBreaker},
+				Project: &projectSyncBackendAdapter{ps: projectSyncer},
+				Handoff: &handoffBackendAdapter{hh: handoffHandler},
+				// device-keys-handoff-01DEVKH01 WP04: Handoff_Share sends
+				// the REAL session (unwired-ledger 2026-10-06 item 1).
+				SessionEvents: newHandoffSessionLoader(c),
+				// device-keys-handoff-01DEVKH01 WP05: accepted handoffs
+				// become real local sessions (OQ-2).
+				Accepted: newHandoffAcceptStore(chassisSessions(c), flDataDir),
+				Recovery: &recoveryBackendAdapter{
+					client:  flCl,
+					dataDir: flDataDir,
+					onNodeRemoved: func() {
+						if a.settingsImpl != nil {
+							a.settingsImpl.FleetNodeRemoved()
+						}
+					},
+				},
 				// fleet-enforcement-truth-01PMZ505 WP13 (owner ruling
 				// G-7): a.cedarGate() is the SAME process-singleton every
 				// other gate site consults (nil-safe — degrades to

@@ -104,7 +104,7 @@ func TestFleetPaths_IdsAreEscaped(t *testing.T) {
 	_ = c.Unpublish(ctx, "a/b?c")
 	_, _ = FetchCatalogItem(ctx, c, "x/y", "1.0#z")
 	h := NewHandoffHandler(c, nil, nil)
-	_, _ = h.fetchRecipientPublicKey(ctx, "u&admin=1")
+	_, _ = h.fetchRecipientKeys(ctx, "u&admin=1")
 	_, _ = h.AcceptShare(ctx, "../inbox")
 	if es, err := NewEventStream(c, "s/x?y", make([]byte, 32)); err == nil {
 		_ = es.DeleteRemote(ctx)

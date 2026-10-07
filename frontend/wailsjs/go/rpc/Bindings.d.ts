@@ -389,9 +389,13 @@ export function Graph_Validate(arg1:string):Promise<agentgraph.ValidationResult>
 
 export function Handoff_Accept(arg1:string):Promise<contextsync.AcceptedSessionView>;
 
+export function Handoff_Delete(arg1:string):Promise<void>;
+
 export function Handoff_Inbox():Promise<Array<contextsync.InboxItemView>>;
 
 export function Handoff_ListTeam():Promise<Array<contextsync.TeamMemberView>>;
+
+export function Handoff_RecipientDevices(arg1:string):Promise<Array<contextsync.RecipientDeviceView>>;
 
 export function Handoff_Share(arg1:string,arg2:string):Promise<void>;
 

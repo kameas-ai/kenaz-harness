@@ -321,4 +321,31 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
     expect(wrapper.find('[data-testid="identity-roles"]').text()).toBe('Org owner');
     expect(wrapper.find('[data-testid="identity-name"]').text()).toBe('Alice Cooper');
   });
+
+  // device-keys-handoff-01DEVKH01 review fix #4.
+  it("shows this device's own handoff-key fingerprint when registered", async () => {
+    const fp = 'sha256:' + 'ab'.repeat(32);
+    const client = buildClient(
+      session('signed_in', prodProfile, { deviceKeys: { status: 'registered', handoffFingerprint: fp } }),
+    );
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="identity-device-fingerprint"]').text()).toBe(fp);
+  });
+
+  it('shows the cannot-receive reason (no fingerprint) when keys did not register', async () => {
+    const msg = "This device can't receive shared sessions: too many devices.";
+    const client = buildClient(
+      session('signed_in', prodProfile, { deviceKeys: { status: 'too_many_devices', message: msg } }),
+    );
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="identity-device-fingerprint"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="error-msg"]').text()).toContain('too many devices');
+  });
 });
+
