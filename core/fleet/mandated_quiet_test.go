@@ -19,6 +19,9 @@ import (
 
 // ownerMandatedWorkflows is a race-safe MandatedWorkflows that tracks which
 // catalog id owns each workflow id, like the real provenance check.
+// In-memory deliberately (WP-PI AC-PI-2): the applier's own state goes
+// through the real mandated_applied.json here; the workflow consumer's
+// persistence is pinned on real sqlite in core/rpc/views/workflows.
 type ownerMandatedWorkflows struct {
 	mu      sync.Mutex
 	owner   map[string]string // workflow id -> mandating catalog id

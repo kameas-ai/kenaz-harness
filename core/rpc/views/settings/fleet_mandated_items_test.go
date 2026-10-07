@@ -23,7 +23,9 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
-// fakeMandatedWorkflows is a race-safe fleet.MandatedWorkflows.
+// fakeMandatedWorkflows is a race-safe fleet.MandatedWorkflows. In-memory
+// deliberately (WP-PI AC-PI-2): these tests pin the composite applier's
+// dispatch and ACK; workflow persistence is pinned in core/rpc/views/workflows.
 type fakeMandatedWorkflows struct {
 	mu        sync.Mutex
 	installed map[string]string // workflowID -> catalogID

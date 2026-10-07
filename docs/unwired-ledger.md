@@ -342,6 +342,37 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-07 (skill-library-01SKLIB01 residuals, feat/skill-library) · three accepted, none introduced as regressions
+
+1. **OQ-1 — the revocation sweep covers skills + workflows only.**
+   Catalog-installed packs and bundles have no consumer install record
+   carrying a catalog id (both kinds are still allowlisted in
+   `check-install-provider-coverage.sh` — there is no pack/bundle
+   provider), so `RevocationSweeper` has nothing to diff for them; a
+   revoked pack/bundle the user downloaded stays as `installed/` residue.
+   **Blocker:** install-framework Phase 3 (pack/bundle providers).
+   **Owner:** the mission that registers those providers adds a
+   `RevocationWorkflows`-shaped source for each kind.
+2. **`CatalogItem.LifecycleReason` has no producer on the live wire.**
+   Fleet main (@ b57b2ec) sends `lifecycle`, `superseded_by` (+
+   `revoked_at` on list) on `GET /catalog/list` and the fetch, but
+   `lifecycle_reason` only on `GET /catalog/entries/{kind}/{slug}`. The
+   harness decodes it forward-compatibly and the chip tooltip shows it
+   when present, so today the tooltip never carries the admin's reason —
+   not a lie (nothing claims a reason), but a consumer without a
+   producer. **Owner:** fleet (add `lifecycle_reason` to
+   `CatalogItemMetaAPI` / `CatalogFetchResponse`, additive), or a harness
+   follow-up that reads the entries detail for deprecated rows.
+3. **A user cannot move their catalog install of a skill from v1 to v2.**
+   Each version is its own catalog id, so `LiveRegister` refuses v2 over
+   v1 under the same store id (`ErrSkillIDCollision`), and
+   `SkillProvider.Update` never offers one (`newestByID` keys on the
+   per-version id). Pre-existing since per-version ids; surfaced, not
+   introduced, by this mission (the mandated path was fixed in WP04 —
+   mandates may take over any catalog-provenance copy). **Owner:** the
+   OQ-4 follow-up ("nudge toward `superseded_by`"), which needs
+   entry-level grouping of versions anyway.
+
 ### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
 
 1. **R1 (P2) — promote-to-team can wedge and duplicate when the user has

@@ -23,7 +23,10 @@ import (
 )
 
 // recordingMandatedWorkflows is a race-safe MandatedWorkflows that records
-// the exact payload bytes it was handed.
+// the exact payload bytes it was handed. In-memory deliberately (WP-PI
+// AC-PI-2, skill-library-01SKLIB01): it pins the applier's dispatch; the
+// workflow consumer's persistence is pinned on real sqlite (and the v0.91.0
+// snapshot) in core/rpc/views/workflows.
 type recordingMandatedWorkflows struct {
 	mu   sync.Mutex
 	got  [][]byte
