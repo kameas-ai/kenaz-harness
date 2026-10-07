@@ -515,10 +515,12 @@ Per-device handoff keys + v2 wrap-to-all + accept-persists shipped
    sender-local artifacts). **Owner:** product — decide if attachments
    should ride as separate encrypted events.
 7. **Externally-owned tokens + node_removed.** Where the host owns the
-   tokens (served / brokered mode) `ClearTokens` is a no-op; the session
-   still shows signed_out/node_removed and enroll is refused locally until
-   an explicit sign-in, but recovery depends on the host re-authorizing.
-   **Owner:** served-mode boundary owner.
+   tokens (served / brokered mode) `ClearTokens` is a no-op. Since review
+   fix #5 (2026-10-07) the block is DURABLE (`<dataDir>/fleet/node_removed`,
+   honoured by every enroll path incl. cmd/servedfleet's supervisor, cleared
+   only by an explicit sign-in), but in served mode that sign-in — and so
+   recovery — is the host's re-authorization. **Owner:** served-mode
+   boundary owner.
 
 ### 2026-10-06 (newly-live fleet routes verification, pre-v0.91.0) · four latent gaps, all verified non-firing today
 
