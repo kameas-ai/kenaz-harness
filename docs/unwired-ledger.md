@@ -392,6 +392,26 @@ left these latents:
 4. Cosmetic: handoff 409 recipient_keys_stale / recipient_no_key / 422
    map to raw "status NNN" in the share dialog. **Owner:** v2 mission.
 
+### 2026-10-06 (empty-turn fix review residuals, fix/session-write-empty-turn) · two pre-existing flags, neither introduced by d845ecf0
+
+1. **Image-only turns drop generated images silently.**
+   `GeneratedImageCapturer.DrainPendingImages` rides the session_write
+   `HookPostLLM` (`chat_runner.go:1598-1612`). A final fire with
+   generated images but EMPTY text now completes via the soft skip and
+   never drains — images lost quietly (previously the same turn
+   hard-errored, losing them loudly). Only bites providers that emit
+   image-only turns. **Fix shape:** move the drain off the session_write
+   hook, or drain on the skip path too. **Owner:** next chat-runner
+   mission; revisit if any wired provider starts emitting image-only
+   finals.
+2. **Whitespace-only assistant rows render as visible empty bubbles.**
+   `session_write` skips only exact `""`; a `"\n"` turn still writes a
+   row, and `MessageBubble.vue` (311, 655-662) renders it under
+   `whitespace-pre-wrap` with no blank guard. Pre-existing. **Fix
+   shape:** TrimSpace-based skip at session_write (consistent with
+   `AppendEntry`'s TrimSpace absorb compare) or a blank guard in the
+   bubble. **Owner:** same follow-up as above.
+
 ### 2026-10-05 (engine-ports review residuals, fix/engine-ports) · two accepted lane-scan edges
 
 1. A slow OUR engine with NO engine.port record (failed write or garbage
