@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -41,7 +42,12 @@ func recipientDevice(t *testing.T, f *fakeV2Fleet, node string) *HandoffHandler 
 	return NewHandoffHandler(c, &fakeEmitter{}, nil)
 }
 
-func TestHandoffRoundTrip_EachDeviceAccepts(t *testing.T) {
+// OQ-1 (owner-ruled, review fix #3): ONE accept per user. Every device of
+// the recipient CAN decrypt (the key is wrapped to each — pinned by
+// TestShareSession_V2_WrapsToEveryDevice), but the first device to open
+// the item deletes it through the real DELETE path, so the user's other
+// devices then get handoff_not_found with honest copy.
+func TestHandoffRoundTrip_OneAcceptPerUser(t *testing.T) {
 	f, sender, _ := sendRig(t)
 	f.setKeys(fxRecipientUser, fxKeySet(t))
 	evs := plainEvents(4)
@@ -49,27 +55,39 @@ func TestHandoffRoundTrip_EachDeviceAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("share: %v", err)
 	}
-	for _, node := range []string{fxNodeA, fxNodeB} {
-		dev := recipientDevice(t, f, node)
-		if _, err := dev.Inbox(context.Background()); err != nil {
-			t.Fatalf("inbox: %v", err)
-		}
-		got, err := dev.AcceptShare(context.Background(), res.InboxItemID)
-		if err != nil {
-			t.Fatalf("device %s accept: %v", node, err)
-		}
-		if got.Mode != "wrapped" || got.SessionID != "sess_rt" || got.SenderEmail != "alice@example.com" || len(got.Events) != 4 {
-			t.Fatalf("device %s: %+v", node, got)
-		}
-		for i := range evs {
-			if got.Events[i].Seq != evs[i].Seq || !bytes.Equal(got.Events[i].Bytes, evs[i].Bytes) {
-				t.Fatalf("device %s event %d mismatch", node, i)
-			}
+	devA := recipientDevice(t, f, fxNodeA)
+	if _, err := devA.Inbox(context.Background()); err != nil {
+		t.Fatalf("inbox: %v", err)
+	}
+	got, err := devA.AcceptShare(context.Background(), res.InboxItemID)
+	if err != nil {
+		t.Fatalf("device A accept: %v", err)
+	}
+	if got.Mode != "wrapped" || got.SessionID != "sess_rt" || got.SenderEmail != "alice@example.com" || len(got.Events) != 4 {
+		t.Fatalf("device A: %+v", got)
+	}
+	for i := range evs {
+		if got.Events[i].Seq != evs[i].Seq || !bytes.Equal(got.Events[i].Bytes, evs[i].Bytes) {
+			t.Fatalf("event %d mismatch", i)
 		}
 	}
-	// A device whose key the item was not wrapped to cannot open it.
-	other := recipientDevice(t, f, "01J9SOMEOTHERNODE00000000")
-	if _, err := other.AcceptShare(context.Background(), res.InboxItemID); !errors.Is(err, ErrHandoffNotForThisDevice) {
+	// What the RPC layer does after persisting: the real DELETE.
+	if err := devA.DeleteShare(context.Background(), res.InboxItemID); err != nil {
+		t.Fatalf("delete after accept: %v", err)
+	}
+	if d := f.deleted(); len(d) != 1 || d[0] != res.InboxItemID {
+		t.Fatalf("fleet deletes = %v", d)
+	}
+	// The user's other device: gone, with copy that says why.
+	_, err = recipientDevice(t, f, fxNodeB).AcceptShare(context.Background(), res.InboxItemID)
+	if !errors.Is(err, ErrHandoffItemGone) || !strings.Contains(err.Error(), "already opened on another of your devices") {
+		t.Fatalf("device B after A accepted: %v", err)
+	}
+	// A device whose key the item was never wrapped to is refused too.
+	f2, sender2, _ := sendRig(t)
+	f2.setKeys(fxRecipientUser, fxKeySet(t))
+	res2, _ := sender2.ShareSession(context.Background(), "sess_rt2", fxRecipientUser, evs)
+	if _, err := recipientDevice(t, f2, "01J9SOMEOTHERNODE00000000").AcceptShare(context.Background(), res2.InboxItemID); !errors.Is(err, ErrHandoffNotForThisDevice) {
 		t.Fatalf("foreign device: %v", err)
 	}
 }
