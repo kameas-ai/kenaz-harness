@@ -252,3 +252,33 @@ func TestResummarize_PendingChunkOnNoopDevice(t *testing.T) {
 		t.Fatalf("new record must stay EmbedPending: %+v", c)
 	}
 }
+
+// TestForget_QueuesFleetForgetOnlyForKnownIDs (WP07, H7): the user Forget
+// RPC queues a Fleet forget for a chunk Fleet may know and coalesces one
+// it cannot (never sent) — read back from the persisted outbox.
+func TestForget_QueuesFleetForgetOnlyForKnownIDs(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, c := range []corememory.Chunk{
+		{ID: "mem-synced", ScopeKind: corememory.ScopeKindGlobal, Content: "a", Embedding: []float32{1, 0}, CreatedAt: now, SyncedAt: now},
+		{ID: "mem-local", ScopeKind: corememory.ScopeKindGlobal, Content: "b", Embedding: []float32{0, 1}, CreatedAt: now},
+	} {
+		if err := f.store.Add(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.api.Forget(ctx, "mem-synced"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.api.Forget(ctx, "mem-local"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.reopenedForgets(t); len(got) != 1 || got[0] != "mem-synced" {
+		t.Fatalf("persisted forgets = %v, want [mem-synced]", got)
+	}
+	if len(f.reopenedChunks(t)) != 0 {
+		t.Fatal("both chunks must be gone locally")
+	}
+}

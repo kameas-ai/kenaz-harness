@@ -323,13 +323,16 @@ func (a *API) PromoteScope(ctx context.Context, chunkID, newScopeKind, newScopeI
 	return chunkID, nil
 }
 
-// Forget removes the chunk with id from the store. Bare wrapper around
-// Store.Delete so the bindings layer doesn't import core/memory.
+// Forget removes the chunk with id from the store. It is a user-intent
+// delete (memory-sync-01MEMSY01 WP07, contract H7): when Fleet may know
+// the chunk, a forget op is queued so every other device deletes it too.
+// A chunk Fleet cannot know coalesces with its unpushed create and sends
+// nothing. (Automatic prune never comes through here.)
 func (a *API) Forget(ctx context.Context, id string) error {
 	if a == nil || a.store == nil {
 		return ErrStoreUnavailable
 	}
-	return a.store.Delete(ctx, id)
+	return corememory.RemoveForSync(ctx, a.store, a.forgets, id)
 }
 
 // Pin sets / clears the do-not-prune flag on a chunk (Bundle E WP16).

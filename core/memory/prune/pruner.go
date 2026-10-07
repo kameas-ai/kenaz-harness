@@ -146,7 +146,10 @@ func (p *Pruner) Plan(ctx context.Context, scope ...memory.ScopeFilter) (Decisio
 // capability keep their survivors unchanged (the drops still apply).
 //
 // Prune is device-local: drops are plain Deletes and never reach the
-// Fleet forget outbox (ruling: automatic prune sends nothing).
+// Fleet forget outbox (ruling: automatic prune sends nothing). A pruned
+// chunk that is synced still lives on Fleet, so it comes back here if it
+// reappears on the pull feed (another device edits or recalls it) — prune
+// evicts this device's copy, it does not forget the memory.
 func (p *Pruner) Apply(ctx context.Context, scope ...memory.ScopeFilter) (Decision, error) {
 	if p == nil || p.store == nil {
 		return Decision{}, errors.New("prune: store is nil")

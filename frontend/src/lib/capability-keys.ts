@@ -31,6 +31,7 @@ export const CAPABILITY_KEYS = [
   'team_session_handoff',
   'context_bootstrap',
   'org_graph_sharing',
+  'memory_sync',
 ] as const;
 
 export type Capability = (typeof CAPABILITY_KEYS)[number];

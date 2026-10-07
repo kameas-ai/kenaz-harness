@@ -729,6 +729,10 @@ type API struct {
 	// user-intent chunk removal reports through it; the memory sync lane
 	// drains it. nil when there is no on-disk store.
 	memForgets *corememory.ForgetOutbox
+	// memorySync is the Fleet learned-memory sync lane
+	// (memory-sync-01MEMSY01 WP07). nil when there is no memory store,
+	// clock or outbox (nil-core chassis, unreadable clock state).
+	memorySync *corefleet.MemorySync
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
 	// WP07). The manager owns the resolved catalog + user-override
@@ -3513,7 +3517,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// the view degrades to the registry-only API which returns "not wired"
 	// for user commands.
 	{
-		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI, a.exposureIdx)
+		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, memForgetRecorder(a.memForgets), a.branchesAPI, a.workflowsAPI, a.exposureIdx)
 		if slashStore != nil && slashDispatch != nil {
 			a.slashAPI = slashview.NewWithStore(slashRegistry, slashStore, slashDispatch)
 			logging.L().Info("rpc.slashcmd.user_wired",
@@ -4361,6 +4365,12 @@ func New(c *core.Core, opts ...Option) *API {
 			)
 		}
 
+		// memory-sync-01MEMSY01 WP07: the learned-memory sync lane. Built
+		// whenever there is a real memory store + clock + outbox; it gates
+		// itself per cycle on the memory_sync capability AND this device's
+		// opt-in, so an un-entitled or un-opted user makes no request.
+		a.memorySync = buildMemorySync(a, flCl, flDataDir)
+
 		// fleet-skills-sync-01NDFSEX18 WP02: wire fleet skill dependencies onto
 		// the slashAPI. The capability snapshot is read lazily from the poller at
 		// call time via GetCaps so tier changes propagate within one poll
@@ -4891,7 +4901,7 @@ func New(c *core.Core, opts ...Option) *API {
 // workflows API (used by /wf).
 // Returns nil when registry construction fails; the view degrades
 // to a friendly error response on every Execute.
-func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI, exposureIdx *secrets.ExposureIndex) *coreslashcmd.Registry {
+func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, memForgets corememory.ForgetRecorder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI, exposureIdx *secrets.ExposureIndex) *coreslashcmd.Registry {
 	deps := coreslashcmd.Deps{}
 	if c != nil && c.SessionManager() != nil {
 		deps.Sessions = &slashSessionAppender{mgr: c.SessionManager()}
@@ -4900,7 +4910,7 @@ func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore coremem
 		deps.Providers = &slashProviderLister{inner: llmAPI}
 	}
 	if memStore != nil && embedder != nil {
-		deps.Memory = &slashMemoryGateway{store: memStore, embedder: embedder}
+		deps.Memory = &slashMemoryGateway{store: memStore, embedder: embedder, forgets: memForgets}
 	}
 	if branchesAPI != nil {
 		deps.Branches = &slashBranchGateway{inner: branchesAPI}
@@ -4979,6 +4989,9 @@ func (a *slashProviderLister) ListProviders(ctx context.Context) ([]coreslashcmd
 type slashMemoryGateway struct {
 	store    corememory.Store
 	embedder corememory.Embedder
+	// forgets: /forget is a user-intent delete — it queues a Fleet memory
+	// sync forget when Fleet may know the chunk (memory-sync-01MEMSY01).
+	forgets corememory.ForgetRecorder
 }
 
 func (g *slashMemoryGateway) Memorize(ctx context.Context, sessionID, text string) (string, error) {
@@ -5069,7 +5082,7 @@ func (g *slashMemoryGateway) Forget(ctx context.Context, id string) error {
 	if g == nil || g.store == nil {
 		return errors.New("slashcmd: memory store unavailable")
 	}
-	if err := g.store.Delete(ctx, id); err != nil {
+	if err := corememory.RemoveForSync(ctx, g.store, g.forgets, id); err != nil {
 		// chromemStore returns a fmt.Errorf("memory: chunk %q not
 		// found", id) — match on the substring since the underlying
 		// error is not a typed sentinel.
@@ -8896,6 +8909,64 @@ func memForgetRecorder(ob *corememory.ForgetOutbox) corememory.ForgetRecorder {
 		return nil
 	}
 	return ob
+}
+
+// buildMemorySync constructs and starts the Fleet memory sync lane
+// (memory-sync-01MEMSY01 WP07). Returns nil — and starts nothing — when
+// the store is not a SyncStore or the clock / outbox could not be opened.
+// A nil / nop fleet client still builds the lane: it reports itself off
+// (fleet_disabled) on every cycle and makes no request.
+func buildMemorySync(a *API, flCl *corefleet.Client, dataDir string) *corefleet.MemorySync {
+	if a == nil || a.memClock == nil || a.memForgets == nil || dataDir == "" {
+		return nil
+	}
+	store, ok := a.memStoreRef.(corememory.SyncStore)
+	if !ok {
+		return nil
+	}
+	settingsRef := a.settingsImpl
+	home, _ := os.UserHomeDir()
+	coreRef, personal := a.core, a.personalStore
+	ms, err := corefleet.NewMemorySync(corefleet.MemorySyncConfig{
+		Client:  flCl,
+		Store:   store,
+		Clock:   a.memClock,
+		Outbox:  a.memForgets,
+		DataDir: dataDir,
+		Caps: func() *corefleet.Capabilities {
+			if settingsRef == nil {
+				return nil
+			}
+			p := settingsRef.CapabilityPoller()
+			if p == nil {
+				return nil
+			}
+			c := p.Current()
+			return &c
+		},
+		Lanes: func() *corefleet.SyncLanes {
+			if settingsRef == nil {
+				return nil
+			}
+			return settingsRef.FleetSyncLanes()
+		}(),
+		// WP06: pulled chunks arrive without vectors; index them with the
+		// embedder as configured NOW (re-resolved per drain so a provider
+		// added after boot is picked up). NoopEmbedder ⇒ nothing drains.
+		AfterPull: func(ctx context.Context) {
+			emb := newEmbedder(coreRef, personal, settingsRef)
+			if n, err := corememory.DrainEmbedPending(ctx, store, emb, 500); err != nil {
+				logging.L().Warn("memory.sync.reembed_failed", "indexed", n, "err", err.Error())
+			}
+		},
+		HomeDir: home,
+	})
+	if err != nil {
+		logging.L().Error("memory.sync.open_failed", "err", err.Error())
+		return nil
+	}
+	ms.Start(context.Background())
+	return ms
 }
 
 // buildMemoryPruneScheduler constructs the automatic prune-sweep

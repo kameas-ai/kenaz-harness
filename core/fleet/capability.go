@@ -84,6 +84,13 @@ const (
 	// Until then it is decoded, cached and surfaced in the capability
 	// snapshot / CAPABILITY_KEYS like every other key.
 	CapOrgGraphSharing Capability = "org_graph_sharing"
+
+	// CapMemorySync gates cross-device learned-memory sync (Pro, Team,
+	// Enterprise). Wire value "memory_sync" (kenaz-fleet
+	// docs/contract-harness-memory.md §1). Consumer: MemorySync
+	// (memory_sync.go) — no request is made without it.
+	// Mission: memory-sync-01MEMSY01 WP07.
+	CapMemorySync Capability = "memory_sync"
 )
 
 // AllCapabilities returns every known Capability constant in declaration
@@ -116,6 +123,7 @@ func AllCapabilities() []Capability {
 		CapTeamSessionHandoff,
 		CapContextBootstrap,
 		CapOrgGraphSharing,
+		CapMemorySync,
 	}
 }
 
