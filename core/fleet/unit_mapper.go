@@ -35,9 +35,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"sync/atomic"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/units"
