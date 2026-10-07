@@ -236,14 +236,33 @@ func failureSummary(f RunFailure) string {
 // Authorization header verbatim in a 401 body). Kept local to core/llm —
 // the sentry redactor's list misses OpenRouter's "sk-or-v1-…" shape and
 // core/llm must not depend on the crash reporter.
-var credentialShapes = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)authorization\s*[:=]\s*\S+(\s+\S+)?`),
-	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(`(?i)(x-api-key|api-key|api_key|apikey)\s*[:=]\s*\S+`),
-	regexp.MustCompile(`sk-[A-Za-z0-9_-]{8,}`),
-	regexp.MustCompile(`AIza[A-Za-z0-9_-]{20,}`),
-	regexp.MustCompile(`(?:AKIA|ASIA)[A-Z0-9]{16}`),
-	regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`),
+var credentialShapes = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	// A credential in a URL query string (Gemini's ?key=…, and the
+	// generic token/api_key params) — keep the parameter name, drop the
+	// value.
+	{regexp.MustCompile(`(?i)([?&](?:key|api_key|apikey|access_token|token)=)[^&\s"'<>]+`), "${1}[redacted]"},
+	{regexp.MustCompile(`(?i)authorization\s*[:=]\s*\S+(\s+\S+)?`), "[redacted]"},
+	{regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}`), "[redacted]"},
+	{regexp.MustCompile(`(?i)(x-api-key|api-key|api_key|apikey)\s*[:=]\s*\S+`), "[redacted]"},
+	{regexp.MustCompile(`sk-[A-Za-z0-9_-]{8,}`), "[redacted]"},
+	{regexp.MustCompile(`AIza[A-Za-z0-9_-]{20,}`), "[redacted]"},
+	{regexp.MustCompile(`(?:AKIA|ASIA)[A-Z0-9]{16}`), "[redacted]"},
+	{regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`), "[redacted]"},
+}
+
+// RedactCredentials replaces every credential shape in msg with
+// "[redacted]" and leaves everything else — length, line breaks —
+// untouched. It is the redaction half of SanitizeProviderMessage, for
+// text that must stay whole: the chat runner's terminal close Message,
+// whose Friendly() copy embeds the provider's raw error body verbatim.
+func RedactCredentials(msg string) string {
+	for _, c := range credentialShapes {
+		msg = c.re.ReplaceAllString(msg, c.repl)
+	}
+	return msg
 }
 
 // SanitizeProviderMessage makes a provider-supplied error message safe to
@@ -255,9 +274,7 @@ func SanitizeProviderMessage(msg string) string {
 	if msg == "" {
 		return ""
 	}
-	for _, re := range credentialShapes {
-		msg = re.ReplaceAllString(msg, "[redacted]")
-	}
+	msg = RedactCredentials(msg)
 	msg = strings.Join(strings.Fields(msg), " ")
 	if r := []rune(msg); len(r) > failureMessageMaxRunes {
 		msg = string(r[:failureMessageMaxRunes]) + "…"

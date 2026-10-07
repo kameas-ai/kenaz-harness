@@ -148,3 +148,23 @@ func TestSanitizeProviderMessage_RedactsCredentialShapes(t *testing.T) {
 		t.Fatalf("ClassifyFailure leaked a key: %q", f.Message)
 	}
 }
+
+// TestRedactCredentials_ProbeBody: the review probe — an OpenRouter key,
+// an Authorization header and a ?key= query param in one provider body.
+// RedactCredentials keeps the text whole; SanitizeProviderMessage also
+// caps it. Neither may let any of the three through.
+func TestRedactCredentials_ProbeBody(t *testing.T) {
+	body := "402 for key sk-or-v1-0123456789abcdef0123456789abcdef; " +
+		"request had Authorization: Bearer sk-or-v1-fedcba9876543210fedcba98; " +
+		"retry at https://generativelanguage.googleapis.com/v1/models?key=AIzaNOTAREALKEY12345&alt=sse"
+	for _, out := range []string{RedactCredentials(body), SanitizeProviderMessage(body)} {
+		for _, leak := range []string{"0123456789abcdef0123", "fedcba9876543210", "AIzaNOTAREALKEY12345"} {
+			if strings.Contains(out, leak) {
+				t.Fatalf("leaked %q: %q", leak, out)
+			}
+		}
+		if !strings.Contains(out, "?key=[redacted]") {
+			t.Fatalf("query param name lost or value kept: %q", out)
+		}
+	}
+}

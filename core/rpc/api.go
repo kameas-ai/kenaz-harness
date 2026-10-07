@@ -10182,7 +10182,7 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 // RunTurnSpans implements llm.TurnRunSpanReader: the turn spans some
 // chat run was already dispatched for (session_turn_runs), so a Retry of
 // an undelivered turn is not re-announced to fleet context-sync.
-func (r *sessionHistoryReader) RunTurnSpans(ctx context.Context, sessionID string) (map[string]bool, error) {
+func (r *sessionHistoryReader) RunTurnSpans(ctx context.Context, sessionID string) (map[string]llm.TurnRunState, error) {
 	if r == nil || r.mgr == nil {
 		return nil, nil
 	}
@@ -10190,10 +10190,12 @@ func (r *sessionHistoryReader) RunTurnSpans(ctx context.Context, sessionID strin
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]bool, len(runs))
+	// ListTurnRuns is oldest first, so the last write per span wins: the
+	// map holds each span's NEWEST run.
+	out := make(map[string]llm.TurnRunState, len(runs))
 	for _, tr := range runs {
 		if tr.TurnSpanID != "" {
-			out[tr.TurnSpanID] = true
+			out[tr.TurnSpanID] = llm.TurnRunState{Outcome: tr.Outcome.Outcome, Delivered: tr.Outcome.Delivered}
 		}
 	}
 	return out, nil

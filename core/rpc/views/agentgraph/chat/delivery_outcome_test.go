@@ -10,6 +10,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
@@ -108,5 +109,31 @@ func TestStreamBridge_MoveStartIsNotDelivery(t *testing.T) {
 	b.Emit(coreag.StreamEvent{Kind: coreag.StreamEventReasoning})
 	if !b.ModelResponded() {
 		t.Fatal("reasoning output means the model accepted the request")
+	}
+}
+
+// TestDeliveryOutcome_CloseMessageRedacted: the close Message is
+// Friendly() copy that embeds the provider body verbatim; a key echoed in
+// that body must not reach the chat bubble.
+func TestDeliveryOutcome_CloseMessageRedacted(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{{Kind: coreag.StreamEventText, Text: "partial"}},
+		err: &corellm.ErrPaymentRequired{Status: 402,
+			Message: "no credits for sk-or-v1-0123456789abcdef0123456789abcdef (Authorization: Bearer abcdefghijklmnop1234) see /v1?key=SECRETVALUE99"},
+	})
+	runner, broker, _ := buildIntegrationRunner(t, llm, newStubTools(), 25, []coreag.Message{{Role: "user", Content: "hi"}})
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("hi")); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	closed := waitForClosed(t, broker)
+	for _, leak := range []string{"0123456789abcdef0123", "abcdefghijklmnop1234", "SECRETVALUE99"} {
+		if strings.Contains(closed.Message, leak) || strings.Contains(closed.FailureMessage, leak) {
+			t.Fatalf("close payload leaked %q: message=%q failure_message=%q", leak, closed.Message, closed.FailureMessage)
+		}
+	}
+	if !closed.Delivered {
+		t.Fatal("output streamed before the failure — delivered must be true")
 	}
 }

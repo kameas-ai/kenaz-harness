@@ -29,6 +29,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -239,15 +240,36 @@ func TestChatTurn_UndeliveredThenRetry_SameUserRow(t *testing.T) {
 		t.Error("(d) no assistant row spans the retried user message")
 	}
 
-	// (e) one announcement for one user turn.
+	// (f) a stale Retry — the same no-append dispatch, from a second
+	// window still showing the badge — is refused: the message already
+	// reached the model. No run is started and no row is written.
+	if _, err := llmAPI.StartStream(ctx, "or-profile", sid, ""); !errors.Is(err, llmview.ErrTurnAlreadyDelivered) {
+		t.Errorf("(f) stale retry err = %v, want ErrTurnAlreadyDelivered", err)
+	}
+	if runs, _ := sessMgr.ListTurnRuns(ctx, sid); len(runs) != 2 {
+		t.Errorf("(f) a refused retry recorded a run: %d runs", len(runs))
+	}
+	if n := countUserRows(t, sessMgr, sid); n != 1 {
+		t.Errorf("(f) user rows after refused retry = %d", n)
+	}
+	// The normal path is unaffected: append, then StartStream.
+	if _, err := sessAPI.AppendMessage(ctx, sid, "user", "next question"); err != nil {
+		t.Fatalf("AppendMessage (next): %v", err)
+	}
+	if _, err := llmAPI.StartStream(ctx, "or-profile", sid, ""); err != nil {
+		t.Fatalf("(f) fresh send after a delivered turn refused: %v", err)
+	}
+	broker.waitClosed(t, 3)
+
+	// (e) one announcement per user turn — the Retry added none.
 	userTurns := 0
 	for _, ev := range syncRec.snapshot() {
 		if ev["role"] == "user" {
 			userTurns++
 		}
 	}
-	if userTurns != 1 {
-		t.Errorf("(e) fleet context-sync saw %d user-turn events, want 1 (the Retry must not re-announce): %+v",
+	if userTurns != 2 {
+		t.Errorf("(e) fleet context-sync saw %d user-turn events, want 2 (two user turns; the Retry must not re-announce): %+v",
 			userTurns, syncRec.snapshot())
 	}
 }
@@ -265,4 +287,83 @@ func countUserRows(t *testing.T, mgr *session.Manager, sid string) int {
 		}
 	}
 	return n
+}
+
+// blockingRegistry parks every Stream call until release is closed, so a
+// run stays in flight for as long as the test needs.
+type blockingRegistry struct {
+	recordingRegistry
+	release chan struct{}
+}
+
+func (r *blockingRegistry) Profile(string) (corellm.ProviderProfile, error) {
+	return corellm.ProviderProfile{ID: "or-profile", Kind: "openrouter"}, nil
+}
+
+func (r *blockingRegistry) Stream(ctx context.Context, req corellm.GenerationRequest) (corellm.Stream, error) {
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return r.recordingRegistry.Stream(ctx, req)
+}
+
+// TestChatTurn_RetryWhileInFlight_Refused: two clients retrying the same
+// message at once must not start two runs of one turn. The second
+// no-append StartStream, while the first run is still executing, is
+// refused with ErrTurnRetryInFlight; real sqlite.
+func TestChatTurn_RetryWhileInFlight_Refused(t *testing.T) {
+	ctx := context.Background()
+	sessMgr, attMgr := newSQLTestStores(t)
+	graphMgr, err := graphview.NewManager()
+	if err != nil {
+		t.Fatalf("graphview.NewManager: %v", err)
+	}
+	historyAdapter := &sessionHistoryReader{mgr: sessMgr}
+	reg := &blockingRegistry{release: make(chan struct{})}
+	broker := &payloadBroker{}
+	runner, err := chat.New(chat.Config{
+		Kernel:   graphMgr.Kernel(),
+		Registry: reg,
+		Broker:   broker,
+		History: chatSessionMessageReader{
+			inner:            historyAdapter,
+			moveFidelityDial: func() bool { return false },
+		},
+		HistoryWriter: &llmHistoryWriter{inner: historyAdapter},
+		TurnSpan:      chatTurnSpanReader{mgr: sessMgr},
+		TurnRuns:      sessMgr,
+		GraphLoader: func() (coreag.Graph, error) {
+			g, gerr := graphMgr.LoadGraphSpec("chat_default")
+			if gerr != nil {
+				return g, gerr
+			}
+			return coreag.GateAgenticTurnRouting(g, false), nil
+		},
+		MaxTurns: func() int { return 5 },
+	})
+	if err != nil {
+		t.Fatalf("chat.New: %v", err)
+	}
+	llmAPI := llmview.New(llmview.Config{History: historyAdapter, ChatRunner: runner})
+	sessAPI := sessions.NewManagerAPIWithAttachments(sessMgr, attMgr)
+	rec, err := sessMgr.Create(ctx, "in-flight probe")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := sessAPI.AppendMessage(ctx, rec.ID, "user", "hello"); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if _, err := llmAPI.StartStream(ctx, "or-profile", rec.ID, ""); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	if _, err := llmAPI.StartStream(ctx, "or-profile", rec.ID, ""); !errors.Is(err, llmview.ErrTurnRetryInFlight) {
+		t.Errorf("concurrent retry err = %v, want ErrTurnRetryInFlight", err)
+	}
+	close(reg.release)
+	broker.waitClosed(t, 1)
+	if runs, _ := sessMgr.ListTurnRuns(ctx, rec.ID); len(runs) != 1 {
+		t.Errorf("runs = %d, want 1 — the refused retry must not start a run", len(runs))
+	}
 }

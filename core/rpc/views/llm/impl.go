@@ -239,8 +239,34 @@ type SessionMessageReader interface {
 // see that the turn was already announced. Readers that do not implement
 // it (test fakes) keep the row-based check only.
 type TurnRunSpanReader interface {
-	RunTurnSpans(ctx context.Context, sessionID string) (map[string]bool, error)
+	RunTurnSpans(ctx context.Context, sessionID string) (map[string]TurnRunState, error)
 }
+
+// TurnRunState is the NEWEST recorded run of one turn span
+// (session_turn_runs). Outcome "" means in flight, or a run recorded
+// before migration sessions/0344 — i.e. unknown.
+type TurnRunState struct {
+	Outcome   string
+	Delivered bool
+}
+
+// ActiveRunChecker is an optional extension of ChatRunner: whether a run
+// for sessionID is still executing. *chat.ChatRunner implements it.
+type ActiveRunChecker interface {
+	HasActiveRun(sessionID string) bool
+}
+
+// ErrTurnAlreadyDelivered refuses a no-append StartStream (a Retry) whose
+// newest user message already reached the model — e.g. a stale NOT
+// DELIVERED badge clicked in a second window after the first one's
+// Retry succeeded. Re-running it would answer the same message twice.
+// The text is the user-facing copy.
+var ErrTurnAlreadyDelivered = errors.New("This message already reached the model, so there is nothing to retry.")
+
+// ErrTurnRetryInFlight refuses a no-append StartStream (a Retry) while a
+// run for the session is still executing — two clients retrying the same
+// message at once would otherwise start two runs of one turn.
+var ErrTurnRetryInFlight = errors.New("This message is already being sent to the model.")
 
 // SessionContextReader exposes the session's optional starting context
 // (Mission A). buildMessages prepends a system role message when the
@@ -1034,10 +1060,24 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 			for i := len(stored) - 1; i >= 0; i-- {
 				if stored[i].Role == "user" {
 					announce := !turnAlreadySpanned(stored, stored[i].ID)
-					if announce {
-						if rr, ok := a.history.(TurnRunSpanReader); ok {
-							if spans, rerr := rr.RunTurnSpans(ctx, sessionID); rerr == nil && spans[stored[i].ID] {
+					if rr, ok := a.history.(TurnRunSpanReader); ok {
+						if spans, rerr := rr.RunTurnSpans(ctx, sessionID); rerr == nil {
+							if state, ran := spans[stored[i].ID]; ran {
+								// A run was already dispatched for the newest
+								// user row, so this call appended nothing: it
+								// is a Retry. Refuse one that cannot be
+								// right (undelivered-message-retry hardening);
+								// a fresh send — append, then StartStream —
+								// has no run yet and never reaches here.
 								announce = false
+								if state.Outcome != "" && state.Delivered {
+									log.Info("llm.start_stream.refused", "reason", "turn already delivered", "session_id", sessionID)
+									return "", ErrTurnAlreadyDelivered
+								}
+								if ar, ok := a.chatRunner.(ActiveRunChecker); ok && ar.HasActiveRun(sessionID) {
+									log.Info("llm.start_stream.refused", "reason", "run in flight", "session_id", sessionID)
+									return "", ErrTurnRetryInFlight
+								}
 							}
 						}
 					}

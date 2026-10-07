@@ -1731,6 +1731,24 @@ func (r *ChatRunner) StopStream(_ context.Context, subID string) error {
 	return nil
 }
 
+// HasActiveRun reports whether a run for sessionID is still executing —
+// started and not yet at its terminal close. The llm view uses it to
+// refuse a second, concurrent Retry of the same turn
+// (undelivered-message-retry; llm.ActiveRunChecker).
+func (r *ChatRunner) HasActiveRun(sessionID string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, sub := range r.subs {
+		if sub.sessionID == sessionID && !sub.finished.Load() {
+			return true
+		}
+	}
+	return false
+}
+
 // HasPausedSubFor reports whether a paused turn exists for the given profileID.
 // When ok is true, token is the sub_id originally assigned to the paused turn.
 // Used by the LLM view's TestAndRotateKey to decide whether to mint an
@@ -2171,6 +2189,11 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// err.Error() unchanged.
 		message = corellm.FriendlyOr(err, err.Error())
 	}
+	// The close Message reaches a chat bubble and, for a partial, a
+	// persisted row; Friendly() copy embeds the provider's raw error body
+	// verbatim, and some providers echo the offending key or header back
+	// in it. Redact every credential shape before it leaves the runner.
+	message = corellm.RedactCredentials(message)
 	if reason == "backend-error" && failure.Class == "" {
 		failure = corellm.ClassifyFailure(err, sub.providerKind)
 		if errorKind == StreamClosedErrorKindSessionFull {
