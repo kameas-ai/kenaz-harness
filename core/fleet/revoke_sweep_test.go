@@ -8,6 +8,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -396,5 +397,120 @@ func TestConfigPoller_AfterPollRunsEveryRound(t *testing.T) {
 	defer mu.Unlock()
 	if n != 2 {
 		t.Errorf("after-poll ran %d times, want 2", n)
+	}
+}
+
+// ── review F7 pins (behaviour probe-verified in review, now pinned) ─────────
+
+// An EMPTY list with catalog installs present uninstalls nothing: absence
+// is never revocation.
+func TestRevocationSweep_EmptyListUninstallsNothing(t *testing.T) {
+	f := newSweepFixture(t)
+	f.install(t, slashcmd.Skill{ID: "a", Trigger: "a", Source: slashcmd.SkillSourceCatalog, CatalogID: "c1", Version: "1"})
+	f.wf.owner["w"] = "c2"
+	f.srv.set(200, `{"items":[]}`)
+	res, err := f.sw.Sweep(context.Background())
+	if err != nil || len(res.Uninstalled) != 0 || !f.has("a") || len(f.wf.snapshotRemoved()) != 0 || len(f.srv.calls()) != 1 {
+		t.Fatalf("empty list: res=%+v err=%v present=%v calls=%d", res, err, f.has("a"), len(f.srv.calls()))
+	}
+}
+
+// Only the exact wire value "revoked" is revocation; case or whitespace
+// variants are unknown states, shown verbatim and never acted on.
+func TestRevocationSweep_CaseVariantsAreNotRevocation(t *testing.T) {
+	for _, lc := range []string{"Revoked", "REVOKED", " revoked", "revoked "} {
+		t.Run(lc, func(t *testing.T) {
+			f := newSweepFixture(t)
+			f.install(t, slashcmd.Skill{ID: "a", Trigger: "a", Source: slashcmd.SkillSourceCatalog, CatalogID: "c1", Version: "1"})
+			f.srv.set(200, listBody([2]string{"c1", lc}))
+			if _, err := f.sw.Sweep(context.Background()); err != nil || !f.has("a") {
+				t.Fatalf("lifecycle %q: err=%v present=%v", lc, err, f.has("a"))
+			}
+		})
+	}
+}
+
+// A revoked row for a DIFFERENT catalog id (e.g. another version of the
+// same entry) never removes this install.
+func TestRevocationSweep_OtherCatalogIDRevokedNoRemoval(t *testing.T) {
+	f := newSweepFixture(t)
+	f.install(t, slashcmd.Skill{ID: "deploy", Trigger: "deploy", Source: slashcmd.SkillSourceCatalog, CatalogID: "c-v2", Version: "2"})
+	f.wf.owner["w"] = "c-w2"
+	f.srv.set(200, listBody([2]string{"c-v1", "revoked"}, [2]string{"c-w1", "revoked"}, [2]string{"c-v2", "active"}))
+	if _, err := f.sw.Sweep(context.Background()); err != nil || !f.has("deploy") || len(f.wf.snapshotRemoved()) != 0 {
+		t.Fatalf("err=%v present=%v removed=%v", err, f.has("deploy"), f.wf.snapshotRemoved())
+	}
+}
+
+// 404 backs off with doubling skips: fail, skip 1, fail, skip 2, fail,
+// skip 4 — fleet is asked only on the non-skipped cycles.
+func TestRevocationSweep_404BackoffDoubles(t *testing.T) {
+	f := newSweepFixture(t)
+	f.install(t, slashcmd.Skill{ID: "a", Trigger: "a", Source: slashcmd.SkillSourceCatalog, CatalogID: "c1", Version: "1"})
+	f.srv.set(http.StatusNotFound, `{"code":"not_found"}`)
+	var pattern []bool // true = fleet was called this cycle
+	for i := 0; i < 10; i++ {
+		before := len(f.srv.calls())
+		_, _ = f.sw.Sweep(context.Background())
+		pattern = append(pattern, len(f.srv.calls()) > before)
+	}
+	want := []bool{true, false, true, false, false, true, false, false, false, false}
+	for i := range want {
+		if pattern[i] != want[i] {
+			t.Fatalf("call pattern = %v, want %v", pattern, want)
+		}
+	}
+	if st := f.lanes.Snapshot(LaneCatalogRevocation); st.Reason != "fleet_endpoint_unsupported" || !f.has("a") {
+		t.Errorf("lane=%+v present=%v", st, f.has("a"))
+	}
+}
+
+// The backoff caps at revocationMaxSkip (32) cycles.
+func TestRevocationSweep_BackoffCap(t *testing.T) {
+	s := &RevocationSweeper{Lanes: NewSyncLanes()}
+	err := &CatalogStatusError{Op: "list", Status: http.StatusForbidden}
+	var got []int
+	for i := 0; i < 9; i++ {
+		s.mu.Lock()
+		_ = s.listFailedLocked(err)
+		got = append(got, s.skip)
+		s.mu.Unlock()
+	}
+	want := []int{1, 2, 4, 8, 16, 32, 32, 32, 32}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("skip sequence = %v, want %v", got, want)
+		}
+	}
+	s.ResetBackoff()
+	if s.skip != 0 || s.nextSkip != 0 {
+		t.Error("ResetBackoff left backoff state")
+	}
+}
+
+// Review F1: a 401 the client could not refresh surfaces as
+// ErrTokenExpired / ErrNotSignedIn (never a status code); the lane says
+// signed_out and the sweep backs off instead of retrying every 5 minutes.
+// A transport-level failure stays list_failed with no backoff.
+func TestRevocationSweep_AuthFailureIsSignedOut(t *testing.T) {
+	for _, tc := range []struct {
+		err        error
+		wantReason string
+		wantSkip   int
+	}{
+		{fmt.Errorf("fleet/catalog: list: %w", ErrTokenExpired), "signed_out", 1},
+		{fmt.Errorf("fleet/catalog: list: %w", ErrNotSignedIn), "signed_out", 1},
+		{&CatalogStatusError{Op: "list", Status: http.StatusUnauthorized}, "signed_out", 1},
+		{errors.New("fleet/catalog: list: dial tcp: connection refused"), "list_failed", 0},
+	} {
+		s := &RevocationSweeper{Lanes: NewSyncLanes()}
+		s.mu.Lock()
+		_ = s.listFailedLocked(tc.err)
+		skip := s.skip
+		s.mu.Unlock()
+		st := s.Lanes.Snapshot(LaneCatalogRevocation)
+		if st.Reason != tc.wantReason || skip != tc.wantSkip {
+			t.Errorf("%v: reason=%q skip=%d, want %q %d", tc.err, st.Reason, skip, tc.wantReason, tc.wantSkip)
+		}
 	}
 }

@@ -276,33 +276,41 @@ func (s *RevocationSweeper) uninstallLocked(ctx context.Context, t RevocationTar
 
 // listFailedLocked classifies a list failure. Nothing is uninstalled.
 func (s *RevocationSweeper) listFailedLocked(err error) error {
-	var se *CatalogStatusError
-	switch {
-	case errors.Is(err, ErrFleetDisabled):
+	if errors.Is(err, ErrFleetDisabled) {
 		s.Lanes.RecordOff(LaneCatalogRevocation, "fleet_disabled")
 		return nil
-	case errors.As(err, &se) && (se.Status == http.StatusUnauthorized || se.Status == http.StatusForbidden || se.Status == http.StatusNotFound):
-		// Signed out, tier lapse, or a fleet without the route: back off
-		// instead of re-asking every cycle.
-		if s.nextSkip == 0 {
-			s.nextSkip = 1
-		} else if s.nextSkip < revocationMaxSkip {
-			s.nextSkip *= 2
-		}
-		s.skip = s.nextSkip
-		s.consecutive++
-		reason := map[int]string{
-			http.StatusUnauthorized: "signed_out",
-			http.StatusForbidden:    "not_entitled",
-			http.StatusNotFound:     "fleet_endpoint_unsupported",
-		}[se.Status]
-		s.Lanes.RecordFailure(LaneCatalogRevocation, reason, err, s.consecutive,
-			time.Now().Add(time.Duration(s.skip)*configPollInterval))
-		return err
-	default:
+	}
+	reason := ""
+	var se *CatalogStatusError
+	switch {
+	case errors.Is(err, ErrTokenExpired), errors.Is(err, ErrNotSignedIn):
+		// The client's own 401 handling failed to refresh (review F1): the
+		// error never reaches a status code, but it is the same signed-out
+		// state as a bare 401.
+		reason = "signed_out"
+	case errors.As(err, &se) && se.Status == http.StatusUnauthorized:
+		reason = "signed_out"
+	case errors.As(err, &se) && se.Status == http.StatusForbidden:
+		reason = "not_entitled"
+	case errors.As(err, &se) && se.Status == http.StatusNotFound:
+		reason = "fleet_endpoint_unsupported"
+	}
+	if reason == "" {
 		s.failLocked("list_failed", err)
 		return err
 	}
+	// Signed out, tier lapse, or a fleet without the route: back off
+	// (doubling, capped) instead of re-asking every cycle.
+	if s.nextSkip == 0 {
+		s.nextSkip = 1
+	} else if s.nextSkip < revocationMaxSkip {
+		s.nextSkip *= 2
+	}
+	s.skip = s.nextSkip
+	s.consecutive++
+	s.Lanes.RecordFailure(LaneCatalogRevocation, reason, err, s.consecutive,
+		time.Now().Add(time.Duration(s.skip)*configPollInterval))
+	return err
 }
 
 func (s *RevocationSweeper) failLocked(reason string, err error) {
