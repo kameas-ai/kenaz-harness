@@ -220,11 +220,19 @@ async function setRetention(days: number) {
         <dd class="font-medium text-ink" data-testid="compliance-archiver-running">
           {{
             status.archiverRunning
-              ? 'Running'
+              ? status.pausedReason === 'payload_too_large'
+                ? 'Paused — fleet refused a batch as too large (audit stays local; resumes on next sign-in)'
+                : 'Running'
               : status.stoppedReason === 'endpoint_unsupported'
                 ? 'Stopped — not supported by this fleet server (audit stays local)'
                 : 'Stopped'
           }}
+        </dd>
+      </div>
+      <div v-if="(status.rejectedEvents ?? 0) > 0">
+        <dt class="text-ink-muted">Refused by fleet</dt>
+        <dd class="font-medium text-signal-warn" data-testid="compliance-rejected-events">
+          {{ status.rejectedEvents }} event{{ status.rejectedEvents === 1 ? '' : 's' }} not archived (kept locally)
         </dd>
       </div>
     </dl>

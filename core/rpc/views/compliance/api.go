@@ -32,7 +32,17 @@ type ComplianceStatus struct {
 	// route (core/fleet/unsupported_endpoint.go) — local audit is unaffected
 	// and archival resumes on the next fleet sign-in. Empty otherwise.
 	StoppedReason string `json:"stoppedReason,omitempty"`
+	// PausedReason says why a RUNNING archiver is not posting:
+	// "payload_too_large" — fleet answered 413 (permanent for that batch);
+	// archival resumes on the next fleet sign-in. Empty otherwise.
+	PausedReason string `json:"pausedReason,omitempty"`
+	// RejectedEvents counts events fleet refused per-event (a 200 report,
+	// e.g. payload_too_large). They were skipped, not archived.
+	RejectedEvents int64 `json:"rejectedEvents"`
 }
+
+// PausedReasonPayloadTooLarge is ComplianceStatus.PausedReason after a 413.
+const PausedReasonPayloadTooLarge = "payload_too_large"
 
 // StoppedReasonEndpointUnsupported is ComplianceStatus.StoppedReason when the
 // fleet server has no audit-append route.

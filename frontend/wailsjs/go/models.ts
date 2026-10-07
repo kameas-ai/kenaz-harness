@@ -1744,6 +1744,8 @@ export namespace compliance {
 	    enabled: boolean;
 	    archiverRunning: boolean;
 	    stoppedReason?: string;
+	    pausedReason?: string;
+	    rejectedEvents: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ComplianceStatus(source);
@@ -1758,6 +1760,8 @@ export namespace compliance {
 	        this.enabled = source["enabled"];
 	        this.archiverRunning = source["archiverRunning"];
 	        this.stoppedReason = source["stoppedReason"];
+	        this.pausedReason = source["pausedReason"];
+	        this.rejectedEvents = source["rejectedEvents"];
 	    }
 	}
 

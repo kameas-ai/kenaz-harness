@@ -5099,6 +5099,10 @@ export interface ComplianceStatus {
    * unaffected; archival resumes on the next fleet sign-in.
    */
   stoppedReason?: string;
+  /** "payload_too_large": fleet refused a batch (413); paused until next sign-in. */
+  pausedReason?: string;
+  /** Events fleet refused per-event (skipped, not archived). */
+  rejectedEvents?: number;
 }
 
 // ── Capabilities: the one install framework (install-framework-01DOGF0B) ───

@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -175,5 +177,74 @@ func TestListTeam_RepeatedCursorStops(t *testing.T) {
 	members, err := h.ListTeam(context.Background())
 	if err != nil || len(members) != 2 {
 		t.Fatalf("members=%d err=%v, want 2 pages then stop on the repeated cursor", len(members), err)
+	}
+}
+
+// headerPoster answers with a status, body and headers.
+type headerPoster struct {
+	mu     sync.Mutex
+	posts  int
+	status int
+	body   string
+	header map[string]string
+}
+
+func (p *headerPoster) Post(_ context.Context, _, _ string, body io.Reader) (*http.Response, error) {
+	_, _ = io.Copy(io.Discard, body)
+	p.mu.Lock()
+	p.posts++
+	p.mu.Unlock()
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/json")
+	for k, v := range p.header {
+		rec.Header().Set(k, v)
+	}
+	rec.WriteHeader(p.status)
+	_, _ = io.WriteString(rec, p.body)
+	return rec.Result(), nil
+}
+
+// Review F10: a 200 whose report refuses events advances the cursor (the
+// answer cannot change) but logs and counts them — never silent.
+func TestAuditArchiver_200RejectedEvents_CountedAndAdvanced(t *testing.T) {
+	logs := captureLogs(t)
+	p := &headerPoster{status: http.StatusOK, body: `{"accepted":1,"duplicates":0,"rejected":1,"rejected_events":[{"index":1,"id":"EV002","reason":"payload_too_large"}]}`}
+	a := newArchiverWithEvents(t, p)
+	if err := a.flushOnce(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if a.CurrentCursor() == "" {
+		t.Error("cursor did not advance past the per-event rejection")
+	}
+	if a.RejectedEvents() != 1 {
+		t.Errorf("RejectedEvents = %d, want 1", a.RejectedEvents())
+	}
+	if n := logs.count(slog.LevelWarn, "fleet.audit_archive.event_rejected"); n != 1 {
+		t.Errorf("rejection logged %d times, want 1", n)
+	}
+}
+
+// Review F10: a 429 honours Retry-After, capped at the next backoff tier.
+func TestAuditArchiver_429RetryAfter(t *testing.T) {
+	p := &headerPoster{status: http.StatusTooManyRequests, body: `{"code":"rate_limited"}`, header: map[string]string{"Retry-After": "5"}}
+	a := newArchiverWithEvents(t, p)
+	err := a.flushOnce(context.Background())
+	var ra *auditRetryAfterError
+	if !errors.As(err, &ra) || ra.After != 5*time.Second {
+		t.Fatalf("err = %v, want a 5s Retry-After", err)
+	}
+	if got := retryWait(err, auditBackoffBase); got != 5*time.Second {
+		t.Errorf("wait = %s, want the server's 5s", got)
+	}
+	// A quota Retry-After hours away is capped at the next tier.
+	far := &auditRetryAfterError{After: 6 * time.Hour}
+	if got := retryWait(far, auditBackoffBase); got != 2*auditBackoffBase {
+		t.Errorf("capped wait = %s, want %s", got, 2*auditBackoffBase)
+	}
+	if got := retryWait(far, auditBackoffMax); got != auditBackoffMax {
+		t.Errorf("capped wait at max = %s, want %s", got, auditBackoffMax)
+	}
+	if d, ok := parseRetryAfter(time.Now().Add(time.Minute).UTC().Format(http.TimeFormat), time.Now()); !ok || d <= 0 || d > time.Minute {
+		t.Errorf("HTTP-date Retry-After = %s, %v", d, ok)
 	}
 }

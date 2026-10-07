@@ -25,6 +25,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -126,6 +128,78 @@ type AuditArchiver struct {
 	// The loop idles without posting (events stay in the local log) until
 	// a fleet session reset clears it (ResetUnsupported).
 	tooLarge atomic.Bool
+
+	// rejectedEvents counts events fleet refused per-event in a 200
+	// response (rejected_events[], e.g. payload_too_large). The cursor
+	// advances past them — retrying cannot change the answer — but they are
+	// logged and counted, never silent (review F10).
+	rejectedEvents atomic.Int64
+}
+
+// RejectedEvents is the cumulative count of events fleet refused per-event.
+func (a *AuditArchiver) RejectedEvents() int64 {
+	return a.rejectedEvents.Load()
+}
+
+// auditAppendResponse mirrors the fields of kenaz-fleet
+// service/handlers_audit_append.go AuditAppendResponse the archiver reads.
+type auditAppendResponse struct {
+	Accepted       int                  `json:"accepted"`
+	Rejected       int                  `json:"rejected"`
+	RejectedEvents []auditRejectedEvent `json:"rejected_events,omitempty"`
+}
+
+// auditRejectedEvent mirrors fleet AuditRejectedEvent.
+type auditRejectedEvent struct {
+	Index  int    `json:"index"`
+	ID     string `json:"id,omitempty"`
+	Reason string `json:"reason"`
+}
+
+// auditRetryAfterError is a 429 carrying fleet's Retry-After.
+type auditRetryAfterError struct {
+	After time.Duration
+}
+
+func (e *auditRetryAfterError) Error() string {
+	return fmt.Sprintf("status 429 (retry after %s)", e.After)
+}
+
+// parseRetryAfter reads a Retry-After header (delta-seconds or HTTP date).
+func parseRetryAfter(v string, now time.Time) (time.Duration, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second, true
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := t.Sub(now); d > 0 {
+			return d, true
+		}
+		return 0, true
+	}
+	return 0, false
+}
+
+// retryWait is how long the loop waits after err: a 429's Retry-After,
+// capped at the NEXT backoff tier (review F10 — a quota reset hours away
+// must not park the archiver past its normal retry ladder); otherwise the
+// current backoff.
+func retryWait(err error, backoff time.Duration) time.Duration {
+	var ra *auditRetryAfterError
+	if errors.As(err, &ra) {
+		next := backoff * 2
+		if next > auditBackoffMax {
+			next = auditBackoffMax
+		}
+		if ra.After < next {
+			return ra.After
+		}
+		return next
+	}
+	return backoff
 }
 
 // ErrAuditBatchTooLarge is fleet's 413 for an audit batch: permanent for that
@@ -358,11 +432,11 @@ func (a *AuditArchiver) loop(ctx context.Context) {
 				return // latched: no route, nothing to retry
 			}
 			slog.Warn("fleet/audit_archive: flush error", "err", err)
-			// Exponential backoff.
+			// Exponential backoff (a 429 waits its Retry-After, capped).
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(backoff):
+			case <-time.After(retryWait(err, backoff)):
 			}
 			if backoff < auditBackoffMax {
 				backoff *= 2
@@ -529,9 +603,35 @@ func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
 		}
 		return ErrAuditBatchTooLarge
 	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if d, ok := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ok {
+			return &auditRetryAfterError{After: d}
+		}
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
 	// 200 / 201 / 204 are all success (fleet contract 2026-10-06).
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	// Content problems come back as 200 + a per-event report. The batch is
+	// accepted (the cursor advances — retrying cannot change the answer),
+	// but each refused event is logged (id + reason, never the payload) and
+	// counted (review F10).
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var ar auditAppendResponse
+	if len(raw) > 0 && json.Unmarshal(raw, &ar) == nil && (ar.Rejected > 0 || len(ar.RejectedEvents) > 0) {
+		n := ar.Rejected
+		if len(ar.RejectedEvents) > n {
+			n = len(ar.RejectedEvents)
+		}
+		a.rejectedEvents.Add(int64(n))
+		for _, re := range ar.RejectedEvents {
+			logging.L().Warn("fleet.audit_archive.event_rejected",
+				"event_id", re.ID, "index", re.Index, "reason", re.Reason)
+		}
+		if len(ar.RejectedEvents) == 0 {
+			logging.L().Warn("fleet.audit_archive.events_rejected", "count", n)
+		}
 	}
 	return nil
 }
