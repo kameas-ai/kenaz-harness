@@ -30,18 +30,18 @@ type recordingMandatedWorkflows struct {
 	fail error
 }
 
-func (r *recordingMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, _, _ string, payload []byte) (string, bool, error) {
+func (r *recordingMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, _, _ string, payload []byte) (string, json.RawMessage, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.fail != nil {
-		return "", false, r.fail
+		return "", nil, r.fail
 	}
 	r.got = append(r.got, append([]byte(nil), payload...))
-	return "wf", false, nil
+	return "wf", nil, nil
 }
 
-func (r *recordingMandatedWorkflows) RemoveMandatedWorkflow(context.Context, string, string, bool) error {
-	return nil
+func (r *recordingMandatedWorkflows) RemoveMandatedWorkflow(context.Context, string, string, json.RawMessage, bool) (bool, error) {
+	return false, nil
 }
 
 func (r *recordingMandatedWorkflows) payloads() [][]byte {

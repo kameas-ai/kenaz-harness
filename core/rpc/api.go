@@ -12003,12 +12003,12 @@ func (e *auditArchiverEmitter) Emit(_ context.Context, ev contextaudit.Event) er
 // fleet.MandatedWorkflows (core/fleet must not import the view).
 type mandatedWorkflowsAdapter struct{ wf *workflowsview.API }
 
-func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (string, bool, error) {
+func (m mandatedWorkflowsAdapter) InstallMandatedWorkflow(ctx context.Context, catalogID, version string, payload []byte) (string, json.RawMessage, error) {
 	return m.wf.InstallMandatedDocument(ctx, payload, catalogID, version)
 }
 
-func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, restoreCatalog bool) error {
-	return m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID, restoreCatalog)
+func (m mandatedWorkflowsAdapter) RemoveMandatedWorkflow(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (bool, error) {
+	return m.wf.RemoveMandatedDocument(ctx, workflowID, catalogID, prior, legacyRestore)
 }
 
 // revocationWorkflowsAdapter adapts the workflows view to

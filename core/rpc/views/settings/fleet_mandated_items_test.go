@@ -30,12 +30,12 @@ type fakeMandatedWorkflows struct {
 	removed   []string
 }
 
-func (f *fakeMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, catalogID, _ string, payload []byte) (string, bool, error) {
+func (f *fakeMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, catalogID, _ string, payload []byte) (string, json.RawMessage, error) {
 	var doc struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(payload, &doc); err != nil || doc.ID == "" {
-		return "", false, errors.New("not a workflow document")
+		return "", nil, errors.New("not a workflow document")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -43,17 +43,17 @@ func (f *fakeMandatedWorkflows) InstallMandatedWorkflow(_ context.Context, catal
 		f.installed = map[string]string{}
 	}
 	f.installed[doc.ID] = catalogID
-	return doc.ID, false, nil
+	return doc.ID, nil, nil
 }
 
-func (f *fakeMandatedWorkflows) RemoveMandatedWorkflow(_ context.Context, workflowID, catalogID string, _ bool) error {
+func (f *fakeMandatedWorkflows) RemoveMandatedWorkflow(_ context.Context, workflowID, catalogID string, _ json.RawMessage, _ bool) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.installed[workflowID] == catalogID {
 		delete(f.installed, workflowID)
 	}
 	f.removed = append(f.removed, workflowID)
-	return nil
+	return false, nil
 }
 
 func (f *fakeMandatedWorkflows) snapshot() (map[string]string, []string) {

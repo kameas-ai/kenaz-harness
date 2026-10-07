@@ -115,7 +115,7 @@ func TestMandatedWorkflow_EditAndScheduleGuarded(t *testing.T) {
 	}
 
 	// The mandate's own removal still disarms the schedule and deletes.
-	if err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-m", false); err != nil {
+	if _, err := api.RemoveMandatedDocument(ctx, "org-flow", "cat-m", nil, false); err != nil {
 		t.Fatalf("RemoveMandatedDocument: %v", err)
 	}
 	got := sched.snapshot()

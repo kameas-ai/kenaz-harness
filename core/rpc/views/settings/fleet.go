@@ -1771,8 +1771,11 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 		}
 		m := a.state.mandatedApplier
 		skills, reg, wf := a.state.skillStore, a.state.skillRegistry, a.state.mandatedWorkflows
+		em := a.state.auditEmitter
 		a.state.mu.Unlock()
 		m.SetConsumers(skills, reg, wf)
+		// Local audit: "removed" vs "upgraded" (skill-library-01SKLIB01 WP04).
+		m.SetEmitter(em)
 		statuses, mErrs := m.Apply(ctx, b.MandatedItems)
 		itemStatuses = statuses
 		for _, me := range mErrs {

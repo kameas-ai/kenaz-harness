@@ -407,6 +407,19 @@ const (
 	// FleetCatalogRevokedUninstalledPayload.
 	KindFleetCatalogRevokedUninstalled Kind = "fleet.catalog_revoked_uninstalled"
 
+	// KindFleetMandatedItemRemoved fires when the org stops requiring an
+	// item and the bundle reconcile uninstalls (or hands back) the local
+	// copy (WP04). Payload: FleetMandatedItemPayload.
+	KindFleetMandatedItemRemoved Kind = "fleet.mandated_item_removed"
+
+	// KindFleetMandatedItemUpgraded fires instead of a removal when the
+	// org promoted a required item to a new version that took over the
+	// same local skill/workflow in the same bundle (v1→v2): locally it was
+	// an upgrade, nothing was uninstalled — even though the ACK still says
+	// "removed" for v1, which fleet groups as "superseded" (WP04, H3).
+	// Payload: FleetMandatedItemPayload.
+	KindFleetMandatedItemUpgraded Kind = "fleet.mandated_item_upgraded"
+
 	// ── ACP envelope audit kind (acp-orchestration-integration-01NDFSEX06) ──
 
 	// KindACPEnvelope fires once per ACP envelope exchanged (sent or received).
@@ -1896,6 +1909,24 @@ type FleetCatalogRevokedUninstalledPayload struct {
 	LocalID string `json:"local_id"`
 	// Reason is always "revoked".
 	Reason string `json:"reason"`
+}
+
+// FleetMandatedItemPayload carries the audit signalling for
+// KindFleetMandatedItemRemoved and KindFleetMandatedItemUpgraded.
+type FleetMandatedItemPayload struct {
+	// CatalogID / Version identify the mandated version that ended.
+	CatalogID string `json:"catalog_id"`
+	Kind      string `json:"kind"`
+	Version   string `json:"version,omitempty"`
+	// LocalID is the skill store id / workflow id.
+	LocalID string `json:"local_id,omitempty"`
+	// ToCatalogID / ToVersion: the version that took over LocalID (upgrade
+	// only).
+	ToCatalogID string `json:"to_catalog_id,omitempty"`
+	ToVersion   string `json:"to_version,omitempty"`
+	// Restored is true when the removal handed the user's own earlier copy
+	// back instead of deleting (removal only).
+	Restored bool `json:"restored,omitempty"`
 }
 
 // FleetSkillUninstalledPayload carries the audit signalling for

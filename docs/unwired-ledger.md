@@ -359,10 +359,33 @@ prose and in a TS union; they do not call `MoveKinds()`.
    content relabelled as a catalog install**, not the user's earlier
    version/edits (skills restore properly). **Owner:** skill-library
    mission (01SKLIB01) WP04 territory.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP04, `fix(fleet): WP04 —
+   > superseded removals stay quiet locally …`):** a mandate that takes
+   > over the user's catalog install now returns an opaque snapshot of the
+   > user's copy (stored document incl. edits + its install provenance),
+   > persisted as `prior_workflow` in `mandated_applied.json`; withdrawal
+   > restores that copy under its original catalog id/version. A v0.91
+   > record (flag only, no snapshot) keeps the old relabel — the only thing
+   > it makes possible. Also fixed in the same change: a mandate may now
+   > take over a catalog/mandated row of ANY catalog id (every version has
+   > its own id), so a v1→v2 promote updates in place instead of failing
+   > as a collision and deleting the workflow. Pinned by
+   > `TestInstallMandatedDocument_TakeoverRestoredOnWithdrawal` (real
+   > sqlite, file provenance), `…_LegacyRecordRelabels`,
+   > `…_PromoteUpdatesInPlace`.
 3. **R3 (P3) — a takeover while mandated_applied.json is unreadable (F5
    path) never persists PriorSkill**, so a later withdrawal deletes
    rather than restores. Needs the F5 corruption AND a takeover in the
    same window. **Owner:** same as R2.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP04):** while the state
+   > file is unreadable the applier still never overwrites it (F5), but
+   > records what it applied — takeover priors included — in
+   > `fleet/mandated_applied.pending.json`, carries it across further
+   > unreadable runs, merges it into the applied set on the first readable
+   > run (file rewritten OR deleted), and clears it after a successful
+   > save. Removals stay skipped while unreadable (F5 unchanged). Pinned by
+   > `TestMandated_TakeoverDuringUnreadableStatePersistsPrior` (real
+   > files; fails with the merge removed).
 4. **Mandated workflows are delete-protected but not edit/unschedule-
    protected** (accepted "not done"): a weak guarantee for
    compliance-type workflows. **Owner:** skill-library mission, with the
