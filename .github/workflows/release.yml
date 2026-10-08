@@ -436,7 +436,12 @@ jobs:
           INDEX_URL="${KENAZ_ML_ENGINE_CHANNEL_BASE}/kenaz-ml/index.json"
           CHANNEL_URL="${KENAZ_ML_ENGINE_CHANNEL_BASE}/kenaz-ml/${ENGINE_VERSION}"
           ARTIFACT="kenaz-ml-${ENGINE_VERSION}-darwin-arm64.dmg"
-          curl -fsSL --retry 3 "$INDEX_URL" -o "$RUNNER_TEMP/kenaz-ml-index.json"
+          # Transient CDN errors (5xx, resets, short reads) must not zero a
+          # release — this step failing fails the darwin/arm64 leg, which
+          # skips publish-s3 for EVERY platform. --retry-all-errors retries
+          # those; verification below is unchanged and still fail-closed.
+          CURL_RETRY=(--retry 5 --retry-all-errors --retry-delay 3)
+          curl -fsSL "${CURL_RETRY[@]}" "$INDEX_URL" -o "$RUNNER_TEMP/kenaz-ml-index.json"
           REL="$(jq -c --arg v "$ENGINE_VERSION" '[.releases[] | select(.version == $v)] | select(length == 1) | .[0]' "$RUNNER_TEMP/kenaz-ml-index.json")"
           test -n "$REL" || { echo "::error::kenaz-ml $ENGINE_VERSION is not listed exactly once in $INDEX_URL"; exit 1; }
           # jq -e: a missing/null field fails the assignment (and the step).
@@ -467,7 +472,7 @@ jobs:
           fi
           # The published signature must verify under the baked key through
           # the harness's own verifier stack (exit 1 = invalid → step fails).
-          curl -fsSL --retry 3 "$SIG_URL" -o "$RUNNER_TEMP/kenaz-ml.sig"
+          curl -fsSL "${CURL_RETRY[@]}" "$SIG_URL" -o "$RUNNER_TEMP/kenaz-ml.sig"
           go run ./cmd/kenaz-ml-sign verify \
             --pubkey "$KEY_FILE" --sig "$RUNNER_TEMP/kenaz-ml.sig" \
             --version "$ENGINE_VERSION" \
@@ -475,8 +480,15 @@ jobs:
             --sha256 "$SHA"
           # The signature binds the index's sha256; bind that sha256 (and the
           # disclosed size) to the bytes the CDN actually serves.
-          curl -fsSL --retry 3 "$URL" -o "$RUNNER_TEMP/$ARTIFACT"
-          GOT_SIZE="$(wc -c < "$RUNNER_TEMP/$ARTIFACT" | tr -d '[:space:]')"
+          # A short body (size != index) is re-fetched, at most 3 attempts in
+          # all; whatever the last attempt got goes through the unchanged
+          # size + sha256 check below, so a persistent mismatch still exits 1.
+          for attempt in 1 2 3; do
+            curl -fsSL "${CURL_RETRY[@]}" "$URL" -o "$RUNNER_TEMP/$ARTIFACT"
+            GOT_SIZE="$(wc -c < "$RUNNER_TEMP/$ARTIFACT" | tr -d '[:space:]')"
+            [ "$GOT_SIZE" = "$SIZE" ] && break
+            echo "::warning::$ARTIFACT download attempt $attempt got $GOT_SIZE bytes, index says $SIZE (attempt $attempt of 3)"
+          done
           GOT_SHA="sha256:$(shasum -a 256 "$RUNNER_TEMP/$ARTIFACT" | cut -d' ' -f1)"
           rm -f "$RUNNER_TEMP/$ARTIFACT"
           if [ "$GOT_SIZE" != "$SIZE" ] || [ "$GOT_SHA" != "$SHA" ]; then
