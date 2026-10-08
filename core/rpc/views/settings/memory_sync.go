@@ -46,6 +46,12 @@ type MemorySyncStatusView struct {
 	FleetError string `json:"fleetError,omitempty"`
 	// Lane is the memory_sync lane health.
 	Lane FleetSyncLaneView `json:"lane"`
+	// OrgPaused: a staff "pause paid features" hold is on the org
+	// (kenaz-fleet #206). The panel shows the paused copy instead of
+	// hiding (entitled is false while paused) and keeps the data-rights
+	// actions — turn off, delete from Fleet — enabled.
+	OrgPaused      bool   `json:"orgPaused"`
+	PausedCategory string `json:"pausedCategory,omitempty"`
 }
 
 // SetMemorySync installs the lane (nil uninstalls).
@@ -67,6 +73,8 @@ func memorySyncView(s fleet.MemorySyncStatus) MemorySyncStatusView {
 		PendingCount:          s.PendingPush,
 		FleetError:            s.FleetError,
 		Lane:                  laneToView(s.Lane),
+		OrgPaused:             s.OrgPaused,
+		PausedCategory:        s.PausedCategory,
 	}
 	if f := s.Fleet; f != nil {
 		if f.Scopes != nil {

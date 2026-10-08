@@ -4547,6 +4547,10 @@ func New(c *core.Core, opts ...Option) *API {
 				// Client first: the breaker's reset republishes the lane.
 				a.settingsImpl.OnFleetSessionReset(flCl.ResetUnsupportedEndpoints)
 				a.settingsImpl.OnFleetSessionReset(appendBreaker.ResetAll)
+				// The org pause lifting (kenaz-fleet #206) reopens every
+				// session circuit an org_paused refusal held — without a
+				// sign-in, toggle or restart.
+				a.settingsImpl.OnOrgUnpaused(appendBreaker.ResetOrgPaused)
 			}
 
 			a.contextSyncAPI = &contextsyncview.Impl{
@@ -4672,6 +4676,8 @@ func New(c *core.Core, opts ...Option) *API {
 			// restarts on the next fleet sign-in / sign-out (review R4).
 			if a.settingsImpl != nil {
 				a.settingsImpl.OnFleetSessionReset(archiver.ResetUnsupported)
+				// The org pause lifting wakes archival out of its backoff.
+				a.settingsImpl.OnOrgUnpaused(archiver.ResumeAfterOrgUnpause)
 			}
 
 			// AuditRetentionSweeper: runs hourly, deletes ACK'd + aged
