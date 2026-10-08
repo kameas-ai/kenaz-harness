@@ -342,6 +342,58 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-08 (fleet contract: org_paused, kenaz-fleet PR #206, fix/org-paused-transient) · new org state; harness treats it as transient everywhere
+
+**Contract (confirmed by fleet 2026-10-08).** A Kameas-staff "pause paid
+features" org state (billing/abuse control; reversible; nothing deleted).
+While paused, every customer route outside fleet's explicit allowlist
+answers `403 {"code":"org_paused","message":…,"details":{…}}` — including
+`GET /configs` and `POST /context/append`. `GET /me/capabilities`, `/me` and
+`/me/ml` stay 200; capabilities keeps the tier, every key `false`, plus
+`paused: true` and `paused_category` ∈ {billing_review, security, abuse,
+legal, other}. Allowlisted (still work while paused): memory forget /
+forget-all / export, ML export, context stream DELETE, context export,
+account erasure, legal acceptance, lockdown status/wait/set, SCIM/SSO
+revoke/delete, billing portal. SCIM answers in SCIM format (irrelevant
+here).
+
+**The bug it fixed.** `classifyAppendError` mapped every 403 to PERMANENT
+`not_authorized`, so each active session's append circuit stayed open after
+the org was unpaused until sign-in / toggle / restart.
+
+**Harness treatment.** One classifier (`fleet.ParseOrgPaused` /
+`IsOrgPaused` / `*OrgPausedError{PausedCategory}`), applied at the single
+choke point `Client.do` (plus the two direct-`httpClient` callers, sites
+deploy and enroll) — a non-pause 403 still reaches its caller unchanged.
+Every consumer: transient on its existing backoff tiers, no permanent
+latch, lane/status reason `org_paused` (append breaker, audit archiver,
+memory sync, config poll, revoke sweep, catalog client, team handoff,
+context graph pull, unit poll, capability poll). The capability poll is the
+recovery signal: `paused` true→false fans out `Client.OnOrgUnpaused` →
+`settings.onOrgUnpaused`, which reopens the append breaker's org_paused
+circuits (`ResetOrgPaused`), wakes the audit archiver, resets + runs the
+config poll, resumes the memory lane and resets the revoke-sweep skip — no
+sign-in. `FleetSession` carries `paused` / `pausedCategory`; the UI shows
+one banner (`OrgPausedBanner`, copy table `lib/orgPausedCopy.ts`) in place
+of every tier/upsell gate on the path, and the memory panel keeps "turn off
++ delete from Fleet" enabled (forget-all runs even though the settings PUT
+before it is refused; `DisablePending` retries it after the pause lifts).
+
+**Residuals (accepted, dated).**
+1. Context-graph pull and unit poll are NOT in the unpause fan-out: they
+   recover on their own cadence (≤ 30 min at the deepest backoff tier).
+   Blocker: neither loop has a wake channel; adding one is a loop refactor
+   outside this fix. Owner: alec — the next change that touches either poll
+   loop wires `OnOrgUnpaused` and deletes this item.
+2. `details` key: the confirmed contract names `details.paused_category`;
+   PR #206's gate (at review time) writes `details.category` (+
+   `details.paused`). The parser accepts both. Owner: alec — delete the
+   `category` fallback once #206 merges with `paused_category`.
+3. `TelemetryOnboardingModal` / `FleetTelemetryPanel` tier copy ("Requires
+   Pro+", "your organization's plan … does not include") is driven by the
+   org TIER, which a pause keeps — it is accurate, not pause-path upsell,
+   and is left as is.
+
 ### 2026-10-07 (release-infra hardening, chore/release-infra-hardening) · six zero-asset release tags, one mechanism; three fixes landed, four follow-ups open
 
 `scripts/ci/check-release-integrity.sh` flagged six tags whose GitHub
