@@ -1213,6 +1213,10 @@ jobs:
         run: |
           # Emit a JSON manifest the docusaurus site consumes.
           # One record per platform with download URL + sha256.
+          # released_at: GITHUB_RUN_STARTED_AT is NOT a GitHub-provided
+          # variable (the field was "" in every published manifest), so stamp
+          # the real build time here.
+          export RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           python3 - <<'PY' > manifest.json
           import json, os, pathlib, re
           tag = os.environ['TAG']
@@ -1284,7 +1288,7 @@ jobs:
               'version': version,
               'tag': tag,
               'commit': os.environ.get('GITHUB_SHA', ''),
-              'released_at': os.environ.get('GITHUB_RUN_STARTED_AT', ''),
+              'released_at': os.environ['RELEASED_AT'],
               'release_url': f"https://github.com/{repo}/releases/tag/{tag}",
               'assets': assets,
           }
@@ -1353,6 +1357,9 @@ jobs:
           TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
           RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
         run: |
+          # released_at: real UTC publish time (GITHUB_RUN_STARTED_AT is not
+          # a GitHub-provided variable, so this was always "").
+          export RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           python3 - <<'PY'
           import json, os, pathlib, re
           # For prod, use the release tag from the release job output;
@@ -1418,7 +1425,7 @@ jobs:
               'tag': tag,
               'env': target_env,
               'commit': os.environ.get('GITHUB_SHA', ''),
-              'released_at': os.environ.get('GITHUB_RUN_STARTED_AT', ''),
+              'released_at': os.environ['RELEASED_AT'],
               'release_url': f"{cdn_base}/",
               'assets': assets,
           }
