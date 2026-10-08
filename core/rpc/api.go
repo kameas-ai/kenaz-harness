@@ -597,6 +597,11 @@ type API struct {
 	// bootstrap reuse isn't semantically "auto-title" cost at all.
 	// Folding those in is future work, not a silent omission.
 	autotitleLLM *autotitlewiring.LLMCaller
+	// chatRunner is the chat path's run driver (stack.chatRunner), held so
+	// Shutdown can cancel + drain in-flight runs BEFORE the caller closes
+	// core's storage: a run's exit path (checkpoint delete, turn outcome)
+	// writes after StartStream returns. nil on a degraded boot.
+	chatRunner *chat.ChatRunner
 	convMgr      *coreconv.Manager
 	branchesAPI  branchesview.BranchesAPI
 	// branchSeam is the SAME BranchSeamAdapter instance
@@ -1416,6 +1421,10 @@ func (a *API) runMigrationDriftCheck(ctx context.Context) {
 	}
 }
 
+// chatRunnerDrainTimeout bounds Shutdown's wait for in-flight chat runs.
+// A cancelled run's exit path is a handful of bounded (5s) writes.
+const chatRunnerDrainTimeout = 15 * time.Second
+
 // Shutdown stops every background goroutine this API wired at
 // construction time: the auto-update poller, the workflow cron
 // scheduler, the chat-run cron scheduler, the compaction sweep
@@ -1451,6 +1460,17 @@ func (a *API) Shutdown() {
 		a.updatePollCancel = nil
 	}
 	a.updatePollMu.Unlock()
+	// Cancel + drain in-flight chat runs first: their exit paths write
+	// session storage, which the caller closes after Shutdown returns
+	// (main.go / serve.ShutdownServedCore: api.Shutdown THEN core
+	// shutdown). Bounded so a wedged run cannot hang app exit.
+	if a.chatRunner != nil {
+		dctx, dcancel := context.WithTimeout(context.Background(), chatRunnerDrainTimeout)
+		if err := a.chatRunner.Shutdown(dctx); err != nil {
+			logging.L().Warn("chat.runner.shutdown_drain_incomplete", "err", err.Error())
+		}
+		dcancel()
+	}
 	if a.wfScheduler != nil {
 		a.wfScheduler.Stop()
 	}
@@ -2589,6 +2609,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// model-settings-reach-the-model-01PMZ101 WP07: same pattern as the
 	// compaction pair above, for the chat runner's auto-title caller.
 	a.autotitleLLM = stack.autotitleLLM
+	a.chatRunner = stack.chatRunner
 	// CK-09 (chat-turn-integrity-01PMZ606 WP13): capture the sweep
 	// scheduler newLLMStack already started so Shutdown can Stop() it.
 	a.compactionScheduler = stack.compactionScheduler

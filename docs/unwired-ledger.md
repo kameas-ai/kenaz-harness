@@ -505,6 +505,38 @@ unwired/CI-hygiene sweep. Related flake seen in the same run:
 ("first demand must not block" — a timing assertion under runner load);
 owner: mlsidecar follow-up if it recurs.
 
+### 2026-10-07 (CI run 37705330106, PR #392) · ~~DATA RACE: a chat run's exit path outlived StartStream and raced the DB close~~ CLOSED
+
+`TestDriveRun_AC003_ErrorClosePromotesCheckpoint/no_tool_recoverable_true`
+flaked on a PR that did not touch the code. WRITE side: the deferred
+cleanup in `(*ChatRunner).driveRun` (chat_runner.go:1875) →
+`session.(*Manager).DeleteStreamCheckpoint` (manager.go:489) →
+`sqlStore.DeleteStreamCheckpoint` (store.go:1448) →
+`concreteDB.WriteTx` (sqlite.go:394), on the goroutine `StartStream`
+spawned (chat_runner.go:1713). RACING: `concreteDB.Close` (sqlite.go:438)
+from the test's `buildCheckpointRunner` cleanup, after the test body
+returned on the close event. The run goroutine's exit path runs AFTER
+the close event lands, and v0.93.0's retry work (RecordTurnOutcome +
+sanitize) lengthened it. Production had the same shape: nothing waited
+for in-flight runs before core's storage closed at app exit. Found with
+it: nothing cancelled `streamCtx` on a normal completion, so every run's
+periodic checkpoint flusher (and StartStream's inbound-ctx watcher) lived
+until process exit, and a flusher tick after the exit-path delete could
+resurrect the checkpoint row.
+
+> **CLOSED 2026-10-07 (`fix(chat): driveRun's exit path must finish before
+> the API/test tears down storage`, fix/ledger-followups-oct7):**
+> `ChatRunner` tracks driveRun plus the work it spawns (periodic flusher,
+> auto-title, merge suggestion, advice) and exposes `Drain(ctx)` and
+> `Shutdown(ctx)` (cancel live runs with cause `app-shutdown`, then
+> drain); `API.Shutdown` calls it first, bounded at 15 s, before the
+> caller shuts core down. driveRun's exit path cancels the run ctx and
+> waits for the flusher before deleting the checkpoint. Test side: every
+> real-sqlite runner fixture drains on cleanup before `db.Close`
+> (`drainRunnerOnCleanup`). Pinned by
+> `TestChatRunner_DrainWaitsForRunExit_ShutdownCancels`; `-race -count=20
+> -run TestDriveRun` clean 3×.
+
 ### 2026-10-07 (skill-library-01SKLIB01 residuals + review F4–F6, feat/skill-library) · six accepted, none introduced as regressions
 
 1. **OQ-1 — the revocation sweep covers skills + workflows only.**
