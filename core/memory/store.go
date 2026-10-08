@@ -91,6 +91,12 @@ type chromemStore struct {
 	// (memory-sync-01MEMSY01 WP02). nil ⇒ fields stay unstamped and the
 	// sync client stamps them on first push.
 	clock *HLC
+	// capture receives one RecordWrite per net-new Add. NewChromemStore
+	// sets it to GlobalCaptureTracker() (what the RPC capture-rate surface
+	// reads); tests in this package swap in a private tracker so they
+	// measure only their own writes (the shared 60s window made
+	// TestStore_Add_WiresGlobalCaptureTracker flaky at -count>1).
+	capture *CaptureRateTracker
 }
 
 // ClockSetter is the optional capability the rpc wiring uses to install
@@ -142,7 +148,7 @@ func NewChromemStore(path string) (Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("memory: mkdir parent: %w", err)
 	}
-	s := &chromemStore{path: path, now: time.Now}
+	s := &chromemStore{path: path, now: time.Now, capture: GlobalCaptureTracker()}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
@@ -293,7 +299,9 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	// Increment the capture-rate counter ONLY on a net-new write (not on
 	// an ID-collision update above). The tracker is process-scoped; no
 	// migration, no persistence.
-	GlobalCaptureTracker().RecordWrite(s.now().UTC())
+	if s.capture != nil {
+		s.capture.RecordWrite(s.now().UTC())
+	}
 	return nil
 }
 

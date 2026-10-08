@@ -606,7 +606,7 @@ resurrect the checkpoint row.
    `installMu`. **Owner:** skill-library follow-up, if the sweep ever
    moves off the config poller's goroutine.
 
-### 2026-10-07 (memory-sync-01MEMSY01 verify pass) · PRE-EXISTING flake: `TestStore_Add_WiresGlobalCaptureTracker`
+### 2026-10-07 (memory-sync-01MEMSY01 verify pass) · ~~PRE-EXISTING flake: `TestStore_Add_WiresGlobalCaptureTracker`~~ CLOSED
 
 `core/memory/capture_rate_test.go` fails when the whole `core/memory`
 package runs with `-count=5` (ChunksPerMinute delta came out negative). It
@@ -622,6 +622,14 @@ negative. It passes at `-count=1` (CI's setting).
   per-test reset/clock), so the test measures only its own writes.
 - **Owner:** memory follow-up mission (next one to touch
   `core/memory/capture_rate.go`). Dated 2026-10-07.
+
+> **CLOSED 2026-10-07 (`test(memory): TestStore_Add_WiresGlobalCaptureTracker
+> isolates the global sliding-window tracker`, fix/ledger-followups-oct7):**
+> the chromem store carries its capture tracker (`capture`, set to
+> `GlobalCaptureTracker()` by `NewChromemStore`; production unchanged).
+> The test asserts the global wiring by identity and counts its writes on
+> a private tracker swapped in (exactly 5, duplicate excluded).
+> `go test ./core/memory/ -race -count=5` passed 3× in a row.
 
 ### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
 
