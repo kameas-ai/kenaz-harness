@@ -127,6 +127,7 @@ func TestChatRunner_BackendErrorAfterCompletedFire_WritesTheAnswerOnce(t *testin
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	drainRunnerOnCleanup(t, runner)
 	if _, err := runner.StartStream(ctx, "profile-1", rec.ID, "",
 		UserTurn{MessageID: userRow.ID, Text: userRow.Content, Announce: true}); err != nil {
 		t.Fatalf("StartStream: %v", err)

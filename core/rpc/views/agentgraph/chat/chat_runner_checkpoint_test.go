@@ -123,6 +123,7 @@ func buildCheckpointRunner(t *testing.T, llm coreag.LLMProvider) (*ChatRunner, *
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	drainRunnerOnCleanup(t, runner)
 	return runner, broker, mgr, sessionID
 }
 

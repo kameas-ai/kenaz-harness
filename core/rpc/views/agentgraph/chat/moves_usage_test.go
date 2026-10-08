@@ -225,6 +225,7 @@ func buildMoveRunnerRealSQLite(t *testing.T, reg *scriptedRegistry, pool *script
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	drainRunnerOnCleanup(t, runner)
 	return runner, broker, sessionMgr, usageMgr, db
 }
 

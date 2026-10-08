@@ -67,3 +67,31 @@ func TestGenerateNodeID_Format(t *testing.T) {
 		}
 	}
 }
+
+func TestClearNodeRemovedForNewIdentity(t *testing.T) {
+	dir := t.TempDir()
+	if ok, err := ClearNodeRemovedForNewIdentity(dir, "bob"); ok || err != nil {
+		t.Fatalf("no marker: %v %v", ok, err)
+	}
+	// A marker without a recorded identity is never cleared this way.
+	if err := MarkNodeRemoved(dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := ClearNodeRemovedForNewIdentity(dir, "bob"); ok || !NodeRemovedMarked(dir) {
+		t.Fatal("identity-less marker must stay")
+	}
+	if err := MarkNodeRemoved(dir, "alice|o|i"); err != nil {
+		t.Fatal(err)
+	}
+	if got := NodeRemovedIdentity(dir); got != "alice|o|i" {
+		t.Fatalf("recorded identity = %q", got)
+	}
+	for _, same := range []string{"", "alice|o|i"} {
+		if ok, _ := ClearNodeRemovedForNewIdentity(dir, same); ok || !NodeRemovedMarked(dir) {
+			t.Fatalf("identity %q must not clear", same)
+		}
+	}
+	if ok, err := ClearNodeRemovedForNewIdentity(dir, "bob|o|i"); !ok || err != nil || NodeRemovedMarked(dir) {
+		t.Fatalf("new identity: ok=%v err=%v marked=%v", ok, err, NodeRemovedMarked(dir))
+	}
+}

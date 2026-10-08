@@ -78,8 +78,13 @@ func TestRevocationSweep_RidesConfigPollerCadence(t *testing.T) {
 	poller.Start(ctx)
 	defer poller.Stop()
 
+	// Wait for the sweep's LAST step — the lane record — not for the
+	// skill's removal: Sweep uninstalls, THEN emits the audit event, THEN
+	// records the lane, all on the poller's goroutine. Breaking on the
+	// removal raced the two later steps (failed in PR #394's hermetic CI
+	// run: skill gone, audit [] and lane unknown, 0.01s in).
 	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if _, err := store.Get("deploy"); err != nil {
+		if state.lanes.Snapshot(fleet.LaneCatalogRevocation).Status == fleet.LaneOK {
 			break
 		}
 	}

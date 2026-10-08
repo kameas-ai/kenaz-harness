@@ -83,6 +83,7 @@ func runOneTurnOn(t *testing.T, log coreag.EventLog, graph coreag.Graph, reply s
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	drainRunnerOnCleanup(t, runner)
 	runID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "",
 		UserTurn{MessageID: "msg-1", Text: "hi"})
 	if err != nil {

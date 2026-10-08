@@ -76,3 +76,6 @@ docs/*-internal.md
 
 # gates_can_fail plant journal (plantguard_test.go) — never commit
 scripts/ci/.zz-plant-journal.json
+
+# Local `go build` output at the repo root (a 55 MB binary slipped into #390).
+/kenaz-harness

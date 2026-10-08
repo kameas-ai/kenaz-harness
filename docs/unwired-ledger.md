@@ -438,6 +438,43 @@ and the docs download page) and inserted the run into `index.json` with
 
 ### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · `MemorySync` has no `Stop`; nothing on the shutdown path cancels it
 
+### 2026-10-07 (release-infra) · OPEN: the stage (prerelease) channel points at v0.7.3-rc1
+
+With the prerelease host fixed (entry below), Prerelease-channel
+subscribers now reach `https://stage.downloads.kameas.ai/kenaz-harness/manifest.json`,
+which serves `v0.7.3-rc1` — months behind stable (v0.93.0). The update
+service compares versions, so a stage subscriber on a current build sees
+no update rather than a downgrade, but the channel offers nothing: no RC
+has been cut in months and stage has no Fleet runtime behind it. Not a
+code defect. **Owner:** release-infra (alec) — either cut RCs again
+(`v<X.Y.Z>-rc1` tags per CLAUDE.md "Environments & promotion") or retire
+the Prerelease channel from the Settings picker so it stops advertising
+a channel nobody publishes to.
+
+### 2026-10-07 · ~~Prerelease update channel fetched an NXDOMAIN host~~ CLOSED
+
+`core/update/manifest.go` set `prereleaseManifestURL` to
+`https://stage-downloads.kameas.ai/kenaz-harness/manifest.json`; that host
+does not resolve (`dig +short` empty). The real stage CDN alias is
+`stage.downloads.kameas.ai` (release.yml's stage `CDN_BASE`; CloudFront).
+`checkChannel` falls back to stable only on `errManifestNotFound` (HTTP
+404) — a DNS failure is a hard error — so every Prerelease-channel update
+check failed outright. Wrong since #168 (`4c77d71c`, 2026-06-11, "point
+auto-updater at live release CDN"), i.e. ~4 months. The wrong host was
+also baked into `core/update/doc.go`, both test muxes
+(`service_test.go`, `wp08_test.go` — the tests encoded the bug) and this
+ledger's egress note.
+
+> **CLOSED 2026-10-07 (`fix(update): prerelease channel host —
+> stage.downloads.kameas.ai, not stage-downloads`,
+> fix/ledger-followups-oct7):** host corrected in all five places;
+> `TestChannelManifestURLs_MatchReleaseWorkflowCDN` reads release.yml's
+> stage and prod `CDN_BASE` and fails when either manifest URL drifts from
+> the host releases are actually published to (verified failing with the
+> old host).
+
+### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · ~~`MemorySync` has no `Stop`; nothing on the shutdown path cancels it~~ CLOSED
+
 `buildMemorySync` (`core/rpc/api.go`, the `ms.Start(context.Background())`
 line near the end of the constructor) starts the memory-sync cycle loop
 under a context that is never cancelled. `MemorySync.Start`
@@ -476,6 +513,19 @@ branch that records `signed_out` is never reached. Correct behaviour,
 misleading label; fold into the Stop fix (a stopped lane should record
 nothing) rather than reorder the checks.
 
+> **CLOSED 2026-10-07 (`fix(fleet): MemorySync.Stop wired into Shutdown +
+> StopFleetBackground`, fix/ledger-followups-oct7):** `(*MemorySync).Stop`
+> cancels the loop's context and waits for the goroutine (nil-safe,
+> idempotent); `Start` is idempotent and restartable. `StopFleetBackground`
+> (sign-out, node_removed, shutdown) stops the lane, `startFleetBackgroundLocked`
+> restarts it on sign-in, and `API.Shutdown` stops it directly as well. A
+> stopped lane records nothing, and `Status` reports it `off/signed_out`
+> instead of the default-deny `not_entitled` (checks not reordered). Pinned
+> by `TestAPI_Shutdown_NoSchedulerGoroutineLeak` (now also counts
+> `(*MemorySync).Start.func1` frames, delta vs baseline; fails with both
+> Stop call sites removed), `TestMemorySync_StopEndsLoop_RestartAfterSignIn`
+> and `TestMemorySync_StoppedLaneReportsSignedOut`.
+
 ### 2026-10-07 (v0.93.0 CI) · core/rpc test package is at the 10-minute cliff
 
 core/rpc ran 580.9s under `-race -short` on the self-hosted ARM runner in
@@ -489,6 +539,77 @@ unwired/CI-hygiene sweep. Related flake seen in the same run:
 `core/mlsidecar` TestDemandProbe_FirstDemandStartsEngine_OneEnsurePerTick
 ("first demand must not block" — a timing assertion under runner load);
 owner: mlsidecar follow-up if it recurs.
+
+> **DemandProbe flake CLOSED 2026-10-07 (`test(mlsidecar): DemandProbe
+> first-demand test no longer races the engine start`,
+> fix/ledger-followups-oct7):** cause: `Healthy()` kicks the Ensure loop
+> then reads the cached status; when the loop's first Ensure adopted the
+> fake engine inside that window, the first call truthfully returned
+> healthy and the test's "must not block" assertion (which really checked
+> "returns false") failed. The test now parks the fake engine's `/health`
+> answer until after the first call (`countingEngine.holdHealth`), which
+> also makes "does not block" a real check. Production ordering reviewed
+> and kept (demand-then-read answers the true cached status; the contract
+> is never-block + per-call fallback) — `Healthy()` and the type doc now
+> say so. `-race -count=50 -run TestDemandProbe` clean. The core/rpc
+> 10-minute-cliff half of this entry stays open.
+
+### 2026-10-07 (CI run 37705330106, PR #392) · ~~DATA RACE: a chat run's exit path outlived StartStream and raced the DB close~~ CLOSED
+
+`TestDriveRun_AC003_ErrorClosePromotesCheckpoint/no_tool_recoverable_true`
+flaked on a PR that did not touch the code. WRITE side: the deferred
+cleanup in `(*ChatRunner).driveRun` (chat_runner.go:1875) →
+`session.(*Manager).DeleteStreamCheckpoint` (manager.go:489) →
+`sqlStore.DeleteStreamCheckpoint` (store.go:1448) →
+`concreteDB.WriteTx` (sqlite.go:394), on the goroutine `StartStream`
+spawned (chat_runner.go:1713). RACING: `concreteDB.Close` (sqlite.go:438)
+from the test's `buildCheckpointRunner` cleanup, after the test body
+returned on the close event. The run goroutine's exit path runs AFTER
+the close event lands, and v0.93.0's retry work (RecordTurnOutcome +
+sanitize) lengthened it. Production had the same shape: nothing waited
+for in-flight runs before core's storage closed at app exit. Found with
+it: nothing cancelled `streamCtx` on a normal completion, so every run's
+periodic checkpoint flusher (and StartStream's inbound-ctx watcher) lived
+until process exit, and a flusher tick after the exit-path delete could
+resurrect the checkpoint row.
+
+> **CLOSED 2026-10-07 (`fix(chat): driveRun's exit path must finish before
+> the API/test tears down storage`, fix/ledger-followups-oct7):**
+> `ChatRunner` tracks driveRun plus the work it spawns (periodic flusher,
+> auto-title, merge suggestion, advice) and exposes `Drain(ctx)` and
+> `Shutdown(ctx)` (cancel live runs with cause `app-shutdown`, then
+> drain); `API.Shutdown` calls it first, bounded at 15 s, before the
+> caller shuts core down. driveRun's exit path cancels the run ctx and
+> waits for the flusher before deleting the checkpoint. Test side: every
+> real-sqlite runner fixture drains on cleanup before `db.Close`
+> (`drainRunnerOnCleanup`). Pinned by
+> `TestChatRunner_DrainWaitsForRunExit_ShutdownCancels`; `-race -count=20
+> -run TestDriveRun` clean 3×.
+>
+> Review follow-up (same day): `API.Shutdown` now stops the workflow and
+> chat-cron schedulers BEFORE the drain (neither Stop waits on a job), and
+> `ChatRunner.Shutdown` closes the tracker so a later `StartStream` returns
+> `chat.ErrRunnerShutdown` (`TestChatRunner_StartStreamRefusedAfterShutdown`,
+> `TestAPI_Shutdown_StopsSchedulersBeforeChatDrain`). **Residual
+> (accepted):** a sub-agent run's `awaitSubagentRun` writes `taskReg.End`
+> after its child run ends; that write can land after the drain returns,
+> where a closed store only yields an error log line, no corruption.
+> **Owner:** subagent follow-up (track the await goroutine with the same
+> tracker).
+
+### 2026-10-07 (PR #394 CI) · ~~`TestRevocationSweep_RidesConfigPollerCadence` raced its own sweep~~ CLOSED
+
+Failed in the hermetic-guard step (skill uninstalled, then `audit kinds =
+[]` and lane `unknown`, 0.01s in). Not environment-specific and not
+caused by #394: `RevocationSweeper.Sweep` uninstalls, then emits the
+audit event, then records the lane, all on the config poller's
+goroutine; the test stopped waiting at the uninstall and asserted the
+other two immediately. Pre-existing since #390; main's green run was
+timing luck. Reproduced deterministically with a 50ms sleep after the
+uninstall. **CLOSED 2026-10-07 (`test(fleet): revocation-sweep test
+waits for the sweep's last step`):** the test waits for the lane record
+(the sweep's final step) instead. Production ordering unchanged
+(uninstall → audit → lane is the right order).
 
 ### 2026-10-07 (skill-library-01SKLIB01 residuals + review F4–F6, feat/skill-library) · six accepted, none introduced as regressions
 
@@ -545,7 +666,7 @@ owner: mlsidecar follow-up if it recurs.
    `installMu`. **Owner:** skill-library follow-up, if the sweep ever
    moves off the config poller's goroutine.
 
-### 2026-10-07 (memory-sync-01MEMSY01 verify pass) · PRE-EXISTING flake: `TestStore_Add_WiresGlobalCaptureTracker`
+### 2026-10-07 (memory-sync-01MEMSY01 verify pass) · ~~PRE-EXISTING flake: `TestStore_Add_WiresGlobalCaptureTracker`~~ CLOSED
 
 `core/memory/capture_rate_test.go` fails when the whole `core/memory`
 package runs with `-count=5` (ChunksPerMinute delta came out negative). It
@@ -561,6 +682,14 @@ negative. It passes at `-count=1` (CI's setting).
   per-test reset/clock), so the test measures only its own writes.
 - **Owner:** memory follow-up mission (next one to touch
   `core/memory/capture_rate.go`). Dated 2026-10-07.
+
+> **CLOSED 2026-10-07 (`test(memory): TestStore_Add_WiresGlobalCaptureTracker
+> isolates the global sliding-window tracker`, fix/ledger-followups-oct7):**
+> the chromem store carries its capture tracker (`capture`, set to
+> `GlobalCaptureTracker()` by `NewChromemStore`; production unchanged).
+> The test asserts the global wiring by identity and counts its writes on
+> a private tracker swapped in (exactly 5, duplicate excluded).
+> `go test ./core/memory/ -race -count=5` passed 3× in a row.
 
 ### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
 
@@ -672,7 +801,42 @@ Per-device handoff keys + v2 wrap-to-all + accept-persists shipped
    stays blocked until someone deletes `<dataDir>/fleet/node_removed` by
    hand. Fix shape: clear the marker when the served supervisor observes a
    NEW identity (different user/node) from the host. **Owner:** served-mode
-   boundary owner. Also low: a crash between `sessions.Create` and the first
+   boundary owner.
+   > **Served-mode gap CLOSED 2026-10-07 (`fix(fleet): served-mode
+   > node_removed clears when the host presents a new identity`,
+   > fix/ledger-followups-oct7):** the marker now records the removed
+   > account's `TokenIdentityKey` (subject|org|issuer, line
+   > `identity=…`); cmd/servedfleet's Enroll step calls
+   > `settings.FleetHostIdentityPresented(identity)` before every attempt,
+   > which (external token source only) clears the marker + in-memory
+   > node_removed state and restarts the fleet background when the host's
+   > identity differs, so the next enroll mints a fresh node id. Same
+   > identity, an unknown identity, or a marker written before this change
+   > (no recorded identity) stays blocked; desktop unchanged (sign-in
+   > clears). Node id is not part of the comparison — the host never
+   > presents one. Residual: the SAME account re-authorizing on the host
+   > is indistinguishable from a token renewal, so it stays blocked until
+   > the marker is removed (needs a host-side re-auth signal, e.g. a
+   > session id claim; owner: served-mode boundary owner). Pinned by
+   > `TestNodeRemoved_ServedHostNewIdentityClears`,
+   > `TestNodeRemoved_HostIdentityIgnoredOnDesktop`,
+   > `TestClearNodeRemovedForNewIdentity` and
+   > `TestEnrollFunc_SupervisorLiftsNodeRemovedOnNewHostIdentity` (real
+   > `serve.FleetEnrollSupervisor`; fails with the presentation call
+   > removed).
+   > Review residuals (2026-10-07, accepted): (a) the identity key is
+   > `sub|org|iss`, so the SAME person gaining or losing the org claim, or
+   > an issuer URL changing only by a trailing slash, also reads as "new"
+   > and lifts the block. Not a widening: desktop already clears on ANY
+   > explicit sign-in. Tightening shape if wanted: compare `sub|iss` with
+   > the issuer normalised, and treat an org change as new only when both
+   > sides carry one. (b) A marker written before this change carries no
+   > identity and so stays blocked in served mode — remove
+   > `<dataDir>/fleet/node_removed` by hand (one-time, pre-release
+   > installs only). The lift also clears the stale "removed by admin"
+   > sign-in reason, as desktop sign-in does. **Owner:** served-mode
+   > boundary owner.
+   Also low: a crash between `sessions.Create` and the first
    `importing` ledger write leaves an empty "Shared by…" session (never a
    second transcript); owner: same mission follow-up.
 
@@ -3063,7 +3227,8 @@ infrastructure.
 **Fleet sync / update-manifest fetches — does not need guarding; URL is
 a compile-time constant.** `core/update/manifest.go:52-53`:
 `stableManifestURL = "https://downloads.kameas.ai/kenaz-harness/manifest.json"`,
-`prereleaseManifestURL = "https://stage-downloads.kameas.ai/..."` — both
+`prereleaseManifestURL = "https://stage.downloads.kameas.ai/..."` (host
+corrected 2026-10-07 — it read `stage-downloads`, an NXDOMAIN host) — both
 literal constants, `ManifestURL` has no production override path
 (test-only). `fetchManifest` (`manifest.go:74-105`) and the asset
 downloader (`core/update/service.go:99,265-405`) use a plain

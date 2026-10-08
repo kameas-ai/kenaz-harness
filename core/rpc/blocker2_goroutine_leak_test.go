@@ -42,6 +42,11 @@ import (
 const (
 	pruneLoopFrame      = "core/memory/prune.(*Scheduler).loop"
 	compactionLoopFrame = "core/agentgraph/compaction.(*SweepScheduler).loop"
+	// memorySyncLoopFrame is the learned-memory sync lane's cycle loop
+	// (buildMemorySync). Before (*MemorySync).Stop existed nothing ended
+	// it: 129 of these were in the v0.93.0 core/rpc CI timeout dump
+	// (unwired-ledger 2026-10-07).
+	memorySyncLoopFrame = "core/fleet.(*MemorySync).Start.func1"
 )
 
 // countGoroutineFrames returns how many goroutines in a full stack
@@ -75,6 +80,9 @@ func TestAPI_Shutdown_NoSchedulerGoroutineLeak(t *testing.T) {
 	// would pollute in both directions (false leak, false clean).
 	runtime.GC()
 	baseline := runtime.NumGoroutine()
+	// Other (non-Shutdown-ing) tests in this binary may already have left
+	// memory-sync loops behind, so that class is asserted as a delta.
+	memSyncBaseline := countGoroutineFrames(memorySyncLoopFrame)
 
 	const n = 5
 	apis := make([]*API, 0, n)
@@ -90,11 +98,12 @@ func TestAPI_Shutdown_NoSchedulerGoroutineLeak(t *testing.T) {
 	// be running N times over before we can meaningfully assert they
 	// are gone after Shutdown.
 	deadline := time.Now().Add(2 * time.Second)
-	var pruneBefore, compactionBefore int
+	var pruneBefore, compactionBefore, memSyncBefore int
 	for time.Now().Before(deadline) {
 		pruneBefore = countGoroutineFrames(pruneLoopFrame)
 		compactionBefore = countGoroutineFrames(compactionLoopFrame)
-		if pruneBefore >= n && compactionBefore >= n {
+		memSyncBefore = countGoroutineFrames(memorySyncLoopFrame)
+		if pruneBefore >= n && compactionBefore >= n && memSyncBefore-memSyncBaseline >= n {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -109,6 +118,11 @@ func TestAPI_Shutdown_NoSchedulerGoroutineLeak(t *testing.T) {
 			"buildCompactionWiring no longer starts a goroutine here, so the leak assertion below would be vacuous",
 			compactionBefore, n, n)
 	}
+	if memSyncBefore-memSyncBaseline < n {
+		t.Fatalf("only %d new (*MemorySync).Start loop goroutine(s) after constructing %d real-DataDir APIs, want >= %d — "+
+			"buildMemorySync no longer starts the lane here, so the leak assertion below would be vacuous",
+			memSyncBefore-memSyncBaseline, n, n)
+	}
 
 	for _, api := range apis {
 		api.Shutdown()
@@ -119,11 +133,12 @@ func TestAPI_Shutdown_NoSchedulerGoroutineLeak(t *testing.T) {
 	// goroutines should already be gone; poll briefly anyway rather
 	// than sleeping a fixed duration.
 	deadline = time.Now().Add(3 * time.Second)
-	var pruneAfter, compactionAfter int
+	var pruneAfter, compactionAfter, memSyncAfter int
 	for time.Now().Before(deadline) {
 		pruneAfter = countGoroutineFrames(pruneLoopFrame)
 		compactionAfter = countGoroutineFrames(compactionLoopFrame)
-		if pruneAfter == 0 && compactionAfter == 0 {
+		memSyncAfter = countGoroutineFrames(memorySyncLoopFrame)
+		if pruneAfter == 0 && compactionAfter == 0 && memSyncAfter <= memSyncBaseline {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -134,6 +149,10 @@ func TestAPI_Shutdown_NoSchedulerGoroutineLeak(t *testing.T) {
 	}
 	if compactionAfter != 0 {
 		t.Errorf("%d compaction.(*SweepScheduler).loop goroutine(s) still running after Shutdown-ing all %d APIs (CK-09 leak)", compactionAfter, n)
+	}
+	if memSyncAfter > memSyncBaseline {
+		t.Errorf("%d (*MemorySync).Start loop goroutine(s) still running after Shutdown-ing all %d APIs (baseline %d) — MemorySync.Stop is not reached from Shutdown",
+			memSyncAfter-memSyncBaseline, n, memSyncBaseline)
 	}
 
 	// NumGoroutine() is logged for diagnostic visibility only — it is

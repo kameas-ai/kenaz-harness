@@ -119,6 +119,19 @@ type TokenIdentity struct {
 	Issuer  string // iss — the realm
 }
 
+// TokenIdentityKey is a stable key for the account the current access
+// token asserts — subject|org|issuer — or "" when there is no usable
+// token. A renewal keeps it stable; a different subject, org or issuer
+// changes it. Used by the served enroll supervisor (cmd/servedfleet) and
+// recorded in the node_removed marker.
+func TokenIdentityKey() string {
+	id, err := TokenIdentityFromAccessToken()
+	if err != nil || id.Subject == "" {
+		return ""
+	}
+	return id.Subject + "|" + id.OrgID + "|" + id.Issuer
+}
+
 // TokenIdentityFromAccessToken decodes the stored access token's identity.
 func TokenIdentityFromAccessToken() (TokenIdentity, error) {
 	ts, err := LoadTokens()

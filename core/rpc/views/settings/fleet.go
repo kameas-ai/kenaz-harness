@@ -319,6 +319,12 @@ func (a *API) startFleetBackgroundLocked() {
 		a.fleet.configPoller = cp
 		cp.Start(context.Background())
 	}
+	// Restart the learned-memory sync lane a prior StopFleetBackground
+	// stopped (no-op at boot, before SetMemorySync, and while it runs —
+	// core/rpc's buildMemorySync starts it the first time).
+	if ms := a.memorySync.Load(); ms != nil {
+		ms.Start(context.Background())
+	}
 	// Start the emergency-lockdown watcher. The watcher self-gates on
 	// CapEmergencyLockdown so it exits immediately when the capability
 	// is absent (fleet-emergency-lockdown-01NDFSEX12 WP02).
@@ -1049,7 +1055,7 @@ func (a *API) runSignIn(ctx context.Context) (FleetIdentity, error) {
 }
 
 // StopFleetBackground stops all fleet background goroutines (capability
-// poller, config poller, lockdown watcher) and clears the in-memory
+// poller, config poller, lockdown watcher, memory sync lane) and clears the in-memory
 // lockdown flag + model-pref cache. It is idempotent and safe to call
 // from sign-out or app shutdown.
 //
@@ -1132,6 +1138,11 @@ func (a *API) StopFleetBackground() {
 	}
 	if watcher != nil {
 		watcher.Stop()
+	}
+	// The memory sync lane too: it would otherwise keep cycling against the
+	// signed-out client (startFleetBackgroundLocked restarts it on sign-in).
+	if ms := a.memorySync.Load(); ms != nil {
+		ms.Stop()
 	}
 	// Clear the package-level lockdown flag so a re-login starts clean.
 	fleet.ForceSetLockdownForTest(false) // production-safe: the symbol is exported for exactly this use
@@ -1223,7 +1234,9 @@ func (a *API) handleNodeRemoved() {
 	// Durable marker FIRST: whatever fails below (keychain delete, file
 	// removal) or however the process restarts, enroll stays refused until
 	// an explicit sign-in (review fix #5).
-	if err := fleet.MarkNodeRemoved(a.fleetDataDir()); err != nil {
+	// The identity is read while the tokens still exist; a served guest
+	// compares it with what its host presents later (FleetHostIdentityPresented).
+	if err := fleet.MarkNodeRemoved(a.fleetDataDir(), fleet.TokenIdentityKey()); err != nil {
 		logging.L().Warn("fleet.node_removed.mark_failed", "err", err.Error())
 	}
 	a.StopFleetBackground()
@@ -1251,6 +1264,45 @@ func (a *API) handleNodeRemoved() {
 	}
 	a.runSessionResetHooks()
 	a.publishFleetSession("node_removed")
+}
+
+// FleetHostIdentityPresented is the served-mode re-authorization for
+// node_removed. A served/brokered guest has no sign-in of its own, so
+// before this nothing cleared <dataDir>/fleet/node_removed and a removed
+// guest stayed blocked until someone deleted the file by hand
+// (unwired-ledger device-keys residual 7). The served enroll supervisor
+// calls this with the identity its host's token asserts before every
+// enroll attempt: when it differs from the identity recorded at removal,
+// the marker and the in-memory node_removed state are cleared so the
+// enroll proceeds under a fresh node id. Same identity (or either side
+// unknown) stays blocked. Only acts while the token source is external;
+// the desktop flow is unchanged (FleetSignIn clears). Reports whether the
+// block was lifted.
+func (a *API) FleetHostIdentityPresented(identity string) bool {
+	if a == nil || a.fleet == nil || !fleet.ExternalTokenSourceActive() {
+		return false
+	}
+	dataDir := a.fleetDataDir()
+	cleared, err := fleet.ClearNodeRemovedForNewIdentity(dataDir, identity)
+	if err != nil {
+		logging.L().Warn("fleet.served.clear_node_removed_failed", "err", err.Error())
+		return false
+	}
+	if !cleared {
+		return false
+	}
+	a.fleet.mu.Lock()
+	a.fleet.sess.nodeRemoved = false
+	a.fleet.sess.autoRetryStopped = false
+	// Drop the "removed by admin" reason too, as the desktop sign-in does;
+	// otherwise a later token failure would still show it.
+	a.fleet.sess.signInReason, a.fleet.sess.signInErr = "", ""
+	// handleNodeRemoved stopped the background workers; restart them the
+	// way FleetSignIn does for the desktop re-authorization.
+	a.startFleetBackgroundLocked()
+	a.fleet.mu.Unlock()
+	logging.L().Info("fleet.served.node_removed_cleared_new_identity")
+	return true
 }
 
 // FleetNodeRemoved applies the node_removed terminal sign-out for a 403

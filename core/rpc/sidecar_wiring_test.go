@@ -216,8 +216,9 @@ func TestSidecarWiring_RealManagerUnderDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Production pin is honestly unavailable until the release channel
-	// publishes the engine (dated note in mlsidecar.PinnedEngineRelease).
+	// The checked-in engine pin (mlsidecar pinned_release_gen.go) is zero —
+	// a real pin is written only at release-build time by release.yml's
+	// engine-pin step — so a test build honestly reports it unavailable.
 	if v.Available || !strings.Contains(v.UnavailableReason, "not been published") {
 		t.Fatalf("view = %+v, want the honest no-published-release reason", v)
 	}

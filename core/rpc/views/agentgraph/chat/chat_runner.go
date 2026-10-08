@@ -894,6 +894,10 @@ type ChatRunner struct {
 	// pending_context.go). Own lock; never nil on a New-constructed
 	// runner.
 	pendingContext *pendingContextQueue
+	// runs tracks driveRun goroutines and the work they spawn, so Drain /
+	// Shutdown can wait for them before the owner closes storage
+	// (run_drain.go).
+	runs runTracker
 }
 
 // chatSub is the per-StartStream bookkeeping entry.
@@ -1018,6 +1022,18 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if sessionID == "" {
 		return "", errors.New("chat: session id required")
 	}
+	// Registered with the drain tracker up front (atomic with Shutdown's
+	// refusal); released on every early return, handed to driveRun on
+	// success.
+	if !r.runs.tryAdd() {
+		return "", ErrRunnerShutdown
+	}
+	runHandedOff := false
+	defer func() {
+		if !runHandedOff {
+			r.runs.done()
+		}
+	}()
 
 	// The turn's run id (agentgraph-settings-linkage-01DOGF0D WP02). It
 	// is both the stream subscription id the frontend holds and the
@@ -1640,7 +1656,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		capturedTier := resolvedKnobs.EffectiveTier
 		capturedProfileID, capturedModelOverride := profileID, modelOverride
 		env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(_ context.Context, sID, _, _ string) {
-			go r.fireAdvice(sID, capturedProfileID, capturedModelOverride, turn.Text, capturedTier)
+			r.goTracked(func() { r.fireAdvice(sID, capturedProfileID, capturedModelOverride, turn.Text, capturedTier) })
 		})
 	}
 
@@ -1710,6 +1726,10 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// resolution, graph load, budget, lockdown) has already returned.
 		r.cfg.TurnUsage.TurnStarted(ctx, sessionID, llmAdapter.ProviderKind())
 	}
+	// The tracker slot taken at the top now belongs to driveRun (its
+	// first defer releases it), so Drain/Shutdown wait for the run's exit
+	// path, which writes storage after StartStream has returned.
+	runHandedOff = true
 	go r.driveRun(streamCtx, sub, env)
 	return subID, nil
 }
@@ -1830,7 +1850,13 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 // surface always sees a close signal — the bridge's Close() is
 // idempotent so a kernel-side Close that already fired is a no-op.
 func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env) {
+	// Registered first so it runs last: the run is not "done" for Drain
+	// until its whole exit path (checkpoint delete, close(sub.done)) is.
+	defer r.runs.done()
 	log := logging.L()
+	// flushDone is closed when the periodic checkpoint flusher exits (nil
+	// when none was started).
+	var flushDone chan struct{}
 	defer func() {
 		// Recover any panic in the kernel run or the terminal
 		// classification/persist logic. Without this a panic would crash
@@ -1870,6 +1896,15 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// taken. `reason` is declared later in this function and is out
 		// of lexical scope for this defer, which is why this is
 		// unconditional rather than branching on it.
+		// End the run's context and wait for the periodic flusher BEFORE
+		// the delete below. Nothing cancelled streamCtx on a normal
+		// completion, so the flusher (and the inbound-ctx watcher in
+		// StartStream) outlived the run indefinitely — and a flusher tick
+		// landing after the delete could resurrect the checkpoint row.
+		sub.cancel()
+		if flushDone != nil {
+			<-flushDone
+		}
 		if r.cfg.StreamCheckpoints != nil {
 			delCtx, delCancel := context.WithTimeout(context.Background(), persistPartialTimeout)
 			if derr := r.cfg.StreamCheckpoints.DeleteStreamCheckpoint(delCtx, sub.sessionID, sub.id); derr != nil {
@@ -1923,7 +1958,16 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	// outside a test fixture means the seam was never wired, not that
 	// periodic durability is an intentionally-disabled feature.
 	if r.cfg.StreamCheckpoints != nil {
-		go runPeriodicFlush(ctx, sub.sessionID, sub.id, sub.bridge, r.cfg.StreamCheckpoints, 0)
+		flushDone = make(chan struct{})
+		// Bind ctx by value: the closure would otherwise read the ctx
+		// variable driveRun reassigns below (sanitizer/resolver layers) —
+		// a race the old `go runPeriodicFlush(ctx, …)` form never had,
+		// because a go statement evaluates its arguments eagerly.
+		flushCtx, done := ctx, flushDone
+		go func() {
+			defer close(done)
+			runPeriodicFlush(flushCtx, sub.sessionID, sub.id, sub.bridge, r.cfg.StreamCheckpoints, 0)
+		}()
 	}
 
 	// model-moves-transcript-01PMCH01 WP02: whatever else happens, the
@@ -2150,7 +2194,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// stopped on its own".
 		reason = "stop-called"
 		cause := cancelCauseString(sub)
-		if cause == "inbound-ctx" {
+		if cause == "inbound-ctx" || cause == "app-shutdown" {
 			log.Warn("chat.run.aborted_by_inbound_ctx",
 				"sub_id", sub.id,
 				"session_id", sub.sessionID,
@@ -2323,7 +2367,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	// at least one assistant message exists — all inside a fresh
 	// 5-second context (NFR-001).
 	if runTerminatedClean && r.cfg.AutoTitle != nil {
-		go r.fireAutoTitle(sub.sessionID, sub.profileID, sub.modelOverride)
+		r.goTracked(func() { r.fireAutoTitle(sub.sessionID, sub.profileID, sub.modelOverride) })
 	}
 
 	// Post-run merge-suggestion trigger (engineer-truth-pass-01PMTP01
@@ -2357,7 +2401,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// earlier segments from the judgment for no reason tied to the
 		// heuristic's intent).
 		lastText, _ := sub.bridge.PartialState()
-		go r.fireMergeSuggestion(sub.sessionID, env.Branch, env.MergeSuggester, lastText)
+		r.goTracked(func() { r.fireMergeSuggestion(sub.sessionID, env.Branch, env.MergeSuggester, lastText) })
 	}
 
 	if !sub.finished.CompareAndSwap(false, true) {
@@ -2435,7 +2479,8 @@ func (r *ChatRunner) recordTurnOutcome(sub *chatSub, o session.TurnRunOutcome) {
 }
 
 // cancelCauseString returns the recorded cancellation cause for a sub
-// ("stop-called", "inbound-ctx") or "none" when nothing cancelled it.
+// ("stop-called", "inbound-ctx", "app-shutdown") or "none" when nothing
+// cancelled it.
 // Used by the terminal path to attribute a context.Canceled exit.
 func cancelCauseString(sub *chatSub) string {
 	if v, ok := sub.cancelCause.Load().(string); ok && v != "" {

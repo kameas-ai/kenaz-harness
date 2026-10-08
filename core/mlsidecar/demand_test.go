@@ -21,7 +21,11 @@ type countingEngine struct {
 	hits   atomic.Int64
 	mu     sync.Mutex
 	health HealthPayload
-	srv    *httptest.Server
+	// hold, when non-nil, parks every /health response until it is closed
+	// (or the request ends) — lets a test pin "the engine has not answered
+	// yet" without racing the probe's background Ensure.
+	hold chan struct{}
+	srv  *httptest.Server
 }
 
 func newCountingEngine(t *testing.T) *countingEngine {
@@ -29,6 +33,16 @@ func newCountingEngine(t *testing.T) *countingEngine {
 	e := &countingEngine{}
 	e.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
+			e.mu.Lock()
+			hold := e.hold
+			e.mu.Unlock()
+			if hold != nil {
+				select {
+				case <-hold:
+				case <-r.Context().Done():
+					return
+				}
+			}
 			e.hits.Add(1)
 			e.mu.Lock()
 			h := e.health
@@ -40,6 +54,23 @@ func newCountingEngine(t *testing.T) *countingEngine {
 	}))
 	t.Cleanup(e.srv.Close)
 	return e
+}
+
+// holdHealth parks /health responses until the returned release is called.
+func (e *countingEngine) holdHealth() (release func()) {
+	ch := make(chan struct{})
+	e.mu.Lock()
+	e.hold = ch
+	e.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			e.mu.Lock()
+			e.hold = nil
+			e.mu.Unlock()
+			close(ch)
+		})
+	}
 }
 
 func (e *countingEngine) setHealth(h HealthPayload) {
@@ -175,9 +206,18 @@ func TestDemandProbe_FirstDemandStartsEngine_OneEnsurePerTick(t *testing.T) {
 	p := &DemandProbe{M: m, MinInterval: 30 * time.Second, IdleAfter: 5 * time.Minute, Now: clock.Now, Sleep: tk.Sleep}
 	defer p.Close()
 
+	// Park the engine's /health answer so the loop's first Ensure cannot
+	// adopt before the first call reads the cache. Without this the
+	// assertion below raced the background adopt (ledger 2026-10-07 CI
+	// entry): a fast adopt made the first call truthfully report healthy.
+	// Holding it also makes "does not block" a real check — the call
+	// returns while the engine has not answered.
+	release := eng.holdHealth()
+	defer release()
 	if p.Healthy() {
 		t.Fatal("first demand must not block on / wait for the engine (per-call fallback)")
 	}
+	release()
 	waitFor(t, "the first Ensure to adopt the engine", func() bool { return m.Healthy() })
 	if !p.Healthy() {
 		t.Fatal("second demand must see the engine healthy")

@@ -285,6 +285,16 @@ type MemorySync struct {
 	// locally (or the process restarts). Deliberately NOT persisted — only
 	// secret_detected earns a durable SyncBlocked (spec: drop and log).
 	skipped map[string]int64
+
+	// runMu guards the loop lifecycle (Start / Stop). cancel and done are
+	// non-nil exactly while the loop goroutine runs; stopped is set by
+	// Stop (sign-out / shutdown) and cleared by the next Start, so Status
+	// can say "signed_out" for a lane that is deliberately not running
+	// instead of whatever its last cycle recorded.
+	runMu   sync.Mutex
+	cancel  context.CancelFunc
+	done    chan struct{}
+	stopped bool
 }
 
 // NewMemorySync builds the lane and loads its persisted state. A corrupt
@@ -316,9 +326,24 @@ func NewMemorySync(cfg MemorySyncConfig) (*MemorySync, error) {
 	return m, nil
 }
 
-// Start runs the cycle loop until ctx is cancelled.
+// Start runs the cycle loop until ctx is cancelled or Stop is called.
+// Idempotent: a Start while the loop already runs is a no-op, so the
+// sign-in restart path (settings startFleetBackgroundLocked) may call it
+// unconditionally. A Start after Stop starts a fresh loop.
 func (m *MemorySync) Start(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
+	if m.cancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	m.cancel, m.done, m.stopped = cancel, done, false
 	go func() {
+		defer close(done)
 		t := time.NewTicker(m.cfg.Interval)
 		defer t.Stop()
 		for {
@@ -331,6 +356,45 @@ func (m *MemorySync) Start(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// Stop cancels the cycle loop and waits for its goroutine to exit (an
+// in-flight cycle sees its context cancelled). Nil-safe and idempotent.
+// Called from API.Shutdown and from settings StopFleetBackground (sign-out
+// and node_removed); before it existed the loop ran — and recorded
+// not_entitled against a signed-out client every cycle — until process
+// exit (unwired-ledger 2026-10-07). Must not be called from the loop's own
+// goroutine (it would wait on itself); no RunOnce path reaches it.
+func (m *MemorySync) Stop() {
+	if m == nil {
+		return
+	}
+	m.runMu.Lock()
+	cancel, done := m.cancel, m.done
+	m.cancel, m.done, m.stopped = nil, nil, true
+	m.runMu.Unlock()
+	if cancel != nil {
+		cancel()
+		<-done
+	}
+}
+
+// Running reports whether the cycle loop is running (Start called and
+// not yet stopped).
+func (m *MemorySync) Running() bool {
+	if m == nil {
+		return false
+	}
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
+	return m.cancel != nil
+}
+
+// isStopped reports whether Stop was called and no Start has followed.
+func (m *MemorySync) isStopped() bool {
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
+	return m.stopped
 }
 
 // Kick requests a cycle soon (non-blocking).
@@ -1188,6 +1252,12 @@ type MemorySyncStatus struct {
 // settings — a user-initiated request, never made by the idle lane.
 func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 	out := MemorySyncStatus{Entitled: m.entitled(), LocalEnabled: m.state().Enabled, Lane: m.lanes().Snapshot(LaneMemorySync)}
+	if m.isStopped() {
+		// A lane stopped by sign-out (or node_removed) records nothing; the
+		// panel names why it is off rather than echoing the default-deny
+		// capability answer (not_entitled) the signed-out client gives.
+		out.Lane = LaneSnapshot{Status: LaneOff, Reason: "signed_out", LastSuccessAt: out.Lane.LastSuccessAt}
+	}
 	if all, err := m.cfg.Store.List(ctx); err == nil {
 		for _, c := range all {
 			if c.SyncBlocked != "" {

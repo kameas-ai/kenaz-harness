@@ -35,10 +35,12 @@ import (
 //   - A user who never enabled recommendations: Installed() is false, no
 //     loop starts — no port dial, no spawn, zero cost (and the
 //     install.json read is itself throttled to MinInterval).
-//   - First demand after enabling/app start: the call itself falls back
-//     (status is not yet healthy — the advisor's per-call heuristic
-//     fallback), the loop's first Ensure starts the engine, later calls
-//     see healthy.
+//   - First demand after enabling/app start: the call never waits; it
+//     normally falls back (status is not yet healthy — the advisor's
+//     per-call heuristic fallback), the loop's first Ensure starts the
+//     engine, later calls see healthy. If an engine is ALREADY running,
+//     the first Ensure can adopt it before this call reads the cache, and
+//     the first call then truthfully answers healthy — see Healthy.
 //
 // The app-boot resolve (core/rpc's advice.laya_ladder.boot_resolve) must
 // be handed the Manager itself (cache-only Healthy), NOT this type, so
@@ -70,6 +72,15 @@ type DemandProbe struct {
 }
 
 // Healthy implements advice.SidecarProbe.
+//
+// It kicks the demand BEFORE reading the cache, deliberately: the answer
+// is the Manager's current cached status, and a background adopt that
+// lands in between makes it true only because the engine really is
+// healthy. Reading first would make the first call deterministically
+// "not yet" but buys nothing — the contract is never-block plus per-call
+// fallback, not "the first call fails" — and would discard a true answer.
+// (Reviewed 2026-10-07 for the TestDemandProbe_FirstDemandStartsEngine
+// flake: the race was in the test's assertion, not here.)
 func (d *DemandProbe) Healthy() bool {
 	if d == nil || d.M == nil {
 		return false
