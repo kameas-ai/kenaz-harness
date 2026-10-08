@@ -264,3 +264,71 @@ func TestNodeRemoved_SurvivesRestart_UntilSignIn(t *testing.T) {
 		t.Fatalf("after sign-in: %s/%s", v.State, v.Reason)
 	}
 }
+
+// Served-mode re-authorization (unwired-ledger device-keys residual 7): a
+// served guest has no sign-in of its own, so the durable node_removed block
+// lifts only when the host presents a DIFFERENT identity than the one
+// recorded at removal. Same identity stays blocked (no request, no node id).
+func TestNodeRemoved_ServedHostNewIdentityClears(t *testing.T) {
+	r, f := newRemovalRig(t)
+	ctx := context.Background()
+	if _, err := r.api.FleetRefreshIdentity(ctx); err != nil {
+		t.Fatal(err)
+	}
+	oldNode := fleet.ReadNodeID(r.dataDir)
+	f.remove(oldNode)
+	if _, err := r.api.FleetRefreshIdentity(ctx); !errors.Is(err, fleet.ErrNodeRemoved) {
+		t.Fatalf("err = %v", err)
+	}
+	alice := fleet.TokenIdentityKey()
+	if alice == "" || fleet.NodeRemovedIdentity(r.dataDir) != alice {
+		t.Fatalf("marker identity = %q, want the removed account %q", fleet.NodeRemovedIdentity(r.dataDir), alice)
+	}
+
+	// Same account re-presented (a renewal): still blocked, nothing sent.
+	n := len(f.enrolls())
+	if r.api.FleetHostIdentityPresented(alice) {
+		t.Fatal("same identity must not lift the block")
+	}
+	if _, err := r.api.FleetRefreshIdentity(ctx); !errors.Is(err, fleet.ErrNodeRemoved) {
+		t.Fatalf("same identity enroll: %v", err)
+	}
+	if r.api.FleetHostIdentityPresented("") {
+		t.Fatal("unknown identity must not lift the block")
+	}
+	if got := len(f.enrolls()); got != n {
+		t.Fatalf("enroll requests while blocked: %d -> %d", n, got)
+	}
+
+	// The host signs in as a different account: block lifts, enroll runs
+	// under a fresh node id.
+	r.setToken(jwtFor("sub-bob", "zitadel-org-1"))
+	if !r.api.FleetHostIdentityPresented(fleet.TokenIdentityKey()) {
+		t.Fatal("a new host identity must lift the block")
+	}
+	if fleet.NodeRemovedMarked(r.dataDir) {
+		t.Fatal("marker still present after the new identity")
+	}
+	if _, err := r.api.FleetRefreshIdentity(ctx); err != nil {
+		t.Fatalf("enroll after new identity: %v", err)
+	}
+	if nn := fleet.ReadNodeID(r.dataDir); nn == "" || nn == oldNode {
+		t.Fatalf("node id after re-enroll = %q (old %q), want a fresh one", nn, oldNode)
+	}
+	if v := snap(t, r.api); v.State != FleetSessionSignedIn {
+		t.Fatalf("snapshot = %s/%s, want signed_in", v.State, v.Reason)
+	}
+}
+
+// Desktop (keychain-owned tokens) is unchanged: only an explicit sign-in
+// clears the marker.
+func TestNodeRemoved_HostIdentityIgnoredOnDesktop(t *testing.T) {
+	r, _ := newRemovalRig(t)
+	if err := fleet.MarkNodeRemoved(r.dataDir, "sub-alice|o|i"); err != nil {
+		t.Fatal(err)
+	}
+	fleet.SetExternalTokenSource(nil)
+	if r.api.FleetHostIdentityPresented("sub-bob|o|i") || !fleet.NodeRemovedMarked(r.dataDir) {
+		t.Fatal("desktop mode must not clear node_removed on a presented identity")
+	}
+}

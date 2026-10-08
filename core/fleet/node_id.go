@@ -116,19 +116,70 @@ func nodeRemovedMarkerPath(dataDir string) string {
 // MarkNodeRemoved persists the node_removed terminal state so that a
 // restart, a served-mode supervisor tick or a partially-failed ClearTokens
 // cannot re-enroll (under a freshly minted node id) without an explicit
-// sign-in. Cleared only by ClearNodeRemoved from the sign-in flow.
-func MarkNodeRemoved(dataDir string) error {
+// sign-in. identity is the TokenIdentityKey of the account that was
+// signed in when the node was removed ("" when unknown); it is recorded so
+// a served guest — which has no sign-in of its own — can clear the marker
+// when its host presents a DIFFERENT identity (ClearNodeRemovedForNewIdentity).
+// Otherwise cleared only by ClearNodeRemoved from the sign-in flow.
+func MarkNodeRemoved(dataDir, identity string) error {
 	if dataDir == "" {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
 		return fmt.Errorf("fleet: mark node removed: %w", err)
 	}
-	stamp := time.Now().UTC().Format(time.RFC3339) + "\n"
-	if err := os.WriteFile(nodeRemovedMarkerPath(dataDir), []byte(stamp), 0o600); err != nil {
+	body := time.Now().UTC().Format(time.RFC3339) + "\n"
+	if identity != "" {
+		body += nodeRemovedIdentityPrefix + identity + "\n"
+	}
+	if err := os.WriteFile(nodeRemovedMarkerPath(dataDir), []byte(body), 0o600); err != nil {
 		return fmt.Errorf("fleet: mark node removed: %w", err)
 	}
 	return nil
+}
+
+// nodeRemovedIdentityPrefix introduces the recorded identity line in the
+// node_removed marker (line 1 is the RFC 3339 stamp).
+const nodeRemovedIdentityPrefix = "identity="
+
+// NodeRemovedIdentity returns the identity recorded in the node_removed
+// marker, or "" when there is no marker or it predates identity recording.
+func NodeRemovedIdentity(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(nodeRemovedMarkerPath(dataDir))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), nodeRemovedIdentityPrefix); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// ClearNodeRemovedForNewIdentity clears the node_removed marker when
+// current is a known identity that differs from the one recorded at
+// removal — the served-mode "re-authorized sign-in": the guest has no
+// sign-in of its own, so a host presenting a different account is the
+// only re-authorization it can observe. It never clears when either side
+// is unknown ("" current, or a marker without a recorded identity): the
+// same account re-presenting the same token must stay blocked (fleet
+// contract §10.1). Reports whether the marker was cleared.
+func ClearNodeRemovedForNewIdentity(dataDir, current string) (bool, error) {
+	if dataDir == "" || current == "" || !NodeRemovedMarked(dataDir) {
+		return false, nil
+	}
+	recorded := NodeRemovedIdentity(dataDir)
+	if recorded == "" || recorded == current {
+		return false, nil
+	}
+	if err := ClearNodeRemoved(dataDir); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // NodeRemovedMarked reports whether the node_removed marker is present.

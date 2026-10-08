@@ -719,7 +719,30 @@ Per-device handoff keys + v2 wrap-to-all + accept-persists shipped
    stays blocked until someone deletes `<dataDir>/fleet/node_removed` by
    hand. Fix shape: clear the marker when the served supervisor observes a
    NEW identity (different user/node) from the host. **Owner:** served-mode
-   boundary owner. Also low: a crash between `sessions.Create` and the first
+   boundary owner.
+   > **Served-mode gap CLOSED 2026-10-07 (`fix(fleet): served-mode
+   > node_removed clears when the host presents a new identity`,
+   > fix/ledger-followups-oct7):** the marker now records the removed
+   > account's `TokenIdentityKey` (subject|org|issuer, line
+   > `identity=…`); cmd/servedfleet's Enroll step calls
+   > `settings.FleetHostIdentityPresented(identity)` before every attempt,
+   > which (external token source only) clears the marker + in-memory
+   > node_removed state and restarts the fleet background when the host's
+   > identity differs, so the next enroll mints a fresh node id. Same
+   > identity, an unknown identity, or a marker written before this change
+   > (no recorded identity) stays blocked; desktop unchanged (sign-in
+   > clears). Node id is not part of the comparison — the host never
+   > presents one. Residual: the SAME account re-authorizing on the host
+   > is indistinguishable from a token renewal, so it stays blocked until
+   > the marker is removed (needs a host-side re-auth signal, e.g. a
+   > session id claim; owner: served-mode boundary owner). Pinned by
+   > `TestNodeRemoved_ServedHostNewIdentityClears`,
+   > `TestNodeRemoved_HostIdentityIgnoredOnDesktop`,
+   > `TestClearNodeRemovedForNewIdentity` and
+   > `TestEnrollFunc_SupervisorLiftsNodeRemovedOnNewHostIdentity` (real
+   > `serve.FleetEnrollSupervisor`; fails with the presentation call
+   > removed).
+   Also low: a crash between `sessions.Create` and the first
    `importing` ledger write leaves an empty "Shared by…" session (never a
    second transcript); owner: same mission follow-up.
 

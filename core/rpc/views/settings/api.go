@@ -1702,6 +1702,10 @@ type SettingsAPI interface {
 
 	// FleetSessionEnded is the served-mode sign-out (host broker session gone).
 	FleetSessionEnded(ctx context.Context)
+	// FleetHostIdentityPresented is the served-mode re-authorization for
+	// node_removed: lifts the durable block when the host's identity
+	// differs from the one removed. Reports whether it was lifted.
+	FleetHostIdentityPresented(identity string) bool
 
 	// SetFleetExportUnauthorizedHook wires the OTLP 401 callback.
 	SetFleetExportUnauthorizedHook(fn func())

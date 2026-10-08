@@ -10,6 +10,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/serve"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 )
@@ -25,19 +26,16 @@ func Start(ctx context.Context, api *rpc.API, cfg authbroker.Config, session *au
 	// token crosses the boundary.
 	fleet.SetExternalTokenSource(session.AccessToken)
 
-	settings := api.Settings()
+	st := api.Settings()
 	// A 401 from Fleet's OTLP receiver nudges an immediate broker renewal.
-	settings.SetFleetExportUnauthorizedHook(session.NotifyOn401)
+	st.SetFleetExportUnauthorizedHook(session.NotifyOn401)
 
 	sup := serve.NewFleetEnrollSupervisor(serve.FleetEnrollConfig{
-		Auth:     session,
-		Identity: identityKey,
-		Enroll: func(ctx context.Context) error {
-			_, err := settings.FleetRefreshIdentity(ctx)
-			return err
-		},
-		Reconcile:    settings.RefreshTelemetryPreferences,
-		SessionEnded: settings.FleetSessionEnded,
+		Auth:         session,
+		Identity:     identityKey,
+		Enroll:       enrollFunc(st, identityKey),
+		Reconcile:    st.RefreshTelemetryPreferences,
+		SessionEnded: st.FleetSessionEnded,
 		Log:          log,
 	})
 	go sup.Run(ctx)
@@ -46,10 +44,23 @@ func Start(ctx context.Context, api *rpc.API, cfg authbroker.Config, session *au
 
 // identityKey is the account the current token asserts. A renewal keeps it
 // stable; a different subject, org or issuer changes it.
-func identityKey() string {
-	id, err := fleet.TokenIdentityFromAccessToken()
-	if err != nil || id.Subject == "" {
-		return ""
+func identityKey() string { return fleet.TokenIdentityKey() }
+
+// enrollSettings is the slice of the settings API the enroll step needs.
+type enrollSettings interface {
+	FleetHostIdentityPresented(identity string) bool
+	FleetRefreshIdentity(ctx context.Context) (settings.FleetIdentity, error)
+}
+
+// enrollFunc is the supervisor's Enroll step. Before each attempt it hands
+// the host's current identity to the settings API, which lifts a durable
+// node_removed block when that identity differs from the one removed: a
+// served guest has no sign-in of its own, so a host presenting a new
+// account is its re-authorization (unwired-ledger device-keys residual 7).
+func enrollFunc(s enrollSettings, identity func() string) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		s.FleetHostIdentityPresented(identity())
+		_, err := s.FleetRefreshIdentity(ctx)
+		return err
 	}
-	return id.Subject + "|" + id.OrgID + "|" + id.Issuer
 }
