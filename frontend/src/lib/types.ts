@@ -4714,6 +4714,9 @@ export interface MemorySyncStatus {
   pendingCount: number;
   fleetError?: string;
   lane: FleetSyncLaneView;
+  /** Staff org pause (kenaz-fleet PR 206): show the paused banner, keep data-rights actions. */
+  orgPaused?: boolean;
+  pausedCategory?: string;
 }
 
 /** Mirrors settings.FleetSyncView. */
@@ -4761,6 +4764,14 @@ export interface FleetSessionView {
    * (device-keys-handoff-01DEVKH01). Absent until an enroll ran.
    */
   deviceKeys?: FleetDeviceKeysView;
+  /**
+   * A Kameas-staff "pause paid features" hold is on the org (kenaz-fleet
+   * PR 206). Surfaces show OrgPausedBanner instead of tier / upsell copy;
+   * data-rights actions stay enabled. Optional for older snapshots.
+   */
+  paused?: boolean;
+  /** billing_review | security | abuse | legal | other while paused. */
+  pausedCategory?: string;
   updatedAt: string;
 }
 

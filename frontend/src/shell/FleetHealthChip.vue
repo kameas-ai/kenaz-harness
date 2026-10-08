@@ -14,14 +14,20 @@
  *   no-key         — signing key not wired in this binary (muted/hidden)
  *   unknown-key    — latest bundle signed with a key this build never pinned;
  *                    the install must update (warn)
+ *   paused         — a Kameas-staff "pause paid features" hold is on the org
+ *                    (kenaz-fleet PR 206); the last applied bundle stays in
+ *                    force. Overrides the config source (warn), never upsell.
  *
  * (fleet-integrity-observability WP10 / FR-010)
  */
 import { ref, onMounted, computed } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { FleetHealthView } from '@/lib/types';
+import { useFleetSession } from '@/lib/fleetSession';
+import { ORG_PAUSED_TITLE, orgPausedCategoryLine } from '@/lib/orgPausedCopy';
 
 const client = useHarnessClient();
+const { orgPaused, pausedCategory } = useFleetSession(client);
 
 const health = ref<FleetHealthView | null>(null);
 
@@ -40,6 +46,7 @@ const visible = computed(() =>
 
 // Color class based on configSource.
 const chipClass = computed(() => {
+  if (orgPaused.value) return 'text-signal-warn border-signal-warn/30 bg-signal-warn/10';
   const src = health.value?.configSource ?? '';
   if (src === 'fleet') return 'text-signal-ok border-signal-ok/30 bg-signal-ok/10';
   if (src.startsWith('stale') || src === 'cache' || src === 'unknown-key')
@@ -49,6 +56,7 @@ const chipClass = computed(() => {
 
 // Short label for the chip.
 const label = computed(() => {
+  if (orgPaused.value) return 'paused by org';
   const src = health.value?.configSource ?? '';
   if (src === 'fleet') return 'fleet';
   if (src === 'stale-cache' || src === 'cache') return 'stale-cache';
@@ -59,6 +67,7 @@ const label = computed(() => {
 
 // Tooltip text.
 const tooltip = computed(() => {
+  if (orgPaused.value) return `${ORG_PAUSED_TITLE}. ${orgPausedCategoryLine(pausedCategory.value)}`;
   const err = health.value?.configLastError;
   if (err) return `Fleet: ${label.value} — ${err}`;
   return `Fleet: ${label.value}`;
