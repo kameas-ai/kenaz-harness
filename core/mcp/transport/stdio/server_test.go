@@ -127,7 +127,12 @@ func TestServer_CallTool(t *testing.T) {
 }
 
 func TestServer_GoroutinesReturnToBaseline(t *testing.T) {
-	t.Parallel()
+	// Deliberately NOT t.Parallel(): runtime.NumGoroutine() is process-wide,
+	// and Go only releases parallel tests after every serial test finishes,
+	// so a serial test sees no parallel sibling spawning child-process /
+	// supervisor goroutines mid-measurement. A stack-filter alternative was
+	// rejected: every sibling's goroutines share this test's function names
+	// (*ServerInstance readLoop etc.), so stacks cannot attribute per instance.
 	bin := buildFakeServer(t)
 	baseline := runtime.NumGoroutine()
 
