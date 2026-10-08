@@ -43,3 +43,28 @@ v0.1.0
 v0.1.1
 v0.4.5
 v0.16.1
+
+# ── Chocolatey community-feed outages (NSIS install step) ────────────────────
+# release.yml's `install NSIS toolchain (windows-amd64 only)` step pulls
+# nsis.install from the Chocolatey community feed. When the feed was down, the
+# windows-amd64 leg failed, the build matrix's aggregate result became
+# `failure`, and `publish-s3` (gated on needs.build.result == 'success') was
+# skipped — so EVERY platform shipped zero assets, not just Windows.
+#
+# Not re-run: at the time, a workflow_dispatch re-run resolved to prod and
+# publish-s3 unconditionally overwrote the stable `manifest.json` pointer and
+# re-sorted index.json with released_at=now, so re-running an old tag would
+# have made it "latest" for every auto-updater. Both were superseded anyway.
+v0.60.0   # choco feed returned invalid XML for nsis.install; superseded by v0.60.1 (2026-08-14)
+v0.76.1   # choco feed 504; superseded by v0.77.0, tagged 13 s later
+
+# ── Apple notarization 403 "agreement expired", 2026-10-04 → 2026-10-05 ───────
+# The Apple Developer Program agreement for team K54JDRHBA7 lapsed unsigned;
+# notarytool returned 403 on both darwin legs, the matrix aggregate failed, and
+# publish-s3 was skipped for all platforms (same mechanism as above). The
+# agreement was accepted before v0.88.0 (2026-10-05 19:11Z), which published
+# normally. Same publish-pointer hazard on re-run; all superseded by v0.88.0+.
+v0.85.1   # notarization 403 agreement expired (team K54JDRHBA7); superseded by v0.88.0+
+v0.85.2   # same; superseded by v0.88.0+
+v0.86.0   # same; superseded by v0.88.0+
+v0.87.0   # same; superseded by v0.88.0+
