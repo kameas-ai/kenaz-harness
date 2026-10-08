@@ -438,6 +438,8 @@ and the docs download page) and inserted the run into `index.json` with
 
 ### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · `MemorySync` has no `Stop`; nothing on the shutdown path cancels it
 
+### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · ~~`MemorySync` has no `Stop`; nothing on the shutdown path cancels it~~ CLOSED
+
 `buildMemorySync` (`core/rpc/api.go`, the `ms.Start(context.Background())`
 line near the end of the constructor) starts the memory-sync cycle loop
 under a context that is never cancelled. `MemorySync.Start`
@@ -475,6 +477,19 @@ nil'd → default-deny) BEFORE any fleet call, so the `ErrNotSignedIn`
 branch that records `signed_out` is never reached. Correct behaviour,
 misleading label; fold into the Stop fix (a stopped lane should record
 nothing) rather than reorder the checks.
+
+> **CLOSED 2026-10-07 (`fix(fleet): MemorySync.Stop wired into Shutdown +
+> StopFleetBackground`, fix/ledger-followups-oct7):** `(*MemorySync).Stop`
+> cancels the loop's context and waits for the goroutine (nil-safe,
+> idempotent); `Start` is idempotent and restartable. `StopFleetBackground`
+> (sign-out, node_removed, shutdown) stops the lane, `startFleetBackgroundLocked`
+> restarts it on sign-in, and `API.Shutdown` stops it directly as well. A
+> stopped lane records nothing, and `Status` reports it `off/signed_out`
+> instead of the default-deny `not_entitled` (checks not reordered). Pinned
+> by `TestAPI_Shutdown_NoSchedulerGoroutineLeak` (now also counts
+> `(*MemorySync).Start.func1` frames, delta vs baseline; fails with both
+> Stop call sites removed), `TestMemorySync_StopEndsLoop_RestartAfterSignIn`
+> and `TestMemorySync_StoppedLaneReportsSignedOut`.
 
 ### 2026-10-07 (v0.93.0 CI) · core/rpc test package is at the 10-minute cliff
 

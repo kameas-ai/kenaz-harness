@@ -319,6 +319,12 @@ func (a *API) startFleetBackgroundLocked() {
 		a.fleet.configPoller = cp
 		cp.Start(context.Background())
 	}
+	// Restart the learned-memory sync lane a prior StopFleetBackground
+	// stopped (no-op at boot, before SetMemorySync, and while it runs —
+	// core/rpc's buildMemorySync starts it the first time).
+	if ms := a.memorySync.Load(); ms != nil {
+		ms.Start(context.Background())
+	}
 	// Start the emergency-lockdown watcher. The watcher self-gates on
 	// CapEmergencyLockdown so it exits immediately when the capability
 	// is absent (fleet-emergency-lockdown-01NDFSEX12 WP02).
@@ -1049,7 +1055,7 @@ func (a *API) runSignIn(ctx context.Context) (FleetIdentity, error) {
 }
 
 // StopFleetBackground stops all fleet background goroutines (capability
-// poller, config poller, lockdown watcher) and clears the in-memory
+// poller, config poller, lockdown watcher, memory sync lane) and clears the in-memory
 // lockdown flag + model-pref cache. It is idempotent and safe to call
 // from sign-out or app shutdown.
 //
@@ -1132,6 +1138,11 @@ func (a *API) StopFleetBackground() {
 	}
 	if watcher != nil {
 		watcher.Stop()
+	}
+	// The memory sync lane too: it would otherwise keep cycling against the
+	// signed-out client (startFleetBackgroundLocked restarts it on sign-in).
+	if ms := a.memorySync.Load(); ms != nil {
+		ms.Stop()
 	}
 	// Clear the package-level lockdown flag so a re-login starts clean.
 	fleet.ForceSetLockdownForTest(false) // production-safe: the symbol is exported for exactly this use

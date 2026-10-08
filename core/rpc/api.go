@@ -1502,6 +1502,10 @@ func (a *API) Shutdown() {
 		a.settingsImpl.FlushFleetTelemetryForShutdown()
 		a.settingsImpl.StopFleetBackground()
 	}
+	// The memory sync lane (StopFleetBackground stops it too when it was
+	// installed into settings; this covers the no-settings chassis).
+	// Idempotent, nil-safe.
+	a.memorySync.Stop()
 	// fleet-audit-archival-01NDFSEX13: stop the archiver and sweeper so
 	// no in-flight batch is abandoned on clean shutdown.
 	if a.auditArchiver != nil {
