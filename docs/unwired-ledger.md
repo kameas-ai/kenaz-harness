@@ -611,6 +611,41 @@ waits for the sweep's last step`):** the test waits for the lane record
 (the sweep's final step) instead. Production ordering unchanged
 (uninstall → audit → lane is the right order).
 
+### 2026-10-07 (CI flakes) · ~~serve `assertNoFrame` vs process-wide broadcasts; stdio goroutine-baseline vs parallel siblings~~ CLOSED
+
+Two test-side flakes, production untouched.
+
+1. **`core/serve` no-frame assertions.** `assertNoFrame` failed on ANY frame
+   in its 300-500ms window. At boot `MemorySync`'s first `RunOnce` records a
+   lane state, `SyncLanes.OnChange` runs `publishFleetSession("sync_lane")`,
+   and the FIRST `fleet:session-changed` always emits (`lastEmitKey` starts
+   empty) to EVERY connection. On a starved runner it lands inside the
+   window (`TestServedAdviceAutoActed_ScopedToSubscribedSession`: `received
+   event="fleet:session-changed" data={"state":"signed_out",...}`).
+2. **`core/mcp/transport/stdio` `TestServer_GoroutinesReturnToBaseline`.**
+   `t.Parallel()` plus a process-wide `runtime.NumGoroutine()` compared
+   against baseline+2 while ~80 sibling parallel tests spawned
+   child-process/supervisor goroutines (`goroutine count 79 exceeds baseline
+   76`; extras were `TestServer_FirstByteTimeout`'s `doInitialize` /
+   `firstByteReader` / `os.File.Read`).
+
+> **CLOSED 2026-10-07 (`test: deflake serve no-frame assertions ... and
+> stdio goroutine baseline`, test/deflake-serve-stdio):** `assertNoFrame`
+> now skips frames on `processWideTopics` (via the test-only
+> `serve.IsProcessWideTopic`) and keeps reading to the deadline; its core
+> `noFrameViolation` is pinned by `TestAssertNoFrame_*` (broadcast passes,
+> session-scoped frame fails). The stdio test dropped `t.Parallel()`: Go
+> releases parallel tests only after all serial ones finish, so no sibling
+> runs mid-measurement. A stack-filter was rejected because every sibling's
+> goroutines share the same `(*ServerInstance)` frames; stacks cannot
+> attribute per instance.
+>
+> **Exposure class for future test authors:** *process-wide broadcast
+> topics vs per-session no-frame assertions* — any "this connection must
+> see nothing" check must exclude `processWideTopics`, and any test that
+> compares process-wide counters (`runtime.NumGoroutine`) must not be
+> parallel.
+
 ### 2026-10-07 (skill-library-01SKLIB01 residuals + review F4–F6, feat/skill-library) · six accepted, none introduced as regressions
 
 1. **OQ-1 — the revocation sweep covers skills + workflows only.**
