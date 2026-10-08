@@ -15,10 +15,15 @@ func releaseWorkflowCDNBase(t *testing.T, target string) string {
 	if err != nil {
 		t.Fatalf("read release.yml: %v", err)
 	}
-	re := regexp.MustCompile(`(?ms)^\s*` + regexp.QuoteMeta(target) + `\)\s*$.*?CDN_BASE="([^"]+)"`)
-	m := re.FindSubmatch(raw)
+	// The arm is matched up to its own `;;`, so a missing or reshaped
+	// stage CDN_BASE cannot borrow the next arm's (prod's) value.
+	arm := regexp.MustCompile(`(?ms)^\s*` + regexp.QuoteMeta(target) + `\)\s*$(.*?)^\s*;;`).FindSubmatch(raw)
+	if arm == nil {
+		t.Fatalf("release.yml has no %s) case arm — the resolve-env shape changed; update this reader", target)
+	}
+	m := regexp.MustCompile(`CDN_BASE="([^"]+)"`).FindSubmatch(arm[1])
 	if m == nil {
-		t.Fatalf("release.yml has no %s) arm with a CDN_BASE — the resolve-env shape changed; update this reader", target)
+		t.Fatalf("release.yml's %s) arm sets no CDN_BASE=\"…\"", target)
 	}
 	return string(m[1])
 }

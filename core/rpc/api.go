@@ -1425,6 +1425,17 @@ func (a *API) runMigrationDriftCheck(ctx context.Context) {
 // A cancelled run's exit path is a handful of bounded (5s) writes.
 const chatRunnerDrainTimeout = 15 * time.Second
 
+// shutdownStepHook, when non-nil, observes Shutdown's ordering-sensitive
+// steps. Test seam only (TestAPI_Shutdown_StopsSchedulersBeforeChatDrain);
+// nil in production.
+var shutdownStepHook func(step string)
+
+func shutdownStep(step string) {
+	if h := shutdownStepHook; h != nil {
+		h(step)
+	}
+}
+
 // Shutdown stops every background goroutine this API wired at
 // construction time: the auto-update poller, the workflow cron
 // scheduler, the chat-run cron scheduler, the compaction sweep
@@ -1460,17 +1471,6 @@ func (a *API) Shutdown() {
 		a.updatePollCancel = nil
 	}
 	a.updatePollMu.Unlock()
-	// Cancel + drain in-flight chat runs first: their exit paths write
-	// session storage, which the caller closes after Shutdown returns
-	// (main.go / serve.ShutdownServedCore: api.Shutdown THEN core
-	// shutdown). Bounded so a wedged run cannot hang app exit.
-	if a.chatRunner != nil {
-		dctx, dcancel := context.WithTimeout(context.Background(), chatRunnerDrainTimeout)
-		if err := a.chatRunner.Shutdown(dctx); err != nil {
-			logging.L().Warn("chat.runner.shutdown_drain_incomplete", "err", err.Error())
-		}
-		dcancel()
-	}
 	if a.wfScheduler != nil {
 		a.wfScheduler.Stop()
 	}
@@ -1485,6 +1485,22 @@ func (a *API) Shutdown() {
 	if a.chatCronEngine != nil {
 		a.chatCronEngine.Stop()
 	}
+	shutdownStep("run_schedulers_stopped")
+	// Cancel + drain in-flight chat runs: their exit paths write session
+	// storage, which the caller closes after Shutdown returns (main.go /
+	// serve.ShutdownServedCore: api.Shutdown THEN core shutdown). AFTER
+	// the workflow + chat-cron schedulers stop (neither Stop waits on a
+	// job), so a firing cannot start a run mid-drain; ChatRunner.Shutdown
+	// also refuses any later StartStream (chat.ErrRunnerShutdown). Bounded
+	// so a wedged run cannot hang app exit.
+	if a.chatRunner != nil {
+		dctx, dcancel := context.WithTimeout(context.Background(), chatRunnerDrainTimeout)
+		if err := a.chatRunner.Shutdown(dctx); err != nil {
+			logging.L().Warn("chat.runner.shutdown_drain_incomplete", "err", err.Error())
+		}
+		dcancel()
+	}
+	shutdownStep("chat_runs_drained")
 	// laya-advisors-01LAYA001 WP13: a clean stop on app exit means "stop
 	// pinning the shared engine alive" — cancel + drain any in-flight
 	// demand-driven Ensure, then release this client's lease (the engine's own 120s

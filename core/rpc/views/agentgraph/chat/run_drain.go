@@ -2,8 +2,13 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
+
+// ErrRunnerShutdown is returned by StartStream once Shutdown has begun:
+// the owner is about to close storage, so no new run may start.
+var ErrRunnerShutdown = errors.New("chat: runner is shutting down")
 
 // runTracker counts the goroutines a ChatRunner spawns that touch storage
 // after StartStream has returned — driveRun itself (whose exit path
@@ -16,9 +21,31 @@ import (
 // WaitGroup forbids an Add from zero concurrent with Wait. The zero value
 // is ready to use.
 type runTracker struct {
-	mu   sync.Mutex
-	n    int
-	idle chan struct{} // closed when n returns to 0; nil while n == 0
+	mu     sync.Mutex
+	n      int
+	idle   chan struct{} // closed when n returns to 0; nil while n == 0
+	closed bool          // set by close(); tryAdd refuses afterwards
+}
+
+// tryAdd registers a new run unless the tracker is closed. Atomic with
+// close, so no run can slip in between Shutdown's refusal and its drain.
+func (t *runTracker) tryAdd() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
+	if t.n == 0 {
+		t.idle = make(chan struct{})
+	}
+	t.n++
+	return true
+}
+
+func (t *runTracker) close() {
+	t.mu.Lock()
+	t.closed = true
+	t.mu.Unlock()
 }
 
 func (t *runTracker) add() {
@@ -83,7 +110,8 @@ func (r *ChatRunner) Drain(ctx context.Context) error {
 	return r.runs.wait(ctx)
 }
 
-// Shutdown cancels every live run (cause "app-shutdown", which the
+// Shutdown refuses new runs (StartStream returns ErrRunnerShutdown),
+// cancels every live run (cause "app-shutdown", which the
 // terminal path treats like a Stop: the partial is persisted and the
 // stream closes with reason stop-called) and then Drains. Nil-safe;
 // safe to call more than once. API.Shutdown calls it before core's
@@ -92,6 +120,7 @@ func (r *ChatRunner) Shutdown(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
+	r.runs.close()
 	r.mu.Lock()
 	subs := make([]*chatSub, 0, len(r.subs))
 	for _, s := range r.subs {

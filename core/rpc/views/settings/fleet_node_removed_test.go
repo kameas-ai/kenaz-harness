@@ -309,6 +309,12 @@ func TestNodeRemoved_ServedHostNewIdentityClears(t *testing.T) {
 	if fleet.NodeRemovedMarked(r.dataDir) {
 		t.Fatal("marker still present after the new identity")
 	}
+	r.api.fleet.mu.RLock()
+	staleReason := r.api.fleet.sess.signInReason
+	r.api.fleet.mu.RUnlock()
+	if staleReason != "" {
+		t.Fatalf("signInReason = %q after the block lifted, want cleared", staleReason)
+	}
 	if _, err := r.api.FleetRefreshIdentity(ctx); err != nil {
 		t.Fatalf("enroll after new identity: %v", err)
 	}

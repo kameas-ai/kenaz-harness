@@ -69,3 +69,30 @@ func TestChatRunner_DrainWaitsForRunExit_ShutdownCancels(t *testing.T) {
 		t.Fatalf("nil Drain: %v", err)
 	}
 }
+
+// TestChatRunner_StartStreamRefusedAfterShutdown: once Shutdown begins no
+// new run may start (a cron/workflow firing in the drain window would
+// otherwise start an uncancelled run and storage would close under it).
+// Mutation: drop the tryAdd refusal in StartStream and this fails.
+func TestChatRunner_StartStreamRefusedAfterShutdown(t *testing.T) {
+	t.Parallel()
+	llm := &blockingAfterTextLLM{deltas: []string{"x"}}
+	runner, _, _, sessionID := buildCheckpointRunner(t, llm)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := runner.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if _, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", testTurn("hi")); !errors.Is(err, ErrRunnerShutdown) {
+		t.Fatalf("StartStream after Shutdown: err = %v, want ErrRunnerShutdown", err)
+	}
+	runner.mu.Lock()
+	live := len(runner.subs)
+	runner.mu.Unlock()
+	if live != 0 {
+		t.Fatalf("%d subs registered by a refused StartStream", live)
+	}
+	if err := runner.Drain(ctx); err != nil {
+		t.Fatalf("Drain after refused start: %v (the refused call leaked a tracker slot)", err)
+	}
+}

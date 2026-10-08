@@ -379,6 +379,17 @@ func (m *MemorySync) Stop() {
 	}
 }
 
+// Running reports whether the cycle loop is running (Start called and
+// not yet stopped).
+func (m *MemorySync) Running() bool {
+	if m == nil {
+		return false
+	}
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
+	return m.cancel != nil
+}
+
 // isStopped reports whether Stop was called and no Start has followed.
 func (m *MemorySync) isStopped() bool {
 	m.runMu.Lock()

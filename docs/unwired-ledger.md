@@ -585,6 +585,17 @@ resurrect the checkpoint row.
 > (`drainRunnerOnCleanup`). Pinned by
 > `TestChatRunner_DrainWaitsForRunExit_ShutdownCancels`; `-race -count=20
 > -run TestDriveRun` clean 3×.
+>
+> Review follow-up (same day): `API.Shutdown` now stops the workflow and
+> chat-cron schedulers BEFORE the drain (neither Stop waits on a job), and
+> `ChatRunner.Shutdown` closes the tracker so a later `StartStream` returns
+> `chat.ErrRunnerShutdown` (`TestChatRunner_StartStreamRefusedAfterShutdown`,
+> `TestAPI_Shutdown_StopsSchedulersBeforeChatDrain`). **Residual
+> (accepted):** a sub-agent run's `awaitSubagentRun` writes `taskReg.End`
+> after its child run ends; that write can land after the drain returns,
+> where a closed store only yields an error log line, no corruption.
+> **Owner:** subagent follow-up (track the await goroutine with the same
+> tracker).
 
 ### 2026-10-07 (skill-library-01SKLIB01 residuals + review F4–F6, feat/skill-library) · six accepted, none introduced as regressions
 
@@ -799,6 +810,18 @@ Per-device handoff keys + v2 wrap-to-all + accept-persists shipped
    > `TestEnrollFunc_SupervisorLiftsNodeRemovedOnNewHostIdentity` (real
    > `serve.FleetEnrollSupervisor`; fails with the presentation call
    > removed).
+   > Review residuals (2026-10-07, accepted): (a) the identity key is
+   > `sub|org|iss`, so the SAME person gaining or losing the org claim, or
+   > an issuer URL changing only by a trailing slash, also reads as "new"
+   > and lifts the block. Not a widening: desktop already clears on ANY
+   > explicit sign-in. Tightening shape if wanted: compare `sub|iss` with
+   > the issuer normalised, and treat an org change as new only when both
+   > sides carry one. (b) A marker written before this change carries no
+   > identity and so stays blocked in served mode — remove
+   > `<dataDir>/fleet/node_removed` by hand (one-time, pre-release
+   > installs only). The lift also clears the stale "removed by admin"
+   > sign-in reason, as desktop sign-in does. **Owner:** served-mode
+   > boundary owner.
    Also low: a crash between `sessions.Create` and the first
    `importing` ledger write leaves an empty "Shared by…" session (never a
    second transcript); owner: same mission follow-up.

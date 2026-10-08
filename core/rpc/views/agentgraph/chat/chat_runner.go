@@ -1022,6 +1022,18 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if sessionID == "" {
 		return "", errors.New("chat: session id required")
 	}
+	// Registered with the drain tracker up front (atomic with Shutdown's
+	// refusal); released on every early return, handed to driveRun on
+	// success.
+	if !r.runs.tryAdd() {
+		return "", ErrRunnerShutdown
+	}
+	runHandedOff := false
+	defer func() {
+		if !runHandedOff {
+			r.runs.done()
+		}
+	}()
 
 	// The turn's run id (agentgraph-settings-linkage-01DOGF0D WP02). It
 	// is both the stream subscription id the frontend holds and the
@@ -1714,9 +1726,10 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// resolution, graph load, budget, lockdown) has already returned.
 		r.cfg.TurnUsage.TurnStarted(ctx, sessionID, llmAdapter.ProviderKind())
 	}
-	// Tracked so Drain/Shutdown can wait for the run's exit path, which
-	// writes storage after StartStream has returned.
-	r.runs.add()
+	// The tracker slot taken at the top now belongs to driveRun (its
+	// first defer releases it), so Drain/Shutdown wait for the run's exit
+	// path, which writes storage after StartStream has returned.
+	runHandedOff = true
 	go r.driveRun(streamCtx, sub, env)
 	return subID, nil
 }
@@ -1946,8 +1959,10 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	// periodic durability is an intentionally-disabled feature.
 	if r.cfg.StreamCheckpoints != nil {
 		flushDone = make(chan struct{})
-		// Bind ctx now: driveRun reassigns ctx below (sanitizer/resolver
-		// layers), and the closure must not read the variable racily.
+		// Bind ctx by value: the closure would otherwise read the ctx
+		// variable driveRun reassigns below (sanitizer/resolver layers) —
+		// a race the old `go runPeriodicFlush(ctx, …)` form never had,
+		// because a go statement evaluates its arguments eagerly.
 		flushCtx, done := ctx, flushDone
 		go func() {
 			defer close(done)

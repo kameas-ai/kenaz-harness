@@ -1294,6 +1294,9 @@ func (a *API) FleetHostIdentityPresented(identity string) bool {
 	a.fleet.mu.Lock()
 	a.fleet.sess.nodeRemoved = false
 	a.fleet.sess.autoRetryStopped = false
+	// Drop the "removed by admin" reason too, as the desktop sign-in does;
+	// otherwise a later token failure would still show it.
+	a.fleet.sess.signInReason, a.fleet.sess.signInErr = "", ""
 	// handleNodeRemoved stopped the background workers; restart them the
 	// way FleetSignIn does for the desktop re-authorization.
 	a.startFleetBackgroundLocked()
