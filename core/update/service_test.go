@@ -504,14 +504,14 @@ func TestService_PrereleaseFallback(t *testing.T) {
 	})
 	// Stable and prerelease now share the same path
 	// (/kenaz-harness/manifest.json) and differ only by host
-	// (downloads vs stage-downloads). rewriteTransport encodes the
+	// (downloads vs stage.downloads). rewriteTransport encodes the
 	// original host into the path so the mux can tell them apart:
 	// the stable host serves 200, the stage host 404 → fallback.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(stableBody)
 	})
-	mux.HandleFunc("/stage-downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/stage.downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	})
 	srv := httptest.NewServer(mux)
@@ -567,7 +567,7 @@ type rewriteTransport struct {
 func (rt *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Replace scheme+host with rt.base; encode the original host into the
 	// path so a single test server can distinguish channel hosts that now
-	// share a path (downloads vs stage-downloads, both /kenaz-harness/...).
+	// share a path (downloads vs stage.downloads, both /kenaz-harness/...).
 	newURL := rt.base + "/" + req.URL.Host + req.URL.Path
 	r2, err := http.NewRequestWithContext(req.Context(), req.Method, newURL, nil)
 	if err != nil {

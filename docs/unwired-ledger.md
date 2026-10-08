@@ -438,6 +438,41 @@ and the docs download page) and inserted the run into `index.json` with
 
 ### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · `MemorySync` has no `Stop`; nothing on the shutdown path cancels it
 
+### 2026-10-07 (release-infra) · OPEN: the stage (prerelease) channel points at v0.7.3-rc1
+
+With the prerelease host fixed (entry below), Prerelease-channel
+subscribers now reach `https://stage.downloads.kameas.ai/kenaz-harness/manifest.json`,
+which serves `v0.7.3-rc1` — months behind stable (v0.93.0). The update
+service compares versions, so a stage subscriber on a current build sees
+no update rather than a downgrade, but the channel offers nothing: no RC
+has been cut in months and stage has no Fleet runtime behind it. Not a
+code defect. **Owner:** release-infra (alec) — either cut RCs again
+(`v<X.Y.Z>-rc1` tags per CLAUDE.md "Environments & promotion") or retire
+the Prerelease channel from the Settings picker so it stops advertising
+a channel nobody publishes to.
+
+### 2026-10-07 · ~~Prerelease update channel fetched an NXDOMAIN host~~ CLOSED
+
+`core/update/manifest.go` set `prereleaseManifestURL` to
+`https://stage-downloads.kameas.ai/kenaz-harness/manifest.json`; that host
+does not resolve (`dig +short` empty). The real stage CDN alias is
+`stage.downloads.kameas.ai` (release.yml's stage `CDN_BASE`; CloudFront).
+`checkChannel` falls back to stable only on `errManifestNotFound` (HTTP
+404) — a DNS failure is a hard error — so every Prerelease-channel update
+check failed outright. Wrong since #168 (`4c77d71c`, 2026-06-11, "point
+auto-updater at live release CDN"), i.e. ~4 months. The wrong host was
+also baked into `core/update/doc.go`, both test muxes
+(`service_test.go`, `wp08_test.go` — the tests encoded the bug) and this
+ledger's egress note.
+
+> **CLOSED 2026-10-07 (`fix(update): prerelease channel host —
+> stage.downloads.kameas.ai, not stage-downloads`,
+> fix/ledger-followups-oct7):** host corrected in all five places;
+> `TestChannelManifestURLs_MatchReleaseWorkflowCDN` reads release.yml's
+> stage and prod `CDN_BASE` and fails when either manifest URL drifts from
+> the host releases are actually published to (verified failing with the
+> old host).
+
 ### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · ~~`MemorySync` has no `Stop`; nothing on the shutdown path cancels it~~ CLOSED
 
 `buildMemorySync` (`core/rpc/api.go`, the `ms.Start(context.Background())`
@@ -3155,7 +3190,8 @@ infrastructure.
 **Fleet sync / update-manifest fetches — does not need guarding; URL is
 a compile-time constant.** `core/update/manifest.go:52-53`:
 `stableManifestURL = "https://downloads.kameas.ai/kenaz-harness/manifest.json"`,
-`prereleaseManifestURL = "https://stage-downloads.kameas.ai/..."` — both
+`prereleaseManifestURL = "https://stage.downloads.kameas.ai/..."` (host
+corrected 2026-10-07 — it read `stage-downloads`, an NXDOMAIN host) — both
 literal constants, `ManifestURL` has no production override path
 (test-only). `fetchManifest` (`manifest.go:74-105`) and the asset
 downloader (`core/update/service.go:99,265-405`) use a plain

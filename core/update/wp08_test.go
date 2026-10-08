@@ -73,7 +73,7 @@ func TestWP08_AC020_BackgroundPollPrereleaseChannel_ReachesFallback(t *testing.T
 	mux.HandleFunc("/downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(stableBody)
 	})
-	mux.HandleFunc("/stage-downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/stage.downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	})
 	srv := httptest.NewServer(mux)
