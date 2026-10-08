@@ -295,7 +295,7 @@ type pausedPoster struct {
 }
 
 func (p *pausedPoster) setPaused(v bool) { p.mu.Lock(); p.paused = v; p.mu.Unlock() }
-func (p *pausedPoster) count() int      { p.mu.Lock(); defer p.mu.Unlock(); return p.posts }
+func (p *pausedPoster) count() int       { p.mu.Lock(); defer p.mu.Unlock(); return p.posts }
 
 func (p *pausedPoster) Post(_ context.Context, _, _ string, body io.Reader) (*http.Response, error) {
 	_, _ = io.Copy(io.Discard, body)
