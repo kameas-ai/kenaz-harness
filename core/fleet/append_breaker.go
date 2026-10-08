@@ -39,6 +39,9 @@ func (e *AppendStatusError) Error() string {
 //   - opens the circuit immediately on a permanent answer (404 missing remote
 //     context, 401/403, expired session): no further posts for that session
 //     until it is reset (sync re-enabled / disabled, sign-in);
+//   - treats 403 org_paused (a staff pause hold) as transient, and reopens
+//     those circuits when the capability poll reports the pause lifted
+//     (ResetOrgPaused, wired to Client.OnOrgUnpaused);
 //   - backs off exponentially on transient failures (30s → 10m) and opens
 //     after appendMaxConsecutiveFailures in a row — a transient-open circuit
 //     half-opens: one probe per appendBackoffMax, a success closes it;
@@ -175,6 +178,29 @@ func (b *AppendBreaker) ResetAll() {
 	}
 }
 
+// ResetOrgPaused clears every session whose failures were org_paused
+// holds — the OnOrgUnpaused fan-out. Circuits held for any other reason (a
+// missing remote context, a 413) are left alone: the pause lifting changes
+// nothing about them.
+func (b *AppendBreaker) ResetOrgPaused() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	cleared := 0
+	for id, st := range b.sessions {
+		if st.reason == ReasonOrgPaused {
+			delete(b.sessions, id)
+			cleared++
+		}
+	}
+	b.mu.Unlock()
+	if cleared > 0 {
+		logging.L().Info("rpc.context_sync.append_org_unpaused", "sessions_reopened", cleared)
+		b.publish()
+	}
+}
+
 func (b *AppendBreaker) allow(sessionID string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -249,6 +275,12 @@ func (b *AppendBreaker) record(sessionID string, err error) {
 // classifyAppendError names a failure and says whether retrying the same
 // post can ever help.
 func classifyAppendError(err error) (reason string, permanent bool) {
+	// 403 org_paused (kenaz-fleet #206) is a reversible staff hold, not
+	// "not_authorized": transient — back off, never latch. The circuit is
+	// reopened outright by ResetOrgPaused when the pause lifts.
+	if IsOrgPaused(err) {
+		return ReasonOrgPaused, false
+	}
 	var se *AppendStatusError
 	if errors.As(err, &se) {
 		switch {

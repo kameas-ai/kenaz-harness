@@ -686,6 +686,11 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 		}
 		s.mu.Lock()
 		s.lastPullErr = err.Error()
+		if IsOrgPaused(err) {
+			// A staff pause hold: transient (the poll loop's normal
+			// backoff), reported by its reason, never as a tier answer.
+			s.lastPullErr = ReasonOrgPaused
+		}
 		s.mu.Unlock()
 		return 0, fmt.Errorf("fleet: context pull: %w", err)
 	}

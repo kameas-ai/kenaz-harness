@@ -117,7 +117,8 @@ func (s *RevocationSweeper) Rewire(fn func(*RevocationSweeper)) {
 	fn(s)
 }
 
-// ResetBackoff clears the 401/403/404 backoff (a fresh sign-in).
+// ResetBackoff clears the 401/403/404 / org_paused backoff (a fresh sign-in,
+// or the org pause lifting).
 func (s *RevocationSweeper) ResetBackoff() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -288,6 +289,11 @@ func (s *RevocationSweeper) listFailedLocked(err error) error {
 		// error never reaches a status code, but it is the same signed-out
 		// state as a bare 401.
 		reason = "signed_out"
+	case IsOrgPaused(err):
+		// A staff pause hold (kenaz-fleet #206): transient, never a tier
+		// lapse. Same doubling skip; the OnOrgUnpaused fan-out clears it
+		// (ResetBackoff).
+		reason = ReasonOrgPaused
 	case errors.As(err, &se) && se.Status == http.StatusUnauthorized:
 		reason = "signed_out"
 	case errors.As(err, &se) && se.Status == http.StatusForbidden:

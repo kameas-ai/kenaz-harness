@@ -64,6 +64,16 @@ type fakeMemoryFleet struct {
 	// status429 / status403 force the next N requests to fail.
 	status429, status403 int
 	pushes               []memPushRequest
+	// pausedCategory, when set, models a staff org pause (kenaz-fleet
+	// #206): every memory route answers 403 org_paused EXCEPT the
+	// data-rights allowlist (forget-all here).
+	pausedCategory string
+}
+
+func (f *fakeMemoryFleet) setPaused(category string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pausedCategory = category
 }
 
 func newFakeMemoryFleet(now func() time.Time) *fakeMemoryFleet {
@@ -121,6 +131,11 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.status429--
 		w.Header().Set("Retry-After", "120")
 		writeJSON(w, 429, map[string]any{"code": "rate_limited", "message": "slow down"})
+		return
+	}
+	if f.pausedCategory != "" && !(r.Method == http.MethodPost && r.URL.Path == "/api/v1/memory/forget-all") {
+		writeJSON(w, 403, map[string]any{"code": "org_paused", "message": "paused",
+			"details": map[string]any{"paused_category": f.pausedCategory}})
 		return
 	}
 	if f.status403 > 0 {

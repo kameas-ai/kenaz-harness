@@ -132,6 +132,18 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 				continue // backoff retry
 			}
 
+			// 403 org_paused (kenaz-fleet #206): a reversible staff hold,
+			// not a tier or auth answer. Converted here, at the one choke
+			// point, into a typed transient error so no consumer's
+			// "403 ⇒ not in tier / not authorized" branch can mislabel it
+			// (org_paused.go). The token was accepted: the session is alive.
+			if pe := checkOrgPaused(resp); pe != nil {
+				cancel()
+				c.notifyAuthOK()
+				c.observeOrgPaused(pe.PausedCategory)
+				return nil, pe
+			}
+
 			// Success or a non-retryable error (4xx other than 401).
 			//
 			// The per-call context must outlive this function: Do returns

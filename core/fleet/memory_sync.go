@@ -273,8 +273,11 @@ type MemorySync struct {
 	st          memSyncState
 	nextAttempt time.Time
 	failures    int
-	settings    *MemorySyncSettings
-	settingsAt  time.Time
+	// pausedHold: the current backoff was set by a 403 org_paused, so the
+	// OnOrgUnpaused fan-out may clear it (ResumeAfterOrgUnpause).
+	pausedHold bool
+	settings   *MemorySyncSettings
+	settingsAt time.Time
 	// serverDate is Fleet's last Date header — the reference for naming
 	// how far ahead a fast OS clock is (clock_in_future).
 	serverDate time.Time
@@ -457,6 +460,41 @@ func (m *MemorySync) entitled() bool {
 
 func (m *MemorySync) lanes() *SyncLanes { return m.cfg.Lanes }
 
+// orgPaused reports a staff pause hold (kenaz-fleet #206) from either the
+// capability snapshot or the client's last org_paused refusal. While paused
+// every capability reads false; without this check the lane would say
+// "not_entitled" — a tier answer — for what is a reversible hold.
+func (m *MemorySync) orgPaused() (bool, string) {
+	if m.cfg.Caps != nil {
+		if c := m.cfg.Caps(); c != nil && c.Paused {
+			return true, c.PausedCategory
+		}
+	}
+	if m.cfg.Client != nil {
+		if st := m.cfg.Client.OrgPause(); st.Paused {
+			return true, st.PausedCategory
+		}
+	}
+	return false, ""
+}
+
+// ResumeAfterOrgUnpause is the OnOrgUnpaused hook: drop any org_paused
+// backoff and run a cycle now, so sync resumes without sign-in or restart.
+func (m *MemorySync) ResumeAfterOrgUnpause() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	held := m.pausedHold
+	m.pausedHold = false
+	if held {
+		m.failures, m.nextAttempt = 0, time.Time{}
+	}
+	m.mu.Unlock()
+	logging.L().Info("fleet.memory_sync.org_unpaused_resume", "backoff_cleared", held)
+	m.Kick()
+}
+
 // RunOnce runs one cycle if the lane is entitled, opted in and not backing
 // off. It never returns an error: outcomes land on the lane board.
 func (m *MemorySync) RunOnce(ctx context.Context) {
@@ -464,6 +502,12 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 	defer m.cycleMu.Unlock()
 	if m.cfg.Client == nil || m.cfg.Client.IsNop() {
 		m.lanes().RecordOff(LaneMemorySync, "fleet_disabled")
+		return
+	}
+	if paused, _ := m.orgPaused(); paused {
+		// A reversible staff hold, not a tier answer: off with the honest
+		// reason; ResumeAfterOrgUnpause kicks the lane when it lifts.
+		m.lanes().RecordOff(LaneMemorySync, ReasonOrgPaused)
 		return
 	}
 	if !m.entitled() {
@@ -540,6 +584,16 @@ func (m *MemorySync) fail(err error) {
 	case errors.Is(err, ErrNotSignedIn), errors.Is(err, ErrTokenExpired):
 		m.mu.Unlock()
 		m.lanes().RecordOff(LaneMemorySync, "signed_out")
+		return
+	case IsOrgPaused(err):
+		// 403 org_paused: transient. Normal backoff tiers (not the
+		// hour-long tier-lapse wait), lane off with reason org_paused, and
+		// the hold is cleared by ResumeAfterOrgUnpause.
+		m.pausedHold = true
+		m.nextAttempt = now.Add(backoff)
+		m.mu.Unlock()
+		logging.L().Info("fleet.memory_sync.org_paused", "paused_category", OrgPausedCategoryOf(err), "consecutive", n)
+		m.lanes().RecordOff(LaneMemorySync, ReasonOrgPaused)
 		return
 	case errors.As(err, &me) && me.Status == http.StatusTooManyRequests:
 		reason = "rate_limited"
@@ -1239,19 +1293,25 @@ func (m *MemorySync) applyResults(ctx context.Context, entries []pushEntry, resp
 
 // MemorySyncStatus is the settings-panel readout.
 type MemorySyncStatus struct {
-	Entitled     bool
-	LocalEnabled bool
-	Fleet        *MemorySyncSettings // nil when not fetched (not entitled / error)
-	FleetError   string
-	BlockedCount int
-	PendingPush  int
-	Lane         LaneSnapshot
+	Entitled bool
+	// OrgPaused / PausedCategory: a staff pause hold is on the org. The
+	// panel shows the paused copy (never an upsell) and keeps the
+	// data-rights actions (disable + delete from Fleet) enabled.
+	OrgPaused      bool
+	PausedCategory string
+	LocalEnabled   bool
+	Fleet          *MemorySyncSettings // nil when not fetched (not entitled / error)
+	FleetError     string
+	BlockedCount   int
+	PendingPush    int
+	Lane           LaneSnapshot
 }
 
 // Status reads the local state, the lane, and (when entitled) Fleet's
 // settings — a user-initiated request, never made by the idle lane.
 func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 	out := MemorySyncStatus{Entitled: m.entitled(), LocalEnabled: m.state().Enabled, Lane: m.lanes().Snapshot(LaneMemorySync)}
+	out.OrgPaused, out.PausedCategory = m.orgPaused()
 	if m.isStopped() {
 		// A lane stopped by sign-out (or node_removed) records nothing; the
 		// panel names why it is off rather than echoing the default-deny
@@ -1384,7 +1444,15 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 	if m.state().DisablePending {
 		if err := m.putDisabled(ctx); err != nil {
-			return 0, err
+			// A paused org (kenaz-fleet #206) refuses PUT /memory/settings
+			// but keeps forget-all open (a data-rights route). The opt-out
+			// is already persisted locally — this device cannot re-upload —
+			// so the erase proceeds; DisablePending stays set and the lane
+			// retries the PUT after the pause lifts.
+			if !IsOrgPaused(err) || !m.state().ForgetAllPending {
+				return 0, err
+			}
+			logging.L().Info("fleet.memory_sync.disable_put_held_org_paused", "action", "forget_all_anyway")
 		}
 	}
 	if !m.state().ForgetAllPending {

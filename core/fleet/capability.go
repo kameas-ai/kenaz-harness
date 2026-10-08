@@ -154,6 +154,13 @@ type Capabilities struct {
 	// Source records where this snapshot came from.
 	// Not sent by the wire protocol; populated by the harness on load.
 	Source string `json:"source,omitempty"`
+	// Paused is true while a Kameas-staff "pause paid features" hold is on
+	// the org (kenaz-fleet #206): the tier is kept, every capability is
+	// false. Additive; absent on the wire means not paused.
+	Paused bool `json:"paused,omitempty"`
+	// PausedCategory is one of billing_review / security / abuse / legal /
+	// other while Paused; empty otherwise.
+	PausedCategory string `json:"paused_category,omitempty"`
 }
 
 // Has reports true when the capability is explicitly enabled AND the
