@@ -265,6 +265,10 @@ done < "$WORK/missing.txt"
     echo "A tag with no downloadable release means users cannot install that version."
     echo "Re-run \`release.yml\` against the tag, or — if the tag is permanently"
     echo "unreleasable — add it to \`$IGNORE_FILE\` with a one-line reason."
+    echo "Re-running an OLD tag is safe: publish-s3 refuses to move the env's"
+    echo "stable \`manifest.json\` pointer backwards (scripts/ci/lib/semver.sh), so"
+    echo "the old version is published under its per-tag prefix and filed into"
+    echo "\`index.json\` at its historical position without becoming \"latest\"."
   else
     echo "✅ Every SemVer tag reconciles to a published release with assets."
   fi

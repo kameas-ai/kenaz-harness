@@ -631,6 +631,14 @@ jobs:
         # "upgrade-snapshot-present/chain-behind-newest-tag".
         run: bash scripts/ci/check-upgrade-snapshot-present.sh
 
+      - name: semver-lib self-test
+        # release.yml's publish-s3 sources scripts/ci/lib/semver.sh to decide
+        # whether a run may move the env's stable manifest.json pointer. That
+        # decision only executes inside a release, so it is pinned here.
+        # Planted-violation proof: scripts/ci/gates_can_fail_test.go
+        # "semver-lib/lexical-compare".
+        run: bash scripts/ci/check-semver-lib.sh
+
       - name: destructive-migration-coverage guard (I14)
         # upgrade-path-coverage-01PMUG01 WP03, spec §FR-2. A migration
         # is dormant until an upgrade path reaches it; repairing
