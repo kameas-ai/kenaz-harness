@@ -597,6 +597,20 @@ resurrect the checkpoint row.
 > **Owner:** subagent follow-up (track the await goroutine with the same
 > tracker).
 
+### 2026-10-07 (PR #394 CI) · ~~`TestRevocationSweep_RidesConfigPollerCadence` raced its own sweep~~ CLOSED
+
+Failed in the hermetic-guard step (skill uninstalled, then `audit kinds =
+[]` and lane `unknown`, 0.01s in). Not environment-specific and not
+caused by #394: `RevocationSweeper.Sweep` uninstalls, then emits the
+audit event, then records the lane, all on the config poller's
+goroutine; the test stopped waiting at the uninstall and asserted the
+other two immediately. Pre-existing since #390; main's green run was
+timing luck. Reproduced deterministically with a 50ms sleep after the
+uninstall. **CLOSED 2026-10-07 (`test(fleet): revocation-sweep test
+waits for the sweep's last step`):** the test waits for the lane record
+(the sweep's final step) instead. Production ordering unchanged
+(uninstall → audit → lane is the right order).
+
 ### 2026-10-07 (skill-library-01SKLIB01 residuals + review F4–F6, feat/skill-library) · six accepted, none introduced as regressions
 
 1. **OQ-1 — the revocation sweep covers skills + workflows only.**
