@@ -505,6 +505,20 @@ unwired/CI-hygiene sweep. Related flake seen in the same run:
 ("first demand must not block" — a timing assertion under runner load);
 owner: mlsidecar follow-up if it recurs.
 
+> **DemandProbe flake CLOSED 2026-10-07 (`test(mlsidecar): DemandProbe
+> first-demand test no longer races the engine start`,
+> fix/ledger-followups-oct7):** cause: `Healthy()` kicks the Ensure loop
+> then reads the cached status; when the loop's first Ensure adopted the
+> fake engine inside that window, the first call truthfully returned
+> healthy and the test's "must not block" assertion (which really checked
+> "returns false") failed. The test now parks the fake engine's `/health`
+> answer until after the first call (`countingEngine.holdHealth`), which
+> also makes "does not block" a real check. Production ordering reviewed
+> and kept (demand-then-read answers the true cached status; the contract
+> is never-block + per-call fallback) — `Healthy()` and the type doc now
+> say so. `-race -count=50 -run TestDemandProbe` clean. The core/rpc
+> 10-minute-cliff half of this entry stays open.
+
 ### 2026-10-07 (CI run 37705330106, PR #392) · ~~DATA RACE: a chat run's exit path outlived StartStream and raced the DB close~~ CLOSED
 
 `TestDriveRun_AC003_ErrorClosePromotesCheckpoint/no_tool_recoverable_true`
