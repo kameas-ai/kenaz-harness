@@ -1395,6 +1395,9 @@ with a blocker and an owner:
   manifest. The whole download -> verify-over-DMG-bytes -> mount -> copy
   -> clear-quarantine -> start path is exercised against a local fixture
   (`core/mlsidecar/install_dmg_test.go`, incl. a real-hdiutil test).
+  > **CLOSED 2026-10-07 (`chore(ci)`, engine pin → kenaz-ml 0.1.1):**
+  > the darwin/arm64 release build now pins the published engine — see
+  > the engine-publication 2026-10-04 entry below for the evidence.
 - **(RESOLVED at the WP13 merge into `release/v0.85.0`, 2026-09-30.)**
   `sidecarProbe`'s consumers (`SidecarAdvisor` WP15, the label pusher
   WP14) and the real Manager+DemandProbe now live on the same branch;
@@ -5426,6 +5429,33 @@ semantics from what its doc currently claims.
   published, the real key is committed, and the release.yml step is
   uncommented — in that change, also delete the dated note on
   `mlsidecar.PinnedEngineRelease`.
+
+> **CLOSED 2026-10-07 (items 1–3; `chore(ci): enable the kenaz-ml
+> engine-pin step against 0.1.1`).** (a) kenaz-ml publishes to the
+> kameas release buckets; (b) the real key landed in #388 (KeyID
+> `56fc9905…0352512`); kenaz-ml 0.1.1 is live on
+> `downloads.kameas.ai/kenaz-ml/0.1.1/`. Verified before enabling: the
+> index's `darwin_arm64.key_id` == the baked KeyID; `kenaz-ml-sign
+> verify` accepts the published `.sig`; the DMG is 189403636 bytes and
+> hashes to the index sha256; a one-off `go run` of the real
+> `mlsidecar.Install` against the live channel, trust store seeded only
+> by `BakedReleaseAnchor()`, installed it `verified=true`. The step is
+> enabled on darwin/arm64 builds and exits 1 on any index/key/sig/size/
+> sha mismatch; the version lives in release.yml's workflow `env`
+> (`KENAZ_ML_ENGINE_VERSION`). **Design deviation, recorded:** the step
+> pins from the PROD engine channel for every harness env — kenaz-ml
+> publishes stable versions only to prod (dev carries
+> `<ver>-dev.<sha7>`, stage has no index), so the original per-env
+> `cdn_base` would have failed every dev/stage harness build. The
+> `-ldflags releaseSigningPubKeyHex` override is deliberately not wired
+> (the step verifies against the `.pub` file; an unverified override
+> would bypass it). Hermetic proof:
+> `core/mlsidecar/published_release_test.go` over
+> `testdata/engine-release-0.1.1/` (real index + `.sig`, PROVENANCE.md),
+> which also fails if release.yml's pin drifts from the fixtures. The
+> dated note on `PinnedEngineRelease` is deleted. Review follow-up #3
+> below is partly addressed: the release step now cross-checks the pin's
+> values against the published index and the served bytes at build time.
 
 **Finding, ungated: trust anchors have no production revocation path.**
 `TrustEngine.RemoveAnchor` and `TrustEngine.IngestRevocation` have zero
