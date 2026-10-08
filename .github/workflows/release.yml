@@ -238,6 +238,19 @@ jobs:
               exit 1
             fi
           fi
+          # A dispatch labels the build with inputs.version but builds
+          # GITHUB_SHA. Dispatched from main (the UI default), that is main's
+          # code shipped under the tag's name. Refuse unless the tag IS the
+          # commit being built — i.e. the run was dispatched with --ref <tag>.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            git fetch --force --depth=1 origin "refs/tags/${VERSION}:refs/tags/${VERSION}" \
+              || { echo "::error::version '$VERSION' is not a tag on origin"; exit 1; }
+            TAG_SHA="$(git rev-parse "${VERSION}^{commit}")"
+            if [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+              echo "::error::dispatched at $GITHUB_SHA but $VERSION is $TAG_SHA — re-run with: gh workflow run release.yml --ref $VERSION -f version=$VERSION"
+              exit 1
+            fi
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Resolved version: ${VERSION} (env: ${TARGET_ENV})"
 
@@ -1483,6 +1496,13 @@ jobs:
             --cache-control 'public, max-age=3600' \
             --metadata-directive REPLACE \
             --no-progress
+          # Pin the manifest under the per-tag prefix too — BEFORE the pointer
+          # guard, so a guard failure still leaves a complete per-tag prefix.
+          aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/${TAG}/manifest.json" \
+            --cache-control 'public, max-age=3600' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
 
       # The canonical kenaz-harness/manifest.json is the env's "latest"
       # pointer: core/update/manifest.go (auto-updater), the frontend update
@@ -1493,8 +1513,10 @@ jobs:
       # tag "latest" for every install. The guard reads the current pointer
       # and refuses to move it backwards; scripts/ci/lib/semver.sh holds the
       # ordering + decision table, self-tested on every PR by
-      # scripts/ci/check-semver-lib.sh. The per-tag prefix and the GitHub
-      # Release assets are still published either way — they are harmless.
+      # scripts/ci/check-semver-lib.sh. The per-tag prefix (binaries AND its
+      # manifest.json, uploaded in the step above) and the GitHub Release
+      # assets are published either way — they are harmless — so a guard
+      # exit 1 leaves the per-tag prefix complete and this job re-runnable.
       - name: Guard — never move the stable pointer backwards
         id: pointer
         env:
@@ -1510,12 +1532,20 @@ jobs:
                --no-progress 2>"$RUNNER_TEMP/current-manifest.err"; then
             # Malformed JSON → empty → treated as "nothing to protect".
             CUR="$(jq -r '.version // "" | strings' "$CUR_JSON" 2>/dev/null || true)"
+            if [ -z "$CUR" ]; then
+              # The pointer EXISTS but carries no string version ({}, 0-byte,
+              # garbage, numeric) — advancing is right, but never silently.
+              echo "::warning::canonical s3://${BUCKET}/kenaz-harness/manifest.json exists but has no string .version — nothing orderable to protect; advancing to $VERSION"
+            fi
           elif grep -Eq '\(404\)|NoSuchKey|does not exist|Not Found' "$RUNNER_TEMP/current-manifest.err"; then
             echo "No canonical manifest in ${BUCKET} yet — first publish to this env."
           else
             # Fail closed: a pointer we cannot read is a pointer we must not
-            # blindly overwrite. The per-tag upload above already landed, so
-            # re-running this job is safe.
+            # blindly overwrite. The per-tag prefix (binaries + manifest) has
+            # already landed, so re-running this job is safe.
+            # (A nonexistent BUCKET also yields "Not Found" above and is
+            # treated as first publish — harmless: the canonical cp that
+            # follows fails on the same missing bucket.)
             echo "::error::could not read s3://${BUCKET}/kenaz-harness/manifest.json to compare versions:"
             sed 's/^/  /' "$RUNNER_TEMP/current-manifest.err"
             exit 1
@@ -1534,17 +1564,11 @@ jobs:
 
       - name: Upload manifest at canonical path (short cache)
         env:
-          TAG:    ${{ needs.derive-version.outputs.version }}
           BUCKET: ${{ needs.resolve-env.outputs.bucket }}
           MOVE_POINTER: ${{ steps.pointer.outputs.move }}
         run: |
           set -euo pipefail
-          # Pin a copy under the per-tag prefix for forensic lookup — always.
-          aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/${TAG}/manifest.json" \
-            --cache-control 'public, max-age=3600' \
-            --content-type 'application/json' \
-            --metadata-directive REPLACE \
-            --no-progress
+          # (The per-tag copy was uploaded with the binaries, before the guard.)
           if [ "$MOVE_POINTER" != "true" ]; then
             echo "Stable pointer held (see guard step) — canonical manifest.json left unchanged."
             exit 0

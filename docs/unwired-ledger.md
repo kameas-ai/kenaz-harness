@@ -407,6 +407,34 @@ and the docs download page) and inserted the run into `index.json` with
   (fail-closed is correct; the coupling is the note). kenaz-ml's publish
   should treat "one row per version" and "key_id changes only with a
   harness pin bump" as contract. **Owner:** release-infra (kenaz-ml side).
+- **(e) Pointer-guard TOCTOU residual.** release.yml's `concurrency.group`
+  is per-ref, so two tag runs seconds apart (e.g. v0.76.1 / v0.77.0, 13 s
+  apart) can both read the current pointer before either writes, and the
+  older can write last. The guard narrows the window to one publish-s3
+  job's guard→cp gap; it does not close it. **Fix shape:** re-read the
+  pointer immediately before the canonical cp, or make the write an S3
+  conditional put (`aws s3api put-object --if-match <etag>` from the
+  guard's read; `--if-none-match '*'` on first publish). **Owner:**
+  release-infra.
+- **Note — "Not Found" also matches a nonexistent bucket.** The guard's
+  first-publish branch keys on `(404)|NoSuchKey|does not exist|Not Found`,
+  so a misconfigured BUCKET reads as "first publish". Harmless: the
+  canonical cp that follows fails on the same missing bucket, and the
+  per-tag upload before the guard would already have failed. Recorded so
+  nobody "fixes" it by widening the match.
+- **Cross-reference:** the prerelease updater host bug
+  (`core/update/manifest.go:53` `stage-downloads.kameas.ai`, NXDOMAIN; the
+  channel publishes to `stage.downloads.kameas.ai`) is being fixed on the
+  parallel `fix/ledger-followups-oct7` branch — not duplicated here.
+- **Remedy hardening (this PR, review tweak):** the integrity gate's
+  remedy now names `gh workflow run release.yml --ref <tag> -f
+  version=<tag>`, and derive-version refuses a `workflow_dispatch` whose
+  `inputs.version` tag is not `GITHUB_SHA` — a UI dispatch from main would
+  otherwise build main's code under the old label and date the held index
+  entry ≈now (top of the picker). The per-tag `manifest.json` now uploads
+  with the binaries, before the guard, so a guard exit 1 leaves a complete
+  per-tag prefix; a pointer that exists but has no string `.version` now
+  warns instead of advancing silently.
 
 ### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · `MemorySync` has no `Stop`; nothing on the shutdown path cancels it
 
