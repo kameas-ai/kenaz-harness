@@ -126,9 +126,13 @@ func attachSidecarInstallDeps(m *mlsidecar.Manager, registry channels.Registry, 
 // decision 2026-10-03 #4). trust.SeedAnchor yields to every existing
 // row: an operator- or fleet-installed anchor for the same key or id is
 // left alone, and a tombstoned (revoked) one stays revoked across boots.
-// A placeholder build (the checked-in NOT-A-REAL-KEY file, no -ldflags
-// override) seeds nothing. Failures are logged, never fatal: without the
-// anchor an engine install fails closed with anchor_missing.
+// The checked-in release_signing_key.pub is the real Kameas ML release
+// key (#388), so every build seeds it; the engine a build installs is
+// pinned at CI build time (release.yml's engine-pin step, which checks the
+// pinned release's key_id against this key). A build whose key is absent
+// or blank (BakedReleaseAnchor ok=false) seeds nothing. Failures are
+// logged, never fatal: without the anchor an engine install fails closed
+// with anchor_missing.
 func seedBakedReleaseAnchor(ctx context.Context, engine coretrust.TrustEngine) coretrust.SeedOutcome {
 	if engine == nil {
 		return ""
