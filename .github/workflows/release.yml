@@ -238,6 +238,19 @@ jobs:
               exit 1
             fi
           fi
+          # A dispatch labels the build with inputs.version but builds
+          # GITHUB_SHA. Dispatched from main (the UI default), that is main's
+          # code shipped under the tag's name. Refuse unless the tag IS the
+          # commit being built — i.e. the run was dispatched with --ref <tag>.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            git fetch --force --depth=1 origin "refs/tags/${VERSION}:refs/tags/${VERSION}" \
+              || { echo "::error::version '$VERSION' is not a tag on origin"; exit 1; }
+            TAG_SHA="$(git rev-parse "${VERSION}^{commit}")"
+            if [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+              echo "::error::dispatched at $GITHUB_SHA but $VERSION is $TAG_SHA — re-run with: gh workflow run release.yml --ref $VERSION -f version=$VERSION"
+              exit 1
+            fi
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Resolved version: ${VERSION} (env: ${TARGET_ENV})"
 
@@ -436,7 +449,12 @@ jobs:
           INDEX_URL="${KENAZ_ML_ENGINE_CHANNEL_BASE}/kenaz-ml/index.json"
           CHANNEL_URL="${KENAZ_ML_ENGINE_CHANNEL_BASE}/kenaz-ml/${ENGINE_VERSION}"
           ARTIFACT="kenaz-ml-${ENGINE_VERSION}-darwin-arm64.dmg"
-          curl -fsSL --retry 3 "$INDEX_URL" -o "$RUNNER_TEMP/kenaz-ml-index.json"
+          # Transient CDN errors (5xx, resets, short reads) must not zero a
+          # release — this step failing fails the darwin/arm64 leg, which
+          # skips publish-s3 for EVERY platform. --retry-all-errors retries
+          # those; verification below is unchanged and still fail-closed.
+          CURL_RETRY=(--retry 5 --retry-all-errors --retry-delay 3)
+          curl -fsSL "${CURL_RETRY[@]}" "$INDEX_URL" -o "$RUNNER_TEMP/kenaz-ml-index.json"
           REL="$(jq -c --arg v "$ENGINE_VERSION" '[.releases[] | select(.version == $v)] | select(length == 1) | .[0]' "$RUNNER_TEMP/kenaz-ml-index.json")"
           test -n "$REL" || { echo "::error::kenaz-ml $ENGINE_VERSION is not listed exactly once in $INDEX_URL"; exit 1; }
           # jq -e: a missing/null field fails the assignment (and the step).
@@ -467,7 +485,7 @@ jobs:
           fi
           # The published signature must verify under the baked key through
           # the harness's own verifier stack (exit 1 = invalid → step fails).
-          curl -fsSL --retry 3 "$SIG_URL" -o "$RUNNER_TEMP/kenaz-ml.sig"
+          curl -fsSL "${CURL_RETRY[@]}" "$SIG_URL" -o "$RUNNER_TEMP/kenaz-ml.sig"
           go run ./cmd/kenaz-ml-sign verify \
             --pubkey "$KEY_FILE" --sig "$RUNNER_TEMP/kenaz-ml.sig" \
             --version "$ENGINE_VERSION" \
@@ -475,8 +493,15 @@ jobs:
             --sha256 "$SHA"
           # The signature binds the index's sha256; bind that sha256 (and the
           # disclosed size) to the bytes the CDN actually serves.
-          curl -fsSL --retry 3 "$URL" -o "$RUNNER_TEMP/$ARTIFACT"
-          GOT_SIZE="$(wc -c < "$RUNNER_TEMP/$ARTIFACT" | tr -d '[:space:]')"
+          # A short body (size != index) is re-fetched, at most 3 attempts in
+          # all; whatever the last attempt got goes through the unchanged
+          # size + sha256 check below, so a persistent mismatch still exits 1.
+          for attempt in 1 2 3; do
+            curl -fsSL "${CURL_RETRY[@]}" "$URL" -o "$RUNNER_TEMP/$ARTIFACT"
+            GOT_SIZE="$(wc -c < "$RUNNER_TEMP/$ARTIFACT" | tr -d '[:space:]')"
+            [ "$GOT_SIZE" = "$SIZE" ] && break
+            echo "::warning::$ARTIFACT download attempt $attempt got $GOT_SIZE bytes, index says $SIZE (attempt $attempt of 3)"
+          done
           GOT_SHA="sha256:$(shasum -a 256 "$RUNNER_TEMP/$ARTIFACT" | cut -d' ' -f1)"
           rm -f "$RUNNER_TEMP/$ARTIFACT"
           if [ "$GOT_SIZE" != "$SIZE" ] || [ "$GOT_SHA" != "$SHA" ]; then
@@ -1213,6 +1238,10 @@ jobs:
         run: |
           # Emit a JSON manifest the docusaurus site consumes.
           # One record per platform with download URL + sha256.
+          # released_at: GITHUB_RUN_STARTED_AT is NOT a GitHub-provided
+          # variable (the field was "" in every published manifest), so stamp
+          # the real build time here.
+          export RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           python3 - <<'PY' > manifest.json
           import json, os, pathlib, re
           tag = os.environ['TAG']
@@ -1284,7 +1313,7 @@ jobs:
               'version': version,
               'tag': tag,
               'commit': os.environ.get('GITHUB_SHA', ''),
-              'released_at': os.environ.get('GITHUB_RUN_STARTED_AT', ''),
+              'released_at': os.environ['RELEASED_AT'],
               'release_url': f"https://github.com/{repo}/releases/tag/{tag}",
               'assets': assets,
           }
@@ -1353,6 +1382,9 @@ jobs:
           TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
           RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
         run: |
+          # released_at: real UTC publish time (GITHUB_RUN_STARTED_AT is not
+          # a GitHub-provided variable, so this was always "").
+          export RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           python3 - <<'PY'
           import json, os, pathlib, re
           # For prod, use the release tag from the release job output;
@@ -1418,7 +1450,7 @@ jobs:
               'tag': tag,
               'env': target_env,
               'commit': os.environ.get('GITHUB_SHA', ''),
-              'released_at': os.environ.get('GITHUB_RUN_STARTED_AT', ''),
+              'released_at': os.environ['RELEASED_AT'],
               'release_url': f"{cdn_base}/",
               'assets': assets,
           }
@@ -1464,23 +1496,87 @@ jobs:
             --cache-control 'public, max-age=3600' \
             --metadata-directive REPLACE \
             --no-progress
+          # Pin the manifest under the per-tag prefix too — BEFORE the pointer
+          # guard, so a guard failure still leaves a complete per-tag prefix.
+          aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/${TAG}/manifest.json" \
+            --cache-control 'public, max-age=3600' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
+
+      # The canonical kenaz-harness/manifest.json is the env's "latest"
+      # pointer: core/update/manifest.go (auto-updater), the frontend update
+      # store and the docs download page all read it. Before this guard every
+      # run overwrote it, so re-running release.yml against an OLD tag (the
+      # remedy check-release-integrity.sh gives for a zero-asset release; and
+      # every workflow_dispatch resolves to prod) would have made that old
+      # tag "latest" for every install. The guard reads the current pointer
+      # and refuses to move it backwards; scripts/ci/lib/semver.sh holds the
+      # ordering + decision table, self-tested on every PR by
+      # scripts/ci/check-semver-lib.sh. The per-tag prefix (binaries AND its
+      # manifest.json, uploaded in the step above) and the GitHub Release
+      # assets are published either way — they are harmless — so a guard
+      # exit 1 leaves the per-tag prefix complete and this job re-runnable.
+      - name: Guard — never move the stable pointer backwards
+        id: pointer
+        env:
+          VERSION:    ${{ needs.derive-version.outputs.version }}
+          BUCKET:     ${{ needs.resolve-env.outputs.bucket }}
+          TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/lib/semver.sh
+          CUR_JSON="$RUNNER_TEMP/current-manifest.json"
+          CUR=""
+          if aws s3 cp "s3://${BUCKET}/kenaz-harness/manifest.json" "$CUR_JSON" \
+               --no-progress 2>"$RUNNER_TEMP/current-manifest.err"; then
+            # Malformed JSON → empty → treated as "nothing to protect".
+            CUR="$(jq -r '.version // "" | strings' "$CUR_JSON" 2>/dev/null || true)"
+            if [ -z "$CUR" ]; then
+              # The pointer EXISTS but carries no string version ({}, 0-byte,
+              # garbage, numeric) — advancing is right, but never silently.
+              echo "::warning::canonical s3://${BUCKET}/kenaz-harness/manifest.json exists but has no string .version — nothing orderable to protect; advancing to $VERSION"
+            fi
+          elif grep -Eq '\(404\)|NoSuchKey|does not exist|Not Found' "$RUNNER_TEMP/current-manifest.err"; then
+            echo "No canonical manifest in ${BUCKET} yet — first publish to this env."
+          else
+            # Fail closed: a pointer we cannot read is a pointer we must not
+            # blindly overwrite. The per-tag prefix (binaries + manifest) has
+            # already landed, so re-running this job is safe.
+            # (A nonexistent BUCKET also yields "Not Found" above and is
+            # treated as first publish — harmless: the canonical cp that
+            # follows fails on the same missing bucket.)
+            echo "::error::could not read s3://${BUCKET}/kenaz-harness/manifest.json to compare versions:"
+            sed 's/^/  /' "$RUNNER_TEMP/current-manifest.err"
+            exit 1
+          fi
+          if [ -n "$CUR" ] && ! semver_valid "$CUR" && [ "$TARGET_ENV" != dev ]; then
+            echo "::warning::current canonical manifest version '$CUR' is not SemVer — nothing orderable to protect; advancing to $VERSION"
+          fi
+          DECISION="$(pointer_decision "$TARGET_ENV" "$VERSION" "$CUR")"
+          if [ "$DECISION" = hold ]; then
+            echo "::warning title=Stable pointer held::publishing $VERSION, which is OLDER than the current ${TARGET_ENV} pointer ${CUR}. Per-tag assets are published; kenaz-harness/manifest.json is NOT moved and $VERSION is filed into index.json at its historical position, not the top."
+            echo "move=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Pointer decision: advance (${TARGET_ENV}: '${CUR:-<none>}' -> ${VERSION})"
+            echo "move=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload manifest at canonical path (short cache)
         env:
-          TAG:    ${{ needs.derive-version.outputs.version }}
           BUCKET: ${{ needs.resolve-env.outputs.bucket }}
+          MOVE_POINTER: ${{ steps.pointer.outputs.move }}
         run: |
           set -euo pipefail
+          # (The per-tag copy was uploaded with the binaries, before the guard.)
+          if [ "$MOVE_POINTER" != "true" ]; then
+            echo "Stable pointer held (see guard step) — canonical manifest.json left unchanged."
+            exit 0
+          fi
           # The download page fetches /kenaz-harness/manifest.json at runtime.
           # Short cache so a fresh release shows up within minutes.
           aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/manifest.json" \
             --cache-control 'public, max-age=120, must-revalidate' \
-            --content-type 'application/json' \
-            --metadata-directive REPLACE \
-            --no-progress
-          # Also pin a copy under the per-tag prefix for forensic lookup.
-          aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/${TAG}/manifest.json" \
-            --cache-control 'public, max-age=3600' \
             --content-type 'application/json' \
             --metadata-directive REPLACE \
             --no-progress
@@ -1492,8 +1588,18 @@ jobs:
           BUCKET:     ${{ needs.resolve-env.outputs.bucket }}
           CDN_BASE:   ${{ needs.resolve-env.outputs.cdn_base }}
           TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
+          MOVE_POINTER: ${{ steps.pointer.outputs.move }}
         run: |
           set -euo pipefail
+          # When the guard held the pointer (publishing an OLDER version than
+          # the env's current one), the entry must not be stamped released_at
+          # =now — the picker sorts on released_at, so that would put the old
+          # version at the top. File it at its historical position instead,
+          # dated by its commit, and leave an existing entry untouched.
+          export HELD_RELEASED_AT=""
+          if [ "$MOVE_POINTER" != "true" ]; then
+            HELD_RELEASED_AT="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ "$GITHUB_SHA" 2>/dev/null || true)"
+          fi
           # Maintain s3://.../kenaz-harness/index.json — a sorted list of
           # every version that's been published to this environment. The
           # download page fetches this lazily when the user opens the
@@ -1514,17 +1620,25 @@ jobs:
           tag = os.environ['TAG']
           cdn_base = os.environ['CDN_BASE']
           target_env = os.environ['TARGET_ENV']
-          # Drop any prior entry for the same tag (rolling 'main' replaces
-          # itself; tagged releases shouldn't republish but if they do the
-          # latest wins).
-          versions = [v for v in versions if v.get('tag') != tag]
-          versions.append({
-              'tag': tag,
-              'version': os.environ['VERSION'],
-              'env': target_env,
-              'released_at': os.environ['NOW'],
-              'manifest_url': f"{cdn_base}/kenaz-harness/{tag}/manifest.json",
-          })
+          held = os.environ.get('MOVE_POINTER') != 'true'
+          if held and any(v.get('tag') == tag for v in versions):
+              # Older than the pointer and already listed: keep its original
+              # released_at and position.
+              pass
+          else:
+              # Drop any prior entry for the same tag (rolling 'main' replaces
+              # itself; tagged releases shouldn't republish but if they do the
+              # latest wins).
+              versions = [v for v in versions if v.get('tag') != tag]
+              versions.append({
+                  'tag': tag,
+                  'version': os.environ['VERSION'],
+                  'env': target_env,
+                  # Held (older) version: its commit time, so it sorts into
+                  # its historical slot rather than to the top.
+                  'released_at': os.environ['HELD_RELEASED_AT'] if held else os.environ['NOW'],
+                  'manifest_url': f"{cdn_base}/kenaz-harness/{tag}/manifest.json",
+              })
           # Newest first by released_at, with rolling dev builds pinned to
           # the top so the picker shows them at the front.
           versions.sort(key=lambda v: (0 if v.get('env') == 'dev' else 1, v.get('released_at', '')), reverse=True)

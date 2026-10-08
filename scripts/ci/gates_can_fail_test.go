@@ -178,6 +178,10 @@ var cwdSensitiveGates = []string{
 	// WP03): scans core/install, core/fleet and core/rpc by repo-relative
 	// path; sources lib/ci-gate.sh so the verdict is cwd-independent.
 	"check-install-provider-coverage.sh",
+
+	// check-semver-lib.sh (release-infra hardening, 2026-10-07): sources
+	// lib/ci-gate.sh and then lib/semver.sh by repo-relative path.
+	"check-semver-lib.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -1293,6 +1297,21 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			gate:       "check-installer-payload.sh",
 			file:       ".github/workflows/release.yml",
 			append:     "\n      # zzGateProbe: -o \"build/bin/zzgateprobe.exe\"\n",
+		},
+		{
+			// release-infra hardening (2026-10-07). lib/semver.sh decides
+			// whether publish-s3 may move an env's stable manifest.json
+			// pointer; a wrong ordering silently points every
+			// auto-updater at an older release. The plant redefines
+			// semver_cmp as a plain string compare — the realistic
+			// mistake, which orders v0.9.0 above v0.10.0 — by appending a
+			// second definition that shadows the real one when sourced.
+			name:       "semver-lib/lexical-compare",
+			wantOutput: "semver_cmp v0.10.0 v0.9.0",
+			gate:       "check-semver-lib.sh",
+			file:       "scripts/ci/lib/semver.sh",
+			append: "\n# zzGateProbe: lexical compare shadows the real semver_cmp\n" +
+				"semver_cmp() { if [[ \"$1\" == \"$2\" ]]; then echo 0; elif [[ \"$1\" < \"$2\" ]]; then echo -1; else echo 1; fi; }\n",
 		},
 		{
 			// entry-points-and-crash-reporting-01PMZD13 UNIT-1. Deviates

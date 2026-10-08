@@ -342,6 +342,100 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-07 (release-infra hardening, chore/release-infra-hardening) · six zero-asset release tags, one mechanism; three fixes landed, four follow-ups open
+
+`scripts/ci/check-release-integrity.sh` flagged six tags whose GitHub
+Release has zero assets: **v0.60.0, v0.76.1** (Chocolatey community-feed
+outages in release.yml's `install NSIS toolchain (windows-amd64 only)`
+step — invalid XML for `nsis.install`, then a 504) and **v0.85.1, v0.85.2,
+v0.86.0, v0.87.0** (Apple notarization `403` "agreement expired" on both
+darwin legs, 2026-10-04 → 10-05; the team K54JDRHBA7 agreement was
+accepted before v0.88.0, 2026-10-05 19:11Z). The shared mechanism: one
+failed matrix leg makes `needs.build.result` `failure`, and `publish-s3`
+gates on `== 'success'`, so EVERY platform ships nothing. All six are
+superseded (v0.60.1; v0.77.0 tagged 13 s after v0.76.1; v0.88.0+) and are
+now on `.github/release-integrity-ignore.txt` with reasons.
+
+They were ignore-listed rather than re-run because re-running was unsafe:
+`resolve-env` maps every `workflow_dispatch` to prod, and `publish-s3`
+unconditionally overwrote the stable `kenaz-harness/manifest.json` pointer
+(read by `core/update/manifest.go`, `useUpdateStore.ts`'s `MANIFEST_URL`
+and the docs download page) and inserted the run into `index.json` with
+`released_at=now` — an old tag would have become "latest".
+
+**CLOSED in this PR:**
+
+- **Pointer could move backwards** — `fix(ci): publish-s3 refuses to move
+  the stable pointer backwards`. publish-s3 reads the current canonical
+  manifest (NoSuchKey = first publish; any other read error fails
+  closed), and when the published version is older keeps the per-tag
+  upload but leaves `manifest.json` alone and files the version into
+  `index.json` at its commit date. dev stays rolling. Ordering in
+  `scripts/ci/lib/semver.sh`, gated by `check-semver-lib.sh` (pr.yml)
+  with planted proof `semver-lib/lexical-compare`. The integrity gate's
+  "re-run release.yml" remedy is now actually safe, and says so.
+- **`manifest.json.released_at` was always `""`** — `fix(ci): manifest
+  released_at is a real timestamp`. Both builders read
+  `GITHUB_RUN_STARTED_AT`, which GitHub does not provide; now `date -u`.
+- **Engine-pin step as a zero-release path on CDN blips** — `fix(ci):
+  engine-pin downloads survive transient CDN errors` (`--retry 5
+  --retry-all-errors`, ≤3 DMG re-fetches on a short body; verification
+  unchanged and still fail-closed). Mitigates (c) below; does not close it.
+
+**OPEN:**
+
+- **(a) A single failed matrix leg zeroes the release for all platforms.**
+  Block-all (today) vs publish-the-legs-that-built (partial release, with
+  the missing platforms named in the manifest/Release body and the
+  integrity gate taught to tell "partial" from "empty"). This is a product
+  call — a partial release means some users' updaters see a version they
+  cannot install. **Owner:** alec (decision), then release-infra.
+- **(b) Apple agreement lapse fails late and anonymously.** The 403 surfaced
+  only at notarization, after a full build, as a generic notarytool
+  failure. Pre-flight it at the start of the macOS leg (`xcrun notarytool
+  history` with the same credentials, or an App Store Connect API call)
+  so a lapse fails in seconds with a named cause. **Owner:** release-infra.
+- **(c) The engine-pin step is a seventh zero-release path.** It runs only
+  on darwin/arm64, and any persistent CDN/index failure there fails the
+  leg and so (per (a)) the whole release. Retries above cover transient
+  errors; the structural question is (a)'s. **Owner:** same as (a).
+- **(d) Index-shape coupling of the pin step.** The step requires the
+  pinned version to appear EXACTLY once in `kenaz-ml/index.json` and its
+  `darwin_arm64.key_id` to equal the baked key. A kenaz-ml republish that
+  duplicates a version row, or a key rotation on the publisher side
+  before the harness `.pub` follows, fails every harness release build
+  (fail-closed is correct; the coupling is the note). kenaz-ml's publish
+  should treat "one row per version" and "key_id changes only with a
+  harness pin bump" as contract. **Owner:** release-infra (kenaz-ml side).
+- **(e) Pointer-guard TOCTOU residual.** release.yml's `concurrency.group`
+  is per-ref, so two tag runs seconds apart (e.g. v0.76.1 / v0.77.0, 13 s
+  apart) can both read the current pointer before either writes, and the
+  older can write last. The guard narrows the window to one publish-s3
+  job's guard→cp gap; it does not close it. **Fix shape:** re-read the
+  pointer immediately before the canonical cp, or make the write an S3
+  conditional put (`aws s3api put-object --if-match <etag>` from the
+  guard's read; `--if-none-match '*'` on first publish). **Owner:**
+  release-infra.
+- **Note — "Not Found" also matches a nonexistent bucket.** The guard's
+  first-publish branch keys on `(404)|NoSuchKey|does not exist|Not Found`,
+  so a misconfigured BUCKET reads as "first publish". Harmless: the
+  canonical cp that follows fails on the same missing bucket, and the
+  per-tag upload before the guard would already have failed. Recorded so
+  nobody "fixes" it by widening the match.
+- **Cross-reference:** the prerelease updater host bug
+  (`core/update/manifest.go:53` `stage-downloads.kameas.ai`, NXDOMAIN; the
+  channel publishes to `stage.downloads.kameas.ai`) is being fixed on the
+  parallel `fix/ledger-followups-oct7` branch — not duplicated here.
+- **Remedy hardening (this PR, review tweak):** the integrity gate's
+  remedy now names `gh workflow run release.yml --ref <tag> -f
+  version=<tag>`, and derive-version refuses a `workflow_dispatch` whose
+  `inputs.version` tag is not `GITHUB_SHA` — a UI dispatch from main would
+  otherwise build main's code under the old label and date the held index
+  entry ≈now (top of the picker). The per-tag `manifest.json` now uploads
+  with the binaries, before the guard, so a guard exit 1 leaves a complete
+  per-tag prefix; a pointer that exists but has no string `.version` now
+  warns instead of advancing silently.
+
 ### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · `MemorySync` has no `Stop`; nothing on the shutdown path cancels it
 
 `buildMemorySync` (`core/rpc/api.go`, the `ms.Start(context.Background())`
@@ -5456,6 +5550,13 @@ semantics from what its doc currently claims.
 > dated note on `PinnedEngineRelease` is deleted. Review follow-up #3
 > below is partly addressed: the release step now cross-checks the pin's
 > values against the published index and the served bytes at build time.
+>
+> **Note 2026-10-07:** kenaz-ml **0.2.0** was published 2026-10-08T00:39Z
+> (prod `kenaz-ml/index.json`). The harness deliberately stays pinned to
+> `KENAZ_ML_ENGINE_VERSION: '0.1.1'` until a fixture-refresh PR replaces
+> `testdata/engine-release-0.1.1/` (index, `.sig`, PROVENANCE.md) and
+> re-runs the pre-enable verification against 0.2.0 — bumping the env
+> alone would fail `published_release_test.go`'s drift check, by design.
 
 **Finding, ungated: trust anchors have no production revocation path.**
 `TrustEngine.RemoveAnchor` and `TrustEngine.IngestRevocation` have zero
