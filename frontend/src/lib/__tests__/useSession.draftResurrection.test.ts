@@ -116,6 +116,32 @@ describe('useSession — the persisted draft cannot resurrect sent text', () => 
     vi.useRealTimers();
   });
 
+  // Dogfood 2026-10-08: type-then-Enter INSIDE the debounce window. No
+  // save has fired yet, so lastSavedDraft is still "" — the send's clear
+  // equals it, and the watcher used to early-return before cancelling
+  // the queued save, which then persisted the just-sent text.
+  it('a send within the debounce window never persists the sent text', async () => {
+    vi.useFakeTimers();
+    persistedDraft = '';
+    const { api } = boot();
+    await settle();
+    expect(api().draft.value).toBe('');
+    savedDrafts.length = 0;
+
+    api().draft.value = 'Reply with exactly the word pong';
+    await settle();
+    vi.advanceTimersByTime(100); // well inside the 400ms debounce
+    api().draft.value = ''; // the send clears the composer
+    await settle();
+    vi.advanceTimersByTime(1000);
+    await settle();
+
+    expect(savedDrafts.some((d) => d.text === 'Reply with exactly the word pong')).toBe(false);
+    expect(savedDrafts.length).toBeGreaterThanOrEqual(1);
+    expect(savedDrafts[savedDrafts.length - 1].text).toBe('');
+    vi.useRealTimers();
+  });
+
   it('a session switch adopts the new session persisted draft again', async () => {
     const { idRef, api } = boot();
     await settle();

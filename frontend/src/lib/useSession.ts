@@ -1355,8 +1355,20 @@ export function useSession(id: Ref<string>): UseSessionResult {
 
   // Debounced draft persistence.
   watch(draft, (next) => {
-    if (next === lastSavedDraft) return;
-    if (draftDebounceHandle) clearTimeout(draftDebounceHandle);
+    // Cancel any pending save FIRST (dogfood 2026-10-08): type-then-Enter
+    // inside the debounce window leaves lastSavedDraft at "" while a save
+    // of the typed text is still queued. The send clears draft to "",
+    // which equals lastSavedDraft — returning before the cancel let the
+    // queued save persist the just-sent text 400ms later, and the next
+    // session load resurrected it as the composer draft.
+    const hadPendingSave = draftDebounceHandle !== null;
+    if (draftDebounceHandle) {
+      clearTimeout(draftDebounceHandle);
+      draftDebounceHandle = null;
+    }
+    // A clear that cancelled a queued save still flushes "": what the
+    // backend holds may not be what lastSavedDraft says.
+    if (next === lastSavedDraft && !(next === "" && hadPendingSave)) return;
     const sid = id.value;
     if (!sid) return;
     // A clear (the send path) flushes IMMEDIATELY: the debounce window is
@@ -1370,6 +1382,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       return;
     }
     draftDebounceHandle = setTimeout(() => {
+      draftDebounceHandle = null;
       lastSavedDraft = next;
       void client.sessions.saveDraft(sid, next).catch(() => {
         // Soft-fail: drafts are best-effort.
