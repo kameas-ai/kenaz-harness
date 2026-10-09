@@ -89,3 +89,65 @@ func waitUntil(t *testing.T, cond func() bool, what string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// Review fix 2: the pause is session-scoped. After sign-out → sign-in (a
+// possibly different org) the snapshot is not paused until a real poll for
+// the NEW session says so — neither the client's old pause state (reset on
+// the session-reset hook, as core/rpc wires it) nor a default-deny poller
+// may carry it over.
+func TestFleetSession_OrgPause_DoesNotSurviveSignOutSignIn(t *testing.T) {
+	r, _ := newEventRig(t)
+	ctx := context.Background()
+	r.api.fleet.mu.RLock()
+	client := r.api.fleet.client
+	r.api.fleet.mu.RUnlock()
+	r.api.OnFleetSessionReset(client.ResetOrgPause) // production wiring (core/rpc/api.go)
+
+	r.setToken(jwtFor("sub-alice", "zitadel-org-1"))
+	if _, err := r.api.FleetRefreshIdentity(ctx); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+	r.api.CapabilityPoller().ForceSetCurrentForTesting(fleet.Capabilities{
+		Tier: "team", Enabled: map[fleet.Capability]bool{}, FetchedAt: time.Now(),
+		Source: "fleet", Paused: true, PausedCategory: "security",
+	})
+	if v := snap(t, r.api); !v.Paused {
+		t.Fatal("precondition: snapshot not paused")
+	}
+
+	r.setToken("")
+	if err := r.api.FleetSignOut(ctx); err != nil {
+		t.Fatalf("sign-out: %v", err)
+	}
+	// New session, different org; the background restarts with a fresh
+	// (default-deny) poller, as after a real sign-in.
+	r.setToken(jwtFor("sub-bob", "zitadel-org-2"))
+	r.api.fleet.mu.Lock()
+	r.api.startFleetBackgroundLocked()
+	r.api.fleet.mu.Unlock()
+	if _, err := r.api.FleetRefreshIdentity(ctx); err != nil {
+		t.Fatalf("enroll 2: %v", err)
+	}
+	if v := snap(t, r.api); v.Paused || v.PausedCategory != "" {
+		t.Fatalf("new session inherited the old pause: paused=%v category=%q caps.source=%q",
+			v.Paused, v.PausedCategory, v.Capabilities.Source)
+	}
+	if client.OrgPause().Paused {
+		t.Fatal("client pause state survived the session reset")
+	}
+
+	// Belt-and-braces: even a pause observed before the first real poll is
+	// not shown while the poller is still default-deny.
+	client.ObserveCapabilitiesPause(true, "abuse")
+	if v := snap(t, r.api); v.Paused {
+		t.Fatal("snapshot paused while the poller is default-deny")
+	}
+	// A real poll for this session says paused → shown.
+	r.api.CapabilityPoller().ForceSetCurrentForTesting(fleet.Capabilities{
+		Tier: "pro", Enabled: map[fleet.Capability]bool{}, FetchedAt: time.Now(),
+		Source: "fleet", Paused: true, PausedCategory: "abuse",
+	})
+	if v := snap(t, r.api); !v.Paused || v.PausedCategory != "abuse" {
+		t.Fatalf("snapshot = paused %v / %q, want abuse", v.Paused, v.PausedCategory)
+	}
+}

@@ -87,11 +87,6 @@ type ConfigPollStatus struct {
 	// judges a served bundle differently (a verified bundle, a 304, or a
 	// different hard rejection); transient fetch errors preserve it.
 	SigningKeyUnknown bool `json:"signingKeyUnknown"`
-	// OrgPaused is true while GET /configs answers 403 org_paused (a staff
-	// pause hold, kenaz-fleet #206). Transient: the poll keeps its normal
-	// backoff, the last applied bundle stays in force, and the pause
-	// lifting resets the backoff and polls at once (ResumeAfterOrgUnpause).
-	OrgPaused bool `json:"orgPaused,omitempty"`
 }
 
 // ConfigPoller polls the fleet config endpoint, verifies bundles, and drives
@@ -110,7 +105,11 @@ type ConfigPoller struct {
 	checksum      string // SHA-256 hex of last-seen bundle JSON (for 304)
 	source        string
 	keyUnknown    bool // last rejection was ErrSigningKeyUnknown
-	orgPaused     bool // last fetch was refused 403 org_paused
+	// orgPaused: the last fetch was refused 403 org_paused (kenaz-fleet
+	// #206) — transient; the last applied bundle stays in force, and
+	// ResumeAfterOrgUnpause clears the "org_paused" lastError it set. The
+	// session snapshot's paused flag is what surfaces it.
+	orgPaused bool
 	// wake asks the loop for an immediate round with a reset backoff
 	// (buffered 1; the OnOrgUnpaused fan-out never blocks).
 	wake chan struct{}
@@ -336,7 +335,6 @@ func (p *ConfigPoller) Status() ConfigPollStatus {
 		Source:            p.source,
 		BundleChecksum:    p.checksum,
 		SigningKeyUnknown: p.keyUnknown,
-		OrgPaused:         p.orgPaused,
 	}
 	if !p.lastAppliedAt.IsZero() {
 		s.LastAppliedAt = p.lastAppliedAt.UTC().Format(time.RFC3339)

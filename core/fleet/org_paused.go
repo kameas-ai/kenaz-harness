@@ -6,7 +6,7 @@ package fleet
 // While an org is paused, every customer route outside fleet's explicit
 // allowlist answers
 //
-//	403 {"code":"org_paused","message":"…","details":{…category…}}
+//	403 {"code":"org_paused","message":"…","details":{"paused_category":"…"}}
 //
 // — including GET /configs and POST /context/append. GET /me/capabilities,
 // /me and /me/ml keep answering 200: capabilities carries "paused": true,
@@ -104,9 +104,8 @@ func OrgPausedCategoryOf(err error) string {
 
 // ParseOrgPaused classifies a response status + body. It returns a non-nil
 // *OrgPausedError only for a 403 carrying the JSON envelope code
-// "org_paused". The category is read from details.paused_category (the
-// confirmed contract) and, for tolerance, details.category (the shape PR
-// #206's gate writes at the time of writing).
+// "org_paused". The category is details.paused_category (confirmed against
+// #206's head); absent or unknown normalises to "other".
 func ParseOrgPaused(status int, body []byte) *OrgPausedError {
 	if status != http.StatusForbidden {
 		return nil
@@ -115,12 +114,7 @@ func ParseOrgPaused(status int, body []byte) *OrgPausedError {
 	if !ok || env.Code != CodeOrgPaused {
 		return nil
 	}
-	cat := ""
-	if v, ok := env.Details["paused_category"].(string); ok {
-		cat = v
-	} else if v, ok := env.Details["category"].(string); ok {
-		cat = v
-	}
+	cat, _ := env.Details["paused_category"].(string)
 	return &OrgPausedError{PausedCategory: NormalizePausedCategory(cat), Message: env.Message}
 }
 
@@ -168,6 +162,19 @@ type orgPauseState struct {
 	category   string
 	onChange   []func(OrgPauseStatus)
 	onUnpaused []func()
+}
+
+// ResetOrgPause forgets the observed pause WITHOUT firing any listener — a
+// fleet session reset (sign-in / sign-out): the next session may be a
+// different org, and only its own capability poll or refusal may say it is
+// paused. No OnOrgUnpaused fan-out: nothing was unpaused.
+func (c *Client) ResetOrgPause() {
+	if c == nil || c.isNop {
+		return
+	}
+	c.orgPause.mu.Lock()
+	c.orgPause.paused, c.orgPause.category = false, ""
+	c.orgPause.mu.Unlock()
 }
 
 // OrgPause returns the pause state this client has observed.

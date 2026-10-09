@@ -145,9 +145,6 @@ type AuditArchiver struct {
 	wake chan struct{}
 }
 
-// OrgPaused reports whether archival is currently held by an org pause.
-func (a *AuditArchiver) OrgPaused() bool { return a.orgPaused.Load() }
-
 // ResumeAfterOrgUnpause is the OnOrgUnpaused hook: clears the org-pause
 // hold and wakes the loop out of its backoff.
 func (a *AuditArchiver) ResumeAfterOrgUnpause() {

@@ -336,10 +336,15 @@ func (a *API) fleetSessionSnapshot() FleetSessionView {
 	applyClaimFallbacks(&v, ts.Claims)
 
 	if poller != nil {
-		v.Capabilities = capabilitiesToView(poller.Current())
-	}
-	if st := client.OrgPause(); st.Paused {
-		v.Paused, v.PausedCategory = true, st.PausedCategory
+		cur := poller.Current()
+		v.Capabilities = capabilitiesToView(cur)
+		// Only a real (fleet / cache) answer for THIS session may say
+		// paused: right after a sign-in the poller is default-deny and the
+		// client's pause state is reset (ResetOrgPause), so a previous
+		// org's pause never bleeds into the new session's snapshot.
+		if st := client.OrgPause(); st.Paused && cur.Source != "default-deny" {
+			v.Paused, v.PausedCategory = true, st.PausedCategory
+		}
 	}
 	v.Sync = syncViewFromLanes(lanes)
 	if kr := client.KeyRegistration(); kr.Status != "" {

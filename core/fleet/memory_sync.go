@@ -505,8 +505,19 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 		return
 	}
 	if paused, _ := m.orgPaused(); paused {
-		// A reversible staff hold, not a tier answer: off with the honest
-		// reason; ResumeAfterOrgUnpause kicks the lane when it lifts.
+		// A reversible staff hold, not a tier answer. Fleet keeps the
+		// data-rights half of the lane open while paused (kenaz-fleet
+		// #206): forget-only push batches, narrowing settings PUTs and
+		// forget-all. So queued forgets are sent (forget-only batches) and
+		// an unconfirmed opt-out / delete-from-Fleet is finished now, not
+		// after the unpause. Nothing else runs; ResumeAfterOrgUnpause kicks
+		// the lane when the hold lifts.
+		m.flushForgets(ctx)
+		if st := m.state(); !st.Enabled && (st.DisablePending || st.ForgetAllPending) {
+			if _, err := m.finishDisable(ctx); err != nil {
+				logging.L().Warn("fleet.memory_sync.disable_retry_failed", "err", err.Error())
+			}
+		}
 		m.lanes().RecordOff(LaneMemorySync, ReasonOrgPaused)
 		return
 	}
@@ -1352,6 +1363,10 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 // Enable opts this user in on Fleet (PUT settings with consent) and this
 // device locally, then kicks a cycle. scopes must be ⊆ {long_term, global}.
 func (m *MemorySync) Enable(ctx context.Context, scopes []string, consentVersion string) (MemorySyncSettings, error) {
+	if paused, cat := m.orgPaused(); paused {
+		// Enabling / widening is refused while paused; say so, not "tier".
+		return MemorySyncSettings{}, &OrgPausedError{PausedCategory: NormalizePausedCategory(cat)}
+	}
 	if !m.entitled() {
 		return MemorySyncSettings{}, fmt.Errorf("%w: %s", ErrCapabilityNotInTier, CapMemorySync)
 	}
@@ -1443,16 +1458,10 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 // checked when the user asked (Disable).
 func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 	if m.state().DisablePending {
+		// A narrowing PUT (sync off) is accepted while the org is paused
+		// (kenaz-fleet #206), so this needs no pause special case.
 		if err := m.putDisabled(ctx); err != nil {
-			// A paused org (kenaz-fleet #206) refuses PUT /memory/settings
-			// but keeps forget-all open (a data-rights route). The opt-out
-			// is already persisted locally — this device cannot re-upload —
-			// so the erase proceeds; DisablePending stays set and the lane
-			// retries the PUT after the pause lifts.
-			if !IsOrgPaused(err) || !m.state().ForgetAllPending {
-				return 0, err
-			}
-			logging.L().Info("fleet.memory_sync.disable_put_held_org_paused", "action", "forget_all_anyway")
+			return 0, err
 		}
 	}
 	if !m.state().ForgetAllPending {

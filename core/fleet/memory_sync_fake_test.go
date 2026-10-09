@@ -76,6 +76,32 @@ func (f *fakeMemoryFleet) setPaused(category string) {
 	f.pausedCategory = category
 }
 
+// pausedAllowed models fleet's pause allowlist for the memory routes.
+func pausedAllowed(method, path string, body []byte) bool {
+	switch {
+	case method == http.MethodPost && path == "/api/v1/memory/forget-all":
+		return true
+	case method == http.MethodPost && path == "/api/v1/memory/push":
+		var req memPushRequest
+		if json.Unmarshal(body, &req) != nil || len(req.Items) == 0 {
+			return false
+		}
+		for _, it := range req.Items {
+			if it.Op != "forget" {
+				return false
+			}
+		}
+		return true
+	case method == http.MethodPut && path == "/api/v1/memory/settings":
+		var u struct {
+			Enabled *bool `json:"enabled"`
+		}
+		_ = json.Unmarshal(body, &u)
+		return u.Enabled == nil || !*u.Enabled
+	}
+	return false
+}
+
 func newFakeMemoryFleet(now func() time.Time) *fakeMemoryFleet {
 	return &fakeMemoryFleet{now: now, enabled: true,
 		scopes: map[string]bool{"global": true, "long_term": true},
@@ -133,10 +159,18 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 429, map[string]any{"code": "rate_limited", "message": "slow down"})
 		return
 	}
-	if f.pausedCategory != "" && !(r.Method == http.MethodPost && r.URL.Path == "/api/v1/memory/forget-all") {
-		writeJSON(w, 403, map[string]any{"code": "org_paused", "message": "paused",
-			"details": map[string]any{"paused_category": f.pausedCategory}})
-		return
+	if f.pausedCategory != "" {
+		// kenaz-fleet #206 (confirmed at #206's head): while paused the
+		// data-rights half stays open — forget-all, a FORGET-ONLY push
+		// batch, and a NARROWING settings PUT (sync off / fewer scopes).
+		// Everything else, including a mixed push or an enable, is 403.
+		peek, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(strings.NewReader(string(peek)))
+		if !pausedAllowed(r.Method, r.URL.Path, peek) {
+			writeJSON(w, 403, map[string]any{"code": "org_paused", "message": "paused",
+				"details": map[string]any{"paused_category": f.pausedCategory}})
+			return
+		}
 	}
 	if f.status403 > 0 {
 		f.status403--

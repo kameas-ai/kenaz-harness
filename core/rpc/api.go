@@ -4546,6 +4546,9 @@ func New(c *core.Core, opts ...Option) *API {
 				// session-sync route is re-probed without a restart.
 				// Client first: the breaker's reset republishes the lane.
 				a.settingsImpl.OnFleetSessionReset(flCl.ResetUnsupportedEndpoints)
+				// A new session may be a different org: forget the old
+				// session's pause (no unpause fan-out — nothing lifted).
+				a.settingsImpl.OnFleetSessionReset(flCl.ResetOrgPause)
 				a.settingsImpl.OnFleetSessionReset(appendBreaker.ResetAll)
 				// The org pause lifting (kenaz-fleet #206) reopens every
 				// session circuit an org_paused refusal held — without a

@@ -110,7 +110,6 @@ func TestParseOrgPaused(t *testing.T) {
 		want   string // "" = not org_paused
 	}{
 		{"confirmed contract", 403, `{"code":"org_paused","message":"m","details":{"paused_category":"billing_review"}}`, "billing_review"},
-		{"pr206 gate shape", 403, `{"code":"org_paused","message":"m","details":{"paused":true,"category":"abuse"}}`, "abuse"},
 		{"no details", 403, `{"code":"org_paused","message":"m"}`, "other"},
 		{"unknown category", 403, `{"code":"org_paused","details":{"paused_category":"tax"}}`, "other"},
 		{"tier, not paused", 403, `{"code":"capability_not_in_tier","message":"m"}`, ""},
@@ -329,7 +328,7 @@ func TestAuditArchiver_OrgPaused_TransientNoLatch_ResumesOnUnpause(t *testing.T)
 	defer cancel()
 	a.Start(ctx)
 	defer a.Stop()
-	waitFor(t, func() bool { return a.OrgPaused() }, "archiver to record the org pause")
+	waitFor(t, func() bool { return a.orgPaused.Load() }, "archiver to record the org pause")
 	if !a.IsRunning() {
 		t.Fatal("archiver loop exited on org_paused — it must back off, not stop")
 	}
@@ -339,8 +338,8 @@ func TestAuditArchiver_OrgPaused_TransientNoLatch_ResumesOnUnpause(t *testing.T)
 	p.setPaused(false)
 	a.ResumeAfterOrgUnpause()
 	waitFor(t, func() bool { return !a.LastArchivedAt().IsZero() }, "archival to resume after unpause")
-	if a.OrgPaused() {
-		t.Fatal("OrgPaused still true after a successful flush")
+	if a.orgPaused.Load() {
+		t.Fatal("orgPaused still true after a successful flush")
 	}
 }
 
@@ -364,13 +363,12 @@ func TestConfigPoller_OrgPaused_TransientReasonAndResume(t *testing.T) {
 	if !IsOrgPaused(err) {
 		t.Fatalf("poll err = %v, want org_paused", err)
 	}
-	st := p.Status()
-	if !st.OrgPaused || st.LastError != ReasonOrgPaused || st.SigningKeyUnknown {
-		t.Fatalf("status = %+v, want orgPaused + lastError org_paused", st)
+	if st := p.Status(); st.LastError != ReasonOrgPaused || st.SigningKeyUnknown {
+		t.Fatalf("status = %+v, want lastError org_paused", st)
 	}
 	f.setPaused("")
 	p.ResumeAfterOrgUnpause()
-	if st := p.Status(); st.OrgPaused || st.LastError != "" {
+	if st := p.Status(); st.LastError != "" {
 		t.Fatalf("status after resume = %+v", st)
 	}
 	select {
@@ -453,8 +451,121 @@ func TestMemorySync_ForgetAll_SucceedsWhilePaused(t *testing.T) {
 		t.Fatalf("erased %d; m1 live=%v m2 live=%v — forget-all must reach fleet while paused", n, w.fleet.live("m1") != nil, w.fleet.live("m2") != nil)
 	}
 	st := d.ms.state()
-	if st.Enabled || st.ForgetAllPending || !st.DisablePending {
-		t.Fatalf("state = %+v: want local off, erase confirmed, the refused settings PUT still pending", st)
+	if st.Enabled || st.ForgetAllPending || st.DisablePending {
+		t.Fatalf("state = %+v: want local off, the narrowing PUT and the erase both confirmed", st)
+	}
+}
+
+// Review fix 1: a delete-from-Fleet whose forget-all failed transiently is
+// retried by the lane WHILE paused — fleet keeps forget-all open so it
+// need not wait for the unpause.
+func TestMemorySync_RunOncePaused_FinishesPendingForgetAll(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("dev-a", 0)
+	d.enable()
+	d.add("m1", "global", "fact one")
+	d.sync()
+
+	w.fleet.setPaused("abuse")
+	d.caps = &Capabilities{Enabled: map[Capability]bool{}, FetchedAt: time.Now(), Paused: true, PausedCategory: "abuse"}
+	// The user's opt-out landed locally; the erase has not been confirmed.
+	if err := d.ms.update(func(s *memSyncState) { s.Enabled, s.DisablePending, s.ForgetAllPending = false, true, true }); err != nil {
+		t.Fatal(err)
+	}
+	d.ms.RunOnce(context.Background())
+	if w.fleet.live("m1") != nil {
+		t.Fatal("RunOnce while paused did not perform the pending forget-all")
+	}
+	if st := d.ms.state(); st.ForgetAllPending || st.DisablePending {
+		t.Fatalf("state = %+v, want both steps confirmed", st)
+	}
+	if l := d.lanes.Snapshot(LaneMemorySync); l.Reason != ReasonOrgPaused {
+		t.Fatalf("lane = %+v, want org_paused", l)
+	}
+}
+
+// Contract item 4: while paused, queued forgets go out as a FORGET-ONLY
+// batch (accepted); a mixed batch is refused 403 org_paused.
+func TestMemorySync_Paused_ForgetOnlyBatchAcceptedMixedRefused(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("dev-a", 0)
+	d.enable()
+	d.add("m1", "global", "fact one")
+	d.add("m2", "global", "fact two")
+	d.sync()
+
+	w.fleet.setPaused("billing_review")
+	d.caps = &Capabilities{Enabled: map[Capability]bool{}, FetchedAt: time.Now(), Paused: true, PausedCategory: "billing_review"}
+	d.forget("m1")
+	d.add("m3", "global", "fact three") // a pending upsert that must NOT ride along
+	d.ms.RunOnce(context.Background())
+	if w.fleet.live("m1") != nil {
+		t.Fatal("queued forget not sent while paused")
+	}
+	if len(d.outbox.Pending()) != 0 {
+		t.Fatalf("outbox still holds %d forgets", len(d.outbox.Pending()))
+	}
+	if w.fleet.live("m3") != nil {
+		t.Fatal("an upsert was pushed while paused")
+	}
+	for _, req := range w.fleet.pushLog() {
+		for _, it := range req.Items {
+			if it.Op != "forget" && it.ID == "m3" {
+				t.Fatalf("paused push carried an upsert: %+v", it)
+			}
+		}
+	}
+
+	mixed := []pushEntry{
+		{item: memPushItem{Op: "forget", ID: "m2", HLC: "1"}, forget: true},
+		{item: memPushItem{Op: "upsert", ID: "m3"}},
+	}
+	if err := d.ms.pushBatch(context.Background(), mixed); !IsOrgPaused(err) {
+		t.Fatalf("mixed batch err = %v, want org_paused", err)
+	}
+}
+
+// Contract item 5: enabling (widening) is refused while paused — surfaced
+// as org_paused, never as a tier answer, and nothing loops on it.
+func TestMemorySync_EnableWhilePaused_SurfacedNoLoop(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("dev-a", 0)
+	// Caps not yet showing the pause: the server's refusal surfaces it.
+	w.fleet.setPaused("legal")
+	before := w.fleet.requestCount()
+	_, err := d.ms.Enable(context.Background(), []string{"global"}, MemoryConsentVersion)
+	if !IsOrgPaused(err) || errors.Is(err, ErrCapabilityNotInTier) {
+		t.Fatalf("Enable err = %v, want org_paused", err)
+	}
+	if got := w.fleet.requestCount() - before; got != 1 {
+		t.Fatalf("Enable made %d requests, want exactly 1", got)
+	}
+	if d.ms.state().Enabled {
+		t.Fatal("a refused enable flipped the local opt-in")
+	}
+	// Now the client knows: Enable refuses locally with no request at all.
+	before = w.fleet.requestCount()
+	if _, err := d.ms.Enable(context.Background(), []string{"global"}, MemoryConsentVersion); !IsOrgPaused(err) {
+		t.Fatalf("second Enable err = %v", err)
+	}
+	d.ms.RunOnce(context.Background())
+	if got := w.fleet.requestCount() - before; got != 0 {
+		t.Fatalf("%d requests after the pause was known, want 0 (no loop)", got)
+	}
+}
+
+func TestClient_ResetOrgPause_NoFanOut(t *testing.T) {
+	f := newPausedFleet(t, "security")
+	c := pausedClient(t, f)
+	fired := 0
+	c.OnOrgUnpaused(func() { fired++ })
+	_, _ = c.Get(context.Background(), "/api/v1/x")
+	if !c.OrgPause().Paused {
+		t.Fatal("precondition: not paused")
+	}
+	c.ResetOrgPause()
+	if c.OrgPause().Paused || fired != 0 {
+		t.Fatalf("after reset paused=%v fired=%d, want false/0", c.OrgPause().Paused, fired)
 	}
 }
 
