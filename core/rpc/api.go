@@ -4277,6 +4277,19 @@ func New(c *core.Core, opts ...Option) *API {
 				}
 				return id.UserID
 			})
+			// Dogfood 2026-10-08: a "team"-layer publish lands in the
+			// enrolled identity's team (fleet enroll returns team_id);
+			// only a teamless identity falls back to the org layer.
+			impl.WithSelfTeamID(func() string {
+				if selfDataDir == "" {
+					return ""
+				}
+				id, err := corefleet.LoadIdentity(selfDataDir)
+				if err != nil {
+					return ""
+				}
+				return id.TeamID
+			})
 
 			// FR-012: wire the library merger so each successful PullDelta
 			// applies team/org entries to the local context library. The

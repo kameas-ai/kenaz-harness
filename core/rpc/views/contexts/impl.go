@@ -59,11 +59,23 @@ type API struct {
 	// selfUserID returns the signed-in fleet user id ("" when unknown) —
 	// used to hide pulled copies of the user's OWN entries (review F3).
 	selfUserID func() string
+	// selfTeamID returns the enrolled fleet identity's team id ("" when
+	// unknown / teamless) — the team a "team"-layer publish lands in when
+	// the request names none (dogfood 2026-10-08).
+	selfTeamID func() string
 }
 
 // WithSelfUserID wires the signed-in fleet user id source (review F3).
 func (a *API) WithSelfUserID(f func() string) *API {
 	a.selfUserID = f
+	return a
+}
+
+// WithSelfTeamID wires the enrolled fleet identity's team id source. When
+// set, a "team"-layer Context_Publish with no req.TeamID publishes to this
+// team instead of falling back to the org layer.
+func (a *API) WithSelfTeamID(f func() string) *API {
+	a.selfTeamID = f
 	return a
 }
 
@@ -333,21 +345,22 @@ func toWire(in corecontexts.Node) Node {
 // rejected with ErrPersonalLayerNotSyncable.
 // Requires a wired ContextGraphSyncer; returns ErrFleetDisabled otherwise.
 //
-// THROWAWAY team→org fallback (finding #97, 2026-09-14):
+// Team resolution (dogfood 2026-10-08; supersedes the finding #97
+// THROWAWAY note):
 //
-// The fleet enroll handler (kenaz-fleet service/handlers_v2.go:156)
-// deliberately returns an empty team_id for every client — "teams land
-// in v0.5.0" — so every org is teamless today and a "team" layer publish
-// can never carry a team_id. Rather than let publish fail for 100% of
-// users, an owner ruling says to widen to the "org" layer instead, and to
-// say so out loud rather than silently: the response's EffectiveLayer
-// always reflects what actually happened, and the frontend must surface
-// it (see ContextsView.vue).
+// The request carries no team_id — the UI has no team picker. When it
+// asks for the "team" layer, the team is the enrolled fleet identity's
+// team_id (selfTeamID, read from identity.json). Fleet's enroll response
+// has carried one since the server shipped a default "Everyone" team per
+// org; before this the harness never used it, and every "Share to team"
+// went org-wide (log: `contexts.publish.start requested_layer=team
+// effective_layer=org team_fallback_to_org=true team_id_present=false`
+// on a device whose identity.json had a team_id).
 //
-// DELETE THIS BLOCK once the fleet server ships a default "everyone" team
-// per org — at that point req.TeamID is never empty for a team-layer
-// publish and this fallback is dead code. Until then it is the only path
-// that makes "Share to team" do anything at all.
+// Only when the identity genuinely has no team_id (a teamless org, or no
+// identity loaded) does the finding #97 fallback still apply: widen to
+// the "org" layer and say so — EffectiveLayer always reflects what
+// actually happened, and the frontend surfaces it (ContextsView.vue).
 func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (ContextPublishResult, error) {
 	if a == nil || a.syncer == nil {
 		return ContextPublishResult{}, fleet.ErrFleetDisabled
@@ -355,6 +368,16 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 
 	layer := contextpack.Layer(req.Layer)
 	teamID := req.TeamID
+	teamIDSource := ""
+	if teamID != "" {
+		teamIDSource = "request"
+	}
+	if layer == contextpack.LayerTeam && teamID == "" && a.selfTeamID != nil {
+		if t := a.selfTeamID(); t != "" {
+			teamID = t
+			teamIDSource = "identity"
+		}
+	}
 	fellBackToOrg := false
 	if layer == contextpack.LayerTeam && teamID == "" {
 		layer = contextpack.LayerOrg
@@ -369,6 +392,7 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		"effective_layer", string(layer),
 		"team_fallback_to_org", fellBackToOrg,
 		"team_id_present", teamID != "",
+		"team_id_source", teamIDSource,
 	)
 
 	entry := fleet.ContextNodeEntry{
