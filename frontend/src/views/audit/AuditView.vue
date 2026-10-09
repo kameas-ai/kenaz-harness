@@ -20,7 +20,13 @@ import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import { CATEGORIES, type Category } from '@/lib/categories';
 import type { AuditEntry, AuditFilter, AuditFilterQuery, SavedAuditQuery, AuditExportOptions } from '@/lib/types';
-import { defaultAuditSince, defaultAuditUntil } from '@/lib/auditDateFilters';
+import {
+  auditDateInputFromBound,
+  auditSinceBound,
+  auditUntilBound,
+  defaultAuditSince,
+  defaultAuditUntil,
+} from '@/lib/auditDateFilters';
 
 const client = useHarnessClient();
 
@@ -83,14 +89,18 @@ const saveQueryError = ref<string>('');
 // persists.
 const filter = computed<AuditFilter>(() => ({
   categories: selectedCategories.value.length > 0 ? [selectedCategories.value[0]] : undefined,
-  since: sinceInput.value || undefined,
-  until: untilInput.value || undefined,
+  since: auditSinceBound(sinceInput.value),
+  until: auditUntilBound(untilInput.value),
   limit: 500,
 }));
 
+// Dogfood 2026-10-08 P1: since/until go over the wire as RFC3339 bounds
+// (start / end of the UTC day), never as the raw date-only input — the
+// Go side decodes them into time.Time and rejects anything else. A
+// partial or invalid date (mid-keystroke "2026-10-0") sends no bound.
 const richFilter = computed<AuditFilterQuery>(() => ({
-  since: sinceInput.value || undefined,
-  until: untilInput.value || undefined,
+  since: auditSinceBound(sinceInput.value),
+  until: auditUntilBound(untilInput.value),
   kinds: selectedCategories.value.length > 0 ? selectedCategories.value : undefined,
   actor_ids: actorIds.value.length > 0 ? actorIds.value : undefined,
   free_text: freeText.value || undefined,
@@ -102,6 +112,10 @@ const richFilter = computed<AuditFilterQuery>(() => ({
 const seeded = ref<readonly AuditEntry[]>([]);
 const verifyResult = ref<null | { ok: boolean; checked: number; brokenAt?: string }>(null);
 const loading = ref(false);
+// Non-empty when the last audit.filter() call rejected. Rendered as a
+// visible error with Retry; the empty-state copy is suppressed while it
+// is set so a failed query cannot read as "nothing happened".
+const loadError = ref<string>('');
 
 // Selection state (for WP08 bulk-purge; pre-wired here).
 const selectedIDs = ref<Set<string>>(new Set());
@@ -129,8 +143,12 @@ async function refresh() {
   loading.value = true;
   try {
     seeded.value = await client.audit.filter(richFilter.value);
-  } catch {
-    seeded.value = [];
+    loadError.value = '';
+  } catch (e) {
+    // Dogfood 2026-10-08 P1: a rejected query must never render as an
+    // empty compliance trail. Keep whatever was shown before (it is still
+    // a true answer to the previous query) and surface the failure.
+    loadError.value = e instanceof Error ? e.message : String(e);
   } finally {
     loading.value = false;
   }
@@ -239,8 +257,8 @@ async function loadSavedQueries() {
 async function applySavedQuery(id: string) {
   const sq = savedQueries.value.find((q) => q.id === id);
   if (!sq) return;
-  sinceInput.value = sq.query.since ?? '';
-  untilInput.value = sq.query.until ?? '';
+  sinceInput.value = auditDateInputFromBound(sq.query.since);
+  untilInput.value = auditDateInputFromBound(sq.query.until);
   // audit-that-tells-the-truth-01PMZA10 UNIT-6 (WP08): full arrays, not
   // ?.[0] — this was the truncation. kinds/actor_ids used to keep only
   // the first element on load, then saveCurrentQuery persisted that
@@ -560,7 +578,23 @@ onBeforeUnmount(() => {
       data-testid="audit-stream"
     >
       <div
-        v-if="!loading && entries.length === 0"
+        v-if="loadError"
+        role="alert"
+        class="mx-6 my-3 flex items-center gap-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        data-testid="audit-load-error"
+      >
+        <span class="flex-1 min-w-0 break-words">Audit query failed: {{ loadError }}</span>
+        <button
+          type="button"
+          class="shrink-0 px-2 py-1 text-[11px] rounded-sm border border-signal-danger hover:bg-surface-2"
+          data-testid="audit-load-retry"
+          @click="refresh"
+        >
+          Retry
+        </button>
+      </div>
+      <div
+        v-if="!loading && !loadError && entries.length === 0"
         class="px-6 py-4 font-ui text-sm text-ink-muted"
       >
         No audit entries match the current filter.

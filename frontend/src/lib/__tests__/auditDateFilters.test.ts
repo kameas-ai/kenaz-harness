@@ -6,7 +6,14 @@
  * i.e. Until is always empty (open-ended) or a date on/after Since.
  */
 import { describe, it, expect } from 'vitest';
-import { nDaysAgoISO, defaultAuditSince, defaultAuditUntil } from '@/lib/auditDateFilters';
+import {
+  nDaysAgoISO,
+  defaultAuditSince,
+  defaultAuditUntil,
+  auditSinceBound,
+  auditUntilBound,
+  auditDateInputFromBound,
+} from '@/lib/auditDateFilters';
 
 describe('nDaysAgoISO', () => {
   it('returns a YYYY-MM-DD string', () => {
@@ -63,5 +70,32 @@ describe('FR-001 invariant: Until >= Since', () => {
     // And no earlier than 8 days ago (within 1-day margin for UTC edge)
     const eightDaysAgo = nDaysAgoISO(8, anchor);
     expect(since >= eightDaysAgo).toBe(true);
+  });
+});
+
+// Dogfood 2026-10-08 P1: the wire bounds sent to Audit_Filter must be
+// RFC3339 (Go decodes them into time.Time); partial / invalid input must
+// send no bound at all.
+describe('audit wire bounds', () => {
+  it('date-only Since becomes start-of-UTC-day RFC3339', () => {
+    expect(auditSinceBound('2026-10-02')).toBe('2026-10-02T00:00:00Z');
+  });
+
+  it('date-only Until becomes end-of-UTC-day RFC3339', () => {
+    expect(auditUntilBound('2026-10-08')).toBe('2026-10-08T23:59:59.999999999Z');
+  });
+
+  it('partial, empty or impossible dates send no bound', () => {
+    for (const bad of ['', '2026-10-0', '2026-10', '2026-13-01', '2026-02-30', 'yesterday']) {
+      expect(auditSinceBound(bad)).toBeUndefined();
+      expect(auditUntilBound(bad)).toBeUndefined();
+    }
+  });
+
+  it('round-trips a persisted bound back to the date input', () => {
+    expect(auditDateInputFromBound('2026-10-02T00:00:00Z')).toBe('2026-10-02');
+    expect(auditDateInputFromBound('2026-10-02')).toBe('2026-10-02');
+    expect(auditDateInputFromBound('0001-01-01T00:00:00Z')).toBe('');
+    expect(auditDateInputFromBound(undefined)).toBe('');
   });
 });

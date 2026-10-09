@@ -366,10 +366,49 @@ func categoryForKind(k event.Kind) string {
 // implemented — shared by the ring path and the store path so they
 // cannot silently diverge (spec §5.4 item 4: "a silent change in
 // filter meaning is a defect nobody notices for a release").
-func matchesFilterQuery(e Entry, q eventlog.FilterQuery) bool {
+//
+// emitterID is the row's emitter_id on the store path. On the ring path
+// it is always "": Entry carries no emitter field (see rowFromEntry —
+// Push-sourced rows persist an empty EmitterID too), so a non-empty
+// ActorIDs filter honestly matches nothing there rather than being
+// silently ignored and returning every entry.
+//
+// Since/Until are inclusive on both ends, matching SQLBackend's
+// `emitted_at >= ? AND emitted_at <= ?` and MemoryBackend's
+// Before/After checks; a zero bound means "no bound". Dogfood
+// 2026-10-08 P1: before this, Since/Until/ActorIDs were accepted on the
+// wire and ignored on both paths.
+func matchesFilterQuery(e Entry, emitterID string, q eventlog.FilterQuery) bool {
 	// Verbose filter.
 	if !q.Verbose && strings.HasPrefix(e.Subject, "verbose.") {
 		return false
+	}
+	// Time-range filter on the entry's own timestamp. An unparseable
+	// timestamp passes (same as ListEntries' matcher) — the store path
+	// has already applied the bounds in SQL, and rowFromEntry never
+	// persists an unparseable one.
+	if !q.Since.IsZero() || !q.Until.IsZero() {
+		if t, err := time.Parse(time.RFC3339Nano, e.Timestamp); err == nil {
+			if !q.Since.IsZero() && t.Before(q.Since) {
+				return false
+			}
+			if !q.Until.IsZero() && t.After(q.Until) {
+				return false
+			}
+		}
+	}
+	// Actor filter on emitter_id.
+	if len(q.ActorIDs) > 0 {
+		matched := false
+		for _, a := range q.ActorIDs {
+			if a != "" && a == emitterID {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	// Kind filter via Subject (Entry.Subject == kind string).
 	if len(q.Kinds) > 0 {
@@ -407,7 +446,7 @@ func (a *API) Filter(ctx context.Context, q eventlog.FilterQuery) ([]Entry, erro
 	}
 
 	if store != nil {
-		rows, err := store.ByTimeRange(ctx, time.Time{}, time.Time{}, "", 0, false)
+		rows, err := store.ByTimeRange(ctx, q.Since, q.Until, "", 0, false)
 		if err != nil {
 			return nil, fmt.Errorf("audit: Filter: %w", err)
 		}
@@ -415,7 +454,7 @@ func (a *API) Filter(ctx context.Context, q eventlog.FilterQuery) ([]Entry, erro
 		out := make([]Entry, 0, len(rows))
 		for _, r := range rows {
 			e := entryFromRow(r)
-			if !matchesFilterQuery(e, q) {
+			if !matchesFilterQuery(e, r.EmitterID, q) {
 				continue
 			}
 			out = append(out, e)
@@ -431,7 +470,7 @@ func (a *API) Filter(ctx context.Context, q eventlog.FilterQuery) ([]Entry, erro
 	out := make([]Entry, 0, len(a.entries))
 	for i := len(a.entries) - 1; i >= 0; i-- {
 		e := a.entries[i]
-		if !matchesFilterQuery(e, q) {
+		if !matchesFilterQuery(e, "", q) {
 			continue
 		}
 		out = append(out, e)
