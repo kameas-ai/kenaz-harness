@@ -102,7 +102,12 @@ func isContextWindowRejection(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "context_length_exceeded") ||
 		strings.Contains(msg, "prompt is too long") ||
-		strings.Contains(msg, "maximum context")
+		strings.Contains(msg, "maximum context") ||
+		// Gemini: "The input token count (N) exceeds the maximum number
+		// of tokens allowed (M)".
+		strings.Contains(msg, "exceeds the maximum number of tokens") ||
+		// llama.cpp: "exceeds the available context size (4096 tokens)".
+		strings.Contains(msg, "context size")
 }
 
 // classifyRequestTooLarge decides whether a context-overflow error was
@@ -117,11 +122,14 @@ func isContextWindowRejection(err error) bool {
 // lookup exactly as the compact node keys it.
 //
 // turnContent is what this run itself added to the conversation (the
-// journal's persisted moves, tool calls and tool results). The composed
-// session history omits those rows under classic move fidelity, but the
-// model saw them inside the run, so they count toward the measurement —
-// a fresh session whose tool returned 150k tokens is a full conversation,
-// not a request-shape problem.
+// journal's persisted moves, tool calls and tool results). The model saw
+// all of it inside the run, so it counts toward the measurement — a fresh
+// session whose tool returned 150k tokens is a full conversation, not a
+// request-shape problem. Whether the composed history already carries
+// those rows depends on the session's move fidelity ("moves" includes
+// assistant_move/tool rows verbatim, classic drops them), so each turn
+// row is added only when the history does not already hold that exact
+// content (mergeTurnContent) — counted once in either mode.
 func (r *ChatRunner) classifyRequestTooLarge(ctx context.Context, sessionID, profileID, modelOverride string, overflowErr error, turnContent []string) *ErrRequestTooLarge {
 	if r.cfg.History == nil || !isContextWindowRejection(overflowErr) {
 		return nil
@@ -130,9 +138,7 @@ func (r *ChatRunner) classifyRequestTooLarge(ctx context.Context, sessionID, pro
 	if err != nil {
 		return nil
 	}
-	for _, c := range turnContent {
-		msgs = append(msgs, coreag.Message{Role: "tool", Content: c})
-	}
+	msgs = mergeTurnContent(msgs, turnContent)
 	historyTokens := countHistoryTokens(msgs)
 
 	model := r.resolveRunModel(profileID, modelOverride)
@@ -172,6 +178,30 @@ func (r *ChatRunner) resolveRunModel(profileID, modelOverride string) string {
 		return ""
 	}
 	return prof.DispatchModel("")
+}
+
+// mergeTurnContent appends each turn row the composed history does not
+// already contain (multiset by exact content), so a row is counted once
+// whether the history's move fidelity included it or dropped it.
+func mergeTurnContent(history []coreag.Message, turnContent []string) []coreag.Message {
+	if len(turnContent) == 0 {
+		return history
+	}
+	present := make(map[string]int, len(history))
+	for _, m := range history {
+		if m.Content != "" {
+			present[m.Content]++
+		}
+	}
+	out := append([]coreag.Message(nil), history...)
+	for _, c := range turnContent {
+		if present[c] > 0 {
+			present[c]--
+			continue
+		}
+		out = append(out, coreag.Message{Role: "tool", Content: c})
+	}
+	return out
 }
 
 func countHistoryTokens(msgs []coreag.Message) int {

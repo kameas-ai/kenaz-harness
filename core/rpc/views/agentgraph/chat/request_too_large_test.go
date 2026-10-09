@@ -137,9 +137,11 @@ func TestProviderWindowFromError(t *testing.T) {
 func TestIsContextWindowRejection(t *testing.T) {
 	t.Parallel()
 	cases := map[string]bool{
-		"This endpoint's maximum context length is 131072 tokens.": true,
-		"prompt is too long: 210000 tokens > 200000 maximum":       true,
-		"error code context_length_exceeded":                       true,
+		"This endpoint's maximum context length is 131072 tokens.":                                true,
+		"prompt is too long: 210000 tokens > 200000 maximum":                                      true,
+		"error code context_length_exceeded":                                                      true,
+		"The input token count (1048577) exceeds the maximum number of tokens allowed (1048576).": true,
+		"the request exceeds the available context size (4096 tokens), try increasing it":         true,
 		// Output-limit errors mention tokens but are not window overflows.
 		"max_tokens is too large: 100000. This model supports at most 16384 completion tokens": false,
 		"max_tokens: 64000 > 8192, which is the maximum allowed number of output tokens":       false,
@@ -170,6 +172,29 @@ func TestClassifyRequestTooLarge_CountsThisTurnsToolOutput(t *testing.T) {
 	if v := r.classifyRequestTooLarge(context.Background(), "s", "p", "m",
 		&corellm.ErrInvalidRequest{Status: 400, Message: "max_tokens: 64000 > 8192"}, nil); v != nil {
 		t.Fatalf("an output-limit 400 got the request-too-large verdict: %+v", v)
+	}
+}
+
+// Under "moves" fidelity (the default) the composed history already
+// carries this turn's tool rows; they must not be counted twice. A 20k
+// tool result on a 131k window is a small conversation in both modes.
+func TestClassifyRequestTooLarge_TurnRowsCountedOnceInEitherFidelity(t *testing.T) {
+	t.Parallel()
+	result := strings.Repeat("tool output words ", 6700) // well under a quarter of 131k
+	overflow := &corellm.ErrInvalidRequest{Status: 400, Message: "maximum context length is 131072 tokens"}
+	user := coreag.Message{Role: "user", Content: "fetch that page"}
+
+	movesHistory := []coreag.Message{user, {Role: "tool", Content: result, ToolCallID: "c1"}}
+	classicHistory := []coreag.Message{user}
+	for name, hist := range map[string][]coreag.Message{"moves": movesHistory, "classic": classicHistory} {
+		r := &ChatRunner{cfg: Config{History: staticHistoryReader{msgs: hist}}}
+		v := r.classifyRequestTooLarge(context.Background(), "s", "p", "m", overflow, []string{result})
+		if v == nil {
+			t.Fatalf("%s fidelity: a ~20k-token turn on a 131k window got no request-too-large verdict (double count?)", name)
+		}
+		if once := countHistoryTokens([]coreag.Message{user, {Role: "tool", Content: result}}); v.HistoryTokens != once {
+			t.Errorf("%s fidelity: HistoryTokens = %d, want %d (the tool result counted exactly once)", name, v.HistoryTokens, once)
+		}
 	}
 }
 
