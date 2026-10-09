@@ -45,8 +45,8 @@ const STATUSES: Record<string, GraphRunStatus> = {
 };
 
 const TRACES: Record<string, GraphRunTraceEvent[]> = {
-  'chat-turn-1': [{ seq: 1, kind: 'run_start', nodeId: '', timestamp: '2026-10-08T21:00:00Z' } as GraphRunTraceEvent],
-  'chat-turn-2': [{ seq: 1, kind: 'run_start', nodeId: '', timestamp: '2026-10-08T21:01:00Z' } as GraphRunTraceEvent],
+  'chat-turn-1': [{ seq: 1, runId: 'chat-turn-1', kind: 'run_start', ts: '2026-10-08T21:00:00Z' }],
+  'chat-turn-2': [{ seq: 1, runId: 'chat-turn-2', kind: 'run_start', ts: '2026-10-08T21:01:00Z' }],
 };
 
 describe('RunView — switching between two runs of one session', () => {
