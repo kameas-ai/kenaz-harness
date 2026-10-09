@@ -369,6 +369,11 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// v0.87.0-era `artifacts_legacy` + artifact units), so the post-Open
 	// assertion can prove the 1105 drop lost no artifact.
 	preArtifactIDs := artifactIDsAnyGeneration(t, ctx, raw)
+	// sessions/0345 adds columns to scheduled_chat_run_history; whether
+	// this snapshot predates it decides the digest waiver below.
+	_, hasSchedHistory := preOpen["scheduled_chat_run_history"]
+	schedHistoryPredates0345 := hasSchedHistory &&
+		!columnExists(t, raw, "scheduled_chat_run_history", "model")
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -565,16 +570,13 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 			changed[tbl] = true
 		}
 	}
-	// sessions/0345-scheduled-chat-history-model-cost (dogfood 2026-10-08
-	// round 2) ADDs model + cost_usd (both defaulted) to
-	// scheduled_chat_run_history. Every seeded history row gains both
-	// columns, so the content digest legitimately changes on every
-	// snapshot that predates 0345 (all of them, as of v0.93.1). The
-	// digest is waived; the row count is NOT — it is asserted here
-	// exactly, so a future migration that writes or drops history rows
-	// is still caught. TestMigration0345_* proves the old rows read back
-	// intact with model "" / cost 0.
-	if before, ok := preOpen["scheduled_chat_run_history"]; ok {
+	// sessions/0345-scheduled-chat-history-model-cost ADDs model +
+	// cost_usd (both defaulted) to scheduled_chat_run_history, so every
+	// seeded row's digest changes — but only on a snapshot whose table
+	// predates 0345 (no `model` column before Open). The digest is waived
+	// for those snapshots only; the row count is still asserted exactly.
+	// TestMigration0345_* proves the old rows read back intact.
+	if before, ok := preOpen["scheduled_chat_run_history"]; ok && schedHistoryPredates0345 {
 		changed["scheduled_chat_run_history"] = true
 		if after, ok := postOpen["scheduled_chat_run_history"]; !ok {
 			t.Errorf("table scheduled_chat_run_history present before Open, missing after")
