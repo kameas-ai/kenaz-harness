@@ -7102,6 +7102,7 @@ func newLLMStack(
 		Tools:         toolDiscoverer,
 		Artifacts:     &llmArtifactSinkAdapter{inner: artifactSink},
 		CapCatalog:    capCatalog,
+		Windows:       newModelWindows(reg, settingsImpl),
 		HostProviders: hostProviders,
 	})
 
@@ -7854,6 +7855,11 @@ func usageComposition(c *corellm.PromptComposition) *session.UsageComposition {
 		Cached:       c.Cached,
 		ToolsFull:    c.ToolsFull,
 		ToolsSummary: c.ToolsSummary,
+
+		SchemaBudget:       c.Budget,
+		ToolsEvicted:       c.Evicted,
+		PinnedOverBudgetBy: c.PinnedOverBudgetBy,
+		HotOverBudgetBy:    c.HotOverBudgetBy,
 	}
 }
 
@@ -8345,6 +8351,7 @@ func buildChatRunner(
 		EnvDefaults:        envDefaults,
 		ToolDiscoverer:     chatToolDiscovererAdapter{inner: tools},
 		ToolExposure:       toolExposure,
+		ModelWindow:        newModelWindows(reg, settingsImpl).ContextWindow,
 		Attachments:        attachments,
 		// model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10:
 		// *session.Manager satisfies chat.KnobsDefaultResolver directly

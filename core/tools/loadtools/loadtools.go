@@ -101,6 +101,11 @@ type Service struct {
 	// loads in one turn (parallel tool calls) cannot drop each other's
 	// activations.
 	mu sync.Mutex
+
+	// evictMu guards lastEvicted: per session, the evicted set last
+	// audited as KindToolsEvicted.
+	evictMu     sync.Mutex
+	lastEvicted map[string]string
 }
 
 // NewService checks the required dependencies once, at wiring time.
@@ -170,6 +175,34 @@ func turnViewFrom(ctx context.Context) TurnView {
 	v, _ := ctx.Value(turnViewKey{}).(TurnView)
 	return v
 }
+
+// TurnBudget is the calling turn's schema budget. Load calls it with the
+// tools it just loaded: the turn keeps them ahead of older activations
+// for the rest of the turn, and the returned map gives, for each loaded
+// tool the turn's next call still cannot carry within the budget, the
+// reason (absent: it fits).
+type TurnBudget func(ctx context.Context, loaded []string) map[string]string
+
+type turnBudgetKey struct{}
+
+// WithTurnBudget attaches b to ctx.
+func WithTurnBudget(ctx context.Context, b TurnBudget) context.Context {
+	return context.WithValue(ctx, turnBudgetKey{}, b)
+}
+
+func turnBudgetFrom(ctx context.Context) TurnBudget {
+	b, _ := ctx.Value(turnBudgetKey{}).(TurnBudget)
+	return b
+}
+
+// ReasonOverBudget is the NotLoaded reason prefix for a loaded tool the
+// schema budget leaves out of the call; the tool stays activated and is
+// sent once there is room.
+const ReasonOverBudget = "over the schema budget"
+
+// ReasonPinnedOverBudget is the NotLoaded reason prefix for a full-tier
+// (pinned) tool the schema budget leaves out of the call.
+const ReasonPinnedOverBudget = "pinned but over the schema budget"
 
 // ReasonUnknown is the NotLoaded reason for a name that matches no
 // installed server or tool.
@@ -337,6 +370,19 @@ func (s *Service) load(ctx context.Context, sessionID string, req Request, by st
 		}, s.d.Now())
 	}
 
+	overBudget := 0
+	if fit := turnBudgetFrom(ctx); fit != nil && len(loaded) > 0 {
+		for name, reason := range fit(ctx, sortedKeys(loaded)) {
+			if !loaded[name] {
+				continue
+			}
+			delete(loaded, name)
+			refuse(name, reason)
+			overBudget++
+		}
+		sort.SliceStable(notLoaded, func(i, j int) bool { return notLoaded[i].Name < notLoaded[j].Name })
+	}
+
 	names := sortedKeys(loaded)
 	res := Result{Loaded: []string{}, LoadedByServer: map[string]int{}, NotLoaded: notLoaded}
 	for _, n := range names {
@@ -357,6 +403,9 @@ func (s *Service) load(ctx context.Context, sessionID string, req Request, by st
 		res.NotLoaded = []NotLoaded{}
 	}
 	res.Summary = summarise(res, len(names), count)
+	if overBudget > 0 {
+		res.Summary += fmt.Sprintf("; %d loaded but over the schema budget — unload others or pick a larger model", overBudget)
+	}
 	return res, count, nil
 }
 
@@ -426,9 +475,15 @@ func (s *Service) applyActivations(ctx context.Context, sessionID string, rc too
 	if len(activate) == 0 {
 		return nil, 0
 	}
-	turn := 0
+	// An unreadable turn count keeps an existing activation's stamp (a
+	// stamp of 0 would expire it at the next turn); a new activation is
+	// stamped 0.
+	turn, turnKnown := 0, true
 	if s.d.Turns != nil {
-		if n, err := s.d.Turns.TurnOrdinal(ctx, sessionID); err == nil {
+		n, err := s.d.Turns.TurnOrdinal(ctx, sessionID)
+		if err != nil {
+			turnKnown = false
+		} else {
 			turn = n
 		}
 	}
@@ -445,13 +500,112 @@ func (s *Service) applyActivations(ctx context.Context, sessionID string, rc too
 				out[i].Sticky = true
 				count++
 			}
-			out[i].LastUsedTurn = turn
+			if turnKnown {
+				out[i].LastUsedTurn = turn
+			}
 			continue
 		}
 		out = append(out, toolexposure.Activation{Name: name, Server: t.Server, LastUsedTurn: turn, Sticky: sticky})
 		count++
 	}
 	return out, count
+}
+
+// TurnOrdinal returns the session's current turn ordinal, or 0 when no
+// turn counter is wired.
+func (s *Service) TurnOrdinal(ctx context.Context, sessionID string) (int, error) {
+	if s.d.Turns == nil {
+		return 0, nil
+	}
+	return s.d.Turns.TurnOrdinal(ctx, sessionID)
+}
+
+// ExpireActivations removes the session's non-sticky activations that
+// have gone more than ttl turns unused as of turn
+// (toolexposure.ActivationExpired) and returns them. Nothing is written
+// when nothing expired.
+func (s *Service) ExpireActivations(ctx context.Context, sessionID string, turn, ttl int) ([]toolexposure.Activation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.d.Resolver.Deps().Sessions.SessionToolExposure(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("loadtools: read activations: %w", err)
+	}
+	kept, expired := toolexposure.ExpireActivations(st.Activations, turn, ttl)
+	if len(expired) == 0 {
+		return nil, nil
+	}
+	if err := s.d.Activations.SetToolActivations(ctx, sessionID, kept); err != nil {
+		return nil, fmt.Errorf("loadtools: save activations: %w", err)
+	}
+	return expired, nil
+}
+
+// MarkUsed records that the model called name on turn: an activation of
+// that name has its LastUsedTurn set to turn, which restarts its TTL and
+// moves it to the head of the activated segment. It reports whether an
+// activation was updated; a name with no activation (a full-tier tool)
+// writes nothing.
+func (s *Service) MarkUsed(ctx context.Context, sessionID, name string, turn int) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.d.Resolver.Deps().Sessions.SessionToolExposure(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("loadtools: read activations: %w", err)
+	}
+	for i, a := range st.Activations {
+		if a.Name != name {
+			continue
+		}
+		if a.LastUsedTurn == turn {
+			return false, nil
+		}
+		out := append([]toolexposure.Activation(nil), st.Activations...)
+		out[i].LastUsedTurn = turn
+		if err := s.d.Activations.SetToolActivations(ctx, sessionID, out); err != nil {
+			return false, fmt.Errorf("loadtools: save activations: %w", err)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// RecordEviction emits KindToolsEvicted for one fitted call when its
+// evicted set differs from the last one audited for the session, so an
+// overage that persists across calls and turns writes one row. A fit
+// that evicted nothing records nothing and clears the session's last
+// set, so a later recurrence is audited again.
+func (s *Service) RecordEviction(ctx context.Context, sessionID string, fit toolexposure.BudgetFit) {
+	names := make([]string, 0, len(fit.Evicted))
+	servers := map[string]bool{}
+	for _, t := range fit.Evicted {
+		names = append(names, t.Name)
+		servers[t.Server] = true
+	}
+	sort.Strings(names)
+	key := strings.Join(names, ",")
+	s.evictMu.Lock()
+	if s.lastEvicted == nil {
+		s.lastEvicted = map[string]string{}
+	}
+	same := s.lastEvicted[sessionID] == key
+	if key == "" {
+		delete(s.lastEvicted, sessionID)
+	} else {
+		s.lastEvicted[sessionID] = key
+	}
+	s.evictMu.Unlock()
+	if same || key == "" || s.d.Audit == nil {
+		return
+	}
+	audit.MustEmit(ctx, s.d.Audit, audit.KindToolsEvicted, audit.ToolsEvictedPayload{
+		SessionID:   sessionID,
+		Servers:     sortedKeys(servers),
+		ToolCount:   len(fit.Evicted),
+		PinnedCount: fit.PinnedEvicted,
+		Budget:      fit.Budget,
+		OverBy:      fit.OverBy,
+	}, s.d.Now())
 }
 
 // resolve lists the session's catalog plus one probe per installed

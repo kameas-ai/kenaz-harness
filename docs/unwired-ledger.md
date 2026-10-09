@@ -342,7 +342,7 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
-### 2026-10-09 (tool-context-budget-01TCBUD01 WP02–WP03) · tool-exposure knobs and surfaces not yet consumed
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP02–WP04) · tool-exposure knobs and surfaces not yet consumed
 
 **Finding.** WP02 shipped the exposure tiers, overrides and resolver;
 WP03 put them on the request path (the chat request builder sends only
@@ -351,12 +351,19 @@ write activations, the FR-E3 write guard is installed on all three
 exposure writers, `settings.Settings.ToolExposure` is `Register`ed with
 its consumer). Still not consumed:
 
-- `settings.Settings.ToolSchemaBudgetTokens` / `ToolActivationTTLTurns` —
-  `knobcoverage.RegisterDeferred` (`core/rpc/tool_exposure_knob_coverage.go`):
-  resolved onto `ResolvedCatalog` but nothing evicts or expires against
-  them. Calling an activated tool does not yet refresh its
-  `LastUsedTurn` (only loading does); expiry needs that, so it lands
-  with the TTL.
+- (WP04, 2026-10-09) `ToolSchemaBudgetTokens` / `ToolActivationTTLTurns`
+  are now `Register`ed with their consumers (eviction in
+  `chat.exposureTurn.selectTools`, expiry in `beginTurn`); calling an
+  activated tool refreshes `LastUsedTurn`.
+- (WP04, 2026-10-09; owner alec; blocker WP06) The composer budget
+  warning has a backend writer and no UI reader: `SessionUsage.composition`
+  carries `schemaBudget`, `toolsEvicted`, `pinnedOverBudgetBy` and
+  `hotOverBudgetBy` (Go `sessions.UsageComposition.{SchemaBudget,
+  ToolsEvicted, PinnedOverBudgetBy, HotOverBudgetBy}`). WP06 renders
+  "Pinned tools exceed the schema budget by N tokens" from
+  `pinnedOverBudgetBy` and "this model's window is too small for the core
+  tools" from `hotOverBudgetBy`; WP06's `budgetWarning` field is to be
+  reconciled onto these names at integration.
 - `toolexposure.SettingsSource` / `PinSource` — `wiring:deferred` at
   their declarations.
 - The seven `*_ToolExposure` / `Sessions_LoadTools` bindings have typed
@@ -369,9 +376,8 @@ its consumer). Still not consumed:
 
 - Activations of tools whose server was later uninstalled stay in
   `sessions.tool_activations` (never sent: the catalog no longer lists
-  them). Cleanup lands with WP04's expiry pass.
-- Subagent fork inheritance of the parent's activated set (spec §2.6,
-  Q-F) is not implemented; WP04 owns it.
+  them). Non-sticky ones leave with WP04's TTL expiry; sticky ones stay
+  until the user unloads them (owner alec; WP06's Tools menu lists them).
 - The digest's "(stopped)" marker covers servers the dispatch pool
   knows. An enabled recipe that never reached the pool (env resolution
   failed at boot) is omitted, not marked (FR-E2 gap). WP08 reads
@@ -394,14 +400,50 @@ its consumer). Still not consumed:
   not `kenaz__load_tools`' description (which is static); spec §2.2
   amended.
 
+**Rulings recorded (2026-10-09, owner alec, WP04 review).**
+- Fork inheritance widens past "subagent children" (spec §2.6): every
+  `conversation.Manager` fork — subagent, advice fork, workflow branch,
+  user "Branch from this turn" / "+ Fork", `kenaz__fork_conversation` —
+  copies the parent's session override (a failed copy fails the fork:
+  consent surface) and its activations (a failed copy is logged). Intended.
+- Eviction is per call and never persisted: an evicted tool stays
+  activated, returns when there is room, and still dispatches if the
+  model calls it by name (it passes the exposure gate as activated).
+- The schema budget counts tool definitions only; the per-call digest
+  section is not counted.
+- Tools called this turn are never evicted; tools loaded this turn go
+  after every older activated and pinned tool, and a load that still
+  does not fit reports them `not_loaded` ("over the schema budget by N
+  tokens" / "pinned but over the schema budget by N tokens").
+- Failed turns count toward the activation TTL (the ordinal is the
+  number of recorded turn runs).
+
 **Disposition: dated-justified.** Each is the next WP's consumer of data
 this mission already resolves; deleting it would delete the mission.
 
-**Blocker / owner.** WP04 (budget eviction, TTL expiry, call-side
-`LastUsedTurn`, uninstalled-server cleanup, fork inheritance), WP06
+**Blocker / owner.** WP06
 (UI), WP07 (org pins), WP08 (workflow-step coverage or a dated ruling;
 never-started recipes in the digest). **Owner:** alec. WP08's ledger pass deletes
 this item once each line has a consumer.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP04 review) · compaction's context-window lookup is keyed by profile id
+
+**Finding.** `compactionwiring.CapabilityLookup.MaxContextTokens`
+(`core/agentgraph/compaction/wiring/capabilities.go`) is called with
+`ProviderProfileRef{ProviderID: <profile id>, ...}` by
+`request_too_large.go:147`, `session_compaction.go:171/173`,
+`overflow_recovery.go:64` (all in `core/rpc/views/agentgraph/chat/`) and
+`core/rpc/compaction_summary_llm.go:95`. Its table
+and the capability catalog are keyed by provider *kind*, and it never
+consults the adapter's live model info, so for most profiles it answers
+`(0, false)`: the pre-send threshold compaction, `ErrSessionFull` and the
+request-too-large window fallback are effectively skipped.
+
+**Disposition: dated-justified.** Fix is a separate `fix:` PR: route
+those callers through `rpc.modelWindows.ContextWindow(kind, model)`
+(`core/rpc/model_window_lookup.go`: override → live adapter ModelInfo →
+catalog), which the chat tool-schema budget and the model picker already
+use. **Owner:** alec. Dated 2026-10-09.
 
 ### 2026-10-08 (dogfood 2026-10-08 fix PR, fix/dogfood-2026-10-08) · audit actor filter has no emitter to match — input disabled, not deleted
 

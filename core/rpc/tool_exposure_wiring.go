@@ -92,15 +92,13 @@ func (d discovererCatalog) Catalog(ctx context.Context, sessionID string) ([]loa
 
 // turnRunCounter counts the session's recorded turns: the chat runner
 // records a turn run before the turn's first model call, so during a
-// turn the count is that turn's ordinal.
+// turn the count is that turn's ordinal. Every started turn is counted,
+// including turns that failed, so a failed turn still advances the
+// activation TTL.
 type turnRunCounter struct{ mgr *session.Manager }
 
 func (t turnRunCounter) TurnOrdinal(ctx context.Context, sessionID string) (int, error) {
-	runs, err := t.mgr.ListTurnRuns(ctx, sessionID)
-	if err != nil {
-		return 0, err
-	}
-	return len(runs), nil
+	return t.mgr.CountTurnRuns(ctx, sessionID)
 }
 
 // recipeStatusPool is the slice of the dispatch pool the directory reads.

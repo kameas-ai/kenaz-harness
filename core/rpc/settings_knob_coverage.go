@@ -640,7 +640,9 @@ func init() {
 		"ContextWindowOverrides",
 		"read by the frontend context-window meter (backend-context-"+
 			"window-length-01KQ8TD3 WP05) as a per-provider-kind override "+
-			"of the catalog's context-window size.",
+			"of the catalog's context-window size; and by rpc.modelWindows "+
+			"(the model picker's ContextWindow and the chat request's "+
+			"tool-schema budget cap, 15 % of the window).",
 	)
 	knobcoverage.RegisterDeferred[settings.Settings](
 		"LocalRuntimeRAMOverrideGB",

@@ -126,6 +126,20 @@ type UsageComposition struct {
 	// ToolsSummary is the number of tools listed only by summary (0 until
 	// summary-tier exposure exists).
 	ToolsSummary int `json:"toolsSummary"`
+	// SchemaBudget is the tool-schema budget the call was fitted to; 0
+	// when none was applied.
+	SchemaBudget int `json:"schemaBudget,omitempty"`
+	// ToolsEvicted is how many loaded tools were left out of the call to
+	// fit SchemaBudget.
+	ToolsEvicted int `json:"toolsEvicted,omitempty"`
+	// PinnedOverBudgetBy is how much of the overage pinned tools account
+	// for, in tokens (at most their total size); > 0 is the composer's
+	// "Pinned tools exceed the schema budget by N tokens" warning.
+	PinnedOverBudgetBy int `json:"pinnedOverBudgetBy,omitempty"`
+	// HotOverBudgetBy is how far the always-sent core tools alone exceed
+	// SchemaBudget, in tokens; > 0 means the model's window is too small
+	// for the core tools.
+	HotOverBudgetBy int `json:"hotOverBudgetBy,omitempty"`
 }
 
 // StreamCheckpoint is a durable mid-run snapshot of one active stream

@@ -519,6 +519,22 @@ func (m *Manager) RecordTurnOutcome(ctx context.Context, sessionID, runID string
 	return m.store.RecordTurnRunOutcome(ctx, sessionID, runID, o)
 }
 
+// turnRunCounter is the store capability that counts turn runs without
+// reading them.
+type turnRunCounter interface {
+	CountTurnRuns(ctx context.Context, sessionID string) (int, error)
+}
+
+// CountTurnRuns returns how many turn runs the session has recorded —
+// every started turn, including ones that failed.
+func (m *Manager) CountTurnRuns(ctx context.Context, sessionID string) (int, error) {
+	if c, ok := m.store.(turnRunCounter); ok {
+		return c.CountTurnRuns(ctx, sessionID)
+	}
+	runs, err := m.store.ListTurnRuns(ctx, sessionID)
+	return len(runs), err
+}
+
 // ListTurnRuns returns a session's recorded turn -> run mappings, oldest
 // first. Read by Sessions_TurnRuns to link transcript turns to their
 // run graphs.

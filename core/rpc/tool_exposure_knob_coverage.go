@@ -2,12 +2,11 @@
 // fields of settings.Settings with core/wiring/knobcoverage
 // (tool-context-budget-01TCBUD01).
 //
-// ToolExposure reaches the request: toolexposure.Resolve folds it into
-// each tool's tier (step 4, user layer) and the chat request builder
-// sends only full and activated tools. The schema budget and the
-// activation TTL are resolved onto ResolvedCatalog but nothing evicts or
-// expires against them yet: each is RegisterDeferred, naming the WP that
-// wires its consumer.
+// Each reaches the request: ToolExposure through toolexposure.Resolve's
+// user layer (a summary or off tier keeps a schema out of the call), the
+// schema budget through the eviction that fits each call's tools to it,
+// and the activation TTL through the expiry that drops unused
+// activations at a turn's start.
 package rpc
 
 import (
@@ -21,16 +20,16 @@ func init() {
 		"chat.exposureTurn.selectTools (via toolexposure.Resolve's user layer): "+
 			"a summary or off tier keeps a tool's schema out of the request",
 	)
-	knobcoverage.RegisterDeferred[settings.Settings](
+	knobcoverage.Register[settings.Settings](
 		"ToolSchemaBudgetTokens",
-		"NOT yet consumed: resolved onto ResolvedCatalog.SchemaBudgetTokens "+
-			"by toolexposure.Resolve; eviction against it lands with "+
-			"tool-context-budget-01TCBUD01 WP04. Dated 2026-10-08. Owner: alec.",
+		"chat.exposureTurn.selectTools: toolexposure.EffectiveBudget(setting, window) "+
+			"is the budget Partition.FitBudget evicts activated, then pinned, tools "+
+			"against, so a lower budget leaves loaded tools out of the request",
 	)
-	knobcoverage.RegisterDeferred[settings.Settings](
+	knobcoverage.Register[settings.Settings](
 		"ToolActivationTTLTurns",
-		"NOT yet consumed: resolved onto ResolvedCatalog.ActivationTTLTurns "+
-			"by toolexposure.Resolve; activation expiry against it lands with "+
-			"tool-context-budget-01TCBUD01 WP04. Dated 2026-10-08. Owner: alec.",
+		"chat.exposureTurn.beginTurn: loadtools.Service.ExpireActivations drops "+
+			"non-sticky activations unused for more than TTL turns, so their "+
+			"schemas leave the request and their servers return to the digest",
 	)
 }

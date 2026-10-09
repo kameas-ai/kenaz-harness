@@ -88,7 +88,7 @@ func TestMigration0346_SessionUsageCacheTokens_UpgradesPopulatedSnapshot(t *test
 	mgr := session.NewManager(session.NewSQLStore(session.NewStorageDB(db)))
 	if err := mgr.SetLastUsage(ctx, "seed-session-1", session.LastUsage{
 		PromptTokens: 1500, CompletionTokens: 20, TotalTokens: 1520, CostSource: "provider",
-		Composition: &session.UsageComposition{System: 600, Tools: 520, History: 30, Attachments: 12, Cached: 900, ToolsFull: 4},
+		Composition: &session.UsageComposition{System: 600, Tools: 520, History: 30, Attachments: 12, Cached: 900, ToolsFull: 4, SchemaBudget: 24000, ToolsEvicted: 2, PinnedOverBudgetBy: 150},
 	}); err != nil {
 		t.Fatalf("SetLastUsage with composition: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestMigration0346_SessionUsageCacheTokens_UpgradesPopulatedSnapshot(t *test
 	if got.PromptTokens != 2700 || got.CachedTokens != 900 {
 		t.Fatalf("GetUsage = %+v, want prompt 2700 (both rows) and cached 900 (the new row)", got)
 	}
-	want := sessions.UsageComposition{System: 600, Tools: 520, History: 30, Attachments: 12, Cached: 900, ToolsFull: 4}
+	want := sessions.UsageComposition{System: 600, Tools: 520, History: 30, Attachments: 12, Cached: 900, ToolsFull: 4, SchemaBudget: 24000, ToolsEvicted: 2, PinnedOverBudgetBy: 150}
 	if got.Composition == nil || *got.Composition != want {
 		t.Fatalf("GetUsage composition = %+v, want %+v", got.Composition, want)
 	}

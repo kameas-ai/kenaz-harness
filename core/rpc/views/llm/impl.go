@@ -123,6 +123,12 @@ type BundleSource interface {
 // per-provider llm.model_info.miss line names.
 const modelInfoMissSampleMax = 5
 
+// WindowLookup resolves a model's context window on a provider kind; 0
+// is unknown.
+type WindowLookup interface {
+	ContextWindow(kind, model string) int
+}
+
 // CapCatalog is the capability-lookup seam used to populate ModelInfos
 // (contextWindow, maxOutputTokens) on Provider at ListProviders time and
 // to resolve per-provider attachment limits (multimodal-io-01KQ8TDF WP04).
@@ -440,6 +446,7 @@ type API struct {
 	// capCatalog, when non-nil, is consulted by ListProviders to populate
 	// Provider.ModelInfos with contextWindow data from the curated table.
 	capCatalog CapCatalog
+	windows    WindowLookup
 	// attachments is the WP03 source of truth for resolved starting
 	// context. nil falls back to the SessionContextReader probe so
 	// Mission A behaviour stays intact during the one-release buffer.
@@ -555,6 +562,11 @@ type Config struct {
 	// Provider.Redaction for each profile. nil = Redaction field
 	// is omitted (zero value) — no breaking change for existing tests.
 	CredPeeker CredPeeker
+	// Windows, when non-nil, is the context-window lookup the chat
+	// request path caps its tool-schema budget with; ListProviders reports
+	// its answer as each model's ContextWindow so the picker and the
+	// budget agree.
+	Windows WindowLookup
 	// CapCatalog, when non-nil, is consulted by ListProviders to populate
 	// Provider.ModelInfos with contextWindow data from the curated table.
 	// nil = ModelInfos fields default to 0 (unknown) — frontend falls
@@ -616,6 +628,7 @@ func New(cfg Config) *API {
 		artifacts:       cfg.Artifacts,
 		credPeeker:      cfg.CredPeeker,
 		capCatalog:      cfg.CapCatalog,
+		windows:         cfg.Windows,
 		credInvalidator: cfg.CredInvalidator,
 		auditRotation:   cfg.AuditRotation,
 		customAdapter:   cfg.CustomAdapter,
@@ -937,6 +950,11 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 					if cw > 0 {
 						resolved = true
 						catalogHits++
+					}
+				}
+				if a.windows != nil {
+					if cw := a.windows.ContextWindow(v.Kind, modelID); cw > 0 {
+						info.ContextWindow = cw
 					}
 				}
 				if !resolved {

@@ -83,16 +83,25 @@ func MessagesTokens(msgs []Message) int {
 // are estimates from the helpers above; Cached is provider-reported
 // (Usage.CachedInputRead of the response). ToolsFull / ToolsSummary
 // count tool definitions sent in full vs. listed only by summary.
+// Budget is the effective tool-schema budget the call was fitted to (0
+// when none was applied), Evicted how many loaded tools were left out to
+// fit it, PinnedOverBudgetBy how much of the overage pinned tools
+// account for, and HotOverBudgetBy how far the always-sent core tools
+// alone exceed it.
 // In-process only — it is never encoded.
 type PromptComposition struct {
-	System       int
-	Tools        int
-	History      int
-	Attachments  int
-	Memory       int
-	Cached       int
-	ToolsFull    int
-	ToolsSummary int
+	System             int
+	Tools              int
+	History            int
+	Attachments        int
+	Memory             int
+	Cached             int
+	ToolsFull          int
+	ToolsSummary       int
+	Budget             int
+	Evicted            int
+	PinnedOverBudgetBy int
+	HotOverBudgetBy    int
 }
 
 // InputExcludesCache reports whether a provider kind's Usage.InputTokens
