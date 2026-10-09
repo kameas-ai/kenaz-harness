@@ -1036,7 +1036,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 					"tool", name, "err", err.Error())
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 		// ── web_fetch (crash-recovery-tool-gating-0XQTC4RK FR-005) ──
 		// Default OFF: the tool makes outbound HTTP requests; the user must
@@ -1049,7 +1048,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-off: fail to disabled on a transient settings error.
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 		case corebash.Name:
 			v, err := store.LoadBash()
@@ -1058,7 +1056,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 					"tool", name, "err", err.Error())
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 		case coresaveartifact.ToolName, coredocuments.NameSave:
 			v, err := store.LoadSaveArtifactEnabled()
@@ -1070,7 +1067,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// settings-file glitch.
 				return true
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 		case corefsrequest.ToolName:
 			v, err := store.LoadFSRequestAccessEnabled()
@@ -1080,7 +1076,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-on: soft-fail to enabled so the tool works on first launch.
 				return true
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 
 		// ── Builtin filesystem tools (builtin-filesystem-tools-01KR3N4P) ──
@@ -1097,7 +1092,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-off: soft-fail to disabled so disk access stays off.
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 
 		// Write-family tools: default OFF until the user opts in from the Tools panel.
@@ -1112,7 +1106,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-off: soft-fail to disabled.
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 
 		// ── Todo tool (builtin-tools-search-and-elicitation-01KZNP3D) ──
@@ -1125,14 +1118,12 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-off: soft-fail to disabled.
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 
 		// ── Passive tools (builtin-tools-search-and-elicitation-01KZNP3D WP04) ──
 		// Sleep is always-on: it has no side effects and must remain available
 		// for __monitor watch patterns regardless of Settings dials.
 		case coresleep.ToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		// ── Skill tool (model-invoked-skills-catalog-01KZNP3E) ──
@@ -1140,7 +1131,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// The tool is registered unconditionally; the dispatch layer enforces
 		// model_invokable=true at resolution time so only eligible commands run.
 		case coreskilltool.ToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		// ── Plan-mode tools (plan-mode-posture-01KZNP3F) ──
@@ -1148,7 +1138,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// side-effects on their own. The Cedar gate enforces write restrictions
 		// while plan_mode is active; the tools themselves are always enabled.
 		case coreplanmode.EnterToolName, coreplanmode.ExitToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		// ── read_context_file (unified-context-artifacts-01NCTXU01) ──
@@ -1156,14 +1145,12 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// is the expected companion behaviour to module attachment. Path-
 		// confinement enforced within the tool itself (module root boundary).
 		case corereadctx.ToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		// ── list_secrets (model-secret-references-01KW7M5A) ──
 		// Always-on when registered (the registration guard is the nil
 		// exposureIdx check; once registered it should always be usable).
 		case corelistsecrets.ToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		case coreaskuser.ToolName:
@@ -1177,7 +1164,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// meant the tool fell through to the fail-closed default below
 			// and was denied from every tool catalog (observed twice per
 			// request in prod logs as "no explicit predicate case").
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		case coresubagent.ToolName:
@@ -1211,7 +1197,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// proactively so wiring the seam wouldn't silently repeat
 			// the ask_user_question regression) and needed no change
 			// when UNIT-6 landed.
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		case coreforkconv.ToolName:
@@ -1223,7 +1208,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// per-call Cedar arm every tool call takes still applies. The
 			// tool only creates a dormant branch of its own session; it
 			// starts no run and touches no other conversation.
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		case coremonitor.ToolName:
@@ -1238,7 +1222,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// per-call gate). Registration itself is already
 			// conditioned on a non-nil task registry (see
 			// registerBuiltinTools above).
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 		}
 		// Fail-closed: an unknown tool name has no explicit predicate case.

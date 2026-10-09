@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
@@ -108,7 +109,17 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 	}
 	if d.builtins != nil && !d.builtins.Empty() {
 		probeCtx := toolloop.WithVisibilityProbe(ctx)
-		for _, b := range d.builtins.List() {
+		listed := d.builtins.List()
+		var enabledBuiltins []string
+		// One summary line per discovery instead of a line per builtin
+		// per predicate read (dogfood 2026-10-08 round 2: the settings
+		// predicate logged 54 "rpc.builtins.predicate" lines per turn).
+		defer func() {
+			logging.L().Info("llm.builtins.enabled",
+				"session_id", sessionID, "listed", len(listed),
+				"enabled", len(enabledBuiltins), "tools", enabledBuiltins)
+		}()
+		for _, b := range listed {
 			// Visibility matches reachability for builtins too
 			// (model-harness-toolset-01MHTS001 WP02 security review, M2):
 			// a builtin the resolver denies for this session — e.g. one
@@ -130,6 +141,7 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 			// BuiltinPool. The Name() value already includes the
 			// "kenaz__" prefix in production tools (websearch.Name,
 			// bash.Name); the discoverer publishes that name verbatim.
+			enabledBuiltins = append(enabledBuiltins, b.Name())
 			out = append(out, corellm.ToolSpec{
 				Name:        b.Name(),
 				Description: b.Description(),
