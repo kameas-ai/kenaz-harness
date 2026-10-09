@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 	mcphttp "github.com/kameas-ai/kenaz-harness/core/mcp/transport/http"
@@ -261,15 +262,24 @@ func (d *Pool) Open(ctx context.Context, specs []coremcp.ServerSpec) error {
 				mu.Unlock()
 				return
 			}
-			if err := sp.Open(ctx, bucket); err != nil {
+			openErr := sp.Open(ctx, bucket)
+			if openErr != nil {
 				mu.Lock()
-				errs = append(errs, err.Error())
+				errs = append(errs, openErr.Error())
 				mu.Unlock()
-				return
 			}
+			// A sub-pool's Open is partial-success: one bad spec does not
+			// stop the others from coming up. Ownership used to be
+			// recorded only when the WHOLE bucket succeeded, so a single
+			// failing recipe left every healthy server in its transport
+			// running, listed by Tools, and unreachable by Call ("server
+			// not in pool") — dogfood 2026-10-08 round 2. Record it for
+			// every server the sub-pool actually holds.
 			d.mu.Lock()
 			for _, s := range bucket {
-				d.ownership[s.Name] = tag
+				if openErr == nil || d.subPoolHoldsLocked(tag, s.Name) {
+					d.ownership[s.Name] = tag
+				}
 			}
 			d.mu.Unlock()
 		}()
@@ -298,17 +308,113 @@ func (d *Pool) Close(ctx context.Context) error {
 
 // Tools aggregates tool lists from all sub-pools. Per-pool errors are
 // swallowed so a pool with no servers yet doesn't fail the aggregate.
+//
+// Visibility matches reachability (dogfood 2026-10-08 round 2): a tool
+// is listed only when Call could route it AND its server is in a state
+// that can answer — not failed, not stopped. A sub-pool's cached tool
+// list outlives its process (a crashed stdio server keeps its last
+// tools/list), and the model was being handed tools whose every call
+// was guaranteed to fail.
 func (d *Pool) Tools(ctx context.Context) ([]coremcp.Tool, error) {
 	var out []coremcp.Tool
+	serves := map[string]bool{}
 	for _, sp := range d.activePools() {
 		tools, err := sp.Tools(ctx)
 		if err != nil {
 			// Non-fatal: one dead sub-pool should not hide the others.
 			continue
 		}
-		out = append(out, tools...)
+		for _, t := range tools {
+			ok, seen := serves[t.Server]
+			if !seen {
+				ok = d.canServe(t.Server)
+				serves[t.Server] = ok
+				if !ok {
+					logging.L().Info("mcp.tools.omitted_unservable", "server", t.Server)
+				}
+			}
+			if ok {
+				out = append(out, t)
+			}
+		}
 	}
 	return out, nil
+}
+
+// canServe reports whether a Call to server could be dispatched and
+// answered: it has an owning sub-pool and that sub-pool does not report
+// it failed or stopped.
+func (d *Pool) canServe(server string) bool {
+	tag, ok := d.ownerOf(server)
+	if !ok {
+		return false
+	}
+	if tag == "inprocess" {
+		return true
+	}
+	st, ok := d.statusByTag(tag, server)
+	if !ok {
+		return false
+	}
+	switch transport.State(st.State) {
+	case transport.StateFailed, transport.StateStopped:
+		return false
+	}
+	return true
+}
+
+// ownerOf resolves the sub-pool tag for server. A server present in a
+// sub-pool but missing from the ownership map — opened on the sub-pool
+// directly, as the persisted-recipe bootstrap does on the stdio pool —
+// is adopted rather than reported unknown: it is running, its tools are
+// listed, and refusing its calls was the "server not in pool" defect.
+func (d *Pool) ownerOf(server string) (string, bool) {
+	d.mu.RLock()
+	tag, ok := d.ownership[server]
+	d.mu.RUnlock()
+	if ok {
+		return tag, true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if tag, ok := d.ownership[server]; ok {
+		return tag, true
+	}
+	for _, tag := range []string{"stdio", "http", "sse"} {
+		if d.subPoolHoldsLocked(tag, server) {
+			d.ownership[server] = tag
+			logging.L().Info("mcp.dispatch.adopted_server", "server", server, "transport", tag)
+			return tag, true
+		}
+	}
+	return "", false
+}
+
+// subPoolHoldsLocked reports whether the tag's sub-pool currently tracks
+// server. Reads only the sub-pool (never d.ownership), so it is safe
+// under d.mu.
+func (d *Pool) subPoolHoldsLocked(tag, server string) bool {
+	_, ok := d.statusByTag(tag, server)
+	return ok
+}
+
+// statusByTag asks the tag's own sub-pool for server's live status.
+func (d *Pool) statusByTag(tag, server string) (stdio.RecipeStatus, bool) {
+	switch tag {
+	case "stdio":
+		if d.stdioPool != nil {
+			return d.stdioPool.RecipeStatus(server)
+		}
+	case "http":
+		if d.httpPool != nil {
+			return d.httpPool.RecipeStatus(server)
+		}
+	case "sse":
+		if d.ssePool != nil {
+			return d.ssePool.RecipeStatus(server)
+		}
+	}
+	return stdio.RecipeStatus{}, false
 }
 
 // SetCallObserver installs a metadata-only observer invoked with
@@ -323,20 +429,37 @@ func (d *Pool) SetCallObserver(fn func(server, tool string)) {
 // Call dispatches tools/call to the sub-pool that opened server.
 func (d *Pool) Call(ctx context.Context, server, tool string, args json.RawMessage) (json.RawMessage, error) {
 	d.mu.RLock()
-	tag, ok := d.ownership[server]
 	observer := d.callObserver
 	d.mu.RUnlock()
 	if observer != nil {
 		observer(server, tool)
 	}
+	tag, ok := d.ownerOf(server)
 	if !ok {
-		return nil, fmt.Errorf("%w: %q", stdio.ErrServerNotFound, server)
+		err := fmt.Errorf("%w: %q", stdio.ErrServerNotFound, server)
+		logCallFailed(server, tool, "", err)
+		return nil, err
 	}
 	sp := d.subPoolFor(tag)
 	if sp == nil {
-		return nil, fmt.Errorf("dispatch: sub-pool for transport %q no longer wired", tag)
+		err := fmt.Errorf("dispatch: sub-pool for transport %q no longer wired", tag)
+		logCallFailed(server, tool, tag, err)
+		return nil, err
 	}
-	return sp.Call(ctx, server, tool, args)
+	out, err := sp.Call(ctx, server, tool, args)
+	if err != nil {
+		logCallFailed(server, tool, tag, err)
+	}
+	return out, err
+}
+
+// logCallFailed records a failed MCP tool call (dogfood 2026-10-08 round
+// 2: "server not in pool" failures reached the model and the transcript
+// but left no line in the app log). Metadata and the error only — never
+// the call's arguments or result.
+func logCallFailed(server, tool, transportTag string, err error) {
+	logging.L().Warn("mcp.tool.call.failed",
+		"server", server, "tool", tool, "transport", transportTag, "err", err.Error())
 }
 
 // ─── PoolController surface ───────────────────────────────────────────────────
@@ -464,9 +587,7 @@ func (d *Pool) closeOneByTag(ctx context.Context, tag, id string) error {
 // were gone this call could not run either. "running" here is a fact
 // about the process, not a probe result nothing ran.
 func (d *Pool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
-	d.mu.RLock()
-	tag, ok := d.ownership[id]
-	d.mu.RUnlock()
+	tag, ok := d.ownerOf(id)
 	if !ok {
 		return stdio.RecipeStatus{}, false
 	}
@@ -504,9 +625,7 @@ func (d *Pool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
 // server's tools/list round-trip is a few Go function calls, cheap
 // enough that a cache buys nothing.
 func (d *Pool) ServerTools(id string) []coremcp.Tool {
-	d.mu.RLock()
-	tag, ok := d.ownership[id]
-	d.mu.RUnlock()
+	tag, ok := d.ownerOf(id)
 	if !ok {
 		return nil
 	}
