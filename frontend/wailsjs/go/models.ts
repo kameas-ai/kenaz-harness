@@ -7358,6 +7358,30 @@ export namespace sessions {
 		    return a;
 		}
 	}
+	export class UsageComposition {
+	    system: number;
+	    tools: number;
+	    history: number;
+	    attachments: number;
+	    memory: number;
+	    cached: number;
+	    toolsFull: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageComposition(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.system = source["system"];
+	        this.tools = source["tools"];
+	        this.history = source["history"];
+	        this.attachments = source["attachments"];
+	        this.memory = source["memory"];
+	        this.cached = source["cached"];
+	        this.toolsFull = source["toolsFull"];
+	    }
+	}
 	export class SessionUsage {
 	    promptTokens: number;
 	    completionTokens: number;
@@ -7366,6 +7390,8 @@ export namespace sessions {
 	    costSource: string;
 	    messageCount: number;
 	    pricingDataDate: string;
+	    cachedTokens: number;
+	    composition?: UsageComposition;
 	
 	    static createFrom(source: any = {}) {
 	        return new SessionUsage(source);
@@ -7380,7 +7406,27 @@ export namespace sessions {
 	        this.costSource = source["costSource"];
 	        this.messageCount = source["messageCount"];
 	        this.pricingDataDate = source["pricingDataDate"];
+	        this.cachedTokens = source["cachedTokens"];
+	        this.composition = this.convertValues(source["composition"], UsageComposition);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class TurnRun {
 	    runId: string;

@@ -52,6 +52,7 @@ import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
+import ContextCompositionPopover from '@/components/chat/ContextCompositionPopover.vue';
 import AdviceChip from '@/components/chat/AdviceChip.vue';
 import AdviceAutoActedBanner from '@/components/chat/AdviceAutoActedBanner.vue';
 import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
@@ -1505,25 +1506,23 @@ function formatSize(bytes: number): string {
 // (model-moves-transcript-01PMCH01 WP04).
 const _nudgeTurnCount = computed(() => countTurns(visibleMessages.value));
 
-// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
-// FR-020): session.lastUsage.promptTokens is a PER-TURN snapshot,
-// overwritten on every session.usage.updated event (see useSession.ts
-// — correct for the context-window meter above, which wants "how full
-// is the model's context right now"). useLongSessionNudge's threshold
-// is documented as CUMULATIVE prompt tokens; against a per-turn value
-// it essentially never crosses the 50,000 default. Sessions_GetUsage
-// returns the real cumulative aggregate — refetch it whenever a turn
-// completes or the session switches.
-const _nudgeCumulativePromptTokens = ref(0);
+// The nudge measures how long the CONVERSATION is: the history part of
+// the last request's composition (Sessions_GetUsage). Prompt tokens —
+// per-turn or cumulative — also count the system prompt and every tool
+// definition, so a one-message session with ~220k tokens of tool schemas
+// would read as "long" on turn 1. Refetched whenever a turn completes or
+// the session switches. A session whose last call predates the
+// composition has no history figure and is judged on turn count alone.
+const _nudgeHistoryTokens = ref(0);
 async function refreshNudgeCumulativeUsage() {
   const id = sessionId.value;
   if (!id) {
-    _nudgeCumulativePromptTokens.value = 0;
+    _nudgeHistoryTokens.value = 0;
     return;
   }
   try {
     const usage = await client.sessions.getUsage(id);
-    _nudgeCumulativePromptTokens.value = usage.promptTokens ?? 0;
+    _nudgeHistoryTokens.value = usage.composition?.history ?? 0;
   } catch {
     // Transient RPC failure: keep the last known value rather than
     // flapping the nudge visibility to zero.
@@ -1533,7 +1532,7 @@ watch(() => session.lastUsage.value, () => { void refreshNudgeCumulativeUsage();
 
 const longSessionNudge = useLongSessionNudge({
   turnCount: _nudgeTurnCount,
-  promptTokens: _nudgeCumulativePromptTokens,
+  historyTokens: _nudgeHistoryTokens,
 });
 
 // laya-advisors-01LAYA001 WP07: the advisor seam's passive chip.
@@ -2542,6 +2541,7 @@ async function onShared() {
                Known window (hasContextWindow): bar + pct + used/max label.
                Unknown window (!hasContextWindow): greyed label only — no bar,
                no percentage, no misleading 200k fallback. -->
+          <ContextCompositionPopover :composition="sessionUsage?.composition ?? null">
           <div
             class="flex items-center gap-2"
             data-testid="session-context-meter"
@@ -2582,6 +2582,7 @@ async function onShared() {
               unknown
             </span>
           </div>
+          </ContextCompositionPopover>
         </div>
         <!-- Long-session nudge banner (v0.5.6 memory-trust-signals).
              Appears once per session when message/token thresholds are crossed.

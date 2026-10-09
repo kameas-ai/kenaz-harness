@@ -15,13 +15,13 @@ import { mount } from '@vue/test-utils';
 import { useLongSessionNudge } from '@/lib/useLongSessionNudge';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 
-function mountNudge(turnCount: ReturnType<typeof ref<number>>, promptTokens = ref(0)) {
+function mountNudge(turnCount: ReturnType<typeof ref<number>>, historyTokens = ref(0)) {
   let nudge: ReturnType<typeof useLongSessionNudge> | null = null;
   const Comp = defineComponent({
     setup() {
       nudge = useLongSessionNudge({
         turnCount: turnCount as ReturnType<typeof ref<number>> & { value: number },
-        promptTokens,
+        historyTokens,
       });
       return () => h('div');
     },
@@ -88,6 +88,16 @@ describe('useLongSessionNudge', () => {
     const { w, nudge } = mountNudge(ref(3), ref(50_000));
     await nextTick();
     expect(nudge.nudgeVisible.value).toBe(true);
+    w.unmount();
+  });
+
+  it('stays hidden on one turn whose prompt is mostly tool definitions', async () => {
+    // tool-context-budget-01TCBUD01 WP01: a 1-message session whose prompt
+    // carried ~220k tokens of tool schemas has a few tokens of history.
+    // The caller feeds history, so the token arm does not fire.
+    const { w, nudge } = mountNudge(ref(1), ref(4));
+    await nextTick();
+    expect(nudge.nudgeVisible.value).toBe(false);
     w.unmount();
   });
 

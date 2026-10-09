@@ -120,6 +120,23 @@ export interface TurnRun {
   failureMessage?: string;
 }
 
+/**
+ * UsageComposition — one model call's prompt by part, in tokens.
+ * Mirrors core/rpc/views/sessions.UsageComposition. Every part but
+ * `cached` is the harness estimate (ceil(bytes / 3.5)); `cached` is the
+ * provider-reported prompt-cache read.
+ */
+export interface UsageComposition {
+  system: number;
+  tools: number;
+  history: number;
+  attachments: number;
+  memory: number;
+  cached: number;
+  /** Number of tool definitions the call carried. */
+  toolsFull: number;
+}
+
 export interface SessionUsage {
   /** Sum of all input tokens for the session. */
   promptTokens: number;
@@ -141,6 +158,16 @@ export interface SessionUsage {
   messageCount: number;
   /** Last-updated date of the pricing table used ("YYYY-MM-DD"). */
   pricingDataDate: string;
+  /**
+   * Sum of provider-reported prompt-cache reads across the session.
+   * Optional so older backends and fakes type-check; absent reads as 0.
+   */
+  cachedTokens?: number;
+  /**
+   * The most recent model call's prompt by part. Absent until a measured
+   * call has completed (and on sessions whose last call predates it).
+   */
+  composition?: UsageComposition;
   /**
    * True when the auto-titling engine wrote the session name. Mirrors
    * session.Record.AutoTitled. The rail renders auto-titled sessions

@@ -8,6 +8,7 @@ package llm
 import (
 	"context"
 	"strings"
+	"sync"
 
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -39,7 +40,18 @@ type mcpToolDiscoverer struct {
 	pool     mcp.Pool
 	perms    toolloop.PermissionResolver
 	builtins toolloop.BuiltinLookup
+
+	// sizes holds each server's summed schema estimate as of its last
+	// discovery, so a tools/list refresh that moves it by more than
+	// schemaSizeChangeRatio is logged once, at the discovery that sees it.
+	sizesMu sync.Mutex
+	sizes   map[string]int
 }
+
+// schemaSizeChangeRatio is the relative change in a server's summed
+// schema estimate, between two discoveries, that logs
+// tools.schema_size_changed.
+const schemaSizeChangeRatio = 0.20
 
 // NewMCPToolDiscoverer wraps an mcp.Pool + an optional permission
 // resolver into a ToolDiscoverer. A nil pool collapses to a no-op
@@ -72,7 +84,10 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 	if d.pool == nil && (d.builtins == nil || d.builtins.Empty()) {
 		return nil, nil
 	}
-	var out []corellm.ToolSpec
+	// out is this session's catalog; listedAll is every listed tool before
+	// the per-session permission filter, which is what a server's schema
+	// size is measured over (a session's allowlist is not a size change).
+	var out, listedAll []corellm.ToolSpec
 	if d.pool != nil {
 		raw, err := d.pool.Tools(ctx)
 		if err != nil {
@@ -83,6 +98,18 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 		// same verdict but must not record one per listed tool.
 		probeCtx := toolloop.WithVisibilityProbe(ctx)
 		for _, t := range raw {
+			spec := corellm.ToolSpec{
+				Name:        t.Server + ToolNameSeparator + t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+				Server:      t.Server,
+				// mcp.Pool.Tools lists only tools whose server can answer
+				// a call (dispatch.Pool.canServe), so a listed tool is a
+				// running one.
+				Running: true,
+			}
+			spec.TokenEst = corellm.EstimateToolSpecTokens(spec)
+			listedAll = append(listedAll, spec)
 			if d.perms != nil {
 				res, perr := d.perms.Resolve(probeCtx, sessionID, t.Server, t.Name)
 				// harness-self-attach-01PMHS01 UNIT-4, AC-017: a
@@ -100,11 +127,7 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 					continue
 				}
 			}
-			out = append(out, corellm.ToolSpec{
-				Name:        t.Server + ToolNameSeparator + t.Name,
-				Description: t.Description,
-				InputSchema: t.InputSchema,
-			})
+			out = append(out, spec)
 		}
 	}
 	if d.builtins != nil && !d.builtins.Empty() {
@@ -119,6 +142,16 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 				"enabled", len(enabledBuiltins), "tools", enabledBuiltins)
 		}()
 		for _, b := range listed {
+			server, _ := splitBuiltinName(b.Name())
+			spec := corellm.ToolSpec{
+				Name:        b.Name(),
+				Description: b.Description(),
+				InputSchema: b.InputSchema(),
+				Server:      server,
+				Running:     true,
+			}
+			spec.TokenEst = corellm.EstimateToolSpecTokens(spec)
+			listedAll = append(listedAll, spec)
 			// Visibility matches reachability for builtins too
 			// (model-harness-toolset-01MHTS001 WP02 security review, M2):
 			// a builtin the resolver denies for this session — e.g. one
@@ -129,7 +162,7 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 			// sees (server, tool) exactly as the kernel adapter's split
 			// hands it at dispatch.
 			if d.perms != nil {
-				server, tool := splitBuiltinName(b.Name())
+				_, tool := splitBuiltinName(b.Name())
 				res, perr := d.perms.Resolve(probeCtx, sessionID, server, tool)
 				if perr != nil || res.Policy == toolloop.PolicyDeny {
 					continue
@@ -141,14 +174,48 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 			// "kenaz__" prefix in production tools (websearch.Name,
 			// bash.Name); the discoverer publishes that name verbatim.
 			enabledBuiltins = append(enabledBuiltins, b.Name())
-			out = append(out, corellm.ToolSpec{
-				Name:        b.Name(),
-				Description: b.Description(),
-				InputSchema: b.InputSchema(),
-			})
+			out = append(out, spec)
 		}
 	}
+	d.noteSchemaSizes(listedAll)
 	return out, nil
+}
+
+// noteSchemaSizes sums the catalog's estimates per server and logs
+// tools.schema_size_changed for every server whose sum moved by more
+// than schemaSizeChangeRatio since the previous discovery. A server
+// seen for the first time records its baseline without logging; a
+// server absent from this discovery keeps its last baseline, so a
+// stop/start cycle compares against the size it had before stopping.
+func (d *mcpToolDiscoverer) noteSchemaSizes(catalog []corellm.ToolSpec) {
+	cur := map[string]int{}
+	count := map[string]int{}
+	for _, t := range catalog {
+		cur[t.Server] += t.TokenEst
+		count[t.Server]++
+	}
+	d.sizesMu.Lock()
+	defer d.sizesMu.Unlock()
+	if d.sizes == nil {
+		d.sizes = map[string]int{}
+	}
+	for server, now := range cur {
+		prev, seen := d.sizes[server]
+		d.sizes[server] = now
+		if !seen || prev == now {
+			continue
+		}
+		delta := now - prev
+		if delta < 0 {
+			delta = -delta
+		}
+		if prev > 0 && float64(delta)/float64(prev) <= schemaSizeChangeRatio {
+			continue
+		}
+		logging.L().Info("tools.schema_size_changed",
+			"server", server, "tools", count[server],
+			"tokens_est_before", prev, "tokens_est_after", now)
+	}
 }
 
 // splitBuiltinName splits a published builtin name ("kenaz__web_fetch")

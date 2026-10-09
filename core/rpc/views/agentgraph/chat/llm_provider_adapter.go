@@ -705,6 +705,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	if req.Model != "" && req.Model != "default" {
 		model = req.Model
 	}
+	attachmentsBlock := a.buildAttachmentsBlock(ctx)
 	gen := corellm.GenerationRequest{
 		ProfileID: a.profileID,
 		Model:     model,
@@ -723,7 +724,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		// attachments, env, recap, ask bar) byte-identical for prompt
 		// caching — and directly BEFORE the user's custom instructions,
 		// which keep the last word.
-		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildAttachmentsBlock(ctx), a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), renderPendingContext(pending), a.buildUserInstructionsBlock()),
+		System:   composeSystemPrompt(nil, req.SystemPrompt, attachmentsBlock, a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), renderPendingContext(pending), a.buildUserInstructionsBlock()),
 		Messages: llmMsgs,
 		Tools:    a.tools,
 	}
@@ -768,6 +769,19 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		"count", len(toolNames),
 		"tools", toolNames,
 	)
+
+	// What this request sends, by part, measured once with the shared
+	// estimator; logged as llm.request.composition when the call ends
+	// (with the provider's own counts on success) and carried on the
+	// response for the usage hook.
+	comp := measureComposition(gen, attachmentsBlock)
+	var (
+		compUsage corellm.Usage
+		compErr   error
+	)
+	defer func() {
+		logComposition(a.sessionID, comp, len(gen.System), compUsage, compErr)
+	}()
 
 	// Carry the per-node sampling knobs already threaded through the
 	// kernel seam (agentgraph.LLMRequest.MaxTokens/Temperature, populated
@@ -903,6 +917,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	}
 	stream, err := retry.RetryStream(ctx, retryPolicy, streamFn)
 	if err != nil {
+		compErr = err
 		return coreag.LLMResponse{}, fmt.Errorf("chat: registry stream: %w", err)
 	}
 
@@ -953,11 +968,17 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 
 	resp, ferr := stream.Final()
 	if ferr != nil {
+		compErr = ferr
 		// On error the kernel surfaces the error up the run; the
 		// runner's terminal goroutine is responsible for emitting the
 		// stream-closed payload with reason=backend-error.
 		return coreag.LLMResponse{}, fmt.Errorf("chat: stream final: %w", ferr)
 	}
+
+	compUsage = resp.Usage
+	comp.Cached = resp.Usage.CachedInputRead
+	measured := comp
+	resp.Composition = &measured
 
 	// Store the response for the HookPostLLM callback (token-cost-
 	// telemetry WP02). The session_write node fires after Generate
@@ -1073,4 +1094,53 @@ func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
 		out.Kind = coreag.StreamEventKind(string(ev.Kind))
 	}
 	return out
+}
+
+// measureComposition estimates each part of an outbound request.
+// attachmentsBlock is the attachments layer already joined into
+// gen.System; it is reported as its own part and subtracted from the
+// system part so the parts do not double-count.
+//
+// Memory is 0 at this seam: memory.retrieve output arrives as an
+// ordinary message, indistinguishable here from the rest of the history,
+// and is counted in History.
+func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) corellm.PromptComposition {
+	systemBytes := len(gen.System) - len(attachmentsBlock)
+	if systemBytes < 0 {
+		systemBytes = 0
+	}
+	return corellm.PromptComposition{
+		System:      corellm.EstimateTokens(systemBytes),
+		Attachments: corellm.EstimateTokens(len(attachmentsBlock)),
+		Tools:       corellm.ToolsTokens(gen.Tools),
+		History:     corellm.MessagesTokens(gen.Messages),
+		ToolsFull:   len(gen.Tools),
+	}
+}
+
+// logComposition writes the one llm.request.composition line of a model
+// call. usage is the provider's report (zero when the call failed before
+// one arrived). budget and evicted are 0: no schema budget or eviction
+// is applied to the request yet.
+func logComposition(sessionID string, comp corellm.PromptComposition, systemChars int, usage corellm.Usage, err error) {
+	outcome := "ok"
+	if err != nil {
+		outcome = "error"
+	}
+	logging.L().Info("llm.request.composition",
+		"session_id", sessionID,
+		"outcome", outcome,
+		"tools_full", comp.ToolsFull,
+		"tools_summary", comp.ToolsSummary,
+		"tools_tokens_est", comp.Tools,
+		"system_chars", systemChars,
+		"system_tokens_est", comp.System,
+		"attachments_tokens_est", comp.Attachments,
+		"history_tokens_est", comp.History,
+		"prompt_tokens", usage.InputTokens,
+		"cached_tokens", usage.CachedInputRead,
+		"cache_write_tokens", usage.CachedInputWrite,
+		"budget", 0,
+		"evicted", 0,
+	)
 }

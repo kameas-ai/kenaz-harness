@@ -644,6 +644,33 @@ entries:
     adapter: custom-openai
     unsupported: "eval system field; never returned by the adapter"
 
+  # Composition — set by the chat adapter that built the request, after
+  # the stream ends; never returned by a provider adapter
+  - struct: Response
+    field: Composition
+    adapter: anthropic
+    unsupported: "request measurement set by the caller that built the request; never returned by the adapter"
+  - struct: Response
+    field: Composition
+    adapter: openai
+    unsupported: "request measurement set by the caller that built the request; never returned by the adapter"
+  - struct: Response
+    field: Composition
+    adapter: openrouter
+    unsupported: "request measurement set by the caller that built the request; never returned by the adapter"
+  - struct: Response
+    field: Composition
+    adapter: bedrock
+    unsupported: "request measurement set by the caller that built the request; never returned by the adapter"
+  - struct: Response
+    field: Composition
+    adapter: azure-openai
+    unsupported: "request measurement set by the caller that built the request; never returned by the adapter"
+  - struct: Response
+    field: Composition
+    adapter: custom-openai
+    unsupported: "request measurement set by the caller that built the request; never returned by the adapter"
+
   # ============================================================
   # StreamEvent fields
   # ============================================================
