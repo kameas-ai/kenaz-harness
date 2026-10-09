@@ -24,12 +24,16 @@
 # WHAT THIS CHECKS
 # ----------------
 # (a) STRUCTURAL (scripts/ci/cmd/checktoolexposure): every non-test writer
-#     of GenerationRequest.Tools under core/ — a `Tools:` key in a
+#     of GenerationRequest.Tools under core/ and cmd/ — a `Tools:` key in a
 #     GenerationRequest literal, a SetTools call, or `x.Tools = …` on a
 #     visibly GenerationRequest-typed x — must be listed in
-#     scripts/ci/allowlists/tool-exposure-writers.txt: either it IS the
-#     partition path, or it is a dated, owned gap. Unlisted → fail;
-#     stale entry → fail. Discovery floor: finding no GenerationRequest
+#     scripts/ci/allowlists/tool-exposure-writers.txt with its exact site
+#     count (`<file>|<func>|<kind> x<N>`): either it IS the partition
+#     path, or it is a dated, owned gap. Unlisted key or a site beyond
+#     the pin → fail; stale entry or over-pinned count → fail. cmd/ is
+#     scanned for binaries that build their own requests
+#     (cmd/harness-vm/agentexec.go builds one without Tools: a literal,
+#     not a writer). Discovery floor: finding no GenerationRequest
 #     literal or no SetTools call fails rather than passing vacuously.
 # (b) RUNTIME: the partition path itself still refuses summary tools —
 #       core/rpc/views/agentgraph/chat
@@ -44,7 +48,9 @@
 #
 # Planted-violation proof: scripts/ci/gates_can_fail_test.go
 # TestToolExposureGate_PlantedDirectToolsWriteFires plants a direct
-# `gen.Tools = …` write in the chat package and asserts this gate fails.
+# `gen.Tools = …` write (and a Tools literal) in the chat package;
+# TestToolExposureGate_PlantedSecondSiteInAllowlistedFuncFires plants a
+# second Tools literal inside an allowlisted function.
 #
 # TOOL_EXPOSURE_GATE_STRUCTURAL_ONLY=1 skips (b) — used only by the
 # planted-violation meta-tests, which exercise (a). CI runs both halves.
@@ -60,6 +66,7 @@ ALLOW_FILE="scripts/ci/allowlists/tool-exposure-writers.txt"
 CHAT_PKG="core/rpc/views/agentgraph/chat"
 
 ci_require_dir core "$GATE"
+ci_require_dir cmd "$GATE"
 ci_require_dir "$CHAT_PKG" "$GATE"
 ci_require_file "$ALLOW_FILE" "$GATE"
 

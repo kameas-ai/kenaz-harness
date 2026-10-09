@@ -1456,6 +1456,13 @@ func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]M
 // without the flag is a veto. Anthropic direct never writes the flag, so
 // its models fall through to the table. listed is nil when the model has
 // no model-list entry.
+//
+// Constraint: the badge reflects this request-time capability table, not
+// the runtime llm.PromptCacheGuard. When a provider rejects cache_control
+// the guard degrades that (profile, model) to fewer or no markers for the
+// life of the process, and the badge still says "caches prompts"
+// (2026-10-09, owner alec — ledger: "expose the guard level to the
+// badge").
 func modelCachesPrompts(kind, modelID string, listed *corellm.ModelInfo) bool {
 	if listed != nil && listed.SupportsPromptCache {
 		return true

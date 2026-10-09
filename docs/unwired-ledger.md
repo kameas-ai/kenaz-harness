@@ -6406,6 +6406,13 @@ Each bullet is deleted by the change its owner names.
   the live AC4 dogfood run (pending in
   `docs/dogfood/2026-10-09-tool-context-acceptance.md`; WP08 is hermetic
   and cannot make it) records the result and deletes this bullet.
+- **The "caches prompts" badge does not see the guard.**
+  `views/llm.modelCachesPrompts` mirrors the request-time capability
+  table; a `PromptCacheGuard` degrade (a provider rejected
+  `cache_control` for a profile + model) leaves the badge on while the
+  wire sends fewer or no markers. **Blocker:** the guard's per-(profile,
+  model) level is process state with no read API. **Owner:** alec —
+  "expose the guard level to the badge" deletes this bullet (2026-10-09).
 - **Degrade scope and lifetime.** `llm.PromptCacheGuard` degrades per
   (profile id, model id) — a proxy or one routed model rejecting
   `cache_control` leaves other profiles and models marking — and the

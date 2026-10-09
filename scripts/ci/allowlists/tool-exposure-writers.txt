@@ -1,6 +1,8 @@
 # tool-exposure-writers — every non-test writer of
-# llm.GenerationRequest.Tools under core/, keyed
-# `<file>|<function>|<kind>` (kind: literal | settools | assign).
+# llm.GenerationRequest.Tools under core/ and cmd/, keyed
+# `<file>|<function>|<kind>` (kind: literal | settools | assign) and
+# pinned to its site count: `<key> x<N>`. A second site inside a listed
+# function exceeds the pin and fails like a new writer.
 #
 # Enforced by scripts/ci/check-tool-exposure-gate.sh
 # (scripts/ci/cmd/checktoolexposure), tool-context-budget-01TCBUD01 WP08,
@@ -22,7 +24,7 @@
 # gate's runtime half runs TestToolExposureWiring_FirstTurnToolTokens,
 # which fails if newLLMStack over a real core wires no load core, and
 # TestRequestBuilder_NeverSendsSummaryToolUnlessActivated, the FR-E1 seed.
-core/rpc/views/agentgraph/chat/llm_provider_adapter.go|(*LLMProviderAdapter).generate|settools
+core/rpc/views/agentgraph/chat/llm_provider_adapter.go|(*LLMProviderAdapter).generate|settools x1
 
 # 2026-10-09 — OPEN GAP, owner alec. Workflow `model_turn` steps
 # (core/workflows/runners.go discoverTools → wfLLMStreamerAdapter.Stream)
@@ -33,4 +35,4 @@ core/rpc/views/agentgraph/chat/llm_provider_adapter.go|(*LLMProviderAdapter).gen
 # tool exposure" gives steps a resolved catalog (project tiers + the
 # step's explicit names as pins) and deletes this line. Recorded in
 # docs/unwired-ledger.md (tool-context-budget WP08 entry).
-core/rpc/wf_adapters.go|(*wfLLMStreamerAdapter).Stream|literal
+core/rpc/wf_adapters.go|(*wfLLMStreamerAdapter).Stream|literal x1

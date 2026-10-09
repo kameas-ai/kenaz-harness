@@ -18,7 +18,7 @@
 //
 // WHAT THIS CHECKS
 // ----------------
-// Every non-test .go file under core/ is parsed (go/parser, no type
+// Every non-test .go file under core/ and cmd/ is parsed (go/parser, no type
 // checking — fast, and needs no build). A WRITER of
 // GenerationRequest.Tools is any of:
 //
@@ -34,16 +34,26 @@
 //	          `x := (&)GenerationRequest{…}`.
 //
 // Each writer is keyed `<repo-relative file>|<function>|<kind>` —
-// line-number free, so unrelated edits do not churn the allowlist.
+// line-number free, so unrelated edits do not churn the allowlist — and
+// the allowlist pins how many sites of that kind the function holds
+// (`<key> x<N>`): a second literal or SetTools call inside an already
+// listed function is a new, unreviewed path and fails, exactly like a
+// new function would.
 // The body of (*GenerationRequest).SetTools itself is the definition of
 // the setter, not a writer, and is skipped.
 //
-// Every writer must be listed in
+// Every writer key must be listed, with its exact site count, in
 // scripts/ci/allowlists/tool-exposure-writers.txt with a justification
 // naming why it may write tools: either it IS the exposure-partition
 // path, or it is a dated, owned gap. An unlisted writer fails (exit 2).
-// A listed key that is no longer a writer is STALE and fails (exit 2):
-// the allowlist shrinks monotonically.
+// A listed key that is no longer a writer, or whose pinned count is
+// higher than the tree's, is STALE and fails (exit 2): the allowlist
+// shrinks monotonically.
+//
+// Scan roots: core/ (every request builder today) and cmd/ (binaries
+// that build their own requests — cmd/harness-vm/agentexec.go builds a
+// GenerationRequest with Messages and System only: counted as a literal,
+// not a writer).
 //
 // Discovery floors (a gate that inspected nothing must not pass): at
 // least one GenerationRequest composite literal and at least one
@@ -74,7 +84,6 @@ import (
 )
 
 const (
-	scanRoot      = "core"
 	allowlistPath = "scripts/ci/allowlists/tool-exposure-writers.txt"
 	typeName      = "GenerationRequest"
 	setterName    = "SetTools"
@@ -140,8 +149,11 @@ func exprString(e ast.Expr) string {
 	return "?"
 }
 
+// scanRoots are the trees scanned (see the header).
+var scanRoots = []string{"core", "cmd"}
+
 type scan struct {
-	writers  map[string]bool
+	writers  map[string]int
 	literals int
 	setCalls int
 }
@@ -213,17 +225,17 @@ func (s *scan) scanNode(rel, label string, recv *ast.FieldList, typ *ast.FuncTyp
 			for _, el := range x.Elts {
 				kv, ok := el.(*ast.KeyValueExpr)
 				if !ok {
-					s.writers[rel+"|"+label+"|literal"] = true
+					s.writers[rel+"|"+label+"|literal"]++
 					break
 				}
 				if id, ok := kv.Key.(*ast.Ident); ok && id.Name == toolsField {
-					s.writers[rel+"|"+label+"|literal"] = true
+					s.writers[rel+"|"+label+"|literal"]++
 				}
 			}
 		case *ast.CallExpr:
 			if sel, ok := x.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == setterName {
 				s.setCalls++
-				s.writers[rel+"|"+label+"|settools"] = true
+				s.writers[rel+"|"+label+"|settools"]++
 			}
 		case *ast.AssignStmt:
 			for _, lhs := range x.Lhs {
@@ -232,7 +244,7 @@ func (s *scan) scanNode(rel, label string, recv *ast.FieldList, typ *ast.FuncTyp
 					continue
 				}
 				if id, ok := sel.X.(*ast.Ident); ok && declared[id.Name] {
-					s.writers[rel+"|"+label+"|assign"] = true
+					s.writers[rel+"|"+label+"|assign"]++
 				}
 			}
 		}
@@ -240,13 +252,14 @@ func (s *scan) scanNode(rel, label string, recv *ast.FieldList, typ *ast.FuncTyp
 	})
 }
 
-func loadAllowlist(path string) (map[string]bool, error) {
+// loadAllowlist reads `<key> x<N>` lines into key -> N.
+func loadAllowlist(path string) (map[string]int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	out := map[string]bool{}
+	out := map[string]int{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -256,7 +269,16 @@ func loadAllowlist(path string) (map[string]bool, error) {
 		if i := strings.Index(line, " #"); i >= 0 {
 			line = strings.TrimSpace(line[:i])
 		}
-		out[line] = true
+		key, n, ok := strings.Cut(line, " x")
+		cnt := 0
+		if ok {
+			_, err := fmt.Sscanf(strings.TrimSpace(n), "%d", &cnt)
+			ok = err == nil && cnt > 0
+		}
+		if !ok {
+			return nil, fmt.Errorf("allowlist line %q: want `<file>|<func>|<kind> x<N>`", line)
+		}
+		out[strings.TrimSpace(key)] = cnt
 	}
 	return out, sc.Err()
 }
@@ -267,47 +289,51 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[tool-exposure-gate] FAIL: chdir %s: %v\n", root, err)
 		os.Exit(1)
 	}
-	if fi, err := os.Stat(scanRoot); err != nil || !fi.IsDir() {
-		fmt.Fprintf(os.Stderr, "[tool-exposure-gate] FAIL: scan root %q missing under %s\n", scanRoot, root)
-		os.Exit(1)
-	}
-	s := &scan{writers: map[string]bool{}}
+	s := &scan{writers: map[string]int{}}
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(scanRoot, func(path string, d fs.DirEntry, err error) error {
+	var err error
+	for _, scanRoot := range scanRoots {
+		if fi, serr := os.Stat(scanRoot); serr != nil || !fi.IsDir() {
+			fmt.Fprintf(os.Stderr, "[tool-exposure-gate] FAIL: scan root %q missing under %s\n", scanRoot, root)
+			os.Exit(1)
+		}
+		err = filepath.WalkDir(scanRoot, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				if d.Name() == "testdata" || d.Name() == "node_modules" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			f, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			if perr != nil {
+				return fmt.Errorf("parse %s: %w", path, perr)
+			}
+			rel := filepath.ToSlash(path)
+			for _, decl := range f.Decls {
+				switch d := decl.(type) {
+				case *ast.FuncDecl:
+					s.scanNode(rel, funcLabel(d), d.Recv, d.Type, d.Body)
+				case *ast.GenDecl:
+					s.scanNode(rel, "<file-scope>", nil, nil, d)
+				}
+			}
+			return nil
+		})
 		if err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "[tool-exposure-gate] FAIL: %v\n", err)
+			os.Exit(1)
 		}
-		if d.IsDir() {
-			if d.Name() == "testdata" || d.Name() == "node_modules" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		f, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if perr != nil {
-			return fmt.Errorf("parse %s: %w", path, perr)
-		}
-		rel := filepath.ToSlash(path)
-		for _, decl := range f.Decls {
-			switch d := decl.(type) {
-			case *ast.FuncDecl:
-				s.scanNode(rel, funcLabel(d), d.Recv, d.Type, d.Body)
-			case *ast.GenDecl:
-				s.scanNode(rel, "<file-scope>", nil, nil, d)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[tool-exposure-gate] FAIL: %v\n", err)
-		os.Exit(1)
 	}
+	scanned := strings.Join(scanRoots, ", ")
 	if s.literals == 0 || s.setCalls == 0 {
 		fmt.Fprintf(os.Stderr, "[tool-exposure-gate] FAIL: discovery floor — found %d %s literals and %d %s calls under %s.\n",
-			s.literals, typeName, s.setCalls, setterName, scanRoot)
+			s.literals, typeName, s.setCalls, setterName, scanned)
 		fmt.Fprintln(os.Stderr, "[tool-exposure-gate] A gate that found nothing to inspect cannot pass; the type or setter was renamed — update this checker in the same commit.")
 		os.Exit(1)
 	}
@@ -318,15 +344,15 @@ func main() {
 	}
 
 	var writers, unlisted, stale []string
-	for w := range s.writers {
-		writers = append(writers, w)
-		if !allow[w] {
-			unlisted = append(unlisted, w)
+	for w, n := range s.writers {
+		writers = append(writers, fmt.Sprintf("%s x%d", w, n))
+		if allowed := allow[w]; n > allowed {
+			unlisted = append(unlisted, fmt.Sprintf("%s x%d (allowlist pins x%d)", w, n, allowed))
 		}
 	}
-	for a := range allow {
-		if !s.writers[a] {
-			stale = append(stale, a)
+	for a, n := range allow {
+		if got := s.writers[a]; got < n {
+			stale = append(stale, fmt.Sprintf("%s x%d (tree has x%d)", a, n, got))
 		}
 	}
 	sort.Strings(writers)
@@ -334,14 +360,14 @@ func main() {
 	sort.Strings(stale)
 
 	fmt.Printf("[tool-exposure-gate] scanned %s: %d %s literals, %d %s calls, %d writer(s) of %s.%s:\n",
-		scanRoot, s.literals, typeName, s.setCalls, setterName, len(writers), typeName, toolsField)
+		scanned, s.literals, typeName, s.setCalls, setterName, len(writers), typeName, toolsField)
 	for _, w := range writers {
 		fmt.Printf("    %s\n", w)
 	}
 	fail := false
 	if len(unlisted) > 0 {
 		fail = true
-		fmt.Fprintf(os.Stderr, "\n[tool-exposure-gate] FAIL: unlisted writer(s) of %s.%s — a tool schema can reach the model without the exposure partition:\n", typeName, toolsField)
+		fmt.Fprintf(os.Stderr, "\n[tool-exposure-gate] FAIL: unlisted writer site(s) of %s.%s — a tool schema can reach the model without the exposure partition:\n", typeName, toolsField)
 		for _, w := range unlisted {
 			fmt.Fprintf(os.Stderr, "    %s\n", w)
 		}
@@ -350,7 +376,7 @@ func main() {
 	}
 	if len(stale) > 0 {
 		fail = true
-		fmt.Fprintf(os.Stderr, "\n[tool-exposure-gate] FAIL: STALE entries in %s (no longer a writer — delete the line; allowlists shrink monotonically):\n", allowlistPath)
+		fmt.Fprintf(os.Stderr, "\n[tool-exposure-gate] FAIL: STALE entries in %s (fewer sites than pinned — lower or delete the line; allowlists shrink monotonically):\n", allowlistPath)
 		for _, w := range stale {
 			fmt.Fprintf(os.Stderr, "    %s\n", w)
 		}

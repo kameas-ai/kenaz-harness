@@ -310,7 +310,7 @@ onMounted(() => void load());
               :data-testid="`tool-exposure-pinned-${c.server}`"
             >
               <template v-if="serverPinned(c)">{{ sourceSentence(c.source) }} — it can't be changed here.</template>
-              <template v-else>Some tools are {{ sourceLabel('org_pin') }}; those can't be changed here.</template>
+              <template v-else>Some tools are set by your organisation; those can't be changed here.</template>
             </p>
           </div>
           <div class="flex items-center gap-2">

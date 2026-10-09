@@ -5214,16 +5214,36 @@ func TestToolExposureGate_PlantedDirectToolsWriteFires(t *testing.T) {
 	}
 }
 
+// TestToolExposureGate_PlantedSecondSiteInAllowlistedFuncFires: the
+// allowlist pins each writer's site count, so a second GenerationRequest
+// literal with Tools inside an already-listed function (here the
+// workflow adapter's Stream) fails the gate even though its key is listed.
+func TestToolExposureGate_PlantedSecondSiteInAllowlistedFuncFires(t *testing.T) {
+	root := repoRoot(t)
+	target := filepath.Join(root, "core", "rpc", "wf_adapters.go")
+	const anchor = "\tinner, err := a.reg.Stream(ctx, corellm.GenerationRequest{\n"
+	cleanup := plantReplace(t, target, anchor,
+		"\t_ = corellm.GenerationRequest{Tools: llmTools}\n"+anchor)
+	defer cleanup()
+	code, out := runGateEnv(t, "check-tool-exposure-gate.sh", root, toolExposureStructuralOnly)
+	if code == 0 {
+		t.Fatalf("check-tool-exposure-gate.sh exited 0 with a second Tools literal in an allowlisted function:\n%s", out)
+	}
+	if !strings.Contains(out, "unlisted writer") || !strings.Contains(out, "core/rpc/wf_adapters.go|(*wfLLMStreamerAdapter).Stream|literal x2 (allowlist pins x1)") {
+		t.Fatalf("gate failed, but does not name the second site against the x1 pin:\n%s", out)
+	}
+}
+
 // TestToolExposureGate_PlantedStaleAllowlistEntryFires: an allowlist line
 // that names no writer fails the gate (allowlists shrink monotonically).
 func TestToolExposureGate_PlantedStaleAllowlistEntryFires(t *testing.T) {
 	root := repoRoot(t)
 	allow := filepath.Join(root, "scripts", "ci", "allowlists", "tool-exposure-writers.txt")
-	const stale = "core/rpc/zz_gone.go|zzGone|literal"
+	const stale = "core/rpc/zz_gone.go|zzGone|literal x1"
 	cleanup := plant(t, allow, "", "\n"+stale+"\n")
 	defer cleanup()
 	code, out := runGateEnv(t, "check-tool-exposure-gate.sh", root, toolExposureStructuralOnly)
-	if code == 0 || !strings.Contains(out, "STALE") || !strings.Contains(out, stale) {
+	if code == 0 || !strings.Contains(out, "STALE") || !strings.Contains(out, "core/rpc/zz_gone.go|zzGone|literal") {
 		t.Fatalf("check-tool-exposure-gate.sh did not fail on a stale allowlist entry (exit %d):\n%s", code, out)
 	}
 }
@@ -5238,7 +5258,7 @@ func TestToolExposureGate_StructuralVerdictIsCWDIndependent(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("check-tool-exposure-gate.sh from %s exited %d on the clean tree:\n%s", dir, code, out)
 		}
-		if !strings.Contains(out, "(*LLMProviderAdapter).generate|settools") {
+		if !strings.Contains(out, "(*LLMProviderAdapter).generate|settools x1") || !strings.Contains(out, "core, cmd") {
 			t.Fatalf("check-tool-exposure-gate.sh from %s passed without listing the chat request builder — "+
 				"the scan looked at nothing:\n%s", dir, out)
 		}

@@ -95,6 +95,13 @@ meter before budget, compaction's window lookup keyed
 by profile id, bundle apply state surviving sign-out (cross-org), the WP05
 cache deviations (live OpenRouter tool marker → AC4 live).
 
+Known limit (review note, 2026-10-09): the model picker's "caches prompts"
+badge reflects the request-time capability table
+(`views/llm.modelCachesPrompts`), not a runtime `PromptCacheGuard` degrade
+— after a provider rejects `cache_control` for a profile + model, the
+badge still shows. Ledger: "expose the guard level to the badge" (owner
+alec).
+
 ## Owner questions — defaults applied (spec §5)
 
 | # | Default applied | Where |
