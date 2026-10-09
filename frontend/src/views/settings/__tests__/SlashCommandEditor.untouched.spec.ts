@@ -1,9 +1,9 @@
 /**
  * SlashCommandEditor — no validation error on an untouched field
- * (dogfood 2026-10-08 round 2: the New-command form showed "Name must
- * start with a lowercase letter" before the user typed anything).
+ * (dogfood 2026-10-08 round 2).
  */
 import { describe, it, expect } from 'vitest';
+import { nextTick } from 'vue';
 import { mount } from '@vue/test-utils';
 import SlashCommandEditor from '@/views/settings/SlashCommandEditor.vue';
 import type { UserCommand } from '@/lib/types';
@@ -19,6 +19,23 @@ describe('SlashCommandEditor — untouched fields', () => {
 
     await w.find('[data-testid="cmd-name-input"]').setValue('bughunt');
     expect(w.find('[data-testid="cmd-name-error"]').exists()).toBe(false);
+  });
+
+  it('switching the same editor instance from a command to New shows no error', async () => {
+    const existing: UserCommand = {
+      name: 'standup',
+      scope: 'global',
+      kind: 'text',
+      description: 'd',
+      modelInvokable: false,
+      body: 'x',
+    };
+    const w = mount(SlashCommandEditor, { props: { command: existing, readOnly: false } });
+    await w.setProps({ command: null });
+    await nextTick();
+    expect(w.find('[data-testid="cmd-name-error"]').exists()).toBe(false);
+    await w.find('[data-testid="cmd-name-input"]').setValue('Bad Name');
+    expect(w.find('[data-testid="cmd-name-error"]').exists()).toBe(true);
   });
 
   it('an existing invalid command shows its error immediately', () => {

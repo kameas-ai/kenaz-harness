@@ -14,7 +14,7 @@
  *
  * user-slash-commands-01KQ8TD9 WP07.
  */
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import Button from '@/components/ui/Button.vue';
 import type { UserCommand, UserCommandKind, UserCommandScope } from '@/lib/types';
 import { validateUserCommand } from '@/lib/slashcmdValidation';
@@ -67,10 +67,16 @@ const form = ref<UserCommand>(
 watch(
   () => props.command,
   (next) => {
+    // The form swap below changes every field; the per-field touched
+    // watchers must not read that as the user editing them.
+    resetting = true;
     form.value = next ? { ...next } : blankCommand();
     yamlMode.value = false;
     saveError.value = null;
     touched.value = new Set(next ? VALIDATED_FIELDS : []);
+    void nextTick(() => {
+      resetting = false;
+    });
   },
 );
 
@@ -104,19 +110,19 @@ const BUILTIN_VARS = [
 const validationError = computed(() => validateUserCommand(form.value));
 const isValid = computed(() => validationError.value === null);
 
-// A field's error shows only once the user has edited it (dogfood
-// 2026-10-08 round 2: a brand-new form greeted the user with "Name must
-// start with a lowercase letter" before they had typed anything). An
-// existing command opens with every field counted as touched — it was
-// valid when saved, so an error there is real news. Save stays disabled
-// on an invalid form either way; this only governs when the message
-// appears.
+// A field's error shows only once the user has edited it; a fresh form
+// shows none. An existing command opens with every field counted as
+// touched, since an error there is real news. Save stays disabled on an
+// invalid form either way — this governs only when the message appears.
 const VALIDATED_FIELDS = ['name', 'kind', 'tool', 'toolArgsTemplate', 'body'] as const;
 const touched = ref<Set<string>>(new Set(props.command ? VALIDATED_FIELDS : []));
+// True while the prop watcher swaps the whole form (see above).
+let resetting = false;
 for (const f of VALIDATED_FIELDS) {
   watch(
     () => form.value[f],
     () => {
+      if (resetting) return;
       if (!touched.value.has(f)) touched.value = new Set([...touched.value, f]);
     },
   );
