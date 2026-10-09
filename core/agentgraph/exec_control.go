@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/elicitation"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"golang.org/x/sync/semaphore"
 )
@@ -955,6 +956,17 @@ func isTerminalNodeError(ctx context.Context, err error) bool {
 		return true
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// A provider 4xx "invalid request" (400/404/413/422 — everything
+	// llm.ClassifyStatus does not mark transient, auth or payment) is a
+	// rejection of the request itself. Re-firing the same node sends the
+	// same request and gets the same answer: the dogfood 2026-10-08
+	// round 2 log shows four identical 400 "maximum context length"
+	// calls inside two seconds for one scheduled run. Typed check, not
+	// string matching — core/llm already classifies the status.
+	var inv *corellm.ErrInvalidRequest
+	if errors.As(err, &inv) {
 		return true
 	}
 	return false
