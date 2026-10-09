@@ -34,9 +34,9 @@ func (f fakeProjects) ProjectToolExposure(_ context.Context, id string) (Exposur
 	return f.byID[id], nil
 }
 
-type fakePins struct{ e Exposure }
+type fakePins struct{ p OrgPolicy }
 
-func (f fakePins) ToolExposurePins(context.Context) (Exposure, error) { return f.e, nil }
+func (f fakePins) ToolExposurePolicy(context.Context) (OrgPolicy, error) { return f.p, nil }
 
 func srv(tier Tier) Exposure {
 	return Exposure{Servers: map[string]ServerExposure{"outlook": {Tier: tier}}}
@@ -59,7 +59,7 @@ func depsFor(ls layerSet) Deps {
 		Settings: fakeSettings{s: Settings{Exposure: ls[LevelUser]}},
 		Sessions: fakeSessions{st: SessionState{ProjectID: "p1", Override: ls[LevelSession]}},
 		Projects: fakeProjects{byID: map[string]Exposure{"p1": ls[LevelProject]}},
-		Pins:     fakePins{e: ls[LevelOrgPin]},
+		Pins:     fakePins{p: OrgPolicy{Pins: ls[LevelOrgPin], Defaults: ls[LevelOrgDefault]}},
 	}
 }
 
@@ -82,9 +82,12 @@ func resolveOne(t *testing.T, cat []CatalogTool, ls layerSet, name string) Resol
 // (e.g. "most permissive wins") can pass. When the lower level is the
 // harness default (summary for an MCP tool) the higher level takes each
 // tier that differs from it. Each case runs with server-wide and
-// tool-level entries at both ends.
+// tool-level entries at both ends. The organisation appears at both ends
+// of the order: a pin (pinned:true) beats every layer, an org default
+// (pinned:false) loses to session, project and user and beats only the
+// harness default.
 func TestResolve_PrecedenceEveryPair(t *testing.T) {
-	order := []Level{LevelOrgPin, LevelSession, LevelProject, LevelUser, LevelDefault}
+	order := []Level{LevelOrgPin, LevelSession, LevelProject, LevelUser, LevelOrgDefault, LevelDefault}
 	shapes := []struct {
 		name   string
 		hi, lo func(Tier) Exposure
@@ -128,12 +131,12 @@ func TestResolve_PrecedenceEveryPair(t *testing.T) {
 			}
 		}
 	}
-	if pairs != 10 {
-		t.Fatalf("covered %d level pairs, want all 10", pairs)
+	if pairs != 15 {
+		t.Fatalf("covered %d level pairs, want all 15", pairs)
 	}
-	// 6 level pairs among the four set levels × 6 ordered tier pairs, plus
-	// 4 pairs against the default × 2 tiers, each × 4 shapes.
-	if want := (6*6 + 4*2) * 4; cases != want {
+	// 10 level pairs among the five set levels × 6 ordered tier pairs, plus
+	// 5 pairs against the default × 2 tiers, each × 4 shapes.
+	if want := (10*6 + 5*2) * 4; cases != want {
 		t.Fatalf("ran %d cases, want %d", cases, want)
 	}
 }

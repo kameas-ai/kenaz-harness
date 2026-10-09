@@ -30,6 +30,7 @@ func TestToolExposure_DefaultsOnFreshInstall(t *testing.T) {
 	want := toolexposure.Settings{
 		EffectiveSchemaBudgetTokens: toolexposure.DefaultSchemaBudgetTokens,
 		EffectiveActivationTTLTurns: toolexposure.DefaultActivationTTLTurns,
+		Org:                         toolexposure.OrgExposure{Settings: []toolexposure.OrgSetting{}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("fresh install = %+v, want stored 0/0 with effective defaults %+v", got, want)
@@ -103,8 +104,10 @@ func TestToolExposure_FileRoundTripAcrossStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, in.WithEffective()) || got.EffectiveSchemaBudgetTokens != 9000 {
-		t.Fatalf("after reload = %+v, want %+v", got, in.WithEffective())
+	want := in.WithEffective()
+	want.Org = toolexposure.OrgPolicy{}.View()
+	if !reflect.DeepEqual(got, want) || got.EffectiveSchemaBudgetTokens != 9000 {
+		t.Fatalf("after reload = %+v, want %+v", got, want)
 	}
 
 	raw, err := os.ReadFile(store2.Path())
@@ -130,8 +133,8 @@ func TestToolExposure_FileRoundTripAcrossStores(t *testing.T) {
 	if err := store2.SaveAll(all); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := NewAPI(store2).GetToolExposure(ctx); !reflect.DeepEqual(got, in.WithEffective()) {
-		t.Fatalf("after unrelated SaveAll = %+v, want %+v", got, in.WithEffective())
+	if got, _ := NewAPI(store2).GetToolExposure(ctx); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after unrelated SaveAll = %+v, want %+v", got, want)
 	}
 
 	// Clearing writes the fields away and reads back the defaults.

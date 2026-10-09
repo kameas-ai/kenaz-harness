@@ -51,6 +51,7 @@ func buildLoadToolsService(
 		Settings: settingsImpl,
 		Sessions: sessionMgr,
 		Projects: projectMgr,
+		Pins:     settingsImpl,
 	})
 	if err != nil {
 		logging.L().Warn("rpc.tool_exposure.resolver_failed", "err", err.Error())

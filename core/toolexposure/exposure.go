@@ -244,15 +244,17 @@ func ValidateActivations(as []Activation) error {
 
 // Settings is the user-level configuration: the per-server / per-tool
 // tiers plus the schema budget and activation TTL as stored (0 = the
-// harness default). The Effective* fields are read-only: filled on read
-// so a surface can show what applies, ignored on write so a read-edit-
-// write round trip never pins today's default into the user's file.
+// harness default). The Effective* fields and Org are read-only: filled on
+// read so a surface can show what applies (and which entries the
+// organisation pinned), ignored on write so a read-edit-write round trip
+// never pins today's default into the user's file.
 type Settings struct {
-	Exposure                    Exposure `json:"exposure"`
-	SchemaBudgetTokens          int      `json:"schemaBudgetTokens"`
-	ActivationTTLTurns          int      `json:"activationTtlTurns"`
-	EffectiveSchemaBudgetTokens int      `json:"effectiveSchemaBudgetTokens"`
-	EffectiveActivationTTLTurns int      `json:"effectiveActivationTtlTurns"`
+	Exposure                    Exposure    `json:"exposure"`
+	SchemaBudgetTokens          int         `json:"schemaBudgetTokens"`
+	ActivationTTLTurns          int         `json:"activationTtlTurns"`
+	EffectiveSchemaBudgetTokens int         `json:"effectiveSchemaBudgetTokens"`
+	EffectiveActivationTTLTurns int         `json:"effectiveActivationTtlTurns"`
+	Org                         OrgExposure `json:"org"`
 }
 
 // Validate bounds the budget and TTL and validates the exposure layer.

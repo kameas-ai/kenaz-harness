@@ -18,6 +18,7 @@ import (
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -65,6 +66,11 @@ type fleetState struct {
 	// mandatedApplier is the ONE per-process mandated-items applier (it
 	// remembers whether a state-file error was reported — review F5).
 	mandatedApplier *fleet.MandatedApplier
+
+	// toolExposurePins holds the organisation's tool-exposure policy from
+	// the last verified bundle (tool-context-budget-01TCBUD01 WP07). Loaded
+	// from disk by SetFleetClient; nil when fleet is disabled.
+	toolExposurePins *fleet.ToolExposurePins
 
 	// revocationWorkflows / revocationAnnounce / revocationSweeper: the
 	// catalog revocation sweep (skill-library-01SKLIB01 WP03). The sweeper
@@ -229,6 +235,9 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	defer a.fleet.mu.Unlock()
 	a.fleet.client = c
 	a.fleet.dataDir = dataDir
+	if a.fleet.toolExposurePins == nil && c != nil && !c.IsNop() {
+		a.fleet.toolExposurePins = fleet.LoadToolExposurePins(dataDir)
+	}
 	// Wire the session-expired broker into the client if already set. The
 	// tap folds the event into the session track and republishes the
 	// FleetSession snapshot (fleet-session-truth-01DOGF0A WP02).
@@ -1184,6 +1193,7 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 	// Stop pollers + watcher + clear caches before removing tokens so
 	// in-flight requests have a chance to complete.
 	a.StopFleetBackground()
+	a.clearToolExposurePins("sign_out")
 
 	// Aggregate keyring errors: a missing token is not an error on sign-out.
 	var signOutErr error
@@ -1256,6 +1266,7 @@ func (a *API) handleNodeRemoved() {
 		logging.L().Warn("fleet.node_removed.mark_failed", "err", err.Error())
 	}
 	a.StopFleetBackground()
+	a.clearToolExposurePins("node_removed")
 	if err := fleet.ClearTokens(); err != nil {
 		logging.L().Warn("fleet.node_removed.clear_tokens_partial", "err", err.Error())
 	}
@@ -1966,6 +1977,25 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 		}
 	}
 
+	// Tool exposure (tool-context-budget-01TCBUD01 WP07). Runs on every
+	// bundle: an absent section clears the organisation's policy so tiers
+	// drop back to the user's settings. A refused entry is an apply error
+	// for the ACK; the section's other entries still apply.
+	{
+		a.state.mu.RLock()
+		pins := a.state.toolExposurePins
+		a.state.mu.RUnlock()
+		switch {
+		case pins != nil:
+			for _, te := range pins.Apply(b.BundleID, b.ToolExposure) {
+				logging.L().Warn("fleet.config.tool_exposure.apply_error", "err", te.Error())
+				errs = append(errs, fmt.Errorf("fleet/config: tool_exposure: %w", te))
+			}
+		case b.ToolExposure != nil:
+			errs = append(errs, fmt.Errorf("fleet/config: tool_exposure present but no policy store wired (SetFleetClient never ran with a live client)"))
+		}
+	}
+
 	// Org config (fleet-generic-sync-framework-01NSYNC02 WP02).
 	//
 	// Each entry in the bundle's keyed org_config map dispatches to its
@@ -2103,6 +2133,9 @@ func (a *compositeConfigApplier) emitConfigApplied(ctx context.Context, b *fleet
 	if len(b.MandatedItems) > 0 {
 		sections = append(sections, "mandated_items")
 	}
+	if b.ToolExposure != nil {
+		sections = append(sections, "tool_exposure")
+	}
 	if len(b.OrgConfig) > 0 {
 		sections = append(sections, "org_config")
 	}
@@ -2217,3 +2250,37 @@ func telemetryOptInsToView(items []fleet.TelemetryOptInItem) []TelemetryOptInVie
 	}
 	return out
 }
+
+// clearToolExposurePins drops the organisation's tool-exposure policy and
+// its state file on an explicit sign-out: a signed-out device no longer
+// carries its organisation's pins. App shutdown keeps them (the state file
+// is what restores them at the next boot).
+func (a *API) clearToolExposurePins(reason string) {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	pins := a.fleet.toolExposurePins
+	a.fleet.mu.RUnlock()
+	if pins == nil {
+		return
+	}
+	if err := pins.Clear(); err != nil {
+		logging.L().Warn("fleet.tool_exposure.clear_failed", "reason", reason, "err", err.Error())
+	}
+}
+
+// ToolExposurePolicy implements toolexposure.PinSource: the
+// organisation's policy from the last verified, applied bundle; the zero
+// policy when fleet is disabled or no bundle carried one.
+func (a *API) ToolExposurePolicy(_ context.Context) (toolexposure.OrgPolicy, error) {
+	if a == nil || a.fleet == nil {
+		return toolexposure.OrgPolicy{}, nil
+	}
+	a.fleet.mu.RLock()
+	pins := a.fleet.toolExposurePins
+	a.fleet.mu.RUnlock()
+	return pins.Policy(), nil
+}
+
+var _ toolexposure.PinSource = (*API)(nil)

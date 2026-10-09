@@ -384,11 +384,3 @@ github.com/kameas-ai/kenaz-harness/core/tools/forkconversation.Options.Logger
 # 2026-10-05 test seam, same class as saveartifact.Options.Logger: production
 # relies on the nil -> slog.Default() fallback; tests inject a capture
 # logger. Owner: model-harness-toolset WP04.
-
-github.com/kameas-ai/kenaz-harness/core/toolexposure.Deps.Pins
-# at core/toolexposure/resolve.go:115: Deps.Pins (interface) is never set to a non-nil value in any non-test composite literal under core/
-# 2026-10-09 deferred (tool-context-budget-01TCBUD01 WP03 wires the
-# resolver in buildLoadToolsService): nil Pins means the organisation pins
-# nothing, the documented default until the signed bundle carries a
-# tool_exposure field. Blocker: tool-context-budget-01TCBUD01 WP07 (bundle
-# field + reader, gated on the fleet field). Owner: alec.

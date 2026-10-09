@@ -38,10 +38,10 @@ func (c ResolvedCatalog) Sendable(name string) bool {
 // Partition is a resolved catalog split into the segments one call's
 // tools array is built from (spec §2.3), each in its send order.
 //
-//   - Hot: full by the harness default or the load_tools invariant,
-//     alphabetical.
-//   - Pinned: full because a layer (org pin, session, project, user)
-//     says so, plus summary tools with a sticky activation;
+//   - Hot: full by the harness default, the organisation's
+//     hot_set_extra or the load_tools invariant, alphabetical.
+//   - Pinned: full because a layer (org pin, session, project, user, org
+//     default) says so, plus summary tools with a sticky activation;
 //     alphabetical.
 //   - Activated: summary tools with a non-sticky activation, most
 //     recently used first, then by name.
@@ -90,7 +90,7 @@ func (c ResolvedCatalog) Partition() Partition {
 		}
 		switch t.Tier {
 		case TierFull:
-			if t.Source == LevelDefault || t.Source == LevelInvariant {
+			if t.Source == LevelDefault || t.Source == LevelInvariant || t.Source == LevelOrgHotSet {
 				p.Hot = append(p.Hot, t)
 			} else {
 				p.Pinned = append(p.Pinned, t)

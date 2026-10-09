@@ -17,7 +17,13 @@ const (
 	LevelSession Level = "session"
 	LevelProject Level = "project"
 	LevelUser    Level = "user"
-	LevelDefault Level = "default"
+	// LevelOrgDefault is an organisation entry marked pinned:false: it
+	// decides only when session, project and user have no opinion.
+	LevelOrgDefault Level = "org_default"
+	LevelDefault    Level = "default"
+	// LevelOrgHotSet marks a tool the organisation added to the hot set
+	// (hot_set_extra): full whatever any layer says.
+	LevelOrgHotSet Level = "org_hot_set"
 	// LevelInvariant marks LoadToolsName forced full because at least
 	// one other tool resolved summary.
 	LevelInvariant Level = "invariant"
@@ -66,6 +72,12 @@ type ResolvedCatalog struct {
 	Activations        []Activation
 	SchemaBudgetTokens int
 	ActivationTTLTurns int
+	// SchemaBudgetPinned is set when SchemaBudgetTokens is the
+	// organisation's budget rather than the user's.
+	SchemaBudgetPinned bool
+	// OrgBundleID is the bundle the organisation layer came from (0 when
+	// there is none).
+	OrgBundleID int64
 
 	byName map[string]int
 }
@@ -104,16 +116,14 @@ type ProjectSource interface {
 	ProjectToolExposure(ctx context.Context, projectID string) (Exposure, error)
 }
 
-// PinSource returns the organisation's pinned layer from the signed
-// bundle; empty when the bundle carries none.
-//
-// wiring:deferred(the bundle field tool_exposure and its reader land with tool-context-budget-01TCBUD01 WP07, gated on the fleet field; until then Deps.Pins is nil and Resolve's org-pin step sees no opinion; dated 2026-10-08, owner: alec)
+// PinSource returns the organisation's layer from the last verified,
+// applied config bundle; the zero OrgPolicy when the bundle carries none.
 type PinSource interface {
-	ToolExposurePins(ctx context.Context) (Exposure, error)
+	ToolExposurePolicy(ctx context.Context) (OrgPolicy, error)
 }
 
 // Deps are the resolver's inputs. Every source but Pins is required;
-// a nil Pins means the organisation pins nothing.
+// a nil Pins means the organisation sets nothing.
 type Deps struct {
 	Settings SettingsSource
 	Sessions SessionSource
@@ -148,11 +158,13 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string, catalog []Cata
 }
 
 // Resolve folds org pins, the session override, the project override,
-// the user's settings and the harness default into one tier per catalog
-// tool (spec §2.1; first layer with an opinion wins, and inside a layer
-// a tool entry beats its server's tier). A stored value that is not one
-// of the three tiers is no opinion. LoadToolsName is then forced full
-// whenever any other tool resolved summary.
+// the user's settings, org defaults and the harness default into one tier
+// per catalog tool (spec §2.1; first layer with an opinion wins, and
+// inside a layer a tool entry beats its server's tier). A stored value
+// that is not one of the three tiers is no opinion. An org hot_set_extra
+// tool resolves full ahead of every layer. LoadToolsName is then forced
+// full whenever any other tool resolved summary. An org budget replaces
+// the user's.
 func Resolve(ctx context.Context, deps Deps, sessionID string, catalog []CatalogTool) (ResolvedCatalog, error) {
 	if err := deps.check(); err != nil {
 		return ResolvedCatalog{}, err
@@ -173,9 +185,9 @@ func Resolve(ctx context.Context, deps Deps, sessionID string, catalog []Catalog
 			return ResolvedCatalog{}, fmt.Errorf("toolexposure: project %s: %w", sess.ProjectID, err)
 		}
 	}
-	var pins Exposure
+	var org OrgPolicy
 	if deps.Pins != nil {
-		pins, err = deps.Pins.ToolExposurePins(ctx)
+		org, err = deps.Pins.ToolExposurePolicy(ctx)
 		if err != nil {
 			return ResolvedCatalog{}, fmt.Errorf("toolexposure: org pins: %w", err)
 		}
@@ -184,10 +196,11 @@ func Resolve(ctx context.Context, deps Deps, sessionID string, catalog []Catalog
 		level Level
 		exp   Exposure
 	}{
-		{LevelOrgPin, pins},
+		{LevelOrgPin, org.Pins},
 		{LevelSession, sess.Override},
 		{LevelProject, project},
 		{LevelUser, user.Exposure},
+		{LevelOrgDefault, org.Defaults},
 	}
 
 	out := ResolvedCatalog{
@@ -195,7 +208,12 @@ func Resolve(ctx context.Context, deps Deps, sessionID string, catalog []Catalog
 		Activations:        append([]Activation(nil), sess.Activations...),
 		SchemaBudgetTokens: user.EffectiveSchemaBudgetTokens,
 		ActivationTTLTurns: user.EffectiveActivationTTLTurns,
+		OrgBundleID:        org.BundleID,
 		byName:             make(map[string]int, len(catalog)),
+	}
+	if org.SchemaBudgetTokens > 0 {
+		out.SchemaBudgetTokens = org.SchemaBudgetTokens
+		out.SchemaBudgetPinned = true
 	}
 	anySummary := false
 	for _, c := range catalog {
@@ -203,8 +221,13 @@ func Resolve(ctx context.Context, deps Deps, sessionID string, catalog []Catalog
 		bare := c.bareName()
 		if c.Probe {
 			bare = ""
+		} else if org.inHotSetExtra(c.Name) {
+			rt.Tier, rt.Source = TierFull, LevelOrgHotSet
 		}
 		for _, l := range layers {
+			if rt.Tier != "" {
+				break
+			}
 			if t := l.exp.lookup(c.Server, bare); t != "" {
 				rt.Tier, rt.Source = t, l.level
 				break

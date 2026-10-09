@@ -5826,7 +5826,11 @@ export function createFakeHarnessClient(
       }),
       getKnobsDefault: async () => null,
       setKnobsDefault: noop,
-      getToolExposure: async () => ({ exposure: {}, activations: [] }),
+      getToolExposure: async () => ({
+        exposure: {},
+        activations: [],
+        org: { settings: [], schemaBudgetTokens: 0, bundleId: 0 },
+      }),
       setToolExposure: noop,
       loadTools: async (_id, servers, tools) => ({
         loaded: [],
@@ -6194,6 +6198,7 @@ export function createFakeHarnessClient(
         activationTtlTurns: 0,
         effectiveSchemaBudgetTokens: 24000,
         effectiveActivationTtlTurns: 6,
+        org: { settings: [], schemaBudgetTokens: 0, bundleId: 0 },
       }),
       setToolExposure: noop,
       getEmbedderConfig: async () => ({ profileId: '', modelOverride: '' }),

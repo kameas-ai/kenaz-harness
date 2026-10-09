@@ -2636,6 +2636,7 @@ func New(c *core.Core, opts ...Option) *API {
 		stack.toolsAudit.bind(a.auditImpl)
 		stack.toolServers.setUserRecipes(mcpUserRecipeSource(a.mcpUserStore))
 		a.sessionsAPI = sessions.WithToolLoading(a.sessionsAPI, stack.loadTools, stack.loadTools)
+		a.sessionsAPI = sessions.WithOrgPins(a.sessionsAPI, settingsImpl)
 		a.projectsAPI = projectsview.WithToolExposureGuard(a.projectsAPI, stack.loadTools)
 		settingsImpl.SetToolExposureGuard(stack.loadTools)
 	}

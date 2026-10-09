@@ -360,11 +360,12 @@ func (s *Service) load(ctx context.Context, sessionID string, req Request, by st
 	return res, count, nil
 }
 
-// CheckLayerWrite implements toolexposure.WriteGuard: it refuses a layer
-// that sets kenaz__load_tools off or summary while any other tool would
-// resolve summary under it (spec FR-E3) — those tools would have no way
-// to be loaded. A layer a higher layer overrides to full is allowed: it
-// changes nothing.
+// CheckLayerWrite implements toolexposure.WriteGuard. It refuses a layer
+// that changes an entry the organisation pinned (a
+// *toolexposure.PinnedError), and a layer that sets kenaz__load_tools off
+// or summary while any other tool would resolve summary under it (spec
+// FR-E3) — those tools would have no way to be loaded. A layer a higher
+// layer overrides to full is allowed: it changes nothing.
 //
 // It checks the layer being written only (2026-10-09, owner alec): a
 // stored user-layer load_tools=off followed by a project write that
@@ -372,6 +373,9 @@ func (s *Service) load(ctx context.Context, sessionID string, req Request, by st
 // resolver's invariant still forces load_tools full in that state, so
 // nothing becomes unreachable; only the write-time message is skipped.
 func (s *Service) CheckLayerWrite(ctx context.Context, w toolexposure.LayerWrite) error {
+	if err := s.checkOrgPins(ctx, w); err != nil {
+		return err
+	}
 	bare := strings.TrimPrefix(Name, toolexposure.BuiltinServer+toolexposure.NameSeparator)
 	tier := w.Exposure.TierFor(toolexposure.BuiltinServer, bare)
 	if tier != toolexposure.TierOff && tier != toolexposure.TierSummary {
@@ -416,6 +420,42 @@ func (s *Service) CheckLayerWrite(ctx context.Context, w toolexposure.LayerWrite
 }
 
 var _ toolexposure.WriteGuard = (*Service)(nil)
+
+// checkOrgPins compares the proposed layer with the stored one and
+// refuses a change to any entry the organisation pinned.
+func (s *Service) checkOrgPins(ctx context.Context, w toolexposure.LayerWrite) error {
+	deps := s.d.Resolver.Deps()
+	if deps.Pins == nil {
+		return nil
+	}
+	org, err := deps.Pins.ToolExposurePolicy(ctx)
+	if err != nil {
+		return fmt.Errorf("loadtools: org pins: %w", err)
+	}
+	if org.IsZero() {
+		return nil
+	}
+	var stored toolexposure.Exposure
+	switch w.Level {
+	case toolexposure.LevelUser:
+		st, err := deps.Settings.GetToolExposure(ctx)
+		if err != nil {
+			return err
+		}
+		stored = st.Exposure
+	case toolexposure.LevelProject:
+		if stored, err = deps.Projects.ProjectToolExposure(ctx, w.ProjectID); err != nil {
+			return err
+		}
+	case toolexposure.LevelSession:
+		st, err := deps.Sessions.SessionToolExposure(ctx, w.SessionID)
+		if err != nil {
+			return err
+		}
+		stored = st.Override
+	}
+	return toolexposure.CheckOrgPins(org, stored, w.Exposure)
+}
 
 // applyActivations merges the requested activations into the session's
 // set. It returns the new set when anything changed (nil otherwise) and
