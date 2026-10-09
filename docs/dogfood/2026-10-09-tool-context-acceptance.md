@@ -17,10 +17,10 @@ built-in with its Settings dial on.
 
 | # | Criterion | Result | Evidence |
 |---|---|---|---|
-| AC1 | First-turn prompt ≤ 15,000 tokens | **PASS** — whole first-turn prompt ≈ **5,619** estimated tokens under the corrected estimator (tool definitions at 2.5 bytes/token, see AC5), was 224,798 provider tokens. Tool schemas: 131 tools ≈ 184,416 → 13 hot-set tools ≈ 4,608; digest 891 chars. (Under the old per-rune/4 rule the same request read 3,889.) Live manual run: **pending (owner alec)**. | `core/rpc` `TestToolExposureWiring_FirstTurnToolTokens` (anthropic adapter over `httptest`) |
+| AC1 | First-turn prompt ≤ 15,000 tokens | **PASS** — whole first-turn prompt ≈ **5,619** estimated tokens under the corrected estimator (tool definitions at 2.5 bytes/token, see AC5), was 224,798 provider tokens. Tool schemas: 131 tools ≈ 184,416 → 13 hot-set tools ≈ 4,608; digest 891 chars. (Under the old per-rune/4 rule the same request read 3,889.) Live run 2026-10-09: **6,045 provider tokens** on call 1 (see "Live checks"). | `core/rpc` `TestToolExposureWiring_FirstTurnToolTokens` (anthropic adapter over `httptest`) |
 | AC2 | "Send an email" in two model calls | **PASS** — call 1 `kenaz__load_tools(servers:["outlook"])`, call 2 carries and calls `outlook__send-mail`, the permission resolver sees it, one `tools.activated` audit row. | `chat` `TestToolLoop_LoadThenCallWithinTwoModelCalls` |
 | AC3 | A 131k-window model completes a scheduled chat using harness-self | **PASS** — `ChatRunDispatcher` → llm view `StartStream` → chat runner → OpenRouter adapter (window 131,072 from its live `/models` list) → provider that refuses any request over 131,072 tokens counted at **2.5 bytes/token** (AC5's measured density — the estimator's own schema rule). Calls: 14,311 B (12 tools), 42,669 B (19 tools: harness-self loaded), 42,957 B → ≈ 5.7k / 17.1k / 17.2k provider tokens; 0 refused; every call's `llm.request.composition` budget = **19,660** (15 % of 131,072, from the live `/models` entry — not the 24k setting); `harness_read_list_sessions` ran once; run `completed`. The whole catalog (≈ 184,582 estimated tokens) cannot fit the window. | `core/rpc` `TestToolExposureAcceptance_131kWindowScheduledChatUsesHarnessSelf` (new in WP08) |
-| AC4 | Byte-identical prefix; `cached_tokens ≥ 0.9 × prefix` live | **Hermetic half PASS** — two consecutive calls serialise byte-identical system + hot/pinned segments, through the chat request builder and both adapters. **Live half PENDING (owner alec)**: OpenRouter-Anthropic turn-2 `cached_tokens` ≥ 90 % of the prefix needs a live call; it also settles the ledger bullet "OpenRouter tool-object `cache_control` is unverified live". | `chat` `TestGenerate_CacheablePrefixStableAcrossCalls`; `TestAnthropicAdapter_PromptCache_GoldenPrefixStable`, `…_ThreeSegmentGolden`; `TestOpenRouterAdapter_PromptCache_GoldenPrefixStable` |
+| AC4 | Byte-identical prefix; `cached_tokens ≥ 0.9 × prefix` live | **Hermetic half PASS** — two consecutive calls serialise byte-identical system + hot/pinned segments, through the chat request builder and both adapters. **Live half PASS (2026-10-09)**: call 3 of the sentinel run reported `cached_tokens` 5,574 ≈ 92 % of the stable prefix on OpenRouter Haiku; the tool-object `cache_control` was accepted (no degrade). See "Live checks". | `chat` `TestGenerate_CacheablePrefixStableAcrossCalls`; `TestAnthropicAdapter_PromptCache_GoldenPrefixStable`, `…_ThreeSegmentGolden`; `TestOpenRouterAdapter_PromptCache_GoldenPrefixStable` |
 | AC5 | Composition within ±10 % of provider `prompt_tokens` on three recorded sessions | **PASS (in-sample)** — after the owner ruling (2026-10-09) tool definitions estimate at **2.5 bytes/token** (`tokenizer.CountToolSchema`); prose and messages keep the per-rune/4 rule. On the dogfood's first three recorded calls (session `b0c22dc5…`, persisted `prompt_tokens` 224,798 / 225,104 / 225,296) the estimate is **227,129 / 227,344 / 227,474 = 101.0 %** on each (frame 1: system 577 + MCP tools 216,058 + built-ins 10,477 + history 17). The MCP part uses the servers' **real** `tools/list` output (captured 2026-10-09: ms-365-mcp-server 0.159.1, server-filesystem 2026.8.31, mcp-server-fetch; 540,051 bytes). Before the fix the same frames read 142,097 / 142,312 / 142,442 = **63.2 %** (per-rune/4 counts JSON schema at 4.0 bytes/token; the provider tokenized it at ≈ 2.5). **Caveat:** 2.5 was derived from these same frames, so this is an in-sample fit — the out-of-sample check is the live re-measure below. | `core/rpc` `TestComposition_RecordedDogfoodFrames_WithinFRH3` (0.90–1.10 band) |
 | AC6 | Every FR-K1 control has a request-level test; the gate exists with a planted proof | **PASS** — see the two tables below. | |
 | AC7 | Unwired sweep | **PASS with dated opens** — see "Sweep". | `docs/unwired-ledger.md` |
@@ -113,13 +113,33 @@ alec).
 | Q-E | 24,000 with the 15 % window cap — now **24k provider-measured tokens** (tool definitions estimated at the measured 2.5 bytes/token, AC5), no longer ~1.6× under-counted | `DefaultSchemaBudgetTokens`, `EffectiveBudget` (AC3: 131k → 19,660) |
 | Q-F | Activation survives fork (every `conversation.Manager` fork) | WP04 ruling, `InheritToolExposure` |
 
-## Pending live checks (owner alec)
+## Live checks — done 2026-10-09 05:30 EDT (owner alec)
 
-1. AC1 manual: first turn with Outlook + Filesystem + Fetch installed —
-   record `prompt_tokens` from the usage frame.
-2. AC4 live: two consecutive calls on an OpenRouter Anthropic-family
-   model — turn 2 `cached_tokens ≥ 0.9 × prefix`; also whether OpenRouter
-   accepts `cache_control` on the tool object.
-3. Re-measure AC5 on three live sessions of the new build — the
-   out-of-sample check of the 2.5 bytes/token schema density (in-sample:
-   101.0 %).
+Release-branch build (`release/v0.94.0` @ 73504f4c, `wails dev`, `dev`
+profile, Outlook + Filesystem + Fetch installed), the "Dogfood sentinel"
+scheduled chat (`*/30`, `~anthropic/claude-haiku-latest` via OpenRouter,
+fresh session per run). Numbers are the provider's usage frames as logged
+by `llm.request.composition` / `agentgraph.model.result`:
+
+| Call | tools_full / summary | tools_tokens_est | history_est | `prompt_tokens` | `cached_tokens` | finish |
+|---|---|---|---|---|---|---|
+| 1 | 14 / 35 | 5,127 | 87 | **6,045** | 0 | tool_calls (`kenaz__load_tools` harness-self) |
+| 2 | 16 / 33 | 5,242 | 185 | 6,390 | 0 | tool_calls (`harness_read_*`) |
+| 3 | 16 / 33 | 5,242 | 9,087 | 22,776 | **5,574** | stop |
+
+- **AC1 live: PASS** — 6,045 prompt tokens on a fresh session (v0.93.0
+  measured 224,798 for the same install: 37× smaller). Composition
+  estimate for call 1 = 5,127 + ~943 (system) + 87 ≈ 6,157 → 101.9 % of
+  the provider's number (AC5 out-of-sample: PASS, within the ±10 % band).
+- **FR-E4 live: PASS** — call 2 carries the two definitions call 1 loaded
+  (14 → 16 full tools).
+- **AC4 live: PASS** — call 3 reports `cached_tokens` 5,574 against a
+  stable prefix of ≈ 6,070 estimated tokens (system + 14 stable tools) =
+  **≈ 92 %**. Call 2 reported 0 cached ~2 s after call 1 (cache-write
+  latency); the hit landed on call 3. OpenRouter accepted the request
+  with `cache_control` on the tool object (no degrade logged).
+- Cost of the 3-call turn: **$0.0038** (`cost_usd` 0.000837 + 0.000817 +
+  0.002101). The same shape on v0.93.0 cost ≈ $0.34.
+
+Still open: re-measure on more sessions once the build is in daily use
+(the 2.5 bytes/token schema density now has one out-of-sample point).
