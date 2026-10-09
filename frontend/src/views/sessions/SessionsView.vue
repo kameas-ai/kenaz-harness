@@ -2541,13 +2541,18 @@ async function onShared() {
                Known window (hasContextWindow): bar + pct + used/max label.
                Unknown window (!hasContextWindow): greyed label only — no bar,
                no percentage, no misleading 200k fallback. -->
-          <ContextCompositionPopover :composition="sessionUsage?.composition ?? null">
-          <div
+          <ContextCompositionPopover
+            v-slot="{ open: compositionOpen }"
+            :composition="sessionUsage?.composition ?? null"
+          >
+          <span
             class="flex items-center gap-2"
             data-testid="session-context-meter"
-            :title="hasContextWindow
-              ? `Context use — ${contextNumerator.toLocaleString()} of ${contextDenominator.toLocaleString()} tokens`
-              : 'Context window size unknown for this model'"
+            :title="compositionOpen
+              ? undefined
+              : hasContextWindow
+                ? `Context use — ${contextNumerator.toLocaleString()} of ${contextDenominator.toLocaleString()} tokens`
+                : 'Context window size unknown for this model'"
           >
             <span
               class="uppercase tracking-[0.14em]"
@@ -2556,17 +2561,17 @@ async function onShared() {
               context
             </span>
             <template v-if="hasContextWindow">
-              <div class="h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
-                <div
-                  class="h-full transition-[width] duration-300"
+              <span class="block h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
+                <span
+                  class="block h-full transition-[width] duration-300"
                   :class="{
                     'bg-signal-ok': contextBarTone === 'ok',
                     'bg-signal-warn': contextBarTone === 'warn',
                     'bg-signal-danger': contextBarTone === 'danger',
                   }"
                   :style="{ width: contextWindowPct + '%' }"
-                ></div>
-              </div>
+                ></span>
+              </span>
               <span class="font-mono text-ink-muted tabular-nums">
                 {{ contextWindowPct }}%
               </span>
@@ -2581,7 +2586,7 @@ async function onShared() {
             >
               unknown
             </span>
-          </div>
+          </span>
           </ContextCompositionPopover>
         </div>
         <!-- Long-session nudge banner (v0.5.6 memory-trust-signals).

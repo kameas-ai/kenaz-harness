@@ -55,7 +55,7 @@ func TestEstimateToolSpecTokens_CountsNameDescriptionSchema(t *testing.T) {
 func TestToolSpec_MetadataNotOnTheWire(t *testing.T) {
 	bare := ToolSpec{Name: "n", Description: "d", InputSchema: json.RawMessage(`{}`)}
 	withMeta := bare
-	withMeta.Server, withMeta.Running, withMeta.TokenEst = "srv", true, 9
+	withMeta.Server, withMeta.TokenEst = "srv", 9
 	a, _ := json.Marshal(bare)
 	b, _ := json.Marshal(withMeta)
 	if string(a) != string(b) {

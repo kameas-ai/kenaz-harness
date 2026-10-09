@@ -103,10 +103,6 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 				Description: t.Description,
 				InputSchema: t.InputSchema,
 				Server:      t.Server,
-				// mcp.Pool.Tools lists only tools whose server can answer
-				// a call (dispatch.Pool.canServe), so a listed tool is a
-				// running one.
-				Running: true,
 			}
 			spec.TokenEst = corellm.EstimateToolSpecTokens(spec)
 			listedAll = append(listedAll, spec)
@@ -148,7 +144,6 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 				Description: b.Description(),
 				InputSchema: b.InputSchema(),
 				Server:      server,
-				Running:     true,
 			}
 			spec.TokenEst = corellm.EstimateToolSpecTokens(spec)
 			listedAll = append(listedAll, spec)

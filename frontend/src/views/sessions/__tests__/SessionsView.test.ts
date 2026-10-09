@@ -468,8 +468,6 @@ describe('SessionsView (chat-ui)', () => {
   it('long-session nudge fires on history tokens from the last request composition', async () => {
     // Two human turns — well under the 30-turn default, so only the
     // token arm can fire.
-    // Two human turns — well under the 30-turn default, so only the
-    // token arm can fire.
     const messages: Message[] = [
       makeMessage({ id: 'q1', role: 'user', content: 'hi' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),

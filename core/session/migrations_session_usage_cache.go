@@ -13,8 +13,9 @@ import (
 //   - cached_tokens       prompt tokens the provider served from its cache
 //   - cache_write_tokens  prompt tokens the provider wrote to its cache
 //
-// Nullable like 0314's columns: a row written before 0346, or by a
-// provider that reports no cache split, reads as NULL and sums as 0.
+// Nullable like 0314's columns: a row written before 0346 reads as NULL
+// and sums as 0. usage.Add always writes both columns, so a row written
+// after 0346 holds 0 when the provider reported no cache split.
 //
 // Additive only, so check-destructive-migration-coverage.sh has nothing
 // to cover. Idempotent: each ALTER is guarded by a pragma_table_info

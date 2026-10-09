@@ -14,9 +14,9 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
-// Every catalog entry carries its source server, running state and the
-// estimator's size of its definition.
-func TestMCPToolDiscoverer_CatalogEntriesCarryServerRunningAndTokenEst(t *testing.T) {
+// Every catalog entry carries its source server and the estimator's size
+// of its definition.
+func TestMCPToolDiscoverer_CatalogEntriesCarryServerAndTokenEst(t *testing.T) {
 	pool := &stubPool{tools: []mcp.Tool{
 		{Server: "outlook", Name: "send-mail", Description: strings.Repeat("x", 100), InputSchema: json.RawMessage(`{"type":"object"}`)},
 	}}
@@ -35,9 +35,6 @@ func TestMCPToolDiscoverer_CatalogEntriesCarryServerRunningAndTokenEst(t *testin
 	for _, spec := range got {
 		if spec.Server != want[spec.Name] {
 			t.Errorf("%s: Server = %q, want %q", spec.Name, spec.Server, want[spec.Name])
-		}
-		if !spec.Running {
-			t.Errorf("%s: Running = false, want true (listed tools are servable)", spec.Name)
 		}
 		if spec.TokenEst == 0 || spec.TokenEst != corellm.EstimateToolSpecTokens(spec) {
 			t.Errorf("%s: TokenEst = %d, want %d", spec.Name, spec.TokenEst, corellm.EstimateToolSpecTokens(spec))

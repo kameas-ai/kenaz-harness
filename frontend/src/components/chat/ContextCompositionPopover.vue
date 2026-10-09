@@ -1,13 +1,22 @@
 <script setup lang="ts">
 /**
- * ContextCompositionPopover — wraps the context meter and, on hover or
- * click, lists what the last model call's prompt was made of: system
- * prompt, tool definitions, conversation history, attachments, memory,
- * and how much the provider served from its prompt cache.
+ * ContextCompositionPopover — wraps the context meter and lists what the
+ * last model call's prompt was made of: system prompt, tool definitions,
+ * conversation history, attachments, memory, and how much the provider
+ * served from its prompt cache.
+ *
+ * Hover shows it; a click pins it open (a click while hovering pins, it
+ * never closes what the pointer just opened). Escape, a second click on
+ * a pinned popover, or focus leaving the trigger closes it. Focus stays on
+ * the trigger, so the panel is a tooltip described by the button, not a
+ * dialog.
  *
  * The parts are harness estimates (ceil(bytes / 3.5)); `cached` is the
  * provider's own count. Memory is listed only when non-zero: memory
  * snippets that arrive as messages are counted in history.
+ *
+ * The default slot receives `{ open }` so the trigger content can drop its
+ * own `title` while the panel is showing.
  */
 import { computed, ref } from 'vue';
 import type { UsageComposition } from '@/lib/types';
@@ -16,7 +25,29 @@ const props = defineProps<{
   composition: UsageComposition | null | undefined;
 }>();
 
-const open = ref(false);
+defineSlots<{ default(props: { open: boolean }): unknown }>();
+
+const hovered = ref(false);
+const pinned = ref(false);
+const open = computed(() => hovered.value || pinned.value);
+const panelId = `context-composition-${Math.random().toString(36).slice(2, 10)}`;
+
+function onClick() {
+  pinned.value = !pinned.value;
+  if (!pinned.value) hovered.value = false;
+}
+
+function close() {
+  pinned.value = false;
+  hovered.value = false;
+}
+
+function onFocusOut(ev: FocusEvent) {
+  const root = ev.currentTarget as HTMLElement | null;
+  const next = ev.relatedTarget as Node | null;
+  if (root && next && root.contains(next)) return;
+  pinned.value = false;
+}
 
 function fmt(n: number): string {
   if (n < 1_000) return String(n);
@@ -53,23 +84,25 @@ const total = computed(() => rows.value.reduce((sum, r) => sum + r.tokens, 0));
 <template>
   <div
     class="relative"
-    @mouseenter="open = true"
-    @mouseleave="open = false"
+    @mouseenter="hovered = true"
+    @mouseleave="hovered = false"
+    @focusout="onFocusOut"
+    @keydown.esc="close"
   >
     <button
       type="button"
       class="flex items-center gap-2"
       data-testid="context-composition-trigger"
       :aria-expanded="open"
-      aria-haspopup="dialog"
-      @click="open = !open"
+      :aria-describedby="open ? panelId : undefined"
+      @click="onClick"
     >
-      <slot />
+      <slot :open="open" />
     </button>
     <div
       v-if="open"
-      role="dialog"
-      aria-label="Context composition"
+      :id="panelId"
+      role="tooltip"
       class="absolute bottom-full right-0 z-20 mb-2 w-64 rounded-md border border-hairline bg-surface-1 p-3 text-xs shadow-lg"
       data-testid="context-composition-popover"
     >

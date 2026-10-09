@@ -312,7 +312,7 @@ type ToolResult struct {
 // ToolSpec declares a callable tool the model may invoke (FR-006).
 //
 // Name, Description and InputSchema are the provider-facing definition.
-// Server, Running and TokenEst are harness-side catalog metadata: they
+// Server and TokenEst are harness-side catalog metadata: they
 // are tagged `json:"-"` and no adapter reads them, so a request's wire
 // payload is identical whether or not they are set.
 type ToolSpec struct {
@@ -323,8 +323,6 @@ type ToolSpec struct {
 	// Server is the catalog source: the MCP server id for pool tools,
 	// "kenaz" for built-ins. Empty when the producer did not say.
 	Server string `json:"-"`
-	// Running reports whether the source can serve a call right now.
-	Running bool `json:"-"`
 	// TokenEst is EstimateToolSpecTokens of this definition, computed by
 	// the producer at discovery. 0 means "not computed"; ToolSpecTokens
 	// falls back to computing it.
