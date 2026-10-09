@@ -12,8 +12,8 @@
  * section below workflow rows; requires the optional `chatClient` prop.
  */
 import { ref, onMounted, onUnmounted, computed } from 'vue';
-import { RouterLink } from 'vue-router';
 import ChatRunOutcome from './scheduledchat/ChatRunOutcome.vue';
+import { formatDuration, formatTimestamp } from '@/lib/formatTime';
 import type {
   WorkflowsClient,
   WorkflowsScheduleEntry,
@@ -58,25 +58,8 @@ function statusClass(status: string): string {
   return 'text-ink-muted';
 }
 
-function fmtTime(iso: string): string {
-  if (!iso) return '—';
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
-}
-
-function fmtDuration(start: string, end?: string): string {
-  if (!start || !end) return '';
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (ms < 0) return '';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const mins = Math.floor(ms / 60_000);
-  const secs = Math.floor((ms % 60_000) / 1000);
-  return `${mins}m ${secs}s`;
-}
+const fmtTime = formatTimestamp;
+const fmtDuration = formatDuration;
 
 // ── data loading ──────────────────────────────────────────────────────────
 
@@ -237,13 +220,6 @@ async function chatRunNow(id: string) {
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : String(err);
   }
-}
-
-function chatHistoryStatusClass(status: string): string {
-  if (status === 'completed') return 'text-signal-ok';
-  if (status === 'running') return 'text-signal-warn';
-  if (status === 'failed') return 'text-signal-danger';
-  return 'text-ink-muted';
 }
 
 // ── auto-refresh ──────────────────────────────────────────────────────────
@@ -535,9 +511,7 @@ onUnmounted(() => {
                   </span>
                   <span class="font-ui text-xs text-ink-muted">→ {{ row.entry.outputSink }}</span>
                 </div>
-                <!-- dogfood 2026-10-08 round 2: the last run is visible
-                     without expanding the row (it used to read as "no
-                     history at all"). -->
+                <!-- The last run is visible without expanding the row. -->
                 <ChatRunOutcome
                   v-if="row.entry.lastRun"
                   :run="row.entry.lastRun"
@@ -602,49 +576,7 @@ onUnmounted(() => {
                   :data-testid="`chat-run-hist-row-${hist.id}`"
                 >
                   <div class="space-y-0.5 min-w-0">
-                    <div class="flex items-center gap-2">
-                      <span
-                        class="font-ui text-xs"
-                        :class="chatHistoryStatusClass(hist.status)"
-                        :data-testid="`chat-run-hist-status-${hist.id}`"
-                      >
-                        {{ hist.status }}
-                      </span>
-                      <span class="font-mono text-xs text-ink-muted truncate">
-                        {{ hist.id }}
-                      </span>
-                    </div>
-                    <div class="font-ui text-xs text-ink-muted">
-                      {{ fmtTime(hist.startedAt) }}
-                      <span v-if="hist.endedAt" class="ml-1">
-                        ({{ fmtDuration(hist.startedAt, hist.endedAt) }})
-                      </span>
-                      <span
-                        v-if="hist.model"
-                        class="ml-2 font-mono"
-                        :data-testid="`chat-run-hist-model-${hist.id}`"
-                      >{{ hist.model }}</span>
-                      <span
-                        v-if="hist.costUsd"
-                        class="ml-2 font-mono"
-                        :data-testid="`chat-run-hist-cost-${hist.id}`"
-                      >${{ hist.costUsd.toFixed(4) }}</span>
-                      <RouterLink
-                        v-if="hist.sessionId"
-                        :to="`/sessions/${encodeURIComponent(hist.sessionId)}`"
-                        class="ml-2 text-accent hover:underline"
-                        :data-testid="`chat-run-hist-open-${hist.id}`"
-                      >
-                        Open session
-                      </RouterLink>
-                    </div>
-                    <div
-                      v-if="hist.error"
-                      class="font-ui text-xs text-signal-danger break-words"
-                      :data-testid="`chat-run-hist-error-${hist.id}`"
-                    >
-                      {{ hist.error }}
-                    </div>
+                    <ChatRunOutcome :run="hist" testid-prefix="chat-run-hist" />
                     <div
                       v-if="hist.outputSnippet"
                       class="font-ui text-xs text-ink-muted truncate"

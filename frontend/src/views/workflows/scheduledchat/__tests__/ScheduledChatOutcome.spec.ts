@@ -91,7 +91,7 @@ describe('Schedules row — last run outcome', () => {
     const link = wrapper.find('[data-testid="chat-run-outcome-open-hist-2"]');
     expect(link.exists()).toBe(true);
     expect(link.attributes('href')).toBe('/sessions/sess-42');
-    expect(wrapper.find('[data-testid="chat-run-outcome-cost-hist-2"]').text()).toBe('$0.1124');
+    expect(wrapper.find('[data-testid="chat-run-outcome-cost-hist-2"]').text()).toBe('$0.112');
     expect(wrapper.find('[data-testid="chat-run-outcome-error-hist-2"]').exists()).toBe(false);
   });
 
@@ -123,7 +123,6 @@ describe('New scheduled chat form — active default model', () => {
     const wrapper = mount(ScheduledChatFormModal, { props: { client, editing: null } });
     await flushPromises();
     expect(wrapper.find('[data-testid="sc-model-default-hint"]').text()).toContain('aion-labs/aion-2.0');
-    expect(wrapper.find('[data-testid="sc-model-input"]').attributes('placeholder')).toContain('aion-labs/aion-2.0');
   });
 
   it('hides the hint once a model is typed', async () => {
@@ -167,7 +166,7 @@ describe('Runs tab — chat run history rows', () => {
     await wrapper.find('[data-testid="chat-run-header-run-1"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-testid="chat-run-hist-model-hist-2"]').text()).toBe('~anthropic/claude-haiku-latest');
-    expect(wrapper.find('[data-testid="chat-run-hist-cost-hist-2"]').text()).toBe('$0.1124');
+    expect(wrapper.find('[data-testid="chat-run-hist-cost-hist-2"]').text()).toBe('$0.112');
     expect(wrapper.find('[data-testid="chat-run-hist-open-hist-2"]').attributes('href')).toBe('/sessions/sess-42');
     expect(wrapper.find('[data-testid="chat-run-hist-open-hist-1"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="chat-run-hist-error-hist-1"]').text()).toContain('Request too large');

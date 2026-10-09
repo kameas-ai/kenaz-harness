@@ -19,6 +19,7 @@
  */
 
 import { computed, ref } from 'vue';
+import { formatCost } from '@/lib/formatCost';
 
 const props = defineProps<{
   promptTokens?: number;
@@ -42,14 +43,6 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
   return String(n);
-}
-
-function formatCost(usd: number): string {
-  if (usd < 0.0001) return '<$0.01';
-  if (usd < 0.01) return '$' + usd.toFixed(4);
-  if (usd < 1) return '$' + usd.toFixed(3);
-  if (usd < 10) return '$' + usd.toFixed(2);
-  return '$' + usd.toFixed(1);
 }
 
 /** One-line chip label: "1.2k → 240 = 1.4k tok · $0.012" */

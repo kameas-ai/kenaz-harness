@@ -41,10 +41,9 @@ const enabled = ref(true);
 const triggerKind = ref<'cron' | 'once'>('cron');
 const runAt = ref('');
 
-// What "active default" resolves to (dogfood 2026-10-08 round 2): a blank
-// model field used to run on whatever the first profile's default model
-// was — a 131k model the user never chose — with nothing on the form
-// saying so. Read from the same resolution the dispatcher applies.
+// What "active default" resolves to — the same resolution the dispatcher
+// applies at fire time — shown under the field while it is blank. null
+// means it could not be read; '' means no default is configured.
 const defaultModel = ref<string | null>(null);
 onMounted(async () => {
   try {
@@ -54,12 +53,6 @@ onMounted(async () => {
     defaultModel.value = null;
   }
 });
-const modelPlaceholder = computed(() =>
-  defaultModel.value
-    ? `Leave blank to use the active default (${defaultModel.value})`
-    : 'Leave blank to use the active default',
-);
-
 // Populate form when editing entry changes.
 watch(
   () => props.editing,
@@ -327,7 +320,7 @@ async function handleSubmit() {
             v-model="model"
             type="text"
             class="w-full rounded-sm border border-border-muted bg-surface-1 px-3 py-1.5 font-ui text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
-            :placeholder="modelPlaceholder"
+            placeholder="Leave blank to use the active default"
             data-testid="sc-model-input"
           />
           <p

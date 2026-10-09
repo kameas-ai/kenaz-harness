@@ -1,23 +1,29 @@
 <script setup lang="ts">
 /**
- * ChatRunOutcome — one scheduled-chat run's outcome on a single line:
- * status, when, model, cost, an "Open session" link, and the error text
- * for a failed run (dogfood 2026-10-08 round 2: outcomes reached the
- * user only through a 10-second toast; the Schedules row and the Runs
- * tab showed nothing).
+ * ChatRunOutcome — one scheduled-chat run's outcome: status, start time
+ * (and duration once ended), model, cost, an "Open session" link when
+ * the run's session exists, and the error text of a failed run.
  *
- * Used by the Schedules row (ScheduledChatsPanel, the entry's lastRun)
- * and by each history row of the Runs tab (ScheduledInbox).
+ * The single renderer for a run outcome: the Schedules row and the Runs
+ * tab's collapsed row show the entry's lastRun with it, and each Runs-tab
+ * history row is one of these. `testidPrefix` keeps each surface's test
+ * ids distinct.
  */
 import { computed } from 'vue';
 import { RouterLink } from 'vue-router';
 import type { ScheduledChatRunSummary } from '@/lib/scheduledChatClient';
+import { formatCost } from '@/lib/formatCost';
+import { formatDuration, formatTimestamp } from '@/lib/formatTime';
 
-const props = defineProps<{
-  run: ScheduledChatRunSummary;
-  /** Prefix copy, e.g. "Last run". Omitted on history rows. */
-  label?: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    run: ScheduledChatRunSummary;
+    /** Prefix copy, e.g. "Last run". Omitted on history rows. */
+    label?: string;
+    testidPrefix?: string;
+  }>(),
+  { label: undefined, testidPrefix: 'chat-run-outcome' },
+);
 
 const statusClass = computed(() => {
   if (props.run.status === 'completed') return 'text-signal-ok';
@@ -26,36 +32,30 @@ const statusClass = computed(() => {
   return 'text-ink-muted';
 });
 
-const when = computed(() => {
-  const t = Date.parse(props.run.startedAt);
-  if (Number.isNaN(t)) return props.run.startedAt;
-  return new Date(t).toLocaleString();
-});
+const duration = computed(() => formatDuration(props.run.startedAt, props.run.endedAt));
 
 const cost = computed(() =>
-  typeof props.run.costUsd === 'number' && props.run.costUsd > 0
-    ? `$${props.run.costUsd.toFixed(4)}`
-    : '',
+  typeof props.run.costUsd === 'number' && props.run.costUsd > 0 ? formatCost(props.run.costUsd) : '',
 );
+
+const tid = (part: string) => `${props.testidPrefix}-${part}-${props.run.id}`;
 </script>
 
 <template>
-  <div class="min-w-0 space-y-0.5" :data-testid="`chat-run-outcome-${run.id}`">
+  <div class="min-w-0 space-y-0.5" :data-testid="tid('row')">
     <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-ui text-xs">
       <span v-if="label" class="text-ink-muted">{{ label }}:</span>
-      <span :class="statusClass" :data-testid="`chat-run-outcome-status-${run.id}`">{{ run.status }}</span>
-      <span class="text-ink-muted" :data-testid="`chat-run-outcome-time-${run.id}`">{{ when }}</span>
-      <span
-        v-if="run.model"
-        class="font-mono text-ink-muted truncate"
-        :data-testid="`chat-run-outcome-model-${run.id}`"
-      >{{ run.model }}</span>
-      <span v-if="cost" class="font-mono text-ink-muted" :data-testid="`chat-run-outcome-cost-${run.id}`">{{ cost }}</span>
+      <span class="capitalize" :class="statusClass" :data-testid="tid('status')">{{ run.status }}</span>
+      <span class="text-ink-muted" :data-testid="tid('time')">
+        {{ formatTimestamp(run.startedAt) }}<template v-if="duration"> ({{ duration }})</template>
+      </span>
+      <span v-if="run.model" class="font-mono text-ink-muted truncate" :data-testid="tid('model')">{{ run.model }}</span>
+      <span v-if="cost" class="font-mono text-ink-muted" :data-testid="tid('cost')">{{ cost }}</span>
       <RouterLink
         v-if="run.sessionId"
         :to="`/sessions/${encodeURIComponent(run.sessionId)}`"
         class="text-accent hover:underline"
-        :data-testid="`chat-run-outcome-open-${run.id}`"
+        :data-testid="tid('open')"
         @click.stop
       >
         Open session
@@ -64,7 +64,7 @@ const cost = computed(() =>
     <div
       v-if="run.status === 'failed' && run.error"
       class="font-ui text-xs text-signal-danger break-words"
-      :data-testid="`chat-run-outcome-error-${run.id}`"
+      :data-testid="tid('error')"
     >
       {{ run.error }}
     </div>
