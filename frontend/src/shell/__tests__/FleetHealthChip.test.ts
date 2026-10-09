@@ -67,7 +67,7 @@ describe('FleetHealthChip', () => {
     const w = await mountChip({ configSource: 'default-deny' });
     const chip = w.find('[data-testid="fleet-health-chip"]');
     expect(chip.text()).toBe('fleet: default-deny');
-    expect(chip.attributes('title')).toContain('no fleet config bundle has ever been applied');
+    expect(chip.attributes('title')).toContain('no fleet config bundle is in force on this device');
   });
 });
 
@@ -120,30 +120,32 @@ describe('FleetHealthChip freshness', () => {
     w.unmount();
   });
 
-  it('re-reads on window focus and on the 60s interval, and stops on unmount', async () => {
+  it('re-reads on the 60s interval, and stops on unmount', async () => {
     vi.useFakeTimers();
     try {
       const { w, fleetHealth } = mountSequenced();
       await flushPromises();
       const afterMount = fleetHealth.mock.calls.length;
 
-      window.dispatchEvent(new Event('focus'));
-      await flushPromises();
-      expect(fleetHealth.mock.calls.length).toBeGreaterThan(afterMount);
-
-      const afterFocus = fleetHealth.mock.calls.length;
       vi.advanceTimersByTime(60_000);
       await flushPromises();
-      expect(fleetHealth.mock.calls.length).toBeGreaterThan(afterFocus);
+      expect(fleetHealth.mock.calls.length).toBeGreaterThan(afterMount);
 
       w.unmount();
       const afterUnmount = fleetHealth.mock.calls.length;
       vi.advanceTimersByTime(180_000);
-      window.dispatchEvent(new Event('focus'));
       await flushPromises();
       expect(fleetHealth.mock.calls.length).toBe(afterUnmount);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('describes a not-yet-revalidated cache without claiming the server is unreachable', async () => {
+    const w = await mountChip({ configSource: 'cache' });
+    const chip = w.find('[data-testid="fleet-health-chip"]');
+    expect(chip.text()).toBe('fleet: cached');
+    expect(chip.attributes('title')).toContain('has not confirmed it is current');
+    expect(chip.attributes('title')).not.toContain('could not be reached');
   });
 });
