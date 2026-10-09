@@ -78,6 +78,11 @@ func (o *fleetUsageObserver) TurnFailed(ctx context.Context, sessionID, failureK
 	o.tracker().TurnFailed(ctx, sessionID, corefleet.ProjectErrorCategory(failureKind), recoverable)
 }
 
+// TurnEnded implements chat.TurnUsageObserver. Usage telemetry closes its
+// conversation segments on its own clock, so the turn-end fact is a no-op
+// here; the seam exists for the ML producer (ml-producer-01MLPRD01 WP02).
+func (o *fleetUsageObserver) TurnEnded(context.Context, string, string, int, int, time.Duration) {}
+
 // LLMResponse feeds one model response's token usage and cost into the
 // session's open conversation segment. Called from the chat UsageHook.
 func (o *fleetUsageObserver) LLMResponse(ctx context.Context, sessionID string, tokenIn, tokenOut int, costUSD float64) {

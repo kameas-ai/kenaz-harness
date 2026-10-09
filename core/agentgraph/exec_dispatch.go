@@ -53,6 +53,12 @@ type dispatchOutcome struct {
 	// dispatch into the node-level `should_replan` signal.
 	doomLoopHit   bool
 	doomLoopCount int
+
+	// outcome / resultForObserver feed Env.ToolCalls (ml-producer-
+	// 01MLPRD01 WP02). Every exit of dispatchOne sets outcome;
+	// resultForObserver is the tool's own output before the output cap.
+	outcome           ToolOutcome
+	resultForObserver string
 }
 
 func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
@@ -183,6 +189,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 				oc.call.Name,
 			)
 			oc.result = ToolResult{Content: errMsg, IsError: true}
+			oc.outcome = ToolOutcomeError
 			oc.err = fmt.Errorf("tool_dispatch: %s", errMsg)
 			_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 				"err":     errMsg,
@@ -197,6 +204,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		}
 		if msg := validateToolArgs(oc.call.Arguments, oc.call.Name, schemaJSON); msg != "" {
 			oc.result = ToolResult{Content: msg, IsError: true}
+			oc.outcome = ToolOutcomeError
 			oc.err = fmt.Errorf("tool_dispatch: validation: %s", msg)
 			_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 				"err":     msg,
@@ -217,6 +225,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		if env.Policy != nil {
 			if err := env.Policy.CheckTool(ctx, oc.call.Name); err != nil {
 				oc.result = ToolResult{Content: "tool denied by policy: " + err.Error(), IsError: true}
+				oc.outcome = ToolOutcomeDenied
 				oc.err = err
 				_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 					"err":     err.Error(),
@@ -253,6 +262,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 			// is_error result — the sibling calls in this fan-out still
 			// run, exactly as they do for a tool that fails.
 			oc.result = *blocked
+			oc.outcome = ToolOutcomeDenied
 			return
 		}
 		if rewritten {
@@ -285,6 +295,10 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		startedAt := time.Now()
 		tr, callErr := env.Tools.Call(callCtx, ToolCall{ID: oc.call.ID, Name: oc.call.Name, Args: oc.args})
 		duration := time.Since(startedAt)
+		// Classified from what the registry returned, before the
+		// timeout / error wrapping below replaces tr (and with it any
+		// explicit Outcome the registry stated).
+		oc.outcome = deriveToolOutcome(ctx, tr, callErr)
 
 		if isMutating {
 			mutateLock.Unlock()
@@ -338,6 +352,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		// rather than being cleaned up downstream. Results at or under
 		// the cap pass through byte-for-byte.
 		originalBytes := len(tr.Content)
+		oc.resultForObserver = tr.Content
 		capped, elided, handle, archiveErr := capToolOutput(ctx, env, ToolOutputRef{
 			RunID:  env.RunID,
 			NodeID: node.ID,
@@ -414,6 +429,23 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 	// the model; sibling tool calls in the same fan-out continue and the
 	// process does not crash. This mirrors the kernel's safeExecute pattern.
 	safeDispatchOne := func(i int) {
+		// Env.ToolCalls (ml-producer-01MLPRD01 WP02): registered first so
+		// it runs LAST — after the panic recovery below has classified a
+		// panicking call — and therefore fires on every exit of
+		// dispatchOne, the early returns included.
+		callStarted := time.Now()
+		defer func() {
+			oc := &outcomes[i]
+			reportToolCall(env, ToolCallRecord{
+				Ctx:           ctx,
+				SessionID:     env.SessionID,
+				ToolName:      oc.call.Name,
+				Outcome:       oc.outcome,
+				Duration:      time.Since(callStarted),
+				RawArgs:       oc.rawArgs,
+				ResultContent: oc.resultForObserver,
+			})
+		}()
 		defer func() {
 			if r := recover(); r != nil {
 				stack := debug.Stack()
@@ -429,6 +461,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 					IsError: true,
 				}
 				oc.err = fmt.Errorf("tool %q panicked: %v", oc.call.Name, r)
+				oc.outcome = ToolOutcomeError
 				_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 					"err":     fmt.Sprintf("panic: %v", r),
 					"tool":    oc.call.Name,
