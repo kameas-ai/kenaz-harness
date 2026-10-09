@@ -687,7 +687,16 @@ type StreamCheckpointStore interface {
 // alignment (backend-context-window-length-01KQ8TD3 WP06). The hook
 // must not block the chat turn — it should write async or accept the
 // latency.
-type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp corellm.Response)
+//
+// resp is the persisted row's OWN model call — the latest call, which is
+// what the context-window bar measures (last_usage_json /
+// session.usage.updated). billed is what to ADD to the session's
+// cumulative usage for this row: resp plus every earlier call in the turn
+// that produced no row of its own (a fire that only requested tools —
+// dogfood 2026-10-08 round 2: a 3-call tool loop contributed one call to
+// the footer, ~30 % of tokens and cost missing). billed equals resp when
+// there were none.
+type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp, billed corellm.Response)
 
 // TurnUsageObserver receives the conversation-lifecycle facts of a chat turn.
 //
@@ -1585,7 +1594,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 						"session_id", capturedSessionID, "message_id", messageID)
 					return
 				}
-				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp)
+				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp, resp)
 			})
 		}
 		// Register the post_send hook (ledger #46). Unlike the usage hook

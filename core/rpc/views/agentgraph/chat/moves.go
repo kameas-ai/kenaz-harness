@@ -171,6 +171,17 @@ type turnJournal struct {
 	heldResp         corellm.Response
 	heldProviderKind string
 	heldModelID      string
+	// unbilled sums the usage of this turn's model calls that produced
+	// no transcript row of their own — a chat-bound fire whose only
+	// output was tool calls (RecordAssistantMove with empty text). Such
+	// a call has no row for usage.Add to UPDATE, so it used to vanish
+	// from the session's cumulative tokens/cost (dogfood 2026-10-08
+	// round 2: a 3-call tool loop billed one call). fireUsage folds it
+	// into the NEXT row this journal bills, then clears it, so every
+	// call is billed exactly once while last_usage still reports the
+	// row's own (latest) call.
+	unbilled      corellm.Response
+	unbilledCalls int
 	// lastAssistant is the content of the last assistant-role row this
 	// journal actually wrote (a flushed move, the final, or a partial).
 	// UnpersistedTail reads it so a terminal path never re-persists text
@@ -378,7 +389,56 @@ func (j *turnJournal) fireUsage(ctx context.Context, id string, err error,
 	if err != nil || id == "" || j.usageHook == nil {
 		return
 	}
-	j.usageHook(ctx, j.sessionID, id, providerKind, modelID, resp)
+	billed := resp
+	if j.unbilledCalls > 0 {
+		billed = sumUsage(resp, j.unbilled)
+		j.unbilled, j.unbilledCalls = corellm.Response{}, 0
+	}
+	j.usageHook(ctx, j.sessionID, id, providerKind, modelID, resp, billed)
+}
+
+// addUnbilled records a model call that will have no transcript row of
+// its own. Caller holds j.mu.
+func (j *turnJournal) addUnbilled(resp corellm.Response) {
+	if resp.Usage == (corellm.Usage{}) && resp.Cost.Total == 0 {
+		return
+	}
+	j.unbilled = sumUsage(j.unbilled, resp)
+	j.unbilledCalls++
+}
+
+// sumUsage returns a's token and cost figures plus b's. Only the
+// accounting fields are summed; content is not carried. The cost source
+// is a's when set, else b's; an indeterminate price on either side makes
+// the sum indeterminate unless a provider-reported total exists.
+func sumUsage(a, b corellm.Response) corellm.Response {
+	out := corellm.Response{FinishReason: a.FinishReason}
+	out.Usage = corellm.Usage{
+		InputTokens:      a.Usage.InputTokens + b.Usage.InputTokens,
+		OutputTokens:     a.Usage.OutputTokens + b.Usage.OutputTokens,
+		CachedInputRead:  a.Usage.CachedInputRead + b.Usage.CachedInputRead,
+		CachedInputWrite: a.Usage.CachedInputWrite + b.Usage.CachedInputWrite,
+		ReasoningTokens:  a.Usage.ReasoningTokens + b.Usage.ReasoningTokens,
+		ImagesGenerated:  a.Usage.ImagesGenerated + b.Usage.ImagesGenerated,
+	}
+	out.Cost = corellm.Cost{
+		Currency:      a.Cost.Currency,
+		Total:         a.Cost.Total + b.Cost.Total,
+		InputCost:     a.Cost.InputCost + b.Cost.InputCost,
+		OutputCost:    a.Cost.OutputCost + b.Cost.OutputCost,
+		CachedCost:    a.Cost.CachedCost + b.Cost.CachedCost,
+		ReasoningCost: a.Cost.ReasoningCost + b.Cost.ReasoningCost,
+		ImageCost:     a.Cost.ImageCost + b.Cost.ImageCost,
+		Indeterminate: a.Cost.Indeterminate && b.Cost.Indeterminate,
+		Source:        a.Cost.Source,
+	}
+	if out.Cost.Currency == "" {
+		out.Cost.Currency = b.Cost.Currency
+	}
+	if out.Cost.Source == "" {
+		out.Cost.Source = b.Cost.Source
+	}
+	return out
 }
 
 // flushHeld writes the parked assistant text as an assistant_move.
@@ -468,6 +528,8 @@ func (j *turnJournal) RecordAssistantMove(ctx context.Context, text string,
 	idx := j.openIdx
 	j.openIdx = -1
 	if text == "" {
+		// No row for this call (tools only): bill it with the next row.
+		j.addUnbilled(resp)
 		return
 	}
 	j.flushHeld(ctx)

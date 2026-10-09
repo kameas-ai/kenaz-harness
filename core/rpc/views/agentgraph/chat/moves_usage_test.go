@@ -89,28 +89,29 @@ func testMoveToolCalls(calls []coreag.ToolCallRequest) []session.ToolCall {
 // makes this a faithful test of the wiring rather than a test of a
 // stand-in that could drift from production and hide a real defect.
 func testUsageHook(usageMgr usage.Manager, sessionMgr *session.Manager) UsageHookFunc {
-	return func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp corellm.Response) {
-		var costUSD *float64
-		source := "unknown"
+	classify := func(resp corellm.Response) (*float64, string) {
 		switch {
 		case resp.Cost.Source == "provider" && resp.Cost.Total > 0:
 			v := resp.Cost.Total
-			costUSD = &v
-			source = "provider"
+			return &v, "provider"
 		case !resp.Cost.Indeterminate && resp.Cost.Total > 0:
 			v := resp.Cost.Total
-			costUSD = &v
-			source = "derived"
+			return &v, "derived"
 		}
+		return nil, "unknown"
+	}
+	return func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp, billed corellm.Response) {
+		costUSD, source := classify(resp)
+		billedCost, billedSource := classify(billed)
 		_ = usageMgr.Add(ctx, usage.UsageTurn{
 			SessionID:        sessionID,
 			MessageID:        messageID,
 			ProviderKind:     providerKind,
 			ModelID:          modelID,
-			PromptTokens:     resp.Usage.InputTokens,
-			CompletionTokens: resp.Usage.OutputTokens,
-			CostUSD:          costUSD,
-			CostSource:       source,
+			PromptTokens:     billed.Usage.InputTokens,
+			CompletionTokens: billed.Usage.OutputTokens,
+			CostUSD:          billedCost,
+			CostSource:       billedSource,
 		})
 		costVal := 0.0
 		if costUSD != nil {

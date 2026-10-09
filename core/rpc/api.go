@@ -8096,29 +8096,22 @@ func buildChatRunner(
 		capturedUsageMgr := usageMgr
 		capturedSessionMgr := sessionMgr
 		capturedBroker := broker
-		usageHookFn = func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp corellm.Response) {
-			var costUSD *float64
-			source := "unknown"
-			switch {
-			case resp.Cost.Source == "provider" && resp.Cost.Total > 0:
-				v := resp.Cost.Total
-				costUSD = &v
-				source = "provider"
-			case !resp.Cost.Indeterminate && resp.Cost.Total > 0:
-				v := resp.Cost.Total
-				costUSD = &v
-				source = "derived"
-			}
+		usageHookFn = func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp, billed corellm.Response) {
+			// resp = this row's own (latest) call: drives the context bar.
+			// billed = resp + any earlier tool-only calls of the turn that
+			// had no row of their own: what the cumulative footer counts.
+			costUSD, source := usageCost(resp)
 			if capturedUsageMgr != nil {
+				billedCost, billedSource := usageCost(billed)
 				turn := usage.UsageTurn{
 					SessionID:        sessionID,
 					MessageID:        messageID,
 					ProviderKind:     providerKind,
 					ModelID:          modelID,
-					PromptTokens:     resp.Usage.InputTokens,
-					CompletionTokens: resp.Usage.OutputTokens,
-					CostUSD:          costUSD,
-					CostSource:       source,
+					PromptTokens:     billed.Usage.InputTokens,
+					CompletionTokens: billed.Usage.OutputTokens,
+					CostUSD:          billedCost,
+					CostSource:       billedSource,
 				}
 				if err := capturedUsageMgr.Add(ctx, turn); err != nil {
 					logging.L().Warn("usage.add.failed",
@@ -8132,9 +8125,15 @@ func buildChatRunner(
 				costVal = *costUSD
 			}
 			// Fleet usage lifecycle: token + cost totals for the session's
-			// open conversation segment. Numbers only — the model id, the
-			// message id and the response text do not cross this call.
-			fleetUsage.LLMResponse(ctx, sessionID, resp.Usage.InputTokens, resp.Usage.OutputTokens, costVal)
+			// open conversation segment — a running total, so it takes the
+			// billed figures (every call), not just the row's own call.
+			// Numbers only — the model id, the message id and the response
+			// text do not cross this call.
+			billedVal := 0.0
+			if bc, _ := usageCost(billed); bc != nil {
+				billedVal = *bc
+			}
+			fleetUsage.LLMResponse(ctx, sessionID, billed.Usage.InputTokens, billed.Usage.OutputTokens, billedVal)
 			snap := session.LastUsage{
 				PromptTokens:     resp.Usage.InputTokens,
 				CompletionTokens: resp.Usage.OutputTokens,
@@ -10555,6 +10554,21 @@ func (w *keychainWriter) Write(ctx context.Context, locator string, plaintext []
 // back to personal.DefaultPath() ($USER_CONFIG_DIR/kenaz-harness).
 // A construction failure returns nil; the rpc impl treats a nil store
 // as "personal store unavailable" and the chassis still boots.
+// usageCost classifies a response's cost the way token-cost-telemetry
+// records it: a provider-reported total, else a price-table derivation,
+// else unknown (nil).
+func usageCost(resp corellm.Response) (*float64, string) {
+	switch {
+	case resp.Cost.Source == "provider" && resp.Cost.Total > 0:
+		v := resp.Cost.Total
+		return &v, "provider"
+	case !resp.Cost.Indeterminate && resp.Cost.Total > 0:
+		v := resp.Cost.Total
+		return &v, "derived"
+	}
+	return nil, "unknown"
+}
+
 // profileDefaultModel is the model a profile dispatches when the caller
 // gives no override: Model, else the first of Models.
 func profileDefaultModel(p corellm.ProviderProfile) string {
