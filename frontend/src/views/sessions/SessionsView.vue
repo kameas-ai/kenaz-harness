@@ -818,18 +818,22 @@ async function runUserSlashCommand(
   appendSlashResult(sid, result.kind, result.text);
 }
 
-// Built-in slash command names, fetched once per view. A failed fetch
-// reads as "no built-ins" — the user lookup then runs first, and an
-// unknown token still reaches the built-in registry below.
+// Built-in slash command names (fleet skills excluded — they rank below
+// user commands), fetched once per view. A failed fetch reads as "no
+// built-ins" for this command only and is retried next time.
 let builtinSlashNames: Promise<Set<string>> | null = null;
 async function isBuiltinSlash(token: string): Promise<boolean> {
   if (!builtinSlashNames) {
     builtinSlashNames = client.slash
       .list()
-      .then((list) => new Set(list.map((c) => c.name)))
-      .catch(() => new Set<string>());
+      .then((list) => new Set(list.filter((c) => !c.isUser && !c.isSkill).map((c) => c.name)));
   }
-  return (await builtinSlashNames).has(token);
+  try {
+    return (await builtinSlashNames).has(token);
+  } catch {
+    builtinSlashNames = null;
+    return false;
+  }
 }
 
 /**

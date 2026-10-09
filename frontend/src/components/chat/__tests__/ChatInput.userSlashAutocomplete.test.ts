@@ -10,14 +10,17 @@ import ChatInput from '@/components/chat/ChatInput.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 
-function mountWithUserCommands(list: () => Promise<unknown>) {
+function mountWithUserCommands(list: () => Promise<unknown>, builtins?: () => Promise<unknown>) {
   const base = createFakeHarnessClient();
   return mount(ChatInput, {
     global: {
       plugins: [
         {
           install(app) {
-            provideFakeClient(app, { slashcmd: { ...base.slashcmd, list } } as never);
+            provideFakeClient(app, {
+              slashcmd: { ...base.slashcmd, list },
+              ...(builtins ? { slash: { ...base.slash, list: builtins } } : {}),
+            } as never);
           },
         },
       ],
@@ -41,6 +44,30 @@ describe('ChatInput slash autocomplete — user commands', () => {
     expect(opts).toHaveLength(1);
     expect(opts[0].text()).toContain('bughunt');
     expect(opts[0].find('[data-testid="slash-user-chip"]').exists()).toBe(true);
+  });
+
+  it('a user command replaces a same-named fleet skill; a built-in keeps its slot', async () => {
+    const w = mountWithUserCommands(
+      async () => [
+        { name: 'pr', scope: 'global', kind: 'prompt', description: 'Mine', modelInvokable: true },
+        { name: 'help', scope: 'global', kind: 'text', description: 'Shadow', modelInvokable: false },
+      ],
+      async () => [
+        { name: 'help', description: 'Built-in help', comingSoon: false },
+        { name: 'pr', description: 'Org skill', comingSoon: false, isSkill: true },
+      ],
+    );
+    await flushPromises();
+    const textarea = w.find('textarea');
+    await textarea.setValue('/');
+    await flushPromises();
+    const texts = w.findAll('[data-testid^="slash-option-"]').map((o) => o.text());
+    const pr = texts.filter((t) => t.includes('pr'));
+    expect(pr).toHaveLength(1);
+    expect(pr[0]).toContain('Mine');
+    const help = texts.filter((t) => t.includes('help'));
+    expect(help).toHaveLength(1);
+    expect(help[0]).toContain('Built-in help');
   });
 
   it('a user-command lookup failure leaves the built-ins working', async () => {

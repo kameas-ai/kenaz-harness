@@ -30,6 +30,10 @@ type CommandInfo struct {
 	// IsUser, when true, marks this as a user-defined command
 	// (as opposed to a built-in). The frontend renders a "user" chip.
 	IsUser bool `json:"isUser,omitempty"`
+	// IsSkill marks a fleet-installed skill. Skills are listed by the
+	// same registry as built-ins but rank below user commands, so a
+	// caller deciding "built-in wins" must exclude them.
+	IsSkill bool `json:"isSkill,omitempty"`
 }
 
 // ExecuteResult is the wire shape returned by Execute. Text is the

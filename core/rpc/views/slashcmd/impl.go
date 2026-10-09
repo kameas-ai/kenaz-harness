@@ -106,6 +106,7 @@ func (a *API) List(_ context.Context) ([]CommandInfo, error) {
 			Description: cmd.Description(),
 			ComingSoon:  cmd.ComingSoon(),
 			IsUser:      false,
+			IsSkill:     coreslashcmd.IsSkill(cmd),
 		})
 	}
 	return out, nil

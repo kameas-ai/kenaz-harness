@@ -8295,6 +8295,7 @@ export namespace slashcmd {
 	    description: string;
 	    comingSoon: boolean;
 	    isUser?: boolean;
+	    isSkill?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new CommandInfo(source);
@@ -8306,6 +8307,7 @@ export namespace slashcmd {
 	        this.description = source["description"];
 	        this.comingSoon = source["comingSoon"];
 	        this.isUser = source["isUser"];
+	        this.isSkill = source["isSkill"];
 	    }
 	}
 	export class ExecuteResult {

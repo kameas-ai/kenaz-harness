@@ -31,7 +31,13 @@ const BUGHUNT: UserCommand = {
   body: 'Triage the reported bug.',
 };
 
-async function mountView(opts: { userCmd: UserCommand | null; runText?: string; runKind?: string; promptRendered?: boolean }) {
+async function mountView(opts: {
+  userCmd: UserCommand | null;
+  runText?: string;
+  runKind?: string;
+  promptRendered?: boolean;
+  builtinList?: () => Promise<unknown>;
+}) {
   const base = createFakeHarnessClient();
   const appendMessage = vi.fn(async (id: string, role: string, content: string) => ({
     id: 'new', sessionId: id, role: role as 'user', content, createdAt: '2026-10-08T00:00:00Z',
@@ -49,6 +55,7 @@ async function mountView(opts: { userCmd: UserCommand | null; runText?: string; 
   const execute = vi.fn(async (_sid: string, raw: string) => {
     const name = raw.slice(1).split(' ')[0];
     if (name === 'help') return { kind: 'info', text: 'built-in help' };
+    if (name === 'pr') return { kind: 'info', text: 'fleet skill pr' };
     throw new Error(`slashcmd: unknown command: "${name}"`);
   });
   const router = createRouter({
@@ -85,7 +92,12 @@ async function mountView(opts: { userCmd: UserCommand | null; runText?: string; 
               slash: {
                 ...base.slash,
                 execute,
-                list: async () => [{ name: 'help', description: 'Help', comingSoon: false }],
+                list:
+                  opts.builtinList ??
+                  (async () => [
+                    { name: 'help', description: 'Help', comingSoon: false },
+                    { name: 'pr', description: 'Org PR skill', comingSoon: false, isSkill: true },
+                  ]),
               },
             } as never);
           },
@@ -138,6 +150,39 @@ describe('SessionsView — user slash-command routing', () => {
     expect(execute).toHaveBeenCalled();
     expect(get).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
+    expect(w.text()).toContain('built-in help');
+    w.unmount();
+  });
+
+  it('a user command beats a fleet skill of the same name (user > skill)', async () => {
+    const { w, run, execute } = await mountView({
+      userCmd: { ...BUGHUNT, name: 'pr', kind: 'text' },
+      runText: 'my own pr command',
+      promptRendered: false,
+    });
+    w.findComponent(ChatInput).vm.$emit('slashCommand', '/pr');
+    await flushPromises();
+    expect(run).toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(w.text()).toContain('my own pr command');
+    w.unmount();
+  });
+
+  it('a failed built-in list is retried, not cached as "no built-ins"', async () => {
+    const builtinList = vi
+      .fn()
+      // Once for the composer's own autocomplete fetch at mount, once for
+      // the view's first built-in check.
+      .mockRejectedValueOnce(new Error('not wired yet'))
+      .mockRejectedValueOnce(new Error('not wired yet'))
+      .mockResolvedValue([{ name: 'help', description: 'Help', comingSoon: false }]);
+    const { w, get } = await mountView({ userCmd: { ...BUGHUNT, name: 'help', kind: 'text' }, builtinList });
+    w.findComponent(ChatInput).vm.$emit('slashCommand', '/help');
+    await flushPromises();
+    get.mockClear();
+    w.findComponent(ChatInput).vm.$emit('slashCommand', '/help');
+    await flushPromises();
+    expect(get).not.toHaveBeenCalled(); // second time the built-in is known
     expect(w.text()).toContain('built-in help');
     w.unmount();
   });
