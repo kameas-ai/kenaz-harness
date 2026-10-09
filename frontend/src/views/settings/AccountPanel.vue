@@ -62,8 +62,18 @@ const envName = computed(() => (profile.value?.name ?? '').toUpperCase());
 const tierLabel = computed(() => identity.value?.tier ?? '');
 /** Roles from the enroll payload (FR-9 / F8b). */
 const rolesLabel = computed(() => formatRoles(identity.value?.roles));
-/** Primary name line: display name, else nothing (email has its own row). */
-const nameLabel = computed(() => identity.value?.displayName?.trim() ?? '');
+/**
+ * Primary name line: display name, else nothing (email has its own row).
+ * Dogfood 2026-10-08 P3: fleet falls back to the email when the user set no
+ * display name, so "Name" showed the email a second time. A display name
+ * that is just the email is not a name — hide the row.
+ */
+const nameLabel = computed(() => {
+  const name = identity.value?.displayName?.trim() ?? '';
+  const email = identity.value?.email?.trim() ?? '';
+  if (name && email && name.toLowerCase() === email.toLowerCase()) return '';
+  return name;
+});
 /** This device's registered handoff-key fingerprint (sha256:<hex>). */
 const handoffFingerprint = computed(() => {
   const dk = fleet.session.value?.deviceKeys;
