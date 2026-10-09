@@ -807,14 +807,41 @@ async function onArgFillSubmit(args: Record<string, string>) {
   if (!fill) return;
   const sid = sessionId.value;
   if (!sid) return;
+  await runUserSlashCommand(sid, fill.command, args, '');
+}
+
+/**
+ * runUserSlashCommand runs a user-defined slash command (dogfood
+ * 2026-10-08 round 2). A PROMPT-kind command's rendered body is an
+ * instruction for the model, so it is sent as the user's turn — with any
+ * text typed after the command appended — instead of being shown as a
+ * system bubble nobody acts on. Text and tool commands render their
+ * result as before.
+ */
+async function runUserSlashCommand(
+  sid: string,
+  cmd: UserCommand,
+  args: Record<string, string>,
+  rest: string,
+) {
   let result;
   try {
-    result = await client.slashcmd.run(fill.command.name, args, sid, fill.command.projectId ?? '', '', '');
+    result = await client.slashcmd.run(cmd.name, args, sid, cmd.projectId ?? '', '', '');
   } catch (err) {
     appendSlashResult(sid, 'error', err instanceof Error ? err.message : String(err));
     return;
   }
+  if (result.kind !== 'error' && result.metadata?.['prompt_rendered'] === true) {
+    const prompt = rest ? `${result.text}\n\n${rest}` : result.text;
+    await onSend(prompt);
+    return;
+  }
   appendSlashResult(sid, result.kind, result.text);
+}
+
+/** Honest copy for a slash token that matches neither registry. */
+function unknownSlashMessage(token: string): string {
+  return `No user or built-in command named "/${token}". Type /help to list commands.`;
 }
 
 async function onSlashCommand(raw: string) {
@@ -828,12 +855,16 @@ async function onSlashCommand(raw: string) {
   // If it resolves to a user-defined command with declared inputs, open
   // the SlashArgFill panel rather than dispatching immediately.
   const trimmedRaw = raw.trim();
+  let slashToken = '';
   if (trimmedRaw.startsWith('/')) {
     const token = trimmedRaw.slice(1).split(/\s+/)[0] ?? '';
+    slashToken = token;
     if (token) {
       let userCmd: UserCommand | null = null;
       try {
-        userCmd = await client.slashcmd.get(token, '');
+        // The session's project, so a project-scoped command resolves
+        // too; LoadUserOne still finds global commands under any id.
+        userCmd = await client.slashcmd.get(token, session.session.value?.projectId ?? '');
       } catch {
         // not a user command — fall through to built-in dispatch
       }
@@ -841,20 +872,36 @@ async function onSlashCommand(raw: string) {
         pendingArgFill.value = { command: userCmd, raw };
         return;
       }
+      if (userCmd) {
+        // dogfood 2026-10-08 round 2: a user command with NO declared
+        // inputs used to fall through to the built-in registry below,
+        // which only knows built-ins — so "/bughunt <text>" for a
+        // freshly created command answered `slashcmd: unknown command:
+        // "bughunt"`. The lookup had found it; the routing dropped it.
+        const rest = trimmedRaw.slice(1 + token.length).trim();
+        await runUserSlashCommand(sid, userCmd, {}, rest);
+        return;
+      }
     }
   }
 
-  // ── Built-in / no-input dispatch ─────────────────────────────────────
+  // ── Built-in dispatch ─────────────────────────────────────────────────
   let result: SlashExecuteResult;
   try {
     result = await client.slash.execute(sid, raw);
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     appendSlashResult(
       sid,
       'error',
-      err instanceof Error ? err.message : String(err),
+      // The registry's own text ("slashcmd: unknown command: …") reads
+      // as if user commands were never consulted. They were.
+      /unknown command/i.test(msg) && slashToken ? unknownSlashMessage(slashToken) : msg,
     );
     return;
+  }
+  if (result.kind === 'error' && /^unknown command/i.test(result.text) && slashToken) {
+    result = { ...result, text: unknownSlashMessage(slashToken) };
   }
   appendSlashResult(sid, result.kind, result.text);
 
