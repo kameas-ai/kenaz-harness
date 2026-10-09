@@ -719,6 +719,8 @@ type ReasoningBlock struct {
 // provider's convention, kept as reported: Anthropic's input_tokens
 // excludes both, while OpenAI-compatible prompt_tokens (OpenRouter) and
 // Gemini's promptTokenCount include them.
+//
+// PromptTokensTotal normalises the two conventions.
 type Usage struct {
 	InputTokens      int `json:"input_tokens"`
 	OutputTokens     int `json:"output_tokens"`

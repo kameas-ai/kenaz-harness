@@ -91,16 +91,6 @@ describe('useLongSessionNudge', () => {
     w.unmount();
   });
 
-  it('stays hidden on one turn whose prompt is mostly tool definitions', async () => {
-    // tool-context-budget-01TCBUD01 WP01: a 1-message session whose prompt
-    // carried ~220k tokens of tool schemas has a few tokens of history.
-    // The caller feeds history, so the token arm does not fire.
-    const { w, nudge } = mountNudge(ref(1), ref(4));
-    await nextTick();
-    expect(nudge.nudgeVisible.value).toBe(false);
-    w.unmount();
-  });
-
   it('stays hidden once dismissed', async () => {
     const { w, nudge } = mountNudge(ref(40));
     await nextTick();

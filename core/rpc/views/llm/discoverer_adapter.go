@@ -41,9 +41,20 @@ type mcpToolDiscoverer struct {
 	perms    toolloop.PermissionResolver
 	builtins toolloop.BuiltinLookup
 
-	// sizes holds each server's summed schema estimate as of its last
+	// sizes holds each MCP server's summed schema estimate as of its last
 	// discovery, so a tools/list refresh that moves it by more than
 	// schemaSizeChangeRatio is logged once, at the discovery that sees it.
+	//
+	// Estimates are recomputed on every discovery (once per chat run),
+	// not cached per tools/list version (2026-10-09; owner alec): the
+	// pool exposes no list version to key a cache on, and the estimate is
+	// a length count. WP02/WP04 revisit this if the resolver needs
+	// estimates outside a discovery.
+	//
+	// This catalog lists only servable tools (dispatch.Pool.Tools omits
+	// stopped and failed servers), so it is no source for the digest's
+	// "(stopped)" marker (2026-10-09; owner alec): WP03 reads server state
+	// from the recipe / pool status instead.
 	sizesMu sync.Mutex
 	sizes   map[string]int
 }
@@ -84,9 +95,12 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 	if d.pool == nil && (d.builtins == nil || d.builtins.Empty()) {
 		return nil, nil
 	}
-	// out is this session's catalog; listedAll is every listed tool before
-	// the per-session permission filter, which is what a server's schema
-	// size is measured over (a session's allowlist is not a size change).
+	// out is this session's catalog; listedAll is every pool-listed tool
+	// before the per-session permission filter, which is what a server's
+	// schema size is measured over (a session's allowlist is not a size
+	// change). Built-ins are not measured for the change log: their
+	// listing is post-enable-filter, so a Settings toggle would read as a
+	// schema change, and their definitions only change with a release.
 	var out, listedAll []corellm.ToolSpec
 	if d.pool != nil {
 		raw, err := d.pool.Tools(ctx)
@@ -146,7 +160,6 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 				Server:      server,
 			}
 			spec.TokenEst = corellm.EstimateToolSpecTokens(spec)
-			listedAll = append(listedAll, spec)
 			// Visibility matches reachability for builtins too
 			// (model-harness-toolset-01MHTS001 WP02 security review, M2):
 			// a builtin the resolver denies for this session — e.g. one
@@ -176,7 +189,7 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 	return out, nil
 }
 
-// noteSchemaSizes sums the catalog's estimates per server and logs
+// noteSchemaSizes sums the pool catalog's estimates per server and logs
 // tools.schema_size_changed for every server whose sum moved by more
 // than schemaSizeChangeRatio since the previous discovery. A server
 // seen for the first time records its baseline without logging; a

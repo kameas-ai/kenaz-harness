@@ -15,6 +15,9 @@
  * provider's own count. Memory is listed only when non-zero: memory
  * snippets that arrive as messages are counted in history.
  *
+ * No schema-budget line yet (spec §2.5; 2026-10-09, owner alec): there is
+ * no budget to show until WP04 applies one. WP04 adds it here.
+ *
  * The default slot receives `{ open }` so the trigger content can drop its
  * own `title` while the panel is showing.
  */

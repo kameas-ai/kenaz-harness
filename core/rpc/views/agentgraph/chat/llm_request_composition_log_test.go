@@ -31,12 +31,12 @@ func TestGenerate_LogsRequestCompositionWithEveryField(t *testing.T) {
 		Usage:        corellm.Usage{InputTokens: 224798, OutputTokens: 9, CachedInputRead: 200000, CachedInputWrite: 24000},
 	}
 	reg := &usageStubRegistry{stream: &usageStubStream{final: final}}
-	attachment := strings.Repeat("a", 70) // 20 tokens
+	attachment := strings.Repeat("a", 80) // 80 runes / 4 = 20 tokens
 	adapter := NewLLMProviderAdapter(reg, "p-openrouter", "anthropic/claude-haiku", tools, nil).
 		WithSessionID("sess-comp").
 		WithAttachments(fixedAttachments{content: attachment})
 
-	history := strings.Repeat("h", 350) // 100 tokens
+	history := strings.Repeat("h", 396) // 99 tokens + 4 message framing = 103
 	logs := captureChatLog(t, func() {
 		if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{
 			SystemPrompt: "base",
@@ -63,8 +63,9 @@ func TestGenerate_LogsRequestCompositionWithEveryField(t *testing.T) {
 		"tools_summary":          0,
 		"tools_tokens_est":       float64(1000 + bashEst),
 		"attachments_tokens_est": 20,
-		"history_tokens_est":     100,
+		"history_tokens_est":     103,
 		"prompt_tokens":          224798,
+		"prompt_tokens_total":    224798, // openrouter: prompt_tokens already includes the cache
 		"cached_tokens":          200000,
 		"cache_write_tokens":     24000,
 		"budget":                 0,
@@ -84,11 +85,12 @@ func TestGenerate_LogsRequestCompositionWithEveryField(t *testing.T) {
 	if !ok || sysChars < float64(len("base")+len(attachment)) {
 		t.Errorf("system_chars = %v, want at least the base prompt plus the attachment", rec["system_chars"])
 	}
-	if rec["outcome"] != "ok" || rec["session_id"] != "sess-comp" {
-		t.Errorf("outcome/session_id = %v/%v, want ok/sess-comp", rec["outcome"], rec["session_id"])
+	if rec["outcome"] != "ok" || rec["session_id"] != "sess-comp" || rec["provider_kind"] != "openrouter" {
+		t.Errorf("outcome/session_id/provider_kind = %v/%v/%v, want ok/sess-comp/openrouter",
+			rec["outcome"], rec["session_id"], rec["provider_kind"])
 	}
 	// The system part excludes the attachment, so the parts do not overlap.
-	if st, _ := rec["system_tokens_est"].(float64); st <= 0 || st >= sysChars/3.5 {
+	if st, _ := rec["system_tokens_est"].(float64); st <= 0 || st >= sysChars/4 {
 		t.Errorf("system_tokens_est = %v, want > 0 and less than the whole system prompt (%v chars)", st, sysChars)
 	}
 
@@ -96,7 +98,7 @@ func TestGenerate_LogsRequestCompositionWithEveryField(t *testing.T) {
 	if comp == nil {
 		t.Fatal("response carries no composition")
 	}
-	if comp.Tools != 1000+bashEst || comp.History != 100 || comp.Attachments != 20 || comp.Cached != 200000 || comp.ToolsFull != 2 {
+	if comp.Tools != 1000+bashEst || comp.History != 103 || comp.Attachments != 20 || comp.Cached != 200000 || comp.ToolsFull != 2 {
 		t.Errorf("composition = %+v", *comp)
 	}
 }

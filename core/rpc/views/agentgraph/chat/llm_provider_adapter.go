@@ -780,7 +780,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		compErr   error
 	)
 	defer func() {
-		logComposition(a.sessionID, comp, len(gen.System), compUsage, compErr)
+		logComposition(a.sessionID, a.ProviderKind(), comp, len(gen.System), compUsage, compErr)
 	}()
 
 	// Carry the per-node sampling knobs already threaded through the
@@ -1096,22 +1096,27 @@ func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
 	return out
 }
 
-// measureComposition estimates each part of an outbound request.
+// measureComposition estimates each part of an outbound request with
+// the shared tokenizer rule, so System + History equals what compaction
+// and the request-too-large check count for the same request.
 // attachmentsBlock is the attachments layer already joined into
 // gen.System; it is reported as its own part and subtracted from the
 // system part so the parts do not double-count.
 //
-// Memory is 0 at this seam: memory.retrieve output arrives as an
-// ordinary message, indistinguishable here from the rest of the history,
-// and is counted in History.
+// Memory is 0 (2026-10-09; owner alec): no producer feeds a memory part
+// to this seam — memory.retrieve output arrives as an ordinary message,
+// indistinguishable here from the rest of the history, and is counted in
+// History. A recall layer that reaches the request separately is what
+// fills it.
 func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) corellm.PromptComposition {
-	systemBytes := len(gen.System) - len(attachmentsBlock)
-	if systemBytes < 0 {
-		systemBytes = 0
+	attachments := corellm.EstimateTokens(attachmentsBlock)
+	system := corellm.SystemTokens(gen.System) - attachments
+	if system < 0 {
+		system = 0
 	}
 	return corellm.PromptComposition{
-		System:      corellm.EstimateTokens(systemBytes),
-		Attachments: corellm.EstimateTokens(len(attachmentsBlock)),
+		System:      system,
+		Attachments: attachments,
 		Tools:       corellm.ToolsTokens(gen.Tools),
 		History:     corellm.MessagesTokens(gen.Messages),
 		ToolsFull:   len(gen.Tools),
@@ -1120,15 +1125,23 @@ func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) 
 
 // logComposition writes the one llm.request.composition line of a model
 // call. usage is the provider's report (zero when the call failed before
-// one arrived). budget and evicted are 0: no schema budget or eviction
-// is applied to the request yet.
-func logComposition(sessionID string, comp corellm.PromptComposition, systemChars int, usage corellm.Usage, err error) {
+// one arrived). prompt_tokens is the provider's input count as reported;
+// prompt_tokens_total is the whole prompt under every provider's
+// convention (llm.PromptTokensTotal), which is the figure the estimates
+// are comparable with.
+//
+// budget and evicted are 0: no schema budget or eviction is applied to
+// the request yet (WP04). FR-H3 — the estimated parts reconciling with
+// prompt_tokens_total within 10 % — is not asserted anywhere yet
+// (2026-10-09; owner alec; deferred to WP08's recorded-frame test).
+func logComposition(sessionID, providerKind string, comp corellm.PromptComposition, systemChars int, usage corellm.Usage, err error) {
 	outcome := "ok"
 	if err != nil {
 		outcome = "error"
 	}
 	logging.L().Info("llm.request.composition",
 		"session_id", sessionID,
+		"provider_kind", providerKind,
 		"outcome", outcome,
 		"tools_full", comp.ToolsFull,
 		"tools_summary", comp.ToolsSummary,
@@ -1138,6 +1151,7 @@ func logComposition(sessionID string, comp corellm.PromptComposition, systemChar
 		"attachments_tokens_est", comp.Attachments,
 		"history_tokens_est", comp.History,
 		"prompt_tokens", usage.InputTokens,
+		"prompt_tokens_total", corellm.PromptTokensTotal(usage, providerKind),
 		"cached_tokens", usage.CachedInputRead,
 		"cache_write_tokens", usage.CachedInputWrite,
 		"budget", 0,

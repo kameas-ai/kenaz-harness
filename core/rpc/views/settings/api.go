@@ -648,8 +648,10 @@ type Settings struct {
 	// rejected at Save.
 	LongSessionNudgeTurns int `json:"longSessionNudgeTurns,omitempty"`
 
-	// LongSessionNudgeTokens is the cumulative prompt-token threshold
-	// after which the nudge banner appears regardless of turn count.
+	// LongSessionNudgeTokens is the conversation-history token threshold
+	// (the history part of the last request's composition, not the whole
+	// prompt) after which the nudge banner appears regardless of turn
+	// count.
 	// Default 50000. Zero falls back to the default via
 	// EffectiveLongSessionNudgeTokens. Negative values are rejected at
 	// Save.
@@ -1875,8 +1877,9 @@ type AuditSettings struct {
 // long-session nudge banner fires.
 const DefaultLongSessionNudgeTurns = 30
 
-// DefaultLongSessionNudgeTokens is the spec-locked cumulative prompt-token
-// threshold after which the nudge banner fires regardless of turn count.
+// DefaultLongSessionNudgeTokens is the spec-locked conversation-history
+// token threshold after which the nudge banner fires regardless of turn
+// count.
 const DefaultLongSessionNudgeTokens = 50000
 
 // EffectiveLongSessionNudgeTurns returns the user-tuned threshold or the

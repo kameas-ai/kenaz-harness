@@ -47,7 +47,9 @@ const title = (() => {
           : 'Unknown cost source';
   return [
     `${u.promptTokens.toLocaleString()} prompt + ${u.completionTokens.toLocaleString()} completion = ${u.totalTokens.toLocaleString()} tokens`,
-    u.cachedTokens ? `${u.cachedTokens.toLocaleString()} prompt tokens served from cache` : '',
+    u.cachedTokens
+      ? `${u.cachedTokens.toLocaleString()} prompt tokens served from cache (included in the prompt total on OpenRouter/Gemini)`
+      : '',
     u.costUsd > 0 ? `$${u.costUsd.toFixed(6)} USD — ${src}` : src,
     u.pricingDataDate ? `Pricing data: ${u.pricingDataDate}` : '',
   ]

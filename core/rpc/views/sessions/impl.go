@@ -1014,13 +1014,14 @@ func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, err
 		if last, lerr := a.mgr.GetLastUsage(ctx, id); lerr == nil && last.Composition != nil {
 			c := last.Composition
 			out.Composition = &UsageComposition{
-				System:      c.System,
-				Tools:       c.Tools,
-				History:     c.History,
-				Attachments: c.Attachments,
-				Memory:      c.Memory,
-				Cached:      c.Cached,
-				ToolsFull:   c.ToolsFull,
+				System:       c.System,
+				Tools:        c.Tools,
+				History:      c.History,
+				Attachments:  c.Attachments,
+				Memory:       c.Memory,
+				Cached:       c.Cached,
+				ToolsFull:    c.ToolsFull,
+				ToolsSummary: c.ToolsSummary,
 			}
 		}
 	}

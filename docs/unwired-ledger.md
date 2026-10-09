@@ -6221,6 +6221,43 @@ should not settle in passing. **Blocker:** none technical — needs the refresh
 design. **Owner:** alec — the Settings-health refresh follow-up deletes this
 entry.
 
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP01) — ad-hoc token estimators beside the canonical one
+
+`core/llm/tokenizer.CountRequestTokens` (ceil(runes / 4) + 4 framing per
+message) is the one token estimator: compaction (`core/agentgraph/
+exec_compute.go` `estimateTokens`), the chat request-too-large check, the
+session compaction strategy and, as of WP01, the request composition
+(`core/llm/token_estimate.go`) all go through it. Five call sites still
+carry their own `/ 4` arithmetic and can drift from it:
+
+- `core/workflows/catalog/preview.go:95` — `len(st.UserPrompt) / 4` (bytes, floor) for the cost preview.
+- `core/contextbootstrap/extraction.go:511` — `len(s) / 4` (bytes, floor).
+- `core/agentgraph/compaction/strategies.go:743` `approxTokens(b int)` — `ceil(bytes / 4)`. Not a one-line convergence: its ~10 callers hold byte counts, not text, so moving it to the per-rune rule means threading the strings (or rune counts) through the strategies.
+- `frontend/src/shell/NewSessionDialog.vue:69` and `frontend/src/views/contexts/ContextPreview.vue:51` — client-side `/ 4` previews; the frontend has no shared estimator.
+
+Same rule for ASCII text; they disagree on non-ASCII text (bytes vs runes)
+and on framing. **Blocker:** none technical. **Owner:** alec — a
+follow-up that routes each through `tokenizer.CountText` /
+`CountRequestTokens` (and a small TS port for the two views) deletes this
+entry.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP01) — derived cost double-charges cached prompt tokens on inclusive providers
+
+`core/llm/cost/reducer.go:150-155` (`Reducer.Derive`) and `:233-237`
+(`DeriveWithSource`, pricing-table branch) charge `Usage.InputTokens` at
+the full input rate **plus** `Usage.CachedInputRead` at the cached rate.
+That is right for Anthropic, whose `input_tokens` excludes cache reads,
+and wrong for providers whose `InputTokens` already includes them
+(OpenRouter's `prompt_tokens`, Gemini's `promptTokenCount`,
+`llm.InputExcludesCache`): the cached tokens are charged twice. Latent
+until WP01, because only Gemini reported cache reads and OpenRouter
+returns a provider cost (branch 1) on every call; WP01 makes OpenRouter
+report them, so a derived fallback on OpenRouter now over-charges.
+**Blocker:** WP05 settles one cost convention (charge
+`InputTokens - CachedInputRead` at the input rate on inclusive
+providers). **Owner:** WP05 of tool-context-budget-01TCBUD01 — deletes
+this entry.
+
 ## Drained
 
 ### 2026-10-07 · CLOSED — project sync advertised an agent-memory class that shipped nothing (`memory-sync-01MEMSY01` WP01)

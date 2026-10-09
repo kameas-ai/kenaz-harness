@@ -123,6 +123,9 @@ type UsageComposition struct {
 	Cached      int `json:"cached"`
 	// ToolsFull is the number of tool definitions the call carried.
 	ToolsFull int `json:"toolsFull"`
+	// ToolsSummary is the number of tools listed only by summary (0 until
+	// summary-tier exposure exists).
+	ToolsSummary int `json:"toolsSummary"`
 }
 
 // StreamCheckpoint is a durable mid-run snapshot of one active stream

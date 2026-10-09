@@ -359,6 +359,8 @@ type UsageComposition struct {
 	Cached      int `json:"cached"`
 	// ToolsFull is the number of tool definitions the call carried.
 	ToolsFull int `json:"toolsFull"`
+	// ToolsSummary is the number of tools listed only by summary.
+	ToolsSummary int `json:"toolsSummary"`
 }
 
 // SessionsAPI is the view-scoped accessor for session CRUD + streams.

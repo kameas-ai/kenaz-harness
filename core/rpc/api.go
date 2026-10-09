@@ -7805,13 +7805,14 @@ func usageComposition(c *corellm.PromptComposition) *session.UsageComposition {
 		return nil
 	}
 	return &session.UsageComposition{
-		System:      c.System,
-		Tools:       c.Tools,
-		History:     c.History,
-		Attachments: c.Attachments,
-		Memory:      c.Memory,
-		Cached:      c.Cached,
-		ToolsFull:   c.ToolsFull,
+		System:       c.System,
+		Tools:        c.Tools,
+		History:      c.History,
+		Attachments:  c.Attachments,
+		Memory:       c.Memory,
+		Cached:       c.Cached,
+		ToolsFull:    c.ToolsFull,
+		ToolsSummary: c.ToolsSummary,
 	}
 }
 

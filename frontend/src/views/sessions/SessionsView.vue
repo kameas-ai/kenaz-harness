@@ -1492,7 +1492,7 @@ function formatSize(bytes: number): string {
 //
 // The nudge banner fires when the session crosses either threshold:
 //   - 30 human turns (counted by countTurns — NOT a row count), OR
-//   - 50,000 cumulative prompt tokens
+//   - 50,000 conversation-history tokens (last request's composition)
 // Both thresholds are configurable via Settings → Display.
 //
 // Per-session dismiss: the user can click "Dismiss for this session" and
@@ -1514,7 +1514,7 @@ const _nudgeTurnCount = computed(() => countTurns(visibleMessages.value));
 // the session switches. A session whose last call predates the
 // composition has no history figure and is judged on turn count alone.
 const _nudgeHistoryTokens = ref(0);
-async function refreshNudgeCumulativeUsage() {
+async function refreshNudgeHistoryTokens() {
   const id = sessionId.value;
   if (!id) {
     _nudgeHistoryTokens.value = 0;
@@ -1528,7 +1528,7 @@ async function refreshNudgeCumulativeUsage() {
     // flapping the nudge visibility to zero.
   }
 }
-watch(() => session.lastUsage.value, () => { void refreshNudgeCumulativeUsage(); });
+watch(() => session.lastUsage.value, () => { void refreshNudgeHistoryTokens(); });
 
 const longSessionNudge = useLongSessionNudge({
   turnCount: _nudgeTurnCount,
@@ -1568,7 +1568,7 @@ function onAdviceAutoActedDismiss() {
 // composable, restoring correct per-session behaviour.
 watch(sessionId, () => {
   longSessionNudge.reset();
-  void refreshNudgeCumulativeUsage();
+  void refreshNudgeHistoryTokens();
 }, { immediate: true });
 
 // ── Scroll position (controls-and-readouts-that-tell-the-truth-01PMZ808

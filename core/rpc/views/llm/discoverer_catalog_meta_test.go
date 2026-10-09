@@ -14,6 +14,32 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
+// Toggling a built-in in Settings changes the enabled listing, not any
+// schema: it must not log tools.schema_size_changed for "kenaz".
+func TestMCPToolDiscoverer_BuiltinToggleIsNotASchemaSizeChange(t *testing.T) { //nolint:paralleltest // swaps the process logger
+	var buf bytes.Buffer
+	prev := logging.L().Handler()
+	logging.Replace(slog.NewJSONHandler(&buf, nil))
+	t.Cleanup(func() { logging.Replace(prev) })
+
+	reg := toolloop.NewBuiltinRegistry()
+	for _, n := range []string{"kenaz__a", "kenaz__b", "kenaz__c"} {
+		reg.Register(namedBuiltin(n))
+	}
+	enabled := map[string]bool{"kenaz__a": true}
+	d := NewMCPToolDiscovererWithBuiltins(nil, nil, toolloop.NewEnabledFilter(reg, func(n string) bool { return enabled[n] }))
+	if _, err := d.Tools(context.Background(), "s"); err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	enabled["kenaz__b"], enabled["kenaz__c"] = true, true // 1 -> 3 enabled: +200 %
+	if _, err := d.Tools(context.Background(), "s"); err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	if lines := schemaSizeLines(&buf); len(lines) != 0 {
+		t.Fatalf("a built-in toggle logged %d schema_size_changed lines:\n%s", len(lines), buf.String())
+	}
+}
+
 // Every catalog entry carries its source server and the estimator's size
 // of its definition.
 func TestMCPToolDiscoverer_CatalogEntriesCarryServerAndTokenEst(t *testing.T) {

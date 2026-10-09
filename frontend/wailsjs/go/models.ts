@@ -7366,6 +7366,7 @@ export namespace sessions {
 	    memory: number;
 	    cached: number;
 	    toolsFull: number;
+	    toolsSummary: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new UsageComposition(source);
@@ -7380,6 +7381,7 @@ export namespace sessions {
 	        this.memory = source["memory"];
 	        this.cached = source["cached"];
 	        this.toolsFull = source["toolsFull"];
+	        this.toolsSummary = source["toolsSummary"];
 	    }
 	}
 	export class SessionUsage {

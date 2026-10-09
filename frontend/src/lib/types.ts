@@ -135,6 +135,11 @@ export interface UsageComposition {
   cached: number;
   /** Number of tool definitions the call carried. */
   toolsFull: number;
+  /**
+   * Number of tools listed only by summary. Optional so older backends
+   * and fakes type-check; absent reads as 0.
+   */
+  toolsSummary?: number;
 }
 
 export interface SessionUsage {
@@ -1347,8 +1352,10 @@ export interface Settings {
   longSessionNudgeTurns?: number;
 
   /**
-   * longSessionNudgeTokens — cumulative prompt-token threshold after
-   * which the nudge banner appears regardless of turn count.
+   * longSessionNudgeTokens — conversation-history token threshold (the
+   * history part of the last request's composition, not the whole
+   * prompt) after which the nudge banner appears regardless of turn
+   * count.
    * Default 50000. Zero == use default.
    */
   longSessionNudgeTokens?: number;
