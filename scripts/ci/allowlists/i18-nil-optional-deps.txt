@@ -227,11 +227,3 @@ github.com/kameas-ai/kenaz-harness/core/update/bootswap.Config.Relauncher
 # OS relaunch is the desired production behaviour; Relauncher exists so
 # bootswap_test.go can inject a fake. Owner: n/a.
 
-
-github.com/kameas-ai/kenaz-harness/core/agentgraph.Env.ToolCalls
-# at core/agentgraph/executor.go:341: Env.ToolCalls (ToolCallObserver) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
-# 2026-10-09 ml-producer-01MLPRD01 WP02 adds the seam (fired on every
-# dispatchOne exit) and mlproducer.Recorder implements it; registering the
-# real recorder on EnvDeps is WP03's (core/rpc wiring WP02 may not touch).
-# Blocker: WP03 of the same mission. Owner: ml-producer-01MLPRD01 WP03,
-# which deletes this entry when it assigns Env.ToolCalls.

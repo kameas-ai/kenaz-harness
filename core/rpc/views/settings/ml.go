@@ -115,6 +115,24 @@ func (a *API) mlShippingStatus() *MLShippingStatusView {
 	return &s
 }
 
+// FleetEnrolledIdentity is the identity of this session's last successful
+// enroll: Fleet's org id (the enroll response's org_id — the same value as
+// identity.json's, NOT the token's Zitadel resource-owner claim) and the
+// node id enroll registered (fleet.NodeID, which Fleet stores as
+// node_registrations.node_id). enrolled is false before the first enroll
+// and after sign-out / node_removed. In-memory only: no keychain, no
+// network — the ML producer's consent gate reads it first so a signed-out
+// or not-yet-enrolled install never touches the keychain on the gate path
+// (ml-producer-01MLPRD01 WP03).
+func (a *API) FleetEnrolledIdentity() (orgID, nodeID string, enrolled bool) {
+	if a == nil || a.fleet == nil {
+		return "", "", false
+	}
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	return a.fleet.enrolledOrgID, a.fleet.enrolledNodeID, a.fleet.enrolled
+}
+
 // MLStatusView is the wire shape of the Cloud ML settings panel.
 type MLStatusView struct {
 	// SignedIn: a live Fleet session exists. The panel hides when false.

@@ -75,7 +75,7 @@ func newProductionShapedBashRegistry(t *testing.T) (*toolloop.BuiltinRegistry, *
 		nil, // exposureIdx
 		nil, // budget
 		nil, // posture
-		taskReg,
+		taskReg, nil,
 	)
 	return registry, taskReg, firer
 }

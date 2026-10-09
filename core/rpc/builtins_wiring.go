@@ -105,6 +105,11 @@ func registerBuiltinTools(
 	// harness path, same as before this parameter existed) and
 	// kenaz__monitor is not registered (see the monitor block below).
 	taskReg *coretasks.Registry,
+	// mlProducer supplies the bash tool's EnvProvider: every process the
+	// agent spawns carries KENAZ_ACTOR=agent (+ KENAZ_SESSION) so the
+	// daemon can skip agent work (ml-producer-01MLPRD01 spec §1 rule 3).
+	// nil (no data dir) leaves the markers off.
+	mlProducer *mlProducerWiring,
 ) {
 	if registry == nil {
 		return
@@ -212,6 +217,9 @@ func registerBuiltinTools(
 		// Tasks_AbortBySession (the session-close-dialog surface, §14
 		// E-004) could never find a session's own background tasks.
 		SessionIDFromCtx: toolloop.SessionIDFromContext,
+		// ml-producer-01MLPRD01 WP03: the agent-process markers
+		// (KENAZ_ACTOR / KENAZ_SESSION) on foreground and background runs.
+		EnvProvider: mlProducer.bashEnvProvider(toolloop.SessionIDFromContext),
 		// Unwired sweep 2026-08-14: this was never passed, so the
 		// Settings dial was permanently false in every shipped build
 		// while BashPermissionModal.vue kept offering "Allow always"

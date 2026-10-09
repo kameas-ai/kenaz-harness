@@ -343,6 +343,29 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-09 (ml-producer-01MLPRD01 WP03) · the ML producer ships for one org only — dev-org guard, dated
+
+`mlproducer.DevOrgID` (`core/mlproducer/gate.go`) closes the consent gate —
+nothing recorded, nothing shipped, any leftover outbox purged — for every
+Fleet org except the internal dev org `fa81ec53-d374-4c48-8b72-dd6b8584d968`,
+whatever `/me/ml` says. Deliberate, not a lie: customer orgs need on-device
+path/command exclusions first (spec §12 A-11; SA v1.1 DPA §4). The guard
+compares Fleet's org UUID from enroll (identity.json `org_id`), never the
+token's Zitadel resource-owner id (a different namespace; that one is what
+`kameas.org.id` carries). Pinned by `TestOrgAllowed_DevOrgGuardNormalised`,
+`TestConsentGate_ConditionMatrix` and
+`TestMLWiring_DevOrgGuard_OtherOrgRecordsAndShipsNothing`.
+**Blocker:** WP05 (on-device exclusions; the Fleet source of the patterns
+is still an open question for kenaz-fleet). **Owner:** ml-producer-01MLPRD01
+WP05, which deletes the constant, `orgAllowed` and this entry.
+
+Also recorded by WP03, for WP04 to carry: Fleet's OTLP receiver decodes an
+`application/json` body with `encoding/json` into the generated proto
+structs (kenaz-fleet `service/telemetry/receiver.go` `unmarshalOTLP`), so a
+standard OTLP-JSON request decodes to zero resource logs and is answered
+200 with nothing routed. The shipper therefore sends protobuf (the contract
+allows either). Fleet-side fix: `protojson.Unmarshal`. Owner: kenaz-fleet.
+
 ### 2026-10-09 (tool-context-budget-01TCBUD01, re-swept by WP08) · tool-exposure gaps still open
 
 **WP08 sweep (2026-10-09, scoped to `git diff v0.93.3..HEAD`).** Closed
