@@ -16,7 +16,6 @@ import (
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/llm/httpx"
-	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // Kind is the canonical provider kind for the Anthropic adapter. It
@@ -85,8 +84,8 @@ type Adapter struct {
 	endpoint   string
 	apiVersion string
 	cat        *capabilities.Catalog
-	// cacheGuard is the cache_control degrade state shared by every
-	// profile of this adapter.
+	// cacheGuard is the per-model cache_control degrade state, shared by
+	// every profile of this adapter.
 	cacheGuard llm.PromptCacheGuard
 }
 
@@ -158,10 +157,9 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 			cw = a.cat.ContextWindow(Kind, m.ID)
 		}
 		out = append(out, llm.ModelInfo{
-			ID:                  m.ID,
-			DisplayName:         display,
-			ContextWindow:       cw,
-			SupportsPromptCache: llm.SupportsPromptCache(Kind, m.ID),
+			ID:            m.ID,
+			DisplayName:   display,
+			ContextWindow: cw,
 		})
 	}
 	return out, nil
@@ -232,18 +230,18 @@ func (a *Adapter) Capabilities(model string) llm.CapabilityDescriptor {
 // Compile-time assertion: *Adapter satisfies llm.ProviderAdapter.
 var _ llm.ProviderAdapter = (*Adapter)(nil)
 
-// SendsSystemSegments implements llm.SystemSegmentsAdapter: the request
+// PlacesSystemVolatile implements llm.SystemVolatileAdapter: the request
 // body places SystemVolatile in a system block after the cache marker.
-func (a *Adapter) SendsSystemSegments() bool { return true }
+func (a *Adapter) PlacesSystemVolatile() {}
 
-var _ llm.SystemSegmentsAdapter = (*Adapter)(nil)
+var _ llm.SystemVolatileAdapter = (*Adapter)(nil)
 
 // cacheLevel is the marking level for a request to model.
-func (a *Adapter) cacheLevel(model string) llm.PromptCacheLevel {
+func (a *Adapter) cacheLevel(profileID, model string) llm.PromptCacheLevel {
 	if !llm.SupportsPromptCache(Kind, model) {
 		return llm.CacheMarkNone
 	}
-	return a.cacheGuard.Level()
+	return a.cacheGuard.Level(profileID, model)
 }
 
 // Compile-time assertion: *Adapter satisfies llm.StructuredOutputAdapter.
@@ -329,7 +327,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		return nil, &llm.ErrAuth{Status: 0, Message: "anthropic: empty credential bytes"}
 	}
 
-	level := a.cacheLevel(prof.Model)
+	level := a.cacheLevel(prof.ID, prof.Model)
 	body, err := buildRequestBodyAt(req, prof, level)
 	if err != nil {
 		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
@@ -360,17 +358,11 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		// A rejected cache marker degrades this adapter's marking one
-		// level and resends; the call itself does not fail over it.
-		if level == llm.CacheMarkNone || !llm.IsCacheControlRejection(resp.StatusCode, bodySnippet) {
+		// A rejected cache marker degrades this model's marking and
+		// resends; the call itself does not fail over it.
+		next, retry := a.cacheGuard.Rejected(Kind, prof.ID, prof.Model, req, level, resp.StatusCode, bodySnippet)
+		if !retry {
 			return nil, classifyStatus(resp.StatusCode, bodySnippet)
-		}
-		next, changed := a.cacheGuard.Degrade(llm.SentCacheLevel(req, level))
-		if changed {
-			logging.L().Warn("llm.prompt_cache.unsupported",
-				"provider", Kind, "model", prof.Model,
-				"status", resp.StatusCode, "now_marking", cacheLevelName(next),
-				"body", truncateSnippet(bodySnippet, 512))
 		}
 		level = next
 		if body, err = buildRequestBodyAt(req, prof, level); err != nil {
@@ -437,25 +429,6 @@ func (a *Adapter) post(ctx context.Context, endpoint, apiVersion string, cred, b
 		return nil, nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
 	}
 	return resp, cancel, nil
-}
-
-// cacheLevelName is the log value for a marking level.
-func cacheLevelName(l llm.PromptCacheLevel) string {
-	switch l {
-	case llm.CacheMarkAll:
-		return "system+tools"
-	case llm.CacheMarkSystemOnly:
-		return "system"
-	default:
-		return "none"
-	}
-}
-
-func truncateSnippet(b []byte, n int) string {
-	if len(b) <= n {
-		return string(b)
-	}
-	return string(b[:n])
 }
 
 // classifyStatus delegates to the canonical top-level
@@ -630,6 +603,11 @@ func buildRequestBodyAt(req llm.GenerationRequest, prof llm.ProviderProfile, lev
 		out["tools"] = tools
 	}
 
+	// The JSON-output instruction ResponseFormat / JSONMode append to the
+	// system string is per-request output shaping: it is split off below
+	// and sent last, after the per-call segment, not in the cached prefix.
+	baseSystem, _ := out["system"].(string)
+
 	// Apply ResponseFormat if set (structured-output-and-grammar-01KX5R8A WP03a).
 	if req.ResponseFormat != nil {
 		a := &Adapter{}
@@ -646,17 +624,36 @@ func buildRequestBodyAt(req llm.GenerationRequest, prof llm.ProviderProfile, lev
 		}
 	}
 
-	applyPromptCache(out, req, level)
+	var instruction string
+	if full, _ := out["system"].(string); len(full) > len(baseSystem) && strings.HasPrefix(full, baseSystem) {
+		instruction = strings.TrimSpace(full[len(baseSystem):])
+		if baseSystem == "" {
+			delete(out, "system")
+		} else {
+			out["system"] = baseSystem
+		}
+	}
+	tail := strings.TrimSpace(req.SystemVolatile)
+	switch {
+	case instruction == "":
+	case tail == "":
+		tail = instruction
+	default:
+		tail = tail + "\n\n" + instruction
+	}
+
+	applyPromptCache(out, req, tail, level)
 
 	return json.Marshal(out)
 }
 
 // applyPromptCache shapes the system field around the cache marker and
-// marks the last stable tool. It runs after every other writer of
-// "system" and "tools", which all treat "system" as a string.
-func applyPromptCache(out map[string]any, req llm.GenerationRequest, level llm.PromptCacheLevel) {
+// marks the last stable tool. volatile is everything that follows the
+// cached prefix (req.SystemVolatile, then any output instruction). It
+// runs after every other writer of "system" and "tools", which all treat
+// "system" as a string.
+func applyPromptCache(out map[string]any, req llm.GenerationRequest, volatile string, level llm.PromptCacheLevel) {
 	stable, _ := out["system"].(string)
-	volatile := strings.TrimSpace(req.SystemVolatile)
 	if level == llm.CacheMarkNone {
 		if volatile != "" {
 			if stable == "" {

@@ -23,7 +23,7 @@ func cacheReq(volatile string, tools []llm.ToolSpec) llm.GenerationRequest {
 	req := minReq()
 	req.System = "You are the chat node."
 	req.SystemVolatile = volatile
-	req.Tools = llm.OrderTools(tools)
+	req.Tools = llm.OrderToolsFlat(tools)
 	req.CacheStableTools = 2
 	return req
 }
@@ -279,8 +279,8 @@ func TestAnthropicAdapter_PromptCache_DegradesOnRejection(t *testing.T) {
 	if strings.Count(got[1], "cache_control") != 1 || !strings.Contains(got[1], `"system":[{"cache_control"`) {
 		t.Errorf("resend should carry the system marker only: %s", got[1])
 	}
-	if a.cacheGuard.Level() != llm.CacheMarkSystemOnly {
-		t.Errorf("guard = %v, want system-only", a.cacheGuard.Level())
+	if a.cacheGuard.Level("p-ant", "claude-sonnet-4-5") != llm.CacheMarkSystemOnly {
+		t.Errorf("guard = %v, want system-only", a.cacheGuard.Level("p-ant", "claude-sonnet-4-5"))
 	}
 
 	// The next call starts at the degraded level: one request.
@@ -326,7 +326,7 @@ func TestAnthropicAdapter_PromptCache_UnrelatedRejectionNotRetried(t *testing.T)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if calls != 1 || a.cacheGuard.Level() != llm.CacheMarkAll {
-		t.Errorf("calls=%d guard=%v, want 1 call and no degrade", calls, a.cacheGuard.Level())
+	if calls != 1 || a.cacheGuard.Level("p-ant", "claude-sonnet-4-5") != llm.CacheMarkAll {
+		t.Errorf("calls=%d guard=%v, want 1 call and no degrade", calls, a.cacheGuard.Level("p-ant", "claude-sonnet-4-5"))
 	}
 }

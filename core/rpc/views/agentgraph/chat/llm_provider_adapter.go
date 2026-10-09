@@ -767,20 +767,17 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		// composeSystemPrompt's default renderer reproduces today's
 		// plain join byte-for-byte, so this is a deliberate, documented
 		// gap rather than a half-wire.
-		// Recap sits before the user's custom instructions so a user
-		// instruction about verbosity still wins the last word among the
-		// standing layers.
 		//
 		// System is the cacheable prefix and must be byte-identical
-		// across calls with unchanged settings (tool-context-budget-
-		// 01TCBUD01 FR-C1): every layer in it is session-stable.
-		// SystemVolatile carries what changes call to call — the
+		// across calls with unchanged settings (FR-C1): every layer in it
+		// is session-stable. SystemVolatile follows it on the wire (after
+		// the cache marker) and holds what changes call to call — the
 		// environment's date / workspace count / tool inventory and the
-		// hook-context layer, which appears and disappears turn to turn —
-		// and adapters place it after the cache marker (or append it to
-		// System where nothing is marked).
-		System:         composeSystemPrompt(nil, req.SystemPrompt, attachmentsBlock, envStable, a.buildRecapBlock(), a.buildAskBarBlock(), a.buildUserInstructionsBlock()),
-		SystemVolatile: composeSystemPrompt(nil, envState, renderPendingContext(pending)),
+		// hook-context layer — then the user's custom instructions, which
+		// must be the last thing in the whole system prompt so the
+		// user's standing preferences keep the last word.
+		System:         composeSystemPrompt(nil, req.SystemPrompt, attachmentsBlock, envStable, a.buildRecapBlock(), a.buildAskBarBlock()),
+		SystemVolatile: composeSystemPrompt(nil, envState, renderPendingContext(pending), a.buildUserInstructionsBlock()),
 		Messages:       llmMsgs,
 		Tools:          sendTools,
 	}
@@ -1004,6 +1001,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	recordMoves := req.StreamToChat && a.moves.records()
 
 	sink, _ := coreag.StreamSinkFromContext(ctx)
+	providerKind := a.ProviderKind()
 	for ev := range stream.Events() {
 		// Open the move BEFORE the first token of the segment reaches
 		// the surface — a boundary that arrives after the text cannot
@@ -1027,7 +1025,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		if sink == nil {
 			continue
 		}
-		sink.Emit(translateLLMStreamEvent(ev))
+		sink.Emit(translateLLMStreamEvent(ev, providerKind))
 	}
 
 	resp, ferr := stream.Final()
@@ -1055,8 +1053,10 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	out := coreag.LLMResponse{
 		Content:      flattenContent(resp.Content),
 		FinishReason: resp.FinishReason,
-		TokensUsed:   resp.Usage.InputTokens + resp.Usage.OutputTokens,
-		CostUSD:      resp.Cost.Total,
+		// The run budget (max_tokens_per_run) counts the whole prompt, so
+		// a cache-heavy Anthropic call weighs what an OpenRouter one does.
+		TokensUsed: corellm.PromptTokensTotal(resp.Usage, providerKind) + resp.Usage.OutputTokens,
+		CostUSD:    resp.Cost.Total,
 	}
 	if len(resp.ToolCalls) > 0 {
 		calls := make([]coreag.ToolCallRequest, 0, len(resp.ToolCalls))
@@ -1121,8 +1121,10 @@ func flattenContent(blocks []corellm.ContentBlock) string {
 
 // translateLLMStreamEvent maps a corellm.StreamEvent → the kernel's
 // agentgraph.StreamEvent shape. Inverse of translateAGStreamEvent in
-// stream_bridge.go.
-func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
+// stream_bridge.go. UsageInputTokens is the whole prompt under
+// providerKind's convention (corellm.PromptTokensTotal), the same number
+// the persisted context-bar snapshot carries.
+func translateLLMStreamEvent(ev corellm.StreamEvent, providerKind string) coreag.StreamEvent {
 	out := coreag.StreamEvent{
 		Text:   ev.Text,
 		Finish: ev.Finish,
@@ -1137,7 +1139,7 @@ func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
 		out.Reasoning = ev.Reasoning.Content
 	}
 	if ev.Usage != nil {
-		out.UsageInputTokens = ev.Usage.InputTokens
+		out.UsageInputTokens = corellm.PromptTokensTotal(*ev.Usage, providerKind)
 		out.UsageOutputTokens = ev.Usage.OutputTokens
 		out.UsageReasoningTokens = ev.Usage.ReasoningTokens
 	}

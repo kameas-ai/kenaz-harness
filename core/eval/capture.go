@@ -451,7 +451,7 @@ func (r *Recorder) AppendLLMRequest(sessionID string, req corellm.GenerationRequ
 	entry := LLMRequestEntry{
 		ProfileID:   req.ProfileID,
 		Model:       req.Model,
-		System:      redactText(req.System),
+		System:      redactText(req.FullSystem()),
 		Messages:    nil, // messages embedded as raw JSON below
 		Fingerprint: fp,
 	}

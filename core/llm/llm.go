@@ -815,9 +815,9 @@ type ModelInfo struct {
 	// (backend-context-window-length-01KQ8TD3 WP01).
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"` // max completion tokens per turn; 0 = unknown
 	// SupportsPromptCache reports whether requests for this model carry
-	// explicit cache_control markers: SupportsPromptCache's curated table,
-	// narrowed by the provider's model list where it reports cache
-	// pricing.
+	// explicit cache_control markers. Written only by the OpenRouter
+	// adapter (the curated SupportsPromptCache table, vetoed by the
+	// model list's cache pricing) and read by its request path.
 	SupportsPromptCache bool `json:"supports_prompt_cache,omitempty"`
 }
 

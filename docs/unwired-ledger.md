@@ -6378,24 +6378,51 @@ follow-up that routes each through `tokenizer.CountText` /
 `CountRequestTokens` (and a small TS port for the two views) deletes this
 entry.
 
-### 2026-10-09 (tool-context-budget-01TCBUD01 WP05) — prompt-cache surfaces with a partial consumer
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP05) — prompt-cache deviations from the spec
 
-- `llm.ModelInfo.SupportsPromptCache` is read on the request path only by
-  the OpenRouter adapter (`cacheLevel`, which lets a loaded model list veto
-  the curated table). The Anthropic adapter's `ListModels` populates it from
-  the same curated table its request path consults directly, and nothing in
-  `core/rpc/views/llm` carries it to the UI. Not a lie (the value is what
-  the request does), but a written field with no reader on that path.
-  **Blocker:** WP06's Capabilities UI decides whether the model picker
-  shows a cache badge. **Owner:** WP06 of tool-context-budget-01TCBUD01 —
-  wires it into the picker or deletes the Anthropic write.
-- `newFleetUsageObserver.LLMResponse` (`core/rpc/api.go` usage hook) still
-  receives raw `Usage.InputTokens`, so on Anthropic it excludes cache reads
-  while the usage row and the context bar now carry `llm.PromptTokensTotal`.
-  The fleet usage lifecycle is a cross-repo contract; changing its token
-  meaning needs the fleet side's agreement. **Owner:** alec — the fleet
-  usage-contract follow-up either adopts the normalised total or documents
-  the raw count; deletes this bullet.
+Recorded deviations of WP05's cacheable prefix from spec §2.4 / tasks.md.
+Each bullet is deleted by the change its owner names.
+
+- **Curated table is code, not the capabilities catalog.**
+  `llm.SupportsPromptCache` (`core/llm/prompt_cache.go`) decides which
+  (provider kind, model) pairs carry `cache_control`: `anthropic` +
+  `claude*`, `openrouter` + `anthropic/…` / `~anthropic/…`. It is not a
+  flag in `core/llm/capabilities/data/*.yaml`, so the capability cache,
+  probes and Settings do not see it. **Blocker:** a `prompt_cache` key in
+  the catalog schema (`ProviderCapabilities`, `CapabilitySchemaVersion`
+  bump, cache invalidation). **Owner:** alec — the capabilities-catalog
+  follow-up moves the table into the YAML and deletes this bullet.
+- **No breakpoint on the conversation history.** Markers sit on the
+  system block and the last stable tool only, so a multi-call tool loop
+  re-bills the growing history on every call. **Blocker:** WP03's tiered
+  builder fixes the tool segments first; a third breakpoint on the last
+  stable message is the follow-up. **Owner:** WP03 of
+  tool-context-budget-01TCBUD01 (or its follow-up mission) — adds the
+  message breakpoint and deletes this bullet.
+- **OpenRouter tool-object `cache_control` is unverified live.** The
+  adapter puts `cache_control` beside `type`/`function` on the last
+  stable tool; OpenRouter documents it inside message content parts. A
+  rejection costs only the tool marker (the guard degrades to
+  system-only for that profile + model), but acceptance criterion 4
+  (`cached_tokens ≥ 0.9 × prefix` on OpenRouter-Anthropic) depends on
+  what OpenRouter does with it. **Blocker:** a live call. **Owner:** WP08
+  of tool-context-budget-01TCBUD01 — the live AC4 check records the
+  result and deletes this bullet.
+- **Degrade scope and lifetime.** `llm.PromptCacheGuard` degrades per
+  (profile id, model id) — a proxy or one routed model rejecting
+  `cache_control` leaves other profiles and models marking — and the
+  degrade lasts for the life of the process, logged once per step
+  (`llm.prompt_cache.unsupported`). There is no re-probe: a provider that
+  later accepts markers stays degraded until restart. **Blocker:** none
+  technical; needs a re-probe policy (TTL or settings reset). **Owner:**
+  alec — a re-probe follow-up deletes this bullet.
+
+The fleet usage observer (`core/rpc/api.go` usage hook) now receives the
+normalised prompt total (`usageTurnRecord(...).PromptTokens`, i.e.
+`llm.PromptTokensTotal`), so fleet token totals include cache reads and
+writes on every provider, the same number the local readout shows.
+`llm.ModelInfo.SupportsPromptCache` is written and read by the OpenRouter
+adapter only; the Anthropic `ListModels` write was removed.
 
 ### 2026-10-09 (tool-context-budget-01TCBUD01 WP07) — org tool-exposure entries have no `.vue` reader yet
 
@@ -6456,12 +6483,21 @@ whose input count already includes it (`llm.InputExcludesCache`).
 inclusive providers moves each cache count with a known rate out of the
 input bucket (`InputTokens − CachedInputRead − CachedInputWrite` at the
 input rate, clamped at 0) and leaves a count whose rate is unknown in the
-input bucket, billed once. Anthropic is unchanged. `pricing.yaml` gained
-OpenRouter `anthropic/claude-{opus,sonnet}-4*` rows carrying Anthropic's
-cache rates, so the fallback now prices cached OpenRouter-Anthropic calls
-instead of billing them at the wildcard input rate. Proof:
-`core/llm/cost/reducer_cache_test.go` (same prompt, same cost on every
-provider kind; clamp; `DeriveWithSource` per convention).
+input bucket, billed once. Anthropic is unchanged.
+
+What is actually priced with cache rates on the live cost path
+(`Reducer.Derive` over `core/llm/cost/starter_table.yaml`): OpenRouter
+`anthropic/claude-opus-4.5*`, `-opus-4.6*`, `-opus-4*` (Opus 4 / 4.1),
+`-sonnet-4*` and `-haiku-4.5*`; direct Anthropic `claude-sonnet-*` and
+`claude-haiku-*`. Every other OpenRouter model falls to the `*` row (no
+cache rates), so its cached tokens stay in the input bucket and are
+billed once at the input rate — correct, not discounted. Gemini rows
+carry no cache rates (same). `core/llm/pricing/pricing.yaml` (read only by
+`DeriveWithSource`, which has no production caller) carries the same
+OpenRouter rows. Proof: `core/llm/cost/reducer_cache_test.go` (same
+prompt, same cost on every provider kind; clamp; `DeriveWithSource` per
+convention; the starter table prices OpenRouter Haiku 4.5 / Opus 4.6 /
+Opus 4.1 / Sonnet cached reads at their cache rates).
 
 ### 2026-10-07 · CLOSED — project sync advertised an agent-memory class that shipped nothing (`memory-sync-01MEMSY01` WP01)
 

@@ -15,7 +15,7 @@ func cacheReqOR(volatile string) llm.GenerationRequest {
 	req := minReqOR()
 	req.System = "You are the chat node."
 	req.SystemVolatile = volatile
-	req.Tools = llm.OrderTools([]llm.ToolSpec{
+	req.Tools = llm.OrderToolsFlat([]llm.ToolSpec{
 		{Name: "outlook__send-mail", Description: "Send mail", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		{Name: "kenaz__bash", Description: "Run a command", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	})
@@ -184,6 +184,7 @@ func TestOpenRouterAdapter_ListModels_SupportsPromptCache(t *testing.T) {
 				{"id":"anthropic/claude-sonnet-4.5","name":"Sonnet","pricing":{"prompt":"0.000003","input_cache_read":"0.0000003"}},
 				{"id":"anthropic/claude-nocache","name":"No cache","pricing":{"prompt":"0.000003","input_cache_read":"0"}},
 				{"id":"anthropic/claude-unpriced","name":"Unpriced"},
+				{"id":"anthropic/claude-nocachefield","name":"No cache field","pricing":{"prompt":"0.000003"}},
 				{"id":"openai/gpt-4o","name":"GPT-4o","pricing":{"prompt":"0.0000025","input_cache_read":"0.00000125"}}
 			]}`))
 			return
@@ -200,20 +201,21 @@ func TestOpenRouterAdapter_ListModels_SupportsPromptCache(t *testing.T) {
 		got[m.ID] = m.SupportsPromptCache
 	}
 	want := map[string]bool{
-		"anthropic/claude-sonnet-4.5": true,
-		"anthropic/claude-nocache":    false,
-		"anthropic/claude-unpriced":   true,
-		"openai/gpt-4o":               false,
+		"anthropic/claude-sonnet-4.5":   true,
+		"anthropic/claude-nocache":      false,
+		"anthropic/claude-unpriced":     true,
+		"anthropic/claude-nocachefield": true, // absent price is unknown, not a veto
+		"openai/gpt-4o":                 false,
 	}
 	for id, w := range want {
 		if got[id] != w {
 			t.Errorf("%s SupportsPromptCache = %v, want %v", id, got[id], w)
 		}
 	}
-	if a.cacheLevel("anthropic/claude-nocache") != llm.CacheMarkNone {
+	if a.cacheLevel("p-or", "anthropic/claude-nocache") != llm.CacheMarkNone {
 		t.Errorf("a listed model without cache pricing must not be marked")
 	}
-	if a.cacheLevel("anthropic/claude-sonnet-4.5") != llm.CacheMarkAll {
+	if a.cacheLevel("p-or", "anthropic/claude-sonnet-4.5") != llm.CacheMarkAll {
 		t.Errorf("a listed cache-priced Anthropic model should be marked")
 	}
 }
@@ -257,8 +259,42 @@ func TestOpenRouterAdapter_PromptCache_DegradesOnRejection(t *testing.T) {
 	if strings.Contains(last, "cache_control") || !strings.Contains(last, `You are the chat node.\n\nv`) {
 		t.Errorf("final request should be unmarked with the segment folded in: %s", last)
 	}
-	if a.cacheGuard.Level() != llm.CacheMarkNone {
-		t.Errorf("guard = %v, want none", a.cacheGuard.Level())
+	if a.cacheGuard.Level("p-or", "anthropic/claude-sonnet-4.5") != llm.CacheMarkNone {
+		t.Errorf("guard = %v, want none", a.cacheGuard.Level("p-or", "anthropic/claude-sonnet-4.5"))
+	}
+}
+
+// OpenRouter routes many models through one profile: a cache_control
+// rejection for one model strips markers from that model only.
+func TestOpenRouterAdapter_PromptCache_DegradeIsPerModel(t *testing.T) {
+	var fs *fakeServer
+	fs = newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		b := fs.body()
+		if strings.Contains(b, `"model":"anthropic/claude-rejects"`) && strings.Contains(b, "cache_control") {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"code":400,"message":"cache_control not supported"}}`))
+			return
+		}
+		writeOKStream(w)
+	})
+	a := newAdapter(fs)
+	for _, model := range []string{"anthropic/claude-rejects", "anthropic/claude-sonnet-4.5"} {
+		s, err := a.Stream(context.Background(), cacheReqOR("v"), stdProfOR(model), []byte("sk"))
+		if err != nil {
+			t.Fatalf("%s: %v", model, err)
+		}
+		if _, _, err := drain(t, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := a.cacheGuard.Level("p-or", "anthropic/claude-rejects"); got != llm.CacheMarkNone {
+		t.Errorf("rejecting model level = %v, want none", got)
+	}
+	if got := a.cacheGuard.Level("p-or", "anthropic/claude-sonnet-4.5"); got != llm.CacheMarkAll {
+		t.Errorf("other model level = %v, want system+tools", got)
+	}
+	if b := fs.body(); !strings.Contains(b, "cache_control") {
+		t.Errorf("the other model's request lost its markers: %s", b)
 	}
 }
 

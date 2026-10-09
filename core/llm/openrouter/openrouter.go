@@ -125,8 +125,8 @@ type Adapter struct {
 	refreshFailedAt  time.Time     // when the last refresh failed (for backoff)
 	refreshBackoff   time.Duration // how long to wait after a failure
 
-	// cacheGuard is the cache_control degrade state shared by every
-	// profile of this adapter.
+	// cacheGuard is the per-model cache_control degrade state, shared by
+	// every profile of this adapter.
 	cacheGuard llm.PromptCacheGuard
 }
 
@@ -175,24 +175,24 @@ var (
 	_ llm.StructuredOutputAdapter = (*Adapter)(nil)
 )
 
-// SendsSystemSegments implements llm.SystemSegmentsAdapter: the request
+// PlacesSystemVolatile implements llm.SystemVolatileAdapter: the request
 // body places SystemVolatile after the cache marker, or folds it into the
 // system message when nothing is marked.
-func (a *Adapter) SendsSystemSegments() bool { return true }
+func (a *Adapter) PlacesSystemVolatile() {}
 
-var _ llm.SystemSegmentsAdapter = (*Adapter)(nil)
+var _ llm.SystemVolatileAdapter = (*Adapter)(nil)
 
 // cacheLevel is the marking level for a request to model: none unless the
 // curated table supports the model and the model list, when loaded, has
 // not said otherwise.
-func (a *Adapter) cacheLevel(model string) llm.PromptCacheLevel {
+func (a *Adapter) cacheLevel(profileID, model string) llm.PromptCacheLevel {
 	if !llm.SupportsPromptCache(Kind, model) {
 		return llm.CacheMarkNone
 	}
 	if info, ok := a.LookupModelInfo(model); ok && !info.SupportsPromptCache {
 		return llm.CacheMarkNone
 	}
-	return a.cacheGuard.Level()
+	return a.cacheGuard.Level(profileID, model)
 }
 
 // ApplyResponseFormat implements llm.StructuredOutputAdapter. OpenRouter
@@ -249,7 +249,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	if req.Model != "" {
 		model = req.Model
 	}
-	level := a.cacheLevel(model)
+	level := a.cacheLevel(prof.ID, model)
 	body, err := buildRequestBodyAt(req, prof, level)
 	if err != nil {
 		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
@@ -275,16 +275,9 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyByteLimit))
 		_ = resp.Body.Close()
 		cancel()
-		// A rejected cache marker degrades this adapter's marking one
-		// level and resends; the call itself does not fail over it.
-		if level != llm.CacheMarkNone && llm.IsCacheControlRejection(resp.StatusCode, bodySnippet) {
-			next, changed := a.cacheGuard.Degrade(llm.SentCacheLevel(req, level))
-			if changed {
-				logging.L().Warn("llm.prompt_cache.unsupported",
-					"provider", Kind, "model", model,
-					"status", resp.StatusCode, "now_marking", cacheLevelName(next),
-					"body", truncForLog(bodySnippet, 512))
-			}
+		// A rejected cache marker degrades this model's marking and
+		// resends; the call itself does not fail over it.
+		if next, retry := a.cacheGuard.Rejected(Kind, prof.ID, model, req, level, resp.StatusCode, bodySnippet); retry {
 			level = next
 			if body, err = buildRequestBodyAt(req, prof, level); err != nil {
 				return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
@@ -358,18 +351,6 @@ func (a *Adapter) post(ctx context.Context, endpoint, model string, cred, body [
 		return nil, nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
 	}
 	return resp, cancel, nil
-}
-
-// cacheLevelName is the log value for a marking level.
-func cacheLevelName(l llm.PromptCacheLevel) string {
-	switch l {
-	case llm.CacheMarkAll:
-		return "system+tools"
-	case llm.CacheMarkSystemOnly:
-		return "system"
-	default:
-		return "none"
-	}
 }
 
 // ListModels implements llm.ModelLister. It calls OpenRouter's /models
@@ -568,8 +549,8 @@ type modelPricing struct {
 }
 
 // promptCacheListed is ModelInfo.SupportsPromptCache for one /models
-// entry: the curated table, vetoed when the entry reports pricing with no
-// non-zero cache-read price.
+// entry: the curated table, vetoed only when the entry reports an explicit
+// zero cache-read price.
 func promptCacheListed(id string, p *modelPricing) bool {
 	if !llm.SupportsPromptCache(Kind, id) {
 		return false
@@ -578,7 +559,9 @@ func promptCacheListed(id string, p *modelPricing) bool {
 		return true
 	}
 	v := strings.TrimSpace(p.InputCacheRead)
-	return v != "" && strings.Trim(v, "0.") != ""
+	// Absent is unknown, which trusts the curated table; only an explicit
+	// zero price vetoes it.
+	return v == "" || strings.Trim(v, "0.") != ""
 }
 
 // modelsURL derives the /models URL from the configured chat URL. The

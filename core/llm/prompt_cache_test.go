@@ -6,10 +6,43 @@ import (
 	"testing"
 )
 
-func TestOrderTools_SameSetSameOrder(t *testing.T) {
+func names(ts []ToolSpec) []string {
+	out := make([]string, len(ts))
+	for i, t := range ts {
+		out[i] = t.Name
+	}
+	return out
+}
+
+// Three segments: hot and pinned are each sorted by name and form the
+// stable prefix; activated keeps its given (last-used) order and never
+// enters the prefix, even when it sorts first by name. A name in an
+// earlier segment is not repeated.
+func TestOrderTools_ThreeSegments(t *testing.T) {
+	hot := []ToolSpec{{Name: "kenaz__read_file"}, {Name: "kenaz__bash"}}
+	pinned := []ToolSpec{{Name: "git__status"}, {Name: "fs__write"}}
+	activated := []ToolSpec{{Name: "outlook__send-mail"}, {Name: "aaa__first"}, {Name: "kenaz__bash"}}
+	tools, stable := OrderTools(hot, pinned, activated)
+	want := []string{"kenaz__bash", "kenaz__read_file", "fs__write", "git__status", "outlook__send-mail", "aaa__first"}
+	if !reflect.DeepEqual(names(tools), want) || stable != 4 {
+		t.Fatalf("OrderTools = %v stable=%d, want %v stable=4", names(tools), stable, want)
+	}
+
+	var req GenerationRequest
+	req.SetTools(tools, stable)
+	if idx := CacheMarkerToolIndex(req); idx != 3 || req.Tools[idx].Name != "git__status" {
+		t.Errorf("marker index %d, want 3 (last pinned tool)", idx)
+	}
+	req.SetTools(OrderTools(nil, nil, activated))
+	if CacheMarkerToolIndex(req) != -1 {
+		t.Errorf("activated-only request must carry no tool marker (CacheStableTools=%d)", req.CacheStableTools)
+	}
+}
+
+func TestOrderToolsFlat_SameSetSameOrder(t *testing.T) {
 	a := []ToolSpec{{Name: "kenaz__grep"}, {Name: "outlook__send-mail"}, {Name: "kenaz__bash"}}
 	b := []ToolSpec{{Name: "outlook__send-mail"}, {Name: "kenaz__bash"}, {Name: "kenaz__grep"}}
-	got1, got2 := OrderTools(a), OrderTools(b)
+	got1, got2 := OrderToolsFlat(a), OrderToolsFlat(b)
 	if !reflect.DeepEqual(got1, got2) {
 		t.Fatalf("same set, different order:\n%v\n%v", got1, got2)
 	}
@@ -20,10 +53,29 @@ func TestOrderTools_SameSetSameOrder(t *testing.T) {
 		}
 	}
 	if a[0].Name != "kenaz__grep" {
-		t.Errorf("OrderTools reordered its input in place: %v", a)
+		t.Errorf("OrderToolsFlat reordered its input in place: %v", a)
 	}
-	if OrderTools(nil) != nil {
-		t.Errorf("OrderTools(nil) should stay nil")
+	if OrderToolsFlat(nil) != nil {
+		t.Errorf("OrderToolsFlat(nil) should stay nil")
+	}
+}
+
+// One (profile, model) degrading leaves other models and other profiles
+// marking.
+func TestPromptCacheGuard_ScopedPerProfileAndModel(t *testing.T) {
+	var g PromptCacheGuard
+	g.Degrade("p-or", "anthropic/claude-x", CacheMarkSystemOnly)
+	if g.Level("p-or", "anthropic/claude-x") != CacheMarkNone {
+		t.Fatal("degraded key did not move")
+	}
+	if g.Level("p-or", "anthropic/claude-y") != CacheMarkAll || g.Level("p-direct", "anthropic/claude-x") != CacheMarkAll {
+		t.Error("a rejection leaked to another model or profile")
+	}
+}
+
+func TestPromptCacheLevel_String(t *testing.T) {
+	if CacheMarkAll.String() != "system+tools" || CacheMarkSystemOnly.String() != "system" || CacheMarkNone.String() != "none" {
+		t.Error("level names changed")
 	}
 }
 
@@ -90,8 +142,8 @@ func TestFoldSystemSegments(t *testing.T) {
 
 func TestPromptCacheGuard_DegradesOneWayOnce(t *testing.T) {
 	var g PromptCacheGuard
-	if g.Level() != CacheMarkAll {
-		t.Fatalf("zero value = %v, want CacheMarkAll", g.Level())
+	if g.Level("p", "m") != CacheMarkAll {
+		t.Fatalf("zero value = %v, want CacheMarkAll", g.Level("p", "m"))
 	}
 	// Many concurrent rejections of the same request: exactly one caller
 	// moves the guard (and logs).
@@ -104,7 +156,7 @@ func TestPromptCacheGuard_DegradesOneWayOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if lvl, changed := g.Degrade(CacheMarkAll); changed {
+			if lvl, changed := g.Degrade("p", "m", CacheMarkAll); changed {
 				mu.Lock()
 				changes++
 				mu.Unlock()
@@ -115,13 +167,13 @@ func TestPromptCacheGuard_DegradesOneWayOnce(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if changes != 1 || g.Level() != CacheMarkSystemOnly {
-		t.Fatalf("changes=%d level=%v, want 1 / system-only", changes, g.Level())
+	if changes != 1 || g.Level("p", "m") != CacheMarkSystemOnly {
+		t.Fatalf("changes=%d level=%v, want 1 / system-only", changes, g.Level("p", "m"))
 	}
-	if lvl, changed := g.Degrade(CacheMarkSystemOnly); !changed || lvl != CacheMarkNone {
+	if lvl, changed := g.Degrade("p", "m", CacheMarkSystemOnly); !changed || lvl != CacheMarkNone {
 		t.Fatalf("second degrade = %v/%v", lvl, changed)
 	}
-	if lvl, changed := g.Degrade(CacheMarkAll); changed || lvl != CacheMarkNone {
+	if lvl, changed := g.Degrade("p", "m", CacheMarkAll); changed || lvl != CacheMarkNone {
 		t.Fatalf("a stale degrade must not move the guard back: %v/%v", lvl, changed)
 	}
 }

@@ -10,7 +10,7 @@ import (
 // segmentsAdapter is a fakeAdapter that places SystemVolatile itself.
 type segmentsAdapter struct{ *fakeAdapter }
 
-func (segmentsAdapter) SendsSystemSegments() bool { return true }
+func (segmentsAdapter) PlacesSystemVolatile() {}
 
 // An adapter that sends one system string receives SystemVolatile folded
 // into System; an adapter that places the segments itself receives them

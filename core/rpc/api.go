@@ -8254,7 +8254,11 @@ func buildChatRunner(
 			if billedCost != nil {
 				billedVal = *billedCost
 			}
-			fleetUsage.LLMResponse(ctx, sessionID, billed.Usage.InputTokens, billed.Usage.OutputTokens, billedVal)
+			// tokenIn is the whole prompt (usageTurnRecord's
+			// PromptTokens), so fleet totals agree with the local
+			// readout under either provider convention.
+			turnRecord := usageTurnRecord(sessionID, messageID, providerKind, modelID, billed)
+			fleetUsage.LLMResponse(ctx, sessionID, turnRecord.PromptTokens, billed.Usage.OutputTokens, billedVal)
 			snap := lastUsageSnapshot(resp, providerKind)
 			// Persist the per-session last_usage_json snapshot so the frontend
 			// context-window indicator refreshes without a full GetUsage RPC.

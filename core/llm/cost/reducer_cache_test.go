@@ -69,6 +69,39 @@ func TestReducer_CachedTokensBilledOncePerConvention(t *testing.T) {
 	}
 }
 
+// The live chat cost path (Reducer.Derive over the embedded starter
+// table) prices OpenRouter Anthropic-family calls with their cache rates,
+// and picks the Opus 4.5/4.6 rows over the older claude-opus-4* glob.
+func TestReducer_StarterTable_OpenRouterAnthropicCacheRates(t *testing.T) {
+	tab, err := LoadDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(tab)
+	u := llm.Usage{InputTokens: 1_000_000, OutputTokens: 100_000, CachedInputRead: 800_000}
+	cases := []struct {
+		model             string
+		wantInput, cached float64
+		wantOutput        float64
+	}{
+		{"anthropic/claude-haiku-4.5", 0.2 * 1.00, 0.8 * 0.10, 0.1 * 5.00},
+		{"anthropic/claude-opus-4.6", 0.2 * 5.00, 0.8 * 0.50, 0.1 * 25.00},
+		{"anthropic/claude-opus-4.1", 0.2 * 15.00, 0.8 * 1.50, 0.1 * 75.00},
+		{"anthropic/claude-sonnet-4.5", 0.2 * 3.00, 0.8 * 0.30, 0.1 * 15.00},
+	}
+	for _, tc := range cases {
+		c := r.Derive(u, "openrouter", tc.model)
+		if c.Indeterminate {
+			t.Fatalf("%s: indeterminate", tc.model)
+		}
+		if math.Abs(c.InputCost-tc.wantInput) > 1e-9 || math.Abs(c.CachedCost-tc.cached) > 1e-9 ||
+			math.Abs(c.OutputCost-tc.wantOutput) > 1e-9 {
+			t.Errorf("%s: input=%v cached=%v output=%v, want %v/%v/%v",
+				tc.model, c.InputCost, c.CachedCost, c.OutputCost, tc.wantInput, tc.cached, tc.wantOutput)
+		}
+	}
+}
+
 // A cache count larger than the inclusive InputTokens (a malformed frame)
 // never drives the input bucket negative.
 func TestReducer_InclusiveCacheCountClampedToInput(t *testing.T) {

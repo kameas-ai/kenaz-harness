@@ -329,30 +329,39 @@ func TestGenerate_CustomInstructionsLayerOrdering(t *testing.T) {
 		}
 	})
 
-	// Present: user layer appears LAST, after the environment layer.
+	// Present: the user layer is the last text of the whole system prompt
+	// as the wire carries it (FullSystem: System, then SystemVolatile),
+	// after the stable environment, the per-call state and hook context.
 	t.Run("present-after-env", func(t *testing.T) {
 		reg := &capturingRegistry{}
+		q := newPendingContextQueue()
 		adapter := NewLLMProviderAdapter(reg, "p", "m", nil, nil).
+			WithSessionID("s1").
 			WithEnvContext(fixedClock(), "", "").
-			WithCustomInstructions(func() string { return "Prefer tables over prose." })
-		if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: base}); err != nil {
+			WithCustomInstructions(func() string { return "Prefer tables over prose." }).
+			withPendingContext(q)
+		_ = q.AppendSystemContext(context.Background(), "s1", "repo uses tabs")
+		if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: base, StreamToChat: true}); err != nil {
 			t.Fatalf("Generate: %v", err)
 		}
-		sys := reg.snapshot().System
+		gen := reg.snapshot()
+		sys := gen.FullSystem()
 		baseIdx := strings.Index(sys, base)
 		envIdx := strings.Index(sys, "## Environment")
+		stateIdx := strings.Index(sys, "## Current state")
+		hookIdx := strings.Index(sys, "repo uses tabs")
 		userIdx := strings.Index(sys, "## User instructions")
 		if baseIdx != 0 {
-			t.Fatalf("base must lead the composed System:\n%s", sys)
+			t.Fatalf("base must lead the composed system prompt:\n%s", sys)
 		}
-		if envIdx <= baseIdx {
-			t.Fatalf("environment must follow the node prompt:\n%s", sys)
+		if !(baseIdx < envIdx && envIdx < stateIdx && stateIdx < hookIdx && hookIdx < userIdx) {
+			t.Fatalf("want base < environment < state < hook context < user instructions:\n%s", sys)
 		}
-		if userIdx <= envIdx {
-			t.Fatalf("user instructions must be the FINAL layer (after env):\n%s", sys)
+		if !strings.HasSuffix(sys, "## User instructions\n\nPrefer tables over prose.") {
+			t.Fatalf("user instructions must be the final text:\n%s", sys)
 		}
-		if !strings.Contains(sys, "Prefer tables over prose.") {
-			t.Errorf("expected user instructions text in composed System:\n%s", sys)
+		if strings.Contains(gen.System, "## User instructions") {
+			t.Errorf("user instructions must ride after the cached prefix, not in System:\n%s", gen.System)
 		}
 	})
 }

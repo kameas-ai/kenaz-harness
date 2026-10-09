@@ -532,7 +532,7 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 
 	// Only an adapter that places SystemVolatile after its cache marker
 	// sees the two system segments; every other adapter reads one System.
-	if seg, ok := adapter.(llm.SystemSegmentsAdapter); !ok || !seg.SendsSystemSegments() {
+	if _, ok := adapter.(llm.SystemVolatileAdapter); !ok {
 		req = llm.FoldSystemSegments(req)
 	}
 

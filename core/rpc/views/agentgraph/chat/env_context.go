@@ -17,10 +17,11 @@ import (
 // Schemas are NOT included here (they are sent separately on the wire);
 // the two blocks together stay compact (≤ ~120 tokens).
 //
-// The facts are split by lifetime (tool-context-budget-01TCBUD01 WP05):
-// buildEnvContext renders the session-stable ones into the cacheable
-// system prefix; buildEnvState renders the per-call ones (date, workspace
-// entry count, tool inventory) into the segment after the cache marker.
+// The facts are split by lifetime because the system prefix must stay
+// byte-identical across calls for provider prompt caching:
+// buildEnvContext renders only session-stable facts (system prefix);
+// buildEnvState renders the per-call ones (date, workspace entry count,
+// tool inventory), which go after the cache marker.
 //
 // buildEnvContext is deliberately pure: every fact it renders arrives via
 // envContextInput so tests can pin a deterministic clock, GOOS/GOARCH,
