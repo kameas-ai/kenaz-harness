@@ -352,7 +352,9 @@ answers `403 {"code":"org_paused","message":…,"details":{…}}` — including
 `/me/ml` stay 200; capabilities keeps the tier, every key `false`, plus
 `paused: true` and `paused_category` ∈ {billing_review, security, abuse,
 legal, other}. Allowlisted (still work while paused): memory forget /
-forget-all / export, ML export, context stream DELETE, context export,
+forget-all / export (a FORGET-ONLY `POST /memory/push` batch is accepted;
+a mixed batch is 403), a NARROWING `PUT /memory/settings` (sync off / fewer
+scopes; enabling or widening is 403), ML export, context stream DELETE, context export,
 account erasure, legal acceptance, lockdown status/wait/set, SCIM/SSO
 revoke/delete, billing portal. SCIM answers in SCIM format (irrelevant
 here).
@@ -376,8 +378,12 @@ config poll, resumes the memory lane and resets the revoke-sweep skip — no
 sign-in. `FleetSession` carries `paused` / `pausedCategory`; the UI shows
 one banner (`OrgPausedBanner`, copy table `lib/orgPausedCopy.ts`) in place
 of every tier/upsell gate on the path, and the memory panel keeps "turn off
-+ delete from Fleet" enabled (forget-all runs even though the settings PUT
-before it is refused; `DisablePending` retries it after the pause lifts).
++ delete from Fleet" enabled. While paused the memory lane still sends
+queued forgets as forget-only batches and finishes a pending opt-out /
+delete-from-Fleet (narrowing PUT + forget-all). The pause is session-scoped:
+`Client.ResetOrgPause` runs on the fleet session-reset hook (no fan-out), and
+the snapshot shows `paused` only once this session's poller is not
+default-deny.
 
 **Residuals (accepted, dated).**
 1. Context-graph pull and unit poll are NOT in the unpause fan-out: they
@@ -385,10 +391,10 @@ before it is refused; `DisablePending` retries it after the pause lifts).
    Blocker: neither loop has a wake channel; adding one is a loop refactor
    outside this fix. Owner: alec — the next change that touches either poll
    loop wires `OnOrgUnpaused` and deletes this item.
-2. `details` key: the confirmed contract names `details.paused_category`;
-   PR #206's gate (at review time) writes `details.category` (+
-   `details.paused`). The parser accepts both. Owner: alec — delete the
-   `category` fallback once #206 merges with `paused_category`.
+2. Audit archiver wake is a buffered-1 channel: an unpause that lands while
+   the loop is not in a backoff wait leaves a token that cuts ONE later
+   backoff short (one extra early retry, never a loop). Accepted; owner
+   alec — whoever next reworks the archiver loop drains it on success.
 3. `TelemetryOnboardingModal` / `FleetTelemetryPanel` tier copy ("Requires
    Pro+", "your organization's plan … does not include") is driven by the
    org TIER, which a pause keeps — it is accurate, not pause-path upsell,

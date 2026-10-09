@@ -10,7 +10,8 @@ import { mount, flushPromises } from '@vue/test-utils';
 import { createRouter, createWebHashHistory } from 'vue-router';
 
 import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
-import { createFakeHarnessClient } from '@/lib/harnessClient';
+import { createFakeHarnessClient, fakeFleetSession } from '@/lib/harnessClient';
+import { _resetFleetSessionForTest, applyFleetSession } from '@/lib/fleetSession';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import { initFeatureFlags } from '@/lib/featureFlags';
 import type { UserCommandSummary, UserCommand, AppInfo } from '@/lib/types';
@@ -255,6 +256,24 @@ describe('SlashCommandsView', () => {
 
       expect(wrapper.find('[data-testid="publish-to-team-btn"]').exists()).toBe(false);
       expect(wrapper.find('[data-testid="publish-to-team-unavailable"]').exists()).toBe(true);
+    });
+
+    it('a staff org pause shows the paused line instead of the Team+ upsell', async () => {
+      initFeatureFlags(makeAppInfo({}));
+      applyFleetSession(
+        fakeFleetSession({ state: 'signed_in', tokensUsable: true, paused: true, pausedCategory: 'legal' }),
+      );
+      try {
+        const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL });
+        await flushPromises();
+        await wrapper.find('[data-testid="slashcmd-row-standup"]').trigger('click');
+        await flushPromises();
+        expect(wrapper.find('[data-testid="org-paused-banner"]').exists()).toBe(true);
+        expect(wrapper.find('[data-testid="publish-to-team-unavailable"]').exists()).toBe(false);
+        expect(wrapper.text()).not.toMatch(/Team\+ required/);
+      } finally {
+        _resetFleetSessionForTest();
+      }
     });
 
     it('does not show publish section when creating a new command', async () => {

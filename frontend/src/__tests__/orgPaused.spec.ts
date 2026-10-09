@@ -20,6 +20,7 @@ import { HarnessClientKey } from '@/lib/harnessClientContext';
 import {
   _resetFleetSessionForTest,
   applyFleetSession,
+  describeFleetReason,
   describeSyncReason,
   fleetDegradedLanes,
 } from '@/lib/fleetSession';
@@ -88,6 +89,10 @@ describe('org paused copy table', () => {
     expect(normalizeOrgPausedCategory('')).toBe('other');
     expect(normalizeOrgPausedCategory('tax_hold')).toBe('other');
     expect(orgPausedCategoryLine('tax_hold')).toBe(ORG_PAUSED_CATEGORY_COPY.other);
+  });
+
+  it('names org_paused as a session reason without tier copy', () => {
+    expect(describeFleetReason('org_paused')).toBe("Paused by your organization's account status");
   });
 
   it('never carries upsell copy', () => {

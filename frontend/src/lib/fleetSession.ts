@@ -333,6 +333,8 @@ export function describeFleetReason(reason: string | undefined): string {
       return 'Update your sign-in — telemetry export is off';
     case 'node_removed':
       return 'This device was removed by an org admin';
+    case ORG_PAUSED_REASON:
+      return "Paused by your organization's account status";
     default:
       return reason ? `Fleet: ${reason}` : '';
   }
