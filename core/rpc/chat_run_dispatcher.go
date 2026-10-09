@@ -266,7 +266,7 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	if _, aerr := d.deps.Sessions.AppendMessage(ctx, sess.ID, "user", prompt); aerr != nil {
 		r := failedRecord2(sess.ID, now, fmt.Sprintf("append prompt: %v", aerr))
 		r.Model = model
-		d.discardEmptyFailedSession(ctx, &r)
+		d.discardEmptyFailedSession(ctx, &r, prompt)
 		return r, nil
 	}
 
@@ -291,7 +291,7 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		}
 		r := failedRecord2(sess.ID, now, fmt.Sprintf("start stream: %v", serr))
 		r.Model = model
-		d.discardEmptyFailedSession(ctx, &r)
+		d.discardEmptyFailedSession(ctx, &r, prompt)
 		return r, nil
 	}
 
@@ -331,9 +331,9 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			// produced an assistant message leaves an empty session
 			// nobody will open: delete it. Not on timeout / ctx-cancel
 			// below — the run may still be executing there.
-			d.discardEmptyFailedSession(ctx, &histRec)
+			d.discardEmptyFailedSession(ctx, &histRec, prompt)
 			if sinkKind == "banner" {
-				d.deliverBanner(id, rec.Name, sess.ID, histRec)
+				d.deliverBanner(id, rec.Name, histRec.SessionID, histRec)
 			}
 			return histRec, nil
 		case <-deadline.C:
@@ -343,7 +343,7 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("timed out after %s waiting for the run to finish", d.deps.Timeout))
 			histRec.Model = model
 			if sinkKind == "banner" {
-				d.deliverBanner(id, rec.Name, sess.ID, histRec)
+				d.deliverBanner(id, rec.Name, histRec.SessionID, histRec)
 			}
 			return histRec, nil
 		case <-ctx.Done():
@@ -353,7 +353,7 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("context cancelled while awaiting completion: %v", ctx.Err()))
 			histRec.Model = model
 			if sinkKind == "banner" {
-				d.deliverBanner(id, rec.Name, sess.ID, histRec)
+				d.deliverBanner(id, rec.Name, histRec.SessionID, histRec)
 			}
 			return histRec, nil
 		}
@@ -524,17 +524,18 @@ func (d *LiveChatRunDispatcher) buildRecord(ctx context.Context, sessionID strin
 	return rec
 }
 
-// discardEmptyFailedSession deletes the run's session when the run failed
-// without producing a single assistant message (dogfood 2026-10-08 round
-// 2: every failed scheduled run left a "Scheduled: <name>" session holding
-// only the prompt — invisible in the sidebar, never cleaned up, and read
-// by the sentinel itself as "a schedule firing more often than intended").
-// The history row keeps the error, model and time, so nothing diagnostic
-// is lost; its SessionID is cleared so the run list never links to a
-// session that no longer exists. A completed run, or a failed one that got
-// as far as an assistant message (partial output worth reading), keeps its
-// session.
-func (d *LiveChatRunDispatcher) discardEmptyFailedSession(ctx context.Context, rec *scheduler.ChatRunHistoryRecord) {
+// discardEmptyFailedSession deletes the run's session when a failed run
+// left nothing in it but the dispatcher's own prompt. Such a session has
+// no output to read and is invisible in the sidebar; the history row
+// keeps the error, model and time, and its SessionID is cleared so
+// nothing links to the deleted session.
+//
+// The rule is deliberately strict: the session is kept if it holds ANY
+// row other than the user prompt this dispatch appended — an assistant
+// segment, a tool call or tool result (the record of what the agent
+// did, e.g. a mail it sent before failing), a system note. A session
+// whose rows cannot be listed is kept. Completed runs never reach here.
+func (d *LiveChatRunDispatcher) discardEmptyFailedSession(ctx context.Context, rec *scheduler.ChatRunHistoryRecord, prompt string) {
 	if rec.Status != "failed" || rec.SessionID == "" || d.deps.Sessions == nil {
 		return
 	}
@@ -543,7 +544,7 @@ func (d *LiveChatRunDispatcher) discardEmptyFailedSession(ctx context.Context, r
 		return // cannot prove it is empty; keep it
 	}
 	for _, m := range msgs {
-		if m.Role == "assistant" {
+		if m.Role != "user" || m.Content != prompt {
 			return
 		}
 	}

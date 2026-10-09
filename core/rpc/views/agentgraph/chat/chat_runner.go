@@ -2440,6 +2440,17 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	if !sub.finished.CompareAndSwap(false, true) {
 		return
 	}
+	// Flush the journal's parked segment BEFORE the close is announced:
+	// stream-closed subscribers read the transcript on that event (the
+	// scheduled-chat dispatcher's snippet, cost and empty-session check),
+	// so every row the turn produced must already be persisted. The
+	// deferred Finish above stays as the backstop for the paths that
+	// return without reaching here; Finish is idempotent.
+	{
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+		sub.journal.Finish(flushCtx)
+		flushCancel()
+	}
 	// Persist the outcome BEFORE the close is announced, so a surface
 	// that re-reads Sessions_TurnRuns on stream-closed sees it.
 	switch {
