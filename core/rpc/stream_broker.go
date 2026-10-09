@@ -112,13 +112,15 @@ const (
 	// TopicMigrationDriftDetected is published once per chassis boot when
 	// the migration drift check finds severity:"error" (id_mismatch)
 	// drift (upgrade-path-coverage-01PMUG01 WP04, FR-3c). Before this,
-	// severity:"error" drift was visible only inside the
-	// MigrationDriftPanel at /settings?tab=health, which a user has no
-	// reason to know exists; this topic lets useEventToasts.ts surface a
-	// persistent toast at boot instead. NOT published for ledger_only or
-	// code_only-only drift — code_only is the normal pending state the
-	// panel already suppresses by default, and adding a boot toast for it
-	// would make the toast itself the false alarm this WP is fixing.
+	// severity:"error" drift was visible only inside a Settings › Health
+	// panel a user had no reason to know exists; this topic lets
+	// useEventToasts.ts surface a persistent toast at boot instead, whose
+	// action opens Settings, where the issue banner
+	// (frontend/src/lib/settingsIssues.ts) offers the repair. NOT
+	// published for ledger_only or code_only-only drift — code_only is
+	// the normal pending state the banner never shows, and adding a boot
+	// toast for it would make the toast itself the false alarm this WP
+	// is fixing.
 	//
 	// The value matches kindpkg.KindMigrationDriftDetected
 	// (core/event/kind/registry.go) so the audit trail and the live

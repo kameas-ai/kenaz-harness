@@ -95,7 +95,7 @@
 # CLASS: gated -- the affordance carries !isServedMode() (or, for
 # PermissionDialsPanel's pair, WP05's equivalent explicit-failure-state
 # pattern, noted per-entry). WP04's + WP07's own output.
-# 28 entries.
+# 31 entries.
 
 # Caller(s) ChatInput.vue carry the WP04 served-mode gate.
 "Attachments_AddMedia"
@@ -181,6 +181,18 @@
 # Ports together with Graph_MaterializeRun if Graph_* is ever served.
 "Sessions_TurnRuns"
 
+# settings-cleanup-01SETUX01 WP01, 2026-10-09. Moved here from
+# boundary-panelled: their old callers (LogsPanel.vue, MigrationDriftPanel.vue)
+# were deleted by owner ruling. The sole caller is now lib/settingsIssues.ts's
+# `database` issue provider, which is declared desktopOnly and skipped by
+# collectSettingsIssues() when isServedMode() is true -- so
+# SettingsIssuesBanner (mounted by SettingsShell, which served-mode routes
+# such as /providers DO render) never calls these in a served build. Pinned
+# by SettingsIssuesBanner.spec.ts's served-mode case.
+"Logs_Tail"
+"Storage_ApplyDriftFix"
+"Storage_GetMigrationDriftReport"
+
 # CLASS: boundary-panelled -- the only caller (or callers, ALL of them)
 # is/are inside a view that renders NotAvailableInServedMode. Grown by
 # WP03/WP05's panels; classified here by walking actual caller sites
@@ -190,7 +202,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 188 entries.
+# 185 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -377,10 +389,6 @@
 "LLM_LoadChain"
 "LLM_SaveChain"
 
-# Caller(s) LogsPanel.vue only reachable from a view that renders
-# NotAvailableInServedMode.
-"Logs_Tail"
-
 # Caller(s) PasteConfigTab.vue only reachable from a view that renders
 # NotAvailableInServedMode.
 "MCP_ImportClaudeDesktopConfig"
@@ -525,11 +533,6 @@
 # deleted by install-framework-01DOGF0B Phase 4 WP08, 2026-10-05), reachable
 # only from SettingsView, which renders NotAvailableInServedMode.
 "Slashcmd_SkillUninstall"
-
-# Caller(s) MigrationDriftPanel.vue only reachable from a view that renders
-# NotAvailableInServedMode.
-"Storage_ApplyDriftFix"
-"Storage_GetMigrationDriftReport"
 
 # Caller(s) SyncPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
