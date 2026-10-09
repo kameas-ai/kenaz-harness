@@ -930,8 +930,10 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 			for _, modelID := range v.Models {
 				info := ModelInfo{ID: modelID, DisplayName: modelID}
 				resolved := false
+				var listed *corellm.ModelInfo
 				if lookup != nil {
 					if mi, ok := lookup.LookupModelInfo(modelID); ok {
+						listed = &mi
 						info.ContextWindow = mi.ContextWindow
 						info.MaxOutputTokens = mi.MaxOutputTokens
 						if mi.DisplayName != "" {
@@ -957,6 +959,7 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 						info.ContextWindow = cw
 					}
 				}
+				info.SupportsPromptCache = modelCachesPrompts(v.Kind, modelID, listed)
 				if !resolved {
 					missCount++
 					if len(missSample) < modelInfoMissSampleMax {
@@ -1429,16 +1432,38 @@ func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]M
 		return nil, err
 	}
 	out := make([]ModelInfo, 0, len(models))
-	for _, m := range models {
+	for i := range models {
+		m := models[i]
 		out = append(out, ModelInfo{
-			ID:              m.ID,
-			DisplayName:     m.DisplayName,
-			Description:     m.Description,
-			ContextWindow:   m.ContextWindow,
-			MaxOutputTokens: m.MaxOutputTokens,
+			ID:                  m.ID,
+			DisplayName:         m.DisplayName,
+			Description:         m.Description,
+			ContextWindow:       m.ContextWindow,
+			MaxOutputTokens:     m.MaxOutputTokens,
+			SupportsPromptCache: modelCachesPrompts(kind, m.ID, &m),
 		})
 	}
 	return out, nil
+}
+
+// modelCachesPrompts mirrors the adapters' request-time decision to send
+// cache_control markers for (kind, modelID), so the "caches prompts"
+// badge never claims more than the wire does. A model-list entry that
+// reports llm.ModelInfo.SupportsPromptCache is believed. Otherwise the
+// curated llm.SupportsPromptCache table decides, except that for
+// OpenRouter — the one adapter that writes the flag, vetoing the table
+// from its /models cache pricing (openrouter cacheLevel) — a listed entry
+// without the flag is a veto. Anthropic direct never writes the flag, so
+// its models fall through to the table. listed is nil when the model has
+// no model-list entry.
+func modelCachesPrompts(kind, modelID string, listed *corellm.ModelInfo) bool {
+	if listed != nil && listed.SupportsPromptCache {
+		return true
+	}
+	if !corellm.SupportsPromptCache(kind, modelID) {
+		return false
+	}
+	return !(listed != nil && kind == "openrouter")
 }
 
 // UpdateProviderCredential writes a new plaintext API key for profileID

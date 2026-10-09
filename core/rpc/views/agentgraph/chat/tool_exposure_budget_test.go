@@ -197,8 +197,8 @@ func TestBudget_EvictsActivatedTailThenStableAcrossCalls(t *testing.T) {
 	if loadSize := corellm.EstimateToolSpecTokens(specs[0]); loadSize >= 500 {
 		t.Fatalf("load_tools is %d tokens; the planted arithmetic assumes < 500", loadSize)
 	}
-	if !strings.Contains(reqs[0].System, "outlook (3 tools) — e.g. b, c, d") {
-		t.Errorf("evicted Outlook tools are not back in the digest:\n%s", reqs[0].System)
+	if !strings.Contains(reqs[0].SystemVolatile, "outlook (3 tools) — e.g. b, c, d") {
+		t.Errorf("evicted Outlook tools are not back in the digest:\n%s", reqs[0].SystemVolatile)
 	}
 	b1, _ := json.Marshal(reqs[0].Tools)
 	b2, _ := json.Marshal(reqs[1].Tools)

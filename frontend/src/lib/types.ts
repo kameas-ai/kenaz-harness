@@ -423,9 +423,9 @@ export interface ModelInfo {
   contextWindow?: number;
   /**
    * True when requests for this model carry prompt-cache markers
-   * (tool-context-budget-01TCBUD01 WP05's llm.ModelInfo flag). Not yet
-   * on the rpc wire (views/llm.ModelInfo; see docs/unwired-ledger.md);
-   * absent reads as unknown, not false.
+   * (tool-context-budget-01TCBUD01 WP05). Go views/llm.ModelInfo derives
+   * it from the adapter's llm.ModelInfo flag, falling back to the curated
+   * llm.SupportsPromptCache table (Anthropic direct); omitted when false.
    */
   supportsPromptCache?: boolean;
   /**
@@ -5484,7 +5484,11 @@ export type ToolExposureLevel =
   | 'session'
   | 'project'
   | 'user'
+  /** An organisation entry marked pinned:false: below the user layer (WP07). */
+  | 'org_default'
   | 'default'
+  /** The organisation added the tool to the hot set (hot_set_extra): always full (WP07). */
+  | 'org_hot_set'
   | 'invariant'
   | '';
 

@@ -121,8 +121,8 @@ type toolSelection struct {
 	summary int
 	// digest is the per-call "Available but not loaded" system section
 	// (loadtools.RenderDigest); "" when nothing is unloaded. It changes
-	// with every activation, so it travels after the cacheable prefix
-	// (appendDigest), never in a tool description.
+	// with every activation, so it travels in SystemVolatile, after the
+	// cacheable prefix, never in a tool description.
 	digest string
 	// autoActivated is the turn's auto-activation count so far.
 	autoActivated int
@@ -370,19 +370,6 @@ func (t *exposureTurn) fitSize(rt toolexposure.ResolvedTool) int {
 	return corellm.EstimateToolSpecTokens(spec)
 }
 
-// appendDigest adds the per-call digest section after everything else
-// in the system prompt, so the stable system text before it stays a
-// cacheable prefix. "" leaves system unchanged.
-func appendDigest(system, digest string) string {
-	if digest == "" {
-		return system
-	}
-	if system == "" {
-		return digest
-	}
-	return system + "\n\n" + digest
-}
-
 // willSend reports whether this turn's next model call carries name's
 // schema: the tool is in the turn's catalog and, resolved against the
 // turn's settings snapshot and the session's current activations, is
@@ -397,17 +384,13 @@ func (t *exposureTurn) willSend(ctx context.Context, name string) bool {
 }
 
 // assembleRequestTools lays out one call's tools array from its three
-// segments (spec §2.3): hot then pinned, each sorted by name, then
-// activated in the order given (most recently used first). stable is the
-// count of leading tools that stay byte-identical from call to call
-// (hot + pinned) — the cacheable prefix; activated tools follow it.
-// Callers pass hot and pinned already sorted by name.
+// segments (spec §2.3) with corellm.OrderTools: hot then pinned, each
+// sorted by name, then activated in the order given (most recently used
+// first). stable is the count of leading tools that stay byte-identical
+// from call to call (hot + pinned) — the cacheable prefix the request
+// marks via GenerationRequest.SetTools; activated tools follow it.
 func assembleRequestTools(hot, pinned, activated []corellm.ToolSpec) (tools []corellm.ToolSpec, stable int) {
-	tools = make([]corellm.ToolSpec, 0, len(hot)+len(pinned)+len(activated))
-	tools = append(tools, hot...)
-	tools = append(tools, pinned...)
-	tools = append(tools, activated...)
-	return tools, len(hot) + len(pinned)
+	return corellm.OrderTools(hot, pinned, activated)
 }
 
 // notLoadedResult is the structured tool result for a call to a tool

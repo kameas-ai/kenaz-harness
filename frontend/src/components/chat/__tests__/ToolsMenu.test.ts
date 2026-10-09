@@ -58,6 +58,7 @@ function setup(opts: {
   windowTokens?: number;
   notLoaded?: { name: string; reason: string }[];
   schemaCosts?: (sid: string, pid: string) => Promise<ServerSchemaCost[]>;
+  orgBudget?: number;
 } = {}) {
   const base = createFakeHarnessClient();
   const schemaCosts = vi.fn(opts.schemaCosts ?? (async () => opts.costs ?? COSTS));
@@ -67,7 +68,11 @@ function setup(opts: {
     not_loaded: opts.notLoaded ?? [],
     summary: 'ok',
   }));
-  const getSession = vi.fn(async () => ({ exposure: opts.sessionLayer ?? {}, activations: [] }));
+  const getSession = vi.fn(async () => ({
+    exposure: opts.sessionLayer ?? {},
+    activations: [],
+    org: { settings: [], schemaBudgetTokens: opts.orgBudget ?? 0, bundleId: 0 },
+  }));
   const setSession = vi.fn(async () => {});
   const getProject = vi.fn(async () => opts.projectLayer ?? {});
   const setProject = vi.fn(async () => {});
@@ -103,6 +108,29 @@ const COMPOSITION: UsageComposition = {
 };
 
 describe('ToolsMenu', () => {
+  // tool-context-budget-01TCBUD01 WP07 read-only UI: organisation rows
+  // offer no moves, and an org-set budget is named on the meter.
+  it('an org hot-set server offers no Load / Unload / Pin and says who set it', async () => {
+    const { w } = setup({
+      projectId: 'p1',
+      costs: [cost({ server: 'crm', tier: 'full', source: 'org_hot_set', toolCount: 2, sendableTokenEst: 20 })],
+    });
+    await flushPromises();
+    expect(w.find('[data-testid="tools-menu-state-crm"]').text()).toContain('set by your organisation');
+    expect(w.find('[data-testid="tools-menu-unload-crm"]').exists()).toBe(false);
+    expect(w.find('[data-testid="tools-menu-load-crm"]').exists()).toBe(false);
+    expect(w.find('[data-testid="tools-menu-pin-crm"]').exists()).toBe(false);
+  });
+
+  it('names an org-set schema budget from SessionToolExposure.org', async () => {
+    const { w } = setup({ orgBudget: 16_000 });
+    await flushPromises();
+    expect(w.find('[data-testid="tools-menu-org-budget"]').text()).toContain('set by your organisation');
+    const plain = setup();
+    await flushPromises();
+    expect(plain.w.find('[data-testid="tools-menu-org-budget"]').exists()).toBe(false);
+  });
+
   it('lists each server with its tier and state for this session', async () => {
     const { w, schemaCosts } = setup();
     await flushPromises();

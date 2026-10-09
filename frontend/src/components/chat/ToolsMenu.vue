@@ -19,6 +19,11 @@
  * setting, 15% of the model's window). It also shows the last request's
  * measured tool tokens, cache read and WP04's budget outcomes.
  *
+ * Organisation rows (an org pin, or a tool the org added to the hot set)
+ * offer no moves: "set by your organisation". An org-set schema budget
+ * (SessionToolExposure.org.schemaBudgetTokens) is named on the meter
+ * (tool-context-budget-01TCBUD01 WP07).
+ *
  * Served mode: a boundary panel. The menu's bindings have no serve
  * dispatch, so nothing is fetched or written there.
  */
@@ -31,6 +36,7 @@ import {
   explainExposureError,
   formatTokens,
   compactTokens,
+  isOrgLocked,
   layerServerTier,
   sendableTokens,
   serverStateLabel,
@@ -72,6 +78,8 @@ const costs = ref<ServerSchemaCost[]>([]);
 const sessionLayer = ref<ToolExposure>({});
 const projectLayer = ref<ToolExposure>({});
 const effectiveBudget = ref<number | null>(null);
+/** The organisation's schema budget for this session; 0 = not set by the organisation. */
+const orgBudget = ref(0);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const notice = ref<string | null>(null);
@@ -98,6 +106,7 @@ async function refresh() {
     if (seq !== refreshSeq || sid !== props.sessionId) return;
     costs.value = c;
     sessionLayer.value = s.exposure ?? {};
+    orgBudget.value = s.org?.schemaBudgetTokens ?? 0;
     effectiveBudget.value = st.effectiveSchemaBudgetTokens || null;
     projectLayer.value = p;
   } catch (e) {
@@ -194,7 +203,7 @@ function sendableCount(c: ServerSchemaCost): number {
 
 function rowState(c: ServerSchemaCost): RowState {
   if (!c.running) return 'stopped';
-  if (c.source === 'org_pin') return 'pinned';
+  if (isOrgLocked(c.source)) return 'pinned';
   if (layerServerTier(sessionLayer.value, c.server) === 'off') return 'unloaded';
   if (c.tier === 'off') return 'off';
   if (c.server === BUILTIN_SERVER) return 'core';
@@ -240,7 +249,7 @@ function canUnload(c: ServerSchemaCost): boolean {
 }
 
 function canPin(c: ServerSchemaCost): boolean {
-  if (!props.projectId || !c.running || c.pinned || c.server === BUILTIN_SERVER) return false;
+  if (!props.projectId || !c.running || c.pinned || isOrgLocked(c.source) || c.server === BUILTIN_SERVER) return false;
   return layerServerTier(projectLayer.value, c.server) !== 'full';
 }
 
@@ -345,6 +354,9 @@ function toggle() {
               {{ formatTokens(nextTokens) }}<template v-if="budget"> of {{ compactTokens(budget) }} budget</template>
             </span>
           </div>
+          <p v-if="orgBudget > 0" class="text-[10px] text-ink-subtle" data-testid="tools-menu-org-budget">
+            Schema budget set by your organisation ({{ orgBudget.toLocaleString() }} tokens).
+          </p>
           <span v-if="budget" class="block h-1 w-full overflow-hidden rounded-full bg-surface-2">
             <span
               class="block h-full"

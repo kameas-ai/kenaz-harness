@@ -750,11 +750,14 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	attachmentsBlock := a.buildAttachmentsBlock(ctx)
 	// The tools this call carries are chosen per call, not per turn: a
 	// kenaz__load_tools call earlier in the turn must reach this request.
-	sendTools := a.tools
+	// Tools go out in corellm.OrderTools order: hot then pinned, each by
+	// name (the stable, cache-marked prefix), then activated. Without
+	// exposure the whole list is one stable segment.
+	sendTools, stableTools := corellm.OrderTools(a.tools, nil, nil)
 	var sel toolSelection
 	if a.exposure != nil {
 		sel = a.exposure.selectTools(ctx, a.windowFor(model))
-		sendTools = sel.tools
+		sendTools, stableTools = sel.tools, sel.stable
 	}
 	envStable, envState := a.buildEnvBlock()
 	gen := corellm.GenerationRequest{
@@ -772,18 +775,17 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		// across calls with unchanged settings (FR-C1): every layer in it
 		// is session-stable. SystemVolatile follows it on the wire (after
 		// the cache marker) and holds what changes call to call — the
-		// environment's date / workspace count / tool inventory and the
-		// hook-context layer — then the user's custom instructions, which
-		// must be the last thing in the whole system prompt so the
-		// user's standing preferences keep the last word.
+		// environment's date / workspace count / tool inventory, the
+		// hook-context layer, and the digest of tools not loaded (it
+		// changes with every activation; reference material, so it sits
+		// before the instructions) — then the user's custom instructions,
+		// which must be the last instruction layer in the whole system
+		// prompt so the user's standing preferences keep the last word.
 		System:         composeSystemPrompt(nil, req.SystemPrompt, attachmentsBlock, envStable, a.buildRecapBlock(), a.buildAskBarBlock()),
-		SystemVolatile: composeSystemPrompt(nil, envState, renderPendingContext(pending), a.buildUserInstructionsBlock()),
+		SystemVolatile: composeSystemPrompt(nil, envState, renderPendingContext(pending), sel.digest, a.buildUserInstructionsBlock()),
 		Messages:       llmMsgs,
-		Tools:          sendTools,
 	}
-	// The digest of tools not loaded is per-call material: it goes after
-	// every other system layer, past the cacheable prefix.
-	gen.System = appendDigest(gen.System, sel.digest)
+	gen.SetTools(sendTools, stableTools)
 
 	// Merge the session-level RequestKnobs default (model-settings-reach-
 	// the-model-01PMZ101 UNIT-6 / WP10) onto the wire request. Before this,

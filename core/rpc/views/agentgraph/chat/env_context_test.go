@@ -9,6 +9,7 @@ import (
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 )
 
 // fixedClock returns a deterministic time source for the environment layer.
@@ -362,6 +363,44 @@ func TestGenerate_CustomInstructionsLayerOrdering(t *testing.T) {
 		}
 		if strings.Contains(gen.System, "## User instructions") {
 			t.Errorf("user instructions must ride after the cached prefix, not in System:\n%s", gen.System)
+		}
+	})
+
+	// With tool exposure: the per-call digest of tools not loaded is
+	// reference material in the volatile tail — after the hook context,
+	// before the user instructions, which keep the last word
+	// (tool-context-budget-01TCBUD01 integration ruling).
+	t.Run("digest-before-user-instructions", func(t *testing.T) {
+		specs := exposureCatalog()
+		svc, _, _ := newExposureService(t, specs)
+		ctx := context.Background()
+		reg := &capturingRegistry{}
+		q := newPendingContextQueue()
+		adapter := NewLLMProviderAdapter(reg, "p", "m", specs, nil).
+			withToolExposure(newExposureTurn(ctx, svc, "s1", specs)).
+			WithSessionID("s1").
+			WithEnvContext(fixedClock(), "", "").
+			WithCustomInstructions(func() string { return "Prefer tables over prose." }).
+			withPendingContext(q)
+		_ = q.AppendSystemContext(ctx, "s1", "repo uses tabs")
+		if _, err := adapter.Generate(ctx, coreag.LLMRequest{SystemPrompt: base, StreamToChat: true}); err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		gen := reg.snapshot()
+		sys := gen.FullSystem()
+		envIdx := strings.Index(sys, "## Environment")
+		stateIdx := strings.Index(sys, "## Current state")
+		hookIdx := strings.Index(sys, "repo uses tabs")
+		digestIdx := strings.Index(sys, "## "+loadtools.DigestHeading)
+		userIdx := strings.Index(sys, "## User instructions")
+		if !(0 <= envIdx && envIdx < stateIdx && stateIdx < hookIdx && hookIdx < digestIdx && digestIdx < userIdx) {
+			t.Fatalf("want environment < state < hook context < digest < user instructions:\n%s", sys)
+		}
+		if !strings.HasSuffix(sys, "## User instructions\n\nPrefer tables over prose.") {
+			t.Fatalf("user instructions must be the final text:\n%s", sys)
+		}
+		if strings.Contains(gen.System, loadtools.DigestHeading) {
+			t.Errorf("digest must ride after the cached prefix, not in System:\n%s", gen.System)
 		}
 	})
 }

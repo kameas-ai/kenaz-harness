@@ -38,13 +38,27 @@ export function sourceLabel(source: ToolExposureLevel): string {
       return 'set for this project';
     case 'user':
       return 'your default';
+    case 'org_default':
+      return "your organisation's default";
     case 'default':
       return 'harness default';
+    case 'org_hot_set':
+      return 'always sent — set by your organisation';
     case 'invariant':
       return 'required while tools are in summary';
     default:
       return 'set per tool';
   }
+}
+
+/**
+ * True when the organisation decided the tier and no layer this UI writes
+ * can change it: an org pin, or a tool the org added to the hot set
+ * (hot_set_extra). An org default (pinned:false) stays editable — the
+ * user's layers sit above it.
+ */
+export function isOrgLocked(source: ToolExposureLevel): boolean {
+  return source === 'org_pin' || source === 'org_hot_set';
 }
 
 /** "1.2k", "14k", "640" — a compact token count. */

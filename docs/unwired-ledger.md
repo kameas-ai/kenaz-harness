@@ -355,15 +355,15 @@ its consumer). Still not consumed:
   are now `Register`ed with their consumers (eviction in
   `chat.exposureTurn.selectTools`, expiry in `beginTurn`); calling an
   activated tool refreshes `LastUsedTurn`.
-- (WP04, 2026-10-09; owner alec; blocker WP06) The composer budget
-  warning has a backend writer and no UI reader: `SessionUsage.composition`
-  carries `schemaBudget`, `toolsEvicted`, `pinnedOverBudgetBy` and
-  `hotOverBudgetBy` (Go `sessions.UsageComposition.{SchemaBudget,
-  ToolsEvicted, PinnedOverBudgetBy, HotOverBudgetBy}`). WP06 renders
-  "Pinned tools exceed the schema budget by N tokens" from
-  `pinnedOverBudgetBy` and "this model's window is too small for the core
-  tools" from `hotOverBudgetBy`; WP06's `budgetWarning` field is to be
-  reconciled onto these names at integration.
+- ~~(WP04, 2026-10-09; owner alec; blocker WP06) The composer budget
+  warning has a backend writer and no UI reader~~ — closed at release
+  integration (2026-10-09): `components/chat/ToolsMenu.vue` reads
+  `SessionUsage.composition.{schemaBudget, toolsEvicted,
+  pinnedOverBudgetBy, hotOverBudgetBy}` (Go
+  `sessions.UsageComposition.{SchemaBudget, ToolsEvicted,
+  PinnedOverBudgetBy, HotOverBudgetBy}`); WP06's `hotOverBy` was renamed
+  onto WP04's `hotOverBudgetBy` and the TS `UsageComposition` has one
+  definition.
 - `toolexposure.SettingsSource` / `PinSource` — `wiring:deferred` at
   their declarations.
 - ~~The seven `*_ToolExposure` / `Sessions_LoadTools` bindings have typed
@@ -379,18 +379,15 @@ its consumer). Still not consumed:
   model-created schedule) says "cost not shown" instead of a number that
   ignores the containment. **Owner:** alec — follow-up mission "schedule
   tool set" (not WP08).
-- WP06 (2026-10-09) — "caches prompts" badge: reads
-  `ModelInfo.supportsPromptCache` from `Provider.modelInfos`, which the rpc
-  `views/llm.ModelInfo` (`core/rpc/views/llm/api.go:104-113`) does not
-  carry, so it never renders yet. **Integration task (release branch, after
-  WP05 merges):** add `SupportsPromptCache bool
-  json:"supportsPromptCache,omitempty"` to `views/llm.ModelInfo`; copy it
-  wherever `MaxOutputTokens` is copied (`core/rpc/views/llm/impl.go`
-  ListModels path) AND on the `LLM_ListProviders` `modelInfos` path; confirm
-  OpenRouter's lister fills WP05's `llm.ModelInfo.SupportsPromptCache`,
-  and fall back to `llm.SupportsPromptCache(kind, id)` for Anthropic-direct
-  profiles whose model list does not. Regenerate models.ts. **Owner:**
-  alec.
+- ~~WP06 (2026-10-09) — "caches prompts" badge has no rpc writer~~ —
+  closed at release integration (2026-10-09): `views/llm.ModelInfo` carries
+  `SupportsPromptCache` (`supportsPromptCache`), set on both the
+  `LLM_ListProviders` `modelInfos` path and the `ListModels` path by
+  `modelCachesPrompts`, which mirrors the adapters' request-time decision
+  (the adapter's `llm.ModelInfo.SupportsPromptCache` when the model list
+  sets it; OpenRouter's unset flag on a listed model is its veto; otherwise
+  the curated `llm.SupportsPromptCache(kind, id)` — Anthropic direct).
+  Test: `core/rpc/views/llm/model_prompt_cache_test.go`.
 - WP06 (2026-10-09) — the Tools menu meter and the request_too_large
   remedy use `Tools_SchemaCosts`' sendable set, which is **before budget**:
   WP04's eviction and TTL expiry are not reflected (the meter is labelled
@@ -400,9 +397,10 @@ its consumer). Still not consumed:
   "every control reaches an observable change in the next request") are
   deferred to WP08 with WP04's eviction; WP06 tests the setting writes and
   the resolver reads. **Owner:** alec — WP08 (dated 2026-10-09).
-- WP06 (2026-10-09) — per-turn cost readout wording for cached tokens is
-  left to WP05 (it rewrites CostCell / TokenMeterChip); the Tools menu
-  shows the last request's cached tokens. **Owner:** WP05.
+- ~~WP06 (2026-10-09) — per-turn cost readout wording for cached tokens is
+  left to WP05~~ — closed at release integration (2026-10-09): WP05's
+  CostCell / TokenMeterChip rewrite is on the release branch; the Tools
+  menu shows the last request's cached tokens.
 - The exposure tiers apply where the chat runner builds the request
   (interactive chat, scheduled chats, subagent runs). Workflow steps
   that call models with tools outside the chat runner still send their
@@ -6424,7 +6422,17 @@ writes on every provider, the same number the local readout shows.
 `llm.ModelInfo.SupportsPromptCache` is written and read by the OpenRouter
 adapter only; the Anthropic `ListModels` write was removed.
 
-### 2026-10-09 (tool-context-budget-01TCBUD01 WP07) — org tool-exposure entries have no `.vue` reader yet
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP07) — org tool-exposure entries have no `.vue` reader yet — FIXED
+
+**FIXED at release integration (2026-10-09).** The TS `ToolExposureLevel`
+union carries `org_default` and `org_hot_set`; `lib/toolExposure.ts`
+`isOrgLocked` (org pin or org hot set) makes those tool rows read-only in
+`ToolExposurePanel` ("always sent — set by your organisation") and takes
+every move off the row in `ToolsMenu`; an org default stays editable. The
+budget input is disabled with a "set by your organisation" note when
+`Settings.org.schemaBudgetTokens > 0`, and `ToolsMenu` names an org budget
+from `SessionToolExposure.org`. Tests: `ToolExposurePanel.test.ts`,
+`ToolsMenu.test.ts`. The original entry follows for the record.
 
 WP07 puts the organisation's entries on the wire read-only
 (`toolexposure.Settings.org`, `sessions.SessionToolExposure.org`:

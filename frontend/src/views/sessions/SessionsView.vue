@@ -405,10 +405,8 @@ function openToolsMenu() {
 
 /**
  * True when the model's catalog entry says requests carry prompt-cache
- * markers (ModelInfo.supportsPromptCache). The rpc ModelInfo does not
- * carry the field until WP05's flag is copied onto it (docs/unwired-ledger.md),
- * so today it is always absent; absent reads as unknown and renders
- * nothing.
+ * markers (ModelInfo.supportsPromptCache, set by LLM_ListProviders from
+ * the adapter's flag or the curated table). Absent renders nothing.
  */
 function modelCachesPrompts(providerId: string, modelId: string): boolean {
   const p = providers.value.find((x) => x.id === providerId);

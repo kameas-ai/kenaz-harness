@@ -18,6 +18,7 @@ const SETTINGS: ToolExposureSettings = {
   activationTtlTurns: 9,
   effectiveSchemaBudgetTokens: 24_000,
   effectiveActivationTtlTurns: 9,
+  org: { settings: [], schemaBudgetTokens: 0, bundleId: 0 },
 };
 
 const COSTS: ServerSchemaCost[] = [
@@ -40,10 +41,17 @@ const COSTS: ServerSchemaCost[] = [
   },
 ];
 
-function setup(opts: { setSettings?: () => Promise<void>; projectLayer?: ToolExposure; costs?: ServerSchemaCost[] } = {}) {
+function setup(
+  opts: {
+    setSettings?: () => Promise<void>;
+    projectLayer?: ToolExposure;
+    costs?: ServerSchemaCost[];
+    settings?: ToolExposureSettings;
+  } = {},
+) {
   const base = createFakeHarnessClient();
   const schemaCosts = vi.fn(async () => opts.costs ?? COSTS);
-  let stored = { ...SETTINGS };
+  let stored = { ...(opts.settings ?? SETTINGS) };
   const getSettings = vi.fn(async () => stored);
   const setSettings = vi.fn(opts.setSettings ?? (async (s: ToolExposureSettings) => {
     stored = { ...s };
@@ -182,6 +190,46 @@ describe('ToolExposurePanel', () => {
     await w.find('[data-testid="tool-exposure-drawer-toggle-outlook"]').trigger('click');
     expect(w.find('[data-testid="tool-exposure-tool-tier-outlook-send-mail"]').attributes('disabled')).toBeDefined();
     expect(w.find('[data-testid="tool-exposure-tool-tier-outlook-list-messages"]').attributes('disabled')).toBeUndefined();
+  });
+
+  // tool-context-budget-01TCBUD01 WP07 read-only UI: a tool the org added
+  // to the hot set (hot_set_extra) is locked like a pin; an org default
+  // (pinned:false) stays editable — the user's layer sits above it.
+  it('an org hot-set tool is read-only and says so; an org default stays editable', async () => {
+    const org: ServerSchemaCost = {
+      server: 'outlook', state: 'running', running: true, toolCount: 2, tokenEst: 600,
+      tier: 'mixed', source: '', pinned: false, sendableTokenEst: 300,
+      tools: [
+        { name: 'send-mail', tokenEst: 300, tier: 'full', source: 'org_hot_set', activated: false, sendable: true, hot: false },
+        { name: 'list-messages', tokenEst: 300, tier: 'summary', source: 'org_default', activated: false, sendable: false, hot: false },
+      ],
+    };
+    const { w, setSettings } = setup({ costs: [org] });
+    await flushPromises();
+    expect(w.find('[data-testid="tool-exposure-pinned-outlook"]').text()).toContain('Some tools are set by your organisation');
+    await w.find('[data-testid="tool-exposure-drawer-toggle-outlook"]').trigger('click');
+    expect(w.find('[data-testid="tool-exposure-tool-tier-outlook-send-mail"]').attributes('disabled')).toBeDefined();
+    expect(w.find('[data-testid="tool-exposure-tool-org-outlook-send-mail"]').text()).toContain('set by your organisation');
+    expect(w.find('[data-testid="tool-exposure-tool-tier-outlook-list-messages"]').attributes('disabled')).toBeUndefined();
+    expect(w.find('[data-testid="tool-exposure-tool-org-outlook-list-messages"]').exists()).toBe(false);
+    await choose(w, 'tool-exposure-tool-tier-outlook-list-messages', 'full');
+    expect(setSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('an org-set schema budget disables the budget input and names the organisation', async () => {
+    const { w, setSettings } = setup({
+      settings: { ...SETTINGS, org: { settings: [], schemaBudgetTokens: 16_000, bundleId: 7 } },
+    });
+    await flushPromises();
+    const input = w.find('[data-testid="tool-exposure-budget"]');
+    expect(input.attributes('disabled')).toBeDefined();
+    expect(w.find('[data-testid="tool-exposure-budget-org"]').text()).toContain('set by your organisation');
+    expect(setSettings).not.toHaveBeenCalled();
+    // Without an org budget the input is live and there is no note.
+    const plain = setup();
+    await flushPromises();
+    expect(plain.w.find('[data-testid="tool-exposure-budget"]').attributes('disabled')).toBeUndefined();
+    expect(plain.w.find('[data-testid="tool-exposure-budget-org"]').exists()).toBe(false);
   });
 
   it('a built-in server tier keeps the hot set explicitly full', async () => {

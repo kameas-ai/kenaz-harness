@@ -282,17 +282,20 @@ func TestRequestBuilder_NeverSendsSummaryToolUnlessActivated(t *testing.T) {
 	}
 	assertOnlySendable(t, svc, specs, r1)
 
-	// The digest is the system prompt's last section, never a tool
-	// description: kenaz__load_tools is sent exactly as the catalog
-	// lists it.
+	// The digest is per-call system material — in SystemVolatile, after
+	// the cacheable prefix, never in System and never a tool description:
+	// kenaz__load_tools is sent exactly as the catalog lists it.
 	if r1.Tools[0].Description != specs[0].Description {
 		t.Errorf("load_tools description changed per call: %q", r1.Tools[0].Description)
 	}
-	i := strings.Index(r1.System, "## "+loadtools.DigestHeading)
-	if i < 0 {
-		t.Fatalf("system prompt has no digest section:\n%s", r1.System)
+	if strings.Contains(r1.System, loadtools.DigestHeading) {
+		t.Errorf("digest is in the cacheable system prefix:\n%s", r1.System)
 	}
-	digest := r1.System[i:]
+	i := strings.Index(r1.SystemVolatile, "## "+loadtools.DigestHeading)
+	if i < 0 {
+		t.Fatalf("per-call system segment has no digest section:\n%s", r1.SystemVolatile)
+	}
+	digest := r1.SystemVolatile[i:]
 	for _, want := range []string{"- kenaz (1 tool) — e.g. monitor", "- outlook (2 tools) — e.g. list-messages, send-mail"} {
 		if !strings.Contains(digest, want) {
 			t.Errorf("digest lacks %q:\n%s", want, digest)
@@ -301,8 +304,11 @@ func TestRequestBuilder_NeverSendsSummaryToolUnlessActivated(t *testing.T) {
 	if strings.Contains(digest, "secret") {
 		t.Errorf("digest lists an off server:\n%s", digest)
 	}
-	if !strings.HasSuffix(r1.System, digest) {
-		t.Errorf("digest is not the last system section")
+	// Empty activated set, non-empty hot set: the whole list is the
+	// stable prefix, counted explicitly (len(hot)+len(pinned)) rather
+	// than as 0 = "all", and the cache marker lands on its last tool.
+	if r1.CacheStableTools != 2 || corellm.CacheMarkerToolIndex(r1) != 1 {
+		t.Errorf("request 1 CacheStableTools = %d (marker %d), want 2 (marker on tool 1)", r1.CacheStableTools, corellm.CacheMarkerToolIndex(r1))
 	}
 	if !strings.Contains(logs, `"tools_summary":3`) || !strings.Contains(logs, `"tools_full":2`) || !strings.Contains(logs, `"tools_stable":2`) {
 		t.Errorf("composition log does not count 2 full (both stable) / 3 summary:\n%s", logs)
@@ -332,6 +338,18 @@ func TestRequestBuilder_NeverSendsSummaryToolUnlessActivated(t *testing.T) {
 	b1p, _ := json.Marshal(r1.Tools[:2])
 	if string(b3) != string(b1p) {
 		t.Fatal("activation changed the stable prefix bytes")
+	}
+	// The activation changed the digest, which lives in SystemVolatile:
+	// the cacheable System is still byte-identical, and the marker still
+	// ends the hot segment rather than moving onto the activated tool.
+	if r3.System != r1.System {
+		t.Errorf("activation changed the cacheable system prefix:\n%s\n---\n%s", r1.System, r3.System)
+	}
+	if r3.SystemVolatile == r1.SystemVolatile {
+		t.Error("activation did not change the per-call digest")
+	}
+	if r3.CacheStableTools != 2 || corellm.CacheMarkerToolIndex(r3) != 1 {
+		t.Errorf("request 3 CacheStableTools = %d (marker %d), want 2 (marker on tool 1)", r3.CacheStableTools, corellm.CacheMarkerToolIndex(r3))
 	}
 	assertOnlySendable(t, svc, specs, r3)
 }

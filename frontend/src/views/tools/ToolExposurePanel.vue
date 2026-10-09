@@ -11,8 +11,12 @@
  * resolver reports for the scope (Tools_SchemaCosts), not the stored
  * value, so what the row says is what the next request in that scope gets.
  *
- * Org-pinned rows are read-only: the resolver decides them before any
- * layer this panel can write (spec §2.1 step 1).
+ * Organisation rows are read-only ("set by your organisation"): an org pin
+ * is decided before any layer this panel can write (spec §2.1 step 1) and
+ * a tool the org added to the hot set (hot_set_extra) is always full. An
+ * org default (pinned:false) sits below the user layer and stays editable.
+ * An org-set schema budget (Settings.org.schemaBudgetTokens) disables the
+ * budget input (tool-context-budget-01TCBUD01 WP07).
  *
  * Mounted only by ToolsView, which renders a served-mode boundary panel
  * instead of this surface.
@@ -24,6 +28,7 @@ import {
   TIER_LABELS,
   explainExposureError,
   formatTokens,
+  isOrgLocked,
   layerServerTier,
   layerToolTier,
   serverStateLabel,
@@ -60,6 +65,8 @@ const layer = computed<ToolExposure>(() =>
   scope.value ? projectLayer.value : (settings.value?.exposure ?? {}),
 );
 const inheritLabel = computed(() => (scope.value ? 'Same as your default' : 'Harness default'));
+/** The organisation's schema budget; 0 = not set by the organisation. */
+const orgBudget = computed(() => settings.value?.org?.schemaBudgetTokens ?? 0);
 
 async function loadCosts() {
   costs.value = await client.tools.schemaCosts('', scope.value);
@@ -162,9 +169,14 @@ function costText(c: ServerSchemaCost): string {
   return `Schema cost ${formatTokens(c.tokenEst)} tokens when loaded`;
 }
 
-/** The org pin decided the server-wide tier (every tool), not only some tools. */
+/** The organisation decided the server-wide tier (every tool), not only some tools. */
 function serverPinned(c: ServerSchemaCost): boolean {
-  return c.source === 'org_pin';
+  return isOrgLocked(c.source);
+}
+
+/** The organisation decided at least one of the server's tools. */
+function someOrgLocked(c: ServerSchemaCost): boolean {
+  return c.pinned || c.tools.some((t) => isOrgLocked(t.source));
 }
 
 function toggle(server: string) {
@@ -208,7 +220,8 @@ onMounted(() => void load());
             class="w-32 rounded-sm border border-border-muted bg-surface-0 px-2 py-1 text-ink"
             :value="settings.schemaBudgetTokens || ''"
             :placeholder="String(settings.effectiveSchemaBudgetTokens)"
-            :disabled="saving"
+            :disabled="saving || orgBudget > 0"
+            :title="orgBudget > 0 ? 'Set by your organisation' : undefined"
             data-testid="tool-exposure-budget"
             @change="onNumber('schemaBudgetTokens', $event)"
           />
@@ -228,6 +241,14 @@ onMounted(() => void load());
         </label>
       </template>
     </div>
+    <p
+      v-if="!scope && orgBudget > 0"
+      class="font-ui text-[11px] text-ink-subtle"
+      data-testid="tool-exposure-budget-org"
+    >
+      Schema budget {{ orgBudget.toLocaleString() }} tokens — set by your organisation; it can't be
+      changed here.
+    </p>
     <p v-if="!scope && settings" class="font-ui text-[11px] text-ink-subtle" data-testid="tool-exposure-effective">
       In effect: {{ settings.effectiveSchemaBudgetTokens.toLocaleString() }} tokens of tool
       definitions per request at most (capped at 15% of the model's window); loaded tools unload
@@ -284,11 +305,11 @@ onMounted(() => void load());
               {{ costText(c) }}
             </p>
             <p
-              v-if="c.pinned"
+              v-if="someOrgLocked(c)"
               class="mt-1 font-ui text-[11px] text-ink-subtle"
               :data-testid="`tool-exposure-pinned-${c.server}`"
             >
-              <template v-if="serverPinned(c)">{{ sourceSentence('org_pin') }} — it can't be changed here.</template>
+              <template v-if="serverPinned(c)">{{ sourceSentence(c.source) }} — it can't be changed here.</template>
               <template v-else>Some tools are {{ sourceLabel('org_pin') }}; those can't be changed here.</template>
             </p>
           </div>
@@ -335,11 +356,13 @@ onMounted(() => void load());
             style="grid-template-columns: 1fr auto auto"
           >
             <span class="min-w-0 truncate font-mono text-ink">{{ t.name }}</span>
-            <span class="text-ink-subtle">{{ formatTokens(t.tokenEst) }} · {{ TIER_LABELS[t.tier] }}</span>
+            <span class="text-ink-subtle">{{ formatTokens(t.tokenEst) }} · {{ TIER_LABELS[t.tier] }}<template
+                v-if="isOrgLocked(t.source)"
+              > · <span :data-testid="`tool-exposure-tool-org-${c.server}-${t.name}`">{{ sourceLabel(t.source) }}</span></template></span>
             <select
               class="rounded-sm border border-border-muted bg-surface-0 px-1.5 py-0.5 text-ink disabled:opacity-50"
               :value="layerToolTier(layer, c.server, t.name)"
-              :disabled="saving || t.source === 'org_pin'"
+              :disabled="saving || isOrgLocked(t.source)"
               :aria-label="`Tier for ${c.server} ${t.name}`"
               :data-testid="`tool-exposure-tool-tier-${c.server}-${t.name}`"
               @change="onToolTier(c.server, t.name, $event)"

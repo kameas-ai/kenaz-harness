@@ -4014,6 +4014,7 @@ export namespace llm {
 	    description?: string;
 	    contextWindow?: number;
 	    maxOutputTokens?: number;
+	    supportsPromptCache?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelInfo(source);
@@ -4026,6 +4027,7 @@ export namespace llm {
 	        this.description = source["description"];
 	        this.contextWindow = source["contextWindow"];
 	        this.maxOutputTokens = source["maxOutputTokens"];
+	        this.supportsPromptCache = source["supportsPromptCache"];
 	    }
 	}
 	export class ProbeCustomEndpointInput {
