@@ -179,6 +179,28 @@ describe('CapabilitySurface — fleet catalog browse (WP08, moved from Marketpla
     w.unmount();
   });
 
+  // Dogfood 2026-10-08 P3: "Nothing to show" could not distinguish an empty
+  // org catalog from a failed fetch.
+  it('M1c. org-catalog filter: a failed fetch says so; an empty catalog says "Nothing to show"', async () => {
+    const failed = setup({
+      catalog: async () => {
+        throw new Error('fleet: 502');
+      },
+    });
+    const { w } = await mountSurface(failed);
+    await w.get('[data-testid=capability-source-chip-org_catalog]').trigger('click');
+    const empty = w.get('[data-testid=capability-empty]');
+    expect(empty.text()).toContain('failed to load');
+    expect(empty.text()).not.toContain('Nothing to show for these filters.');
+    w.unmount();
+
+    const ok = setup({ catalog: [] });
+    const { w: w2 } = await mountSurface(ok);
+    await w2.get('[data-testid=capability-source-chip-org_catalog]').trigger('click');
+    expect(w2.get('[data-testid=capability-empty]').text()).toBe('Nothing to show for these filters.');
+    w2.unmount();
+  });
+
   it('M2. renders bundle / agent_pack catalog items; installed/ residue is "Downloaded — not active", never Installed', async () => {
     const residue: CatalogItemView = { ...BUNDLE, id: 'cat-b2', slug: 'old-bundle', installed: true };
     const s = setup({ catalog: [BUNDLE, PACK, residue] });
