@@ -327,18 +327,6 @@ const otherFamilyChoices = computed(() =>
   allChoices.value.filter((c) => c.family !== activeFamily.value),
 );
 
-// Read the new-session-dialog's localStorage stash for this session,
-// if present. NewSessionDialog writes the user's chosen
-// (providerId, modelId) under "kenaz.session.config.<id>" so we
-// can honour cross-family choices that the mid-conversation switcher
-// would otherwise block.
-function readSessionConfig(sessionID: string): {
-  providerId: string;
-  modelId: string;
-} | null {
-  return readSessionModel(sessionID);
-}
-
 // On session id or provider list change, seed the active selection.
 // Priority: stashed dialog config > previously-set value > provider
 // primary model.
@@ -347,7 +335,11 @@ watch(
   ([newSid]) => {
     // Reset prior selection when switching sessions.
     if (newSid) {
-      const stashed = readSessionConfig(newSid);
+      // The session's stashed (provider, model): written by
+      // NewSessionDialog and by every switch (pickModel), so a
+      // cross-family choice the switcher would block, and the latest
+      // switch, both survive a re-seed.
+      const stashed = readSessionModel(newSid);
       if (stashed) {
         activeProviderId.value = stashed.providerId;
         activeModelId.value = stashed.modelId;
@@ -829,7 +821,25 @@ async function runUserSlashCommand(
   appendSlashResult(sid, result.kind, result.text);
 }
 
-/** Honest copy for a slash token that matches neither registry. */
+// Built-in slash command names, fetched once per view. A failed fetch
+// reads as "no built-ins" — the user lookup then runs first, and an
+// unknown token still reaches the built-in registry below.
+let builtinSlashNames: Promise<Set<string>> | null = null;
+async function isBuiltinSlash(token: string): Promise<boolean> {
+  if (!builtinSlashNames) {
+    builtinSlashNames = client.slash
+      .list()
+      .then((list) => new Set(list.map((c) => c.name)))
+      .catch(() => new Set<string>());
+  }
+  return (await builtinSlashNames).has(token);
+}
+
+/**
+ * Copy for a slash token that matches neither registry. Keyed on the
+ * registry's "unknown command" text: Slash_Execute exposes no typed code
+ * for it, only the message.
+ */
 function unknownSlashMessage(token: string): string {
   return `No user or built-in command named "/${token}". Type /help to list commands.`;
 }
@@ -849,7 +859,10 @@ async function onSlashCommand(raw: string) {
   if (trimmedRaw.startsWith('/')) {
     const token = trimmedRaw.slice(1).split(/\s+/)[0] ?? '';
     slashToken = token;
-    if (token) {
+    // Built-ins take precedence over a user command of the same name
+    // (/model, /clear, /help … keep their meaning whatever the user
+    // saves), so a built-in token never consults the user store.
+    if (token && !(await isBuiltinSlash(token))) {
       let userCmd: UserCommand | null = null;
       try {
         // The session's project, so a project-scoped command resolves
@@ -863,11 +876,8 @@ async function onSlashCommand(raw: string) {
         return;
       }
       if (userCmd) {
-        // dogfood 2026-10-08 round 2: a user command with NO declared
-        // inputs used to fall through to the built-in registry below,
-        // which only knows built-ins — so "/bughunt <text>" for a
-        // freshly created command answered `slashcmd: unknown command:
-        // "bughunt"`. The lookup had found it; the routing dropped it.
+        // A user command without declared inputs runs as a user command;
+        // the built-in registry below knows only built-ins.
         const rest = trimmedRaw.slice(1 + token.length).trim();
         await runUserSlashCommand(sid, userCmd, {}, rest);
         return;

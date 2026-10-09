@@ -126,6 +126,15 @@ describe('copy', () => {
     ).toBe('Not delivered — Out of credits with OpenRouter. Add credits, then retry.');
   });
 
+  it('tells the user how to fix a request larger than the model window', () => {
+    expect(
+      deliveryCopy({
+        turnSpanId: 'u', failureClass: 'user_actionable', code: 'request_too_large',
+        summary: "The request is larger than the model's context window",
+      }),
+    ).toBe("Not delivered — The request is larger than the model's context window. Pick a larger model or disable tools, then retry.");
+  });
+
   it('offers settings only for key/permission problems', () => {
     const base = { turnSpanId: 'u', failureClass: 'user_actionable' as const, summary: 's' };
     expect(needsSettings({ ...base, code: 'auth_invalid' })).toBe(true);

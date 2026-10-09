@@ -47,7 +47,9 @@ async function mountView(opts: { userCmd: UserCommand | null; runText?: string; 
     metadata: opts.promptRendered === false ? {} : { prompt_rendered: true, slash_invocation: '/bughunt' },
   }));
   const execute = vi.fn(async (_sid: string, raw: string) => {
-    throw new Error(`slashcmd: unknown command: "${raw.slice(1).split(' ')[0]}"`);
+    const name = raw.slice(1).split(' ')[0];
+    if (name === 'help') return { kind: 'info', text: 'built-in help' };
+    throw new Error(`slashcmd: unknown command: "${name}"`);
   });
   const router = createRouter({
     history: createMemoryHistory(),
@@ -80,7 +82,11 @@ async function mountView(opts: { userCmd: UserCommand | null; runText?: string; 
                 startStream,
               },
               slashcmd: { ...base.slashcmd, get, run },
-              slash: { ...base.slash, execute },
+              slash: {
+                ...base.slash,
+                execute,
+                list: async () => [{ name: 'help', description: 'Help', comingSoon: false }],
+              },
             } as never);
           },
         },
@@ -122,6 +128,17 @@ describe('SessionsView — user slash-command routing', () => {
     expect(execute).not.toHaveBeenCalled();
     expect(appendMessage).not.toHaveBeenCalled();
     expect(w.text()).toContain('Ship small, ship often.');
+    w.unmount();
+  });
+
+  it('a built-in name wins over a user command of the same name', async () => {
+    const { w, get, run, execute } = await mountView({ userCmd: { ...BUGHUNT, name: 'help', kind: 'text' } });
+    w.findComponent(ChatInput).vm.$emit('slashCommand', '/help');
+    await flushPromises();
+    expect(execute).toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    expect(w.text()).toContain('built-in help');
     w.unmount();
   });
 

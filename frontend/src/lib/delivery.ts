@@ -99,6 +99,8 @@ function remedy(code: string): string {
       return 'Retry once the provider recovers.';
     case 'session_full':
       return 'Start a new session or compact this one, then retry.';
+    case 'request_too_large':
+      return 'Pick a larger model or disable tools, then retry.';
     case STOPPED_CODE:
       return 'Retry to send it.';
     default:

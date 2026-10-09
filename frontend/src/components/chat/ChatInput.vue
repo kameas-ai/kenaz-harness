@@ -886,10 +886,10 @@ onMounted(() => {
     client.slashcmd.list('').catch(() => []),
   ]).then(([builtins, user]) => {
     const names = new Set(builtins.map((c) => c.name));
-    const userInfos: SlashCommandInfo[] = (user ?? [])
+    const userInfos: SlashCommandInfo[] = user
       .filter((u) => !u.hiddenFromPanel && !names.has(u.name))
       .map((u) => ({ name: u.name, description: u.description, comingSoon: false, isUser: true }));
-    slashCommands.value = [...(builtins ?? []), ...userInfos];
+    slashCommands.value = [...builtins, ...userInfos];
   });
 });
 
