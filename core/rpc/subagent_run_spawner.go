@@ -51,6 +51,7 @@ import (
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
@@ -138,6 +139,17 @@ type SubagentRunSpawnerDeps struct {
 	// conversation rather than as a conversation of its own. nil is fine.
 	UsageParent func(childSessionID, parentSessionID string)
 
+	// MLParent, when set, links the child to its parent for the harness
+	// ML producer (ml-producer-01MLPRD01 WP02, spec §12 A-3): a linked
+	// child's agent work counts toward its attended ROOT's task instead
+	// of being dropped as unattended. Linked ONLY when the spawn ctx is
+	// attended, or when the parent is itself a linked child (a nested
+	// child — whose spawn ctx is unattended by construction — chains to
+	// the same attended root). A subagent of a scheduled chat is
+	// therefore never linked and stays dropped. nil (WP03 wires the real
+	// recorder) links nothing.
+	MLParent mlproducer.ParentLinker
+
 	// HookRunner fires hooks.EventSubagentStart once per dispatch, before
 	// deps.LLM.StartStream is called (UNIT-7, FR-007). The SAME
 	// process-singleton *hooks.Runner core/rpc/api.go's New() assigns to
@@ -178,6 +190,20 @@ type SubagentRunSpawnerDeps struct {
 // SetRunSpawner, once the LLM connector, event bus and task registry all
 // exist (see the call site's comment for why that's late-bound rather
 // than passed at construction).
+// linkMLParent registers child -> parent with the ML producer under the
+// rule documented on SubagentRunSpawnerDeps.MLParent. ctx is the spawn
+// ctx: the dispatching tool call's, before this spawner marks the child
+// run unattended.
+func linkMLParent(ctx context.Context, linker mlproducer.ParentLinker, child, parent string) {
+	if linker == nil || child == "" || parent == "" {
+		return
+	}
+	if runposture.IsUnattended(ctx) && !linker.IsLinked(parent) {
+		return
+	}
+	linker.LinkChild(child, parent)
+}
+
 func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 	if deps.Timeout <= 0 {
 		deps.Timeout = defaultSubagentSpawnTimeout
@@ -238,6 +264,7 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 		if deps.UsageParent != nil {
 			deps.UsageParent(childSessionID, req.ParentSessionID)
 		}
+		linkMLParent(ctx, deps.MLParent, childSessionID, req.ParentSessionID)
 
 		// WP02 (H-1): before StartStream, so the child's first tool call
 		// is already contained. Never released — see

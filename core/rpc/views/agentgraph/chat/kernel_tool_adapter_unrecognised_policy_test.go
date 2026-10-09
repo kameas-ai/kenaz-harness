@@ -86,6 +86,9 @@ func TestKernelToolAdapter_UnrecognisedVerdictDeniesAtDispatch(t *testing.T) {
 				}
 				return
 			}
+			if res.Outcome != coreag.ToolOutcomeDenied {
+				t.Errorf("%s: Outcome = %q, want denied", tc.name, res.Outcome)
+			}
 			if err != nil {
 				t.Fatalf("%s: unexpected error: %v", tc.name, err)
 			}

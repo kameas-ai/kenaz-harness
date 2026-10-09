@@ -384,3 +384,12 @@ github.com/kameas-ai/kenaz-harness/core/tools/forkconversation.Options.Logger
 # 2026-10-05 test seam, same class as saveartifact.Options.Logger: production
 # relies on the nil -> slog.Default() fallback; tests inject a capture
 # logger. Owner: model-harness-toolset WP04.
+
+github.com/kameas-ai/kenaz-harness/core/tools/bash.Options.EnvProvider
+# at core/tools/bash/bash.go:208: Options.EnvProvider (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-10-09 ml-producer-01MLPRD01 WP02 lands the hook (KENAZ_ACTOR /
+# KENAZ_SESSION process markers) and mlproducer.Recorder.EnvProvider, which
+# computes the values; the production assignment in corebash.New is WP03's
+# (core/rpc/mlproducer_wiring.go, a file WP02 may not touch). Blocker: WP03
+# of the same mission. Owner: ml-producer-01MLPRD01 WP03, which deletes this
+# entry when it wires the provider.
