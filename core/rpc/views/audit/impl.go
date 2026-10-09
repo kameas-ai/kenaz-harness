@@ -362,6 +362,30 @@ func categoryForKind(k event.Kind) string {
 	return "STORAGE"
 }
 
+// withinBounds reports whether an Entry timestamp (RFC3339Nano) falls in
+// [since, until]. Both ends are inclusive, matching SQLBackend's
+// `emitted_at >= ? AND emitted_at <= ?` and MemoryBackend's Before/After
+// checks; a zero bound means no bound. An unparseable timestamp passes:
+// on the store path the bounds were already applied in SQL, and
+// rowFromEntry never persists an unparseable one. Shared by Filter and
+// ListEntries so the two read paths cannot disagree about a time range.
+func withinBounds(ts string, since, until time.Time) bool {
+	if since.IsZero() && until.IsZero() {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return true
+	}
+	if !since.IsZero() && t.Before(since) {
+		return false
+	}
+	if !until.IsZero() && t.After(until) {
+		return false
+	}
+	return true
+}
+
 // matchesFilterQuery is the ONE place Filter's matching semantics are
 // implemented — shared by the ring path and the store path so they
 // cannot silently diverge (spec §5.4 item 4: "a silent change in
@@ -373,29 +397,14 @@ func categoryForKind(k event.Kind) string {
 // ActorIDs filter honestly matches nothing there rather than being
 // silently ignored and returning every entry.
 //
-// Since/Until are inclusive on both ends, matching SQLBackend's
-// `emitted_at >= ? AND emitted_at <= ?` and MemoryBackend's
-// Before/After checks; a zero bound means "no bound". Dogfood
-// 2026-10-08 P1: before this, Since/Until/ActorIDs were accepted on the
-// wire and ignored on both paths.
+// Since/Until follow withinBounds (inclusive, zero = no bound).
 func matchesFilterQuery(e Entry, emitterID string, q eventlog.FilterQuery) bool {
 	// Verbose filter.
 	if !q.Verbose && strings.HasPrefix(e.Subject, "verbose.") {
 		return false
 	}
-	// Time-range filter on the entry's own timestamp. An unparseable
-	// timestamp passes (same as ListEntries' matcher) — the store path
-	// has already applied the bounds in SQL, and rowFromEntry never
-	// persists an unparseable one.
-	if !q.Since.IsZero() || !q.Until.IsZero() {
-		if t, err := time.Parse(time.RFC3339Nano, e.Timestamp); err == nil {
-			if !q.Since.IsZero() && t.Before(q.Since) {
-				return false
-			}
-			if !q.Until.IsZero() && t.After(q.Until) {
-				return false
-			}
-		}
+	if !withinBounds(e.Timestamp, q.Since, q.Until) {
+		return false
 	}
 	// Actor filter on emitter_id.
 	if len(q.ActorIDs) > 0 {
@@ -637,11 +646,9 @@ func (a *API) BulkPurge(ctx context.Context, eventIDs []string) error {
 // listEntriesFilter bundles ListEntries' parsed filter state so the
 // ring path and the store path share one matching function.
 type listEntriesFilter struct {
-	wantCat  map[string]struct{}
-	since    time.Time
-	until    time.Time
-	hasSince bool
-	hasUntil bool
+	wantCat map[string]struct{}
+	since   time.Time // zero = no lower bound
+	until   time.Time // zero = no upper bound
 }
 
 func parseListEntriesFilter(filter Filter) listEntriesFilter {
@@ -653,12 +660,12 @@ func parseListEntriesFilter(filter Filter) listEntriesFilter {
 	}
 	if filter.Since != "" {
 		if t, err := time.Parse(time.RFC3339Nano, filter.Since); err == nil {
-			f.since, f.hasSince = t, true
+			f.since = t
 		}
 	}
 	if filter.Until != "" {
 		if t, err := time.Parse(time.RFC3339Nano, filter.Until); err == nil {
-			f.until, f.hasUntil = t, true
+			f.until = t
 		}
 	}
 	return f
@@ -670,18 +677,7 @@ func (f listEntriesFilter) matches(e Entry) bool {
 			return false
 		}
 	}
-	if f.hasSince || f.hasUntil {
-		t, err := time.Parse(time.RFC3339Nano, e.Timestamp)
-		if err == nil {
-			if f.hasSince && t.Before(f.since) {
-				return false
-			}
-			if f.hasUntil && t.After(f.until) {
-				return false
-			}
-		}
-	}
-	return true
+	return withinBounds(e.Timestamp, f.since, f.until)
 }
 
 // ListEntries returns entries matching filter, newest first. Reads the
@@ -696,7 +692,7 @@ func (a *API) ListEntries(ctx context.Context, filter Filter) ([]Entry, error) {
 	f := parseListEntriesFilter(filter)
 
 	if store != nil {
-		rows, err := store.ByTimeRange(ctx, time.Time{}, time.Time{}, "", 0, false)
+		rows, err := store.ByTimeRange(ctx, f.since, f.until, "", 0, false)
 		if err != nil {
 			return nil, fmt.Errorf("audit: ListEntries: %w", err)
 		}

@@ -183,3 +183,32 @@ func TestFilter_ActorIDs_Ring(t *testing.T) {
 		t.Errorf("ring Filter with ActorIDs = %v, want none (entries carry no emitter)", ids(got))
 	}
 }
+
+// ListEntries shares withinBounds with Filter and pushes the bounds into
+// ByTimeRange on the store path: both read paths agree on the same
+// single-day window.
+func TestListEntries_SinceUntil_RingAndStore(t *testing.T) {
+	ctx := context.Background()
+	db, store := openStoreAt(t, t.TempDir())
+	defer func() { _ = db.Close(ctx) }()
+	storeAPI := NewAPI(WithStore(store))
+	ringAPI := NewAPI()
+	for _, e := range boundsEntries() {
+		storeAPI.Push(e)
+		ringAPI.Push(e)
+	}
+	f := Filter{
+		Since: daySince.Format(time.RFC3339Nano),
+		Until: dayUntil.Format(time.RFC3339Nano),
+	}
+	want := []string{"b-d", "b-c", "b-b"}
+	for name, api := range map[string]*API{"store": storeAPI, "ring": ringAPI} {
+		got, err := api.ListEntries(ctx, f)
+		if err != nil {
+			t.Fatalf("%s ListEntries: %v", name, err)
+		}
+		if !equalIDs(ids(got), want) {
+			t.Errorf("%s ListEntries = %v, want %v", name, ids(got), want)
+		}
+	}
+}

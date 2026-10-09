@@ -68,6 +68,13 @@ const actorIds = computed<string[]>(() =>
     .map((s) => s.trim())
     .filter((s) => s.length > 0),
 );
+// Audit rows do not record an emitter yet (Entry has no emitter field and
+// Push persists an empty emitter_id), so an actor filter can only ever
+// match nothing. The input stays visible — and still round-trips a saved
+// query's actor_ids — but is disabled. docs/unwired-ledger.md
+// "audit actor filter has no emitter to match".
+const ACTOR_FILTER_UNAVAILABLE =
+  'Actor filtering is unavailable: audit entries do not record which emitter produced them yet.';
 const freeText = ref<string>('');
 const verboseToggle = ref<boolean>(false);
 const selectedSavedQuery = ref<string>('');
@@ -94,10 +101,9 @@ const filter = computed<AuditFilter>(() => ({
   limit: 500,
 }));
 
-// Dogfood 2026-10-08 P1: since/until go over the wire as RFC3339 bounds
-// (start / end of the UTC day), never as the raw date-only input — the
-// Go side decodes them into time.Time and rejects anything else. A
-// partial or invalid date (mid-keystroke "2026-10-0") sends no bound.
+// since/until go over the wire as RFC3339 bounds (start / end of the UTC
+// day): the Go side decodes them into time.Time and rejects a date-only
+// string. A partial or invalid date sends no bound.
 const richFilter = computed<AuditFilterQuery>(() => ({
   since: auditSinceBound(sinceInput.value),
   until: auditUntilBound(untilInput.value),
@@ -116,6 +122,11 @@ const loading = ref(false);
 // visible error with Retry; the empty-state copy is suppressed while it
 // is set so a failed query cannot read as "nothing happened".
 const loadError = ref<string>('');
+// The filter that produced `seeded` — rows are only ever shown as the
+// answer to the query that returned them.
+let seededKey: string | null = null;
+// Last-request-wins: a slow earlier response never overwrites a later one.
+let refreshSeq = 0;
 
 // Selection state (for WP08 bulk-purge; pre-wired here).
 const selectedIDs = ref<Set<string>>(new Set());
@@ -133,24 +144,35 @@ const exportToast = ref<string>('');
 // instead of the narrow audit.listEntries(), which is single-category
 // only. Before this change audit.filter() had no caller anywhere in
 // the frontend despite being a fully-implemented RPC method.
-async function refresh() {
+async function refresh(opts: { invalidate?: boolean } = {}) {
   // Served mode: the whole view renders NotAvailableInServedMode instead.
   // Audit_Filter has no serve dispatch case — calling it would only ever
   // reject, and a bare catch turning that rejection into an empty array is
   // exactly the fabrication this WP exists to stop (see the module-level
   // comment above).
   if (servedMode.value) return;
+  const query = richFilter.value;
+  const key = JSON.stringify(query);
+  const mySeq = ++refreshSeq;
   loading.value = true;
   try {
-    seeded.value = await client.audit.filter(richFilter.value);
+    const rows = await client.audit.filter(query);
+    if (mySeq !== refreshSeq) return;
+    seeded.value = rows;
+    seededKey = key;
     loadError.value = '';
   } catch (e) {
-    // Dogfood 2026-10-08 P1: a rejected query must never render as an
-    // empty compliance trail. Keep whatever was shown before (it is still
-    // a true answer to the previous query) and surface the failure.
+    if (mySeq !== refreshSeq) return;
+    // A rejected query is an error, never an empty trail. Rows stay only
+    // while they still answer this exact query (a retry of it); rows from
+    // another filter — or that a purge may have removed — are cleared.
     loadError.value = e instanceof Error ? e.message : String(e);
+    if (opts.invalidate || seededKey !== key) {
+      seeded.value = [];
+      seededKey = null;
+    }
   } finally {
-    loading.value = false;
+    if (mySeq === refreshSeq) loading.value = false;
   }
 }
 
@@ -347,8 +369,9 @@ async function confirmPurge() {
     // Remove purged entries from local state.
     selectedIDs.value = new Set();
     showPurgeModal.value = false;
-    // Refresh to reflect the deletion.
-    await refresh();
+    // Refresh to reflect the deletion. The purged rows must not survive a
+    // failed refetch.
+    await refresh({ invalidate: true });
   } catch (e) {
     purgeError.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -401,7 +424,7 @@ onBeforeUnmount(() => {
 
         <!-- Time range -->
         <label class="flex items-center gap-2">
-          <span>Since</span>
+          <span>Since (UTC day)</span>
           <input
             v-model="sinceInput"
             type="text"
@@ -410,7 +433,7 @@ onBeforeUnmount(() => {
           />
         </label>
         <label class="flex items-center gap-2">
-          <span>Until</span>
+          <span>Until (UTC day)</span>
           <input
             v-model="untilInput"
             type="text"
@@ -428,6 +451,9 @@ onBeforeUnmount(() => {
           <input
             v-model="actorInput"
             type="text"
+            disabled
+            :title="ACTOR_FILTER_UNAVAILABLE"
+            data-testid="audit-actor-input"
             placeholder="emitter-id, emitter-id2"
             class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] w-36"
           />
@@ -588,7 +614,7 @@ onBeforeUnmount(() => {
           type="button"
           class="shrink-0 px-2 py-1 text-[11px] rounded-sm border border-signal-danger hover:bg-surface-2"
           data-testid="audit-load-retry"
-          @click="refresh"
+          @click="refresh()"
         >
           Retry
         </button>

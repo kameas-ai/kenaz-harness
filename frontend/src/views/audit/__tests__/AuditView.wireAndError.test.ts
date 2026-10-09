@@ -79,7 +79,7 @@ describe('AuditView wire shape (dogfood 2026-10-08 P1)', () => {
 });
 
 describe('AuditView error state (dogfood 2026-10-08 P1)', () => {
-  it('a rejected query renders an error and keeps the previous entries', async () => {
+  it('a rejected query for a NEW filter renders an error and never shows the old filter’s rows', async () => {
     let fail = false;
     const filter = vi.fn(async (_q: AuditFilterQuery) => {
       if (fail) throw new Error('error parsing arguments');
@@ -96,8 +96,9 @@ describe('AuditView error state (dogfood 2026-10-08 P1)', () => {
 
     const err = w.get('[data-testid="audit-load-error"]');
     expect(err.text()).toContain('Audit query failed: error parsing arguments');
-    // Previous answer is preserved; the empty-state copy never appears.
-    expect(w.text()).toContain('fleet.config.applied');
+    // The old rows are not an answer to the new filter, and the empty-state
+    // copy never stands in for an error.
+    expect(w.findAll('[data-testid="audit-row"]')).toHaveLength(0);
     expect(w.text()).not.toContain('No audit entries match');
 
     // Retry clears the error once the backend answers.
@@ -105,6 +106,77 @@ describe('AuditView error state (dogfood 2026-10-08 P1)', () => {
     await w.get('[data-testid="audit-load-retry"]').trigger('click');
     await flushPromises();
     expect(w.find('[data-testid="audit-load-error"]').exists()).toBe(false);
+    expect(w.text()).toContain('fleet.config.applied');
+  });
+
+  it('a slow earlier response never overwrites a later one', async () => {
+    let releaseFirst!: (v: AuditEntry[]) => void;
+    const later: AuditEntry[] = [
+      { id: 'e2', timestamp: '2026-10-08T01:00:00Z', category: 'STORAGE', subject: 'later.answer' },
+    ];
+    let n = 0;
+    const filter = vi.fn((_q: AuditFilterQuery) => {
+      n++;
+      if (n === 1) return new Promise<AuditEntry[]>((r) => { releaseFirst = r; });
+      return Promise.resolve(later);
+    });
+    const w = mountWith(filter);
+    await flushPromises();
+    await w.get('input[type="search"]').setValue('later');
+    await flushPromises();
+    expect(w.text()).toContain('later.answer');
+
+    releaseFirst(seed); // the stale first answer lands last
+    await flushPromises();
+    expect(w.text()).toContain('later.answer');
+    expect(w.text()).not.toContain('fleet.config.applied');
+  });
+
+  it('after a purge, a failed refetch clears the purged rows', async () => {
+    let fail = false;
+    const filter = vi.fn(async (_q: AuditFilterQuery) => {
+      if (fail) throw new Error('store busy');
+      return seed;
+    });
+    const client = createFakeHarnessClient({
+      audit: {
+        listEntries: async () => [],
+        verifyEntry: async () => true,
+        verifyChain: async () => ({ verified: true, rows_checked: 0 }),
+        filter,
+        listSavedQueries: async () => [],
+        saveQuery: async () => undefined,
+        deleteQuery: async () => undefined,
+        export: async () => '/tmp/x.jsonl',
+        bulkPurge: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+      },
+    });
+    const w = mount(AuditView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    await w.get('[data-testid="audit-row"] input[type="checkbox"]').setValue(true);
+    await w.get('[data-testid="audit-purge-selected"]').trigger('click');
+    fail = true;
+    (document.querySelector('[data-testid="purge-modal-confirm"]') as HTMLButtonElement).click();
+    await flushPromises();
+
+    expect(w.get('[data-testid="audit-load-error"]').text()).toContain('store busy');
+    expect(w.findAll('[data-testid="audit-row"]')).toHaveLength(0);
+    w.unmount();
+  });
+
+  it('labels the date inputs as UTC days and disables the Actor filter with a reason', async () => {
+    const w = mountWith(async () => seed);
+    await flushPromises();
+    expect(w.text()).toContain('Since (UTC day)');
+    expect(w.text()).toContain('Until (UTC day)');
+    const actor = w.get('[data-testid="audit-actor-input"]');
+    expect(actor.attributes('disabled')).toBeDefined();
+    expect(actor.attributes('title')).toContain('do not record which emitter');
   });
 
   it('a rejected first query shows the error, not the empty-state copy', async () => {
