@@ -55,25 +55,57 @@ func (e *ErrRequestTooLarge) Error() string {
 }
 
 // providerWindowRe extracts the context window from the provider's own
-// rejection text ("This endpoint's maximum context length is 131072
-// tokens", "maximum context length is 128,000 tokens").
-var providerWindowRe = regexp.MustCompile(`(?i)(?:maximum context length|context window|context length)[^0-9]{0,40}([0-9][0-9,]{2,})`)
+// rejection text. Each alternative names the WINDOW, and the capture is
+// the first number after that phrase, so a requested-size number
+// elsewhere in the message ("you requested about 224798 tokens",
+// "n_keep: 5000") is never taken for it:
+//
+//	"maximum context length is 131072 tokens"   -> 131072
+//	"context window of 128,000 tokens"          -> 128000
+//	"n_keep: 5000 >= n_ctx: 4096"               -> 4096
+//	"requested 250000 tokens, limit 131072"     -> 131072
+var providerWindowRe = regexp.MustCompile(`(?i)(?:maximum context length|context window|context length|n_ctx|tokens?[,;]? *limit)[^0-9]{0,40}?([0-9][0-9,]{2,})`)
 
 // providerWindowFromError returns the window the provider named in a
-// context-length rejection, or 0.
+// context-length rejection, or 0. When several window phrases match, the
+// smallest is taken: a window is a ceiling, and the larger numbers in
+// such messages are requested sizes.
 func providerWindowFromError(err error) int {
 	if err == nil {
 		return 0
 	}
-	m := providerWindowRe.FindStringSubmatch(err.Error())
-	if len(m) < 2 {
-		return 0
+	best := 0
+	for _, m := range providerWindowRe.FindAllStringSubmatch(err.Error(), -1) {
+		if len(m) < 2 {
+			continue
+		}
+		n, perr := strconv.Atoi(strings.ReplaceAll(m[1], ",", ""))
+		if perr != nil || n <= 0 {
+			continue
+		}
+		if best == 0 || n < best {
+			best = n
+		}
 	}
-	n, perr := strconv.Atoi(strings.ReplaceAll(m[1], ",", ""))
-	if perr != nil || n <= 0 {
-		return 0
+	return best
+}
+
+// isContextWindowRejection reports whether a provider rejection is
+// specifically about the context window — not merely a 400 whose text
+// mentions tokens (OpenAI "max_tokens is too large", Anthropic
+// "max_tokens: 64000 > 8192" are output-limit errors, not window
+// overflows). The request-too-large verdict requires this signal.
+func isContextWindowRejection(err error) bool {
+	if err == nil {
+		return false
 	}
-	return n
+	if providerWindowFromError(err) > 0 {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "context_length_exceeded") ||
+		strings.Contains(msg, "prompt is too long") ||
+		strings.Contains(msg, "maximum context")
 }
 
 // classifyRequestTooLarge decides whether a context-overflow error was
@@ -86,13 +118,23 @@ func providerWindowFromError(err error) int {
 // model is the model the run actually used (the override, else the
 // profile's default model); profileID/modelOverride key the capability
 // lookup exactly as the compact node keys it.
-func (r *ChatRunner) classifyRequestTooLarge(ctx context.Context, sessionID, profileID, modelOverride string, overflowErr error) *ErrRequestTooLarge {
-	if r.cfg.History == nil {
+//
+// turnContent is what this run itself added to the conversation (the
+// journal's persisted moves, tool calls and tool results). The composed
+// session history omits those rows under classic move fidelity, but the
+// model saw them inside the run, so they count toward the measurement —
+// a fresh session whose tool returned 150k tokens is a full conversation,
+// not a request-shape problem.
+func (r *ChatRunner) classifyRequestTooLarge(ctx context.Context, sessionID, profileID, modelOverride string, overflowErr error, turnContent []string) *ErrRequestTooLarge {
+	if r.cfg.History == nil || !isContextWindowRejection(overflowErr) {
 		return nil
 	}
 	msgs, err := r.cfg.History.History(ctx, sessionID, 0)
 	if err != nil {
 		return nil
+	}
+	for _, c := range turnContent {
+		msgs = append(msgs, coreag.Message{Role: "tool", Content: c})
 	}
 	historyTokens := countHistoryTokens(msgs)
 

@@ -118,13 +118,69 @@ func TestChatRunner_OverflowOnFullHistory_KeepsSessionFull(t *testing.T) {
 func TestProviderWindowFromError(t *testing.T) {
 	t.Parallel()
 	cases := map[string]int{
-		"This endpoint's maximum context length is 131072 tokens.": 131072,
-		"maximum context length is 128,000 tokens":                 128000,
-		"prompt is too long":                                       0,
+		"This endpoint's maximum context length is 131072 tokens.":                                      131072,
+		"maximum context length is 128,000 tokens":                                                      128000,
+		"This model's maximum context length is 8192 tokens. However, you requested 9000 tokens":        8192,
+		"maximum context length is 131072 tokens. However, you requested about 224798 tokens":           131072,
+		"the request exceeds the available context size (n_keep: 5000 >= n_ctx: 4096)":                  4096,
+		"requested 250000 tokens, limit 131072":                                                         131072,
+		"prompt is too long":                                                                            0,
+		"max_tokens: 64000 > 8192, which is the maximum allowed number of output tokens for this model": 0,
 	}
 	for msg, want := range cases {
 		if got := providerWindowFromError(&corellm.ErrInvalidRequest{Status: 400, Message: msg}); got != want {
 			t.Errorf("%q: got %d, want %d", msg, got, want)
 		}
+	}
+}
+
+func TestIsContextWindowRejection(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"This endpoint's maximum context length is 131072 tokens.": true,
+		"prompt is too long: 210000 tokens > 200000 maximum":       true,
+		"error code context_length_exceeded":                       true,
+		// Output-limit errors mention tokens but are not window overflows.
+		"max_tokens is too large: 100000. This model supports at most 16384 completion tokens": false,
+		"max_tokens: 64000 > 8192, which is the maximum allowed number of output tokens":       false,
+	}
+	for msg, want := range cases {
+		if got := isContextWindowRejection(&corellm.ErrInvalidRequest{Status: 400, Message: msg}); got != want {
+			t.Errorf("%q: got %v, want %v", msg, got, want)
+		}
+	}
+}
+
+// A fresh session whose tool returned a huge result inside the run is a
+// full conversation — the composed history (classic fidelity) omits the
+// tool rows, but the model saw them, so the verdict must not blame the
+// request shape.
+func TestClassifyRequestTooLarge_CountsThisTurnsToolOutput(t *testing.T) {
+	t.Parallel()
+	r := &ChatRunner{cfg: Config{History: staticHistoryReader{msgs: []coreag.Message{{Role: "user", Content: "fetch that page"}}}}}
+	overflow := &corellm.ErrInvalidRequest{Status: 400, Message: "maximum context length is 131072 tokens"}
+
+	if v := r.classifyRequestTooLarge(context.Background(), "s", "p", "m", overflow, nil); v == nil {
+		t.Fatal("empty turn: want the request-too-large verdict")
+	}
+	huge := strings.Repeat("page content words here ", 30000) // ~150k tokens
+	if v := r.classifyRequestTooLarge(context.Background(), "s", "p", "m", overflow, []string{huge}); v != nil {
+		t.Fatalf("turn with a ~150k-token tool result got verdict %+v; it is a full conversation", v)
+	}
+	if v := r.classifyRequestTooLarge(context.Background(), "s", "p", "m",
+		&corellm.ErrInvalidRequest{Status: 400, Message: "max_tokens: 64000 > 8192"}, nil); v != nil {
+		t.Fatalf("an output-limit 400 got the request-too-large verdict: %+v", v)
+	}
+}
+
+func TestTurnJournal_TurnContentIncludesToolRows(t *testing.T) {
+	t.Parallel()
+	j := newTurnJournal(&recordingHistoryWriter{}, nil, "s", "span", nil)
+	call := coreag.ToolCall{ID: "c1", Name: "kenaz__web_fetch"}
+	j.RecordToolCall(context.Background(), call)
+	j.RecordToolResult(context.Background(), call, coreag.ToolResult{Content: "BIG PAGE"})
+	got := strings.Join(j.TurnContent(), "|")
+	if !strings.Contains(got, "BIG PAGE") {
+		t.Fatalf("TurnContent = %q, want the tool result", got)
 	}
 }

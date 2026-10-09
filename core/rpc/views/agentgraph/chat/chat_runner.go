@@ -2132,7 +2132,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	// history, and only the overflow arm consumes it.
 	var tooLarge *ErrRequestTooLarge
 	if err != nil && isContextOverflowError(err) {
-		tooLarge = r.classifyRequestTooLarge(context.WithoutCancel(ctx), sub.sessionID, sub.profileID, sub.modelOverride, err)
+		tooLarge = r.classifyRequestTooLarge(context.WithoutCancel(ctx), sub.sessionID, sub.profileID, sub.modelOverride, err, sub.journal.TurnContent())
 	}
 
 	switch {

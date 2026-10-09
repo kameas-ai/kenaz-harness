@@ -182,6 +182,12 @@ type turnJournal struct {
 	// row's own (latest) call.
 	unbilled      corellm.Response
 	unbilledCalls int
+	// turnContent is the content of every row this journal persisted
+	// this turn (assistant moves, tool calls, tool results). The model
+	// saw all of it inside the run even where the session's composed
+	// history (classic move fidelity) drops those rows, so a
+	// "how big was the request" measurement must add it back.
+	turnContent []string
 	// lastAssistant is the content of the last assistant-role row this
 	// journal actually wrote (a flushed move, the final, or a partial).
 	// UnpersistedTail reads it so a terminal path never re-persists text
@@ -375,7 +381,21 @@ func (j *turnJournal) persist(ctx context.Context, e coreag.HistoryEntry) (strin
 			"err", err.Error())
 		return "", err
 	}
+	if e.Content != "" {
+		j.turnContent = append(j.turnContent, e.Content)
+	}
 	return id, nil
+}
+
+// TurnContent returns a copy of the content this journal persisted this
+// turn. Safe on a nil journal.
+func (j *turnJournal) TurnContent() []string {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return append([]string(nil), j.turnContent...)
 }
 
 // fireUsage invokes j.usageHook for one persisted assistant-role row,
