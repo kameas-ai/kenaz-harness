@@ -31,6 +31,18 @@ export interface ScheduledChatEntry {
   triggerKind?: 'cron' | 'once';
   /** Fire time for a triggerKind "once" row (ISO 8601, UTC). Absent for "cron". */
   runAt?: string;
+  /**
+   * The newest persisted run outcome; absent when the schedule has never
+   * run (dogfood 2026-10-08 round 2 — the row used to show no trace of a
+   * run that only surfaced as a 10-second toast).
+   */
+  lastRun?: ScheduledChatRunSummary;
+}
+
+/** What "active default" resolves to for a schedule with no model override. */
+export interface ScheduledChatDefaultModel {
+  profileId: string;
+  model: string;
 }
 
 export interface ScheduledChatRunSummary {
@@ -42,6 +54,10 @@ export interface ScheduledChatRunSummary {
   endedAt?: string;  // ISO 8601
   outputSnippet?: string;
   error?: string;
+  /** Model the run was dispatched with; absent when unknown. */
+  model?: string;
+  /** Run cost in USD; absent/0 when unknown or free. */
+  costUsd?: number;
 }
 
 export interface ScheduledChatCreateInput {
@@ -83,6 +99,7 @@ export interface ScheduledChatClient {
   runNow(id: string): Promise<ScheduledChatRunSummary>;
   history(id: string, limit: number): Promise<ScheduledChatRunSummary[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
+  defaultModel(): Promise<ScheduledChatDefaultModel>;
 }
 
 // ── bridge helper ─────────────────────────────────────────────────────────
@@ -111,6 +128,7 @@ export function createScheduledChatClient(): ScheduledChatClient {
     runNow: (id) => bridge().ScheduledChat_RunNow(id),
     history: (id, limit) => bridge().ScheduledChat_History(id, limit),
     setEnabled: (id, enabled) => bridge().ScheduledChat_SetEnabled(id, enabled),
+    defaultModel: () => bridge().ScheduledChat_DefaultModel(),
   };
 }
 
@@ -152,5 +170,7 @@ export function createFakeScheduledChatClient(
         })),
     history: seed.history ?? (() => Promise.resolve([])),
     setEnabled: seed.setEnabled ?? (() => Promise.resolve()),
+    defaultModel:
+      seed.defaultModel ?? (() => Promise.resolve({ profileId: '', model: '' })),
   };
 }

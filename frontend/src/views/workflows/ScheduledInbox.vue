@@ -12,6 +12,8 @@
  * section below workflow rows; requires the optional `chatClient` prop.
  */
 import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { RouterLink } from 'vue-router';
+import ChatRunOutcome from './scheduledchat/ChatRunOutcome.vue';
 import type {
   WorkflowsClient,
   WorkflowsScheduleEntry,
@@ -533,6 +535,14 @@ onUnmounted(() => {
                   </span>
                   <span class="font-ui text-xs text-ink-muted">→ {{ row.entry.outputSink }}</span>
                 </div>
+                <!-- dogfood 2026-10-08 round 2: the last run is visible
+                     without expanding the row (it used to read as "no
+                     history at all"). -->
+                <ChatRunOutcome
+                  v-if="row.entry.lastRun"
+                  :run="row.entry.lastRun"
+                  label="Last run"
+                />
               </div>
 
               <div class="flex items-center gap-2">
@@ -609,10 +619,28 @@ onUnmounted(() => {
                       <span v-if="hist.endedAt" class="ml-1">
                         ({{ fmtDuration(hist.startedAt, hist.endedAt) }})
                       </span>
+                      <span
+                        v-if="hist.model"
+                        class="ml-2 font-mono"
+                        :data-testid="`chat-run-hist-model-${hist.id}`"
+                      >{{ hist.model }}</span>
+                      <span
+                        v-if="hist.costUsd"
+                        class="ml-2 font-mono"
+                        :data-testid="`chat-run-hist-cost-${hist.id}`"
+                      >${{ hist.costUsd.toFixed(4) }}</span>
+                      <RouterLink
+                        v-if="hist.sessionId"
+                        :to="`/sessions/${encodeURIComponent(hist.sessionId)}`"
+                        class="ml-2 text-accent hover:underline"
+                        :data-testid="`chat-run-hist-open-${hist.id}`"
+                      >
+                        Open session
+                      </RouterLink>
                     </div>
                     <div
                       v-if="hist.error"
-                      class="font-ui text-xs text-signal-danger truncate"
+                      class="font-ui text-xs text-signal-danger break-words"
                       :data-testid="`chat-run-hist-error-${hist.id}`"
                     >
                       {{ hist.error }}

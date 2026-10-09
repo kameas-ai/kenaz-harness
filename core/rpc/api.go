@@ -3883,6 +3883,22 @@ func New(c *core.Core, opts ...Option) *API {
 		// fully wired by this point in New() (every With* wrap above has
 		// already run).
 		var chatDispatcher schedulerPkg.ChatRunDispatcher
+		// scheduledDefaultModel is THE resolution of a scheduled chat's
+		// "active default" (dogfood 2026-10-08 round 2): first personal
+		// profile, its default model. The dispatcher records it on each
+		// run; the New-schedule form displays it via
+		// ScheduledChat_DefaultModel, so the two cannot disagree.
+		capturedPersonalForSched := personalForLLM
+		scheduledDefaultModel := func() (string, string) {
+			if capturedPersonalForSched == nil {
+				return "", ""
+			}
+			profs, err := capturedPersonalForSched.List()
+			if err != nil || len(profs) == 0 {
+				return "", ""
+			}
+			return profs[0].ID, profileDefaultModel(profs[0])
+		}
 		if chatStore != nil && a.sessionsAPI != nil && a.llmAPI != nil {
 			capturedPersonalStore := personalForLLM
 			live := NewChatRunDispatcher(ChatRunDispatcherDeps{
@@ -3903,6 +3919,13 @@ func New(c *core.Core, opts ...Option) *API {
 						return ""
 					}
 					return profs[0].ID
+				},
+				DefaultModel: func(profileID string) string {
+					id, model := scheduledDefaultModel()
+					if id != profileID {
+						return ""
+					}
+					return model
 				},
 				// model-scheduled-jobs-01PMSJ01 WP06: the SAME registry
 				// registerFSBuiltinTools's RecordingPrompter reads from
@@ -3936,6 +3959,10 @@ func New(c *core.Core, opts ...Option) *API {
 			Engine:     chatEngine,
 			Dispatcher: chatDispatcher,
 			Cedar:      a.cedarGate(),
+			DefaultModel: func() scheduledchatview.DefaultModel {
+				id, model := scheduledDefaultModel()
+				return scheduledchatview.DefaultModel{ProfileID: id, Model: model}
+			},
 		})
 	}
 
@@ -10528,6 +10555,18 @@ func (w *keychainWriter) Write(ctx context.Context, locator string, plaintext []
 // back to personal.DefaultPath() ($USER_CONFIG_DIR/kenaz-harness).
 // A construction failure returns nil; the rpc impl treats a nil store
 // as "personal store unavailable" and the chassis still boots.
+// profileDefaultModel is the model a profile dispatches when the caller
+// gives no override: Model, else the first of Models.
+func profileDefaultModel(p corellm.ProviderProfile) string {
+	if p.Model != "" {
+		return p.Model
+	}
+	if len(p.Models) > 0 {
+		return p.Models[0]
+	}
+	return ""
+}
+
 func newPersonalStore(c *core.Core) personal.Store {
 	var path string
 	if c != nil && c.DataDir() != "" {

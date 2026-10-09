@@ -617,6 +617,8 @@ export function SaveTheme(arg1:string):Promise<void>;
 
 export function ScheduledChat_Create(arg1:scheduledchat.CreateInput):Promise<scheduledchat.ChatRunEntry>;
 
+export function ScheduledChat_DefaultModel():Promise<scheduledchat.DefaultModel>;
+
 export function ScheduledChat_Delete(arg1:string):Promise<void>;
 
 export function ScheduledChat_Get(arg1:string):Promise<scheduledchat.ChatRunEntry>;

@@ -1110,6 +1110,10 @@ export function ScheduledChat_Create(arg1) {
   return window['go']['rpc']['Bindings']['ScheduledChat_Create'](arg1);
 }
 
+export function ScheduledChat_DefaultModel() {
+  return window['go']['rpc']['Bindings']['ScheduledChat_DefaultModel']();
+}
+
 export function ScheduledChat_Delete(arg1) {
   return window['go']['rpc']['Bindings']['ScheduledChat_Delete'](arg1);
 }

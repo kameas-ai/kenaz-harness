@@ -218,7 +218,11 @@ func TestAuditRetention_DeleteAfterWindow_AgainstPopulatedUpgradedDatabase(t *te
 			// of all four is asserted by assertArtifactsMigratedToUnits and
 			// migration_1104_test.go.
 			continue
-		case "scheduled_chat_runs":
+		case "scheduled_chat_runs", "scheduled_chat_run_history":
+			// scheduled_chat_run_history: sessions/0345 (dogfood
+			// 2026-10-08 round 2) ADD COLUMNs model + cost_usd — the same
+			// digest-only schema side effect as 0340 below.
+			//
 			// model-scheduled-jobs-01PMSJ01 WP09's sessions/0340 migration
 			// ADD COLUMNs created_by + tool_allowlist onto this table,
 			// which the v0.65.0 fixture predates — the real Open() path

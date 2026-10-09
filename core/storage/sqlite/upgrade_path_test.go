@@ -565,6 +565,23 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 			changed[tbl] = true
 		}
 	}
+	// sessions/0345-scheduled-chat-history-model-cost (dogfood 2026-10-08
+	// round 2) ADDs model + cost_usd (both defaulted) to
+	// scheduled_chat_run_history. Every seeded history row gains both
+	// columns, so the content digest legitimately changes on every
+	// snapshot that predates 0345 (all of them, as of v0.93.1). The
+	// digest is waived; the row count is NOT — it is asserted here
+	// exactly, so a future migration that writes or drops history rows
+	// is still caught. TestMigration0345_* proves the old rows read back
+	// intact with model "" / cost 0.
+	if before, ok := preOpen["scheduled_chat_run_history"]; ok {
+		changed["scheduled_chat_run_history"] = true
+		if after, ok := postOpen["scheduled_chat_run_history"]; !ok {
+			t.Errorf("table scheduled_chat_run_history present before Open, missing after")
+		} else if before.RowCount != after.RowCount {
+			t.Errorf("table scheduled_chat_run_history row count changed: %d -> %d (0345 only adds columns)", before.RowCount, after.RowCount)
+		}
+	}
 	for table, before := range preOpen {
 		if changed[table] {
 			continue

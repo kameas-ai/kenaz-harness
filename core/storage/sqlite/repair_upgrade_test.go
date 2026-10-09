@@ -127,8 +127,9 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	// (agentgraph-settings-linkage-01DOGF0D) and 0343
 	// (feat/graph-resolved-spec) re-create their tables idempotently.
 	// 0344 (undelivered-message-retry) probes pragma_table_info before
-	// each ALTER, so its re-application over existing columns is a no-op.
-	want := []int{332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344}
+	// each ALTER, so its re-application over existing columns is a no-op;
+	// 0345 (scheduled-chat history model/cost) probes the same way.
+	want := []int{332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345}
 	if len(got) != len(want) {
 		t.Fatalf("re-applied sessions migrations = %v, want %v", got, want)
 	}

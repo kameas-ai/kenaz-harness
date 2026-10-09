@@ -119,8 +119,8 @@ func TestProviderWindowFromError(t *testing.T) {
 	t.Parallel()
 	cases := map[string]int{
 		"This endpoint's maximum context length is 131072 tokens.": 131072,
-		"maximum context length is 128,000 tokens":                  128000,
-		"prompt is too long":                                         0,
+		"maximum context length is 128,000 tokens":                 128000,
+		"prompt is too long":                                       0,
 	}
 	for msg, want := range cases {
 		if got := providerWindowFromError(&corellm.ErrInvalidRequest{Status: 400, Message: msg}); got != want {

@@ -6634,6 +6634,56 @@ export namespace rpc {
 
 export namespace scheduledchat {
 	
+	export class RunSummary {
+	    id: string;
+	    chatRunId: string;
+	    sessionId?: string;
+	    status: string;
+	    // Go type: time
+	    startedAt: any;
+	    // Go type: time
+	    endedAt?: any;
+	    outputSnippet?: string;
+	    error?: string;
+	    model?: string;
+	    costUsd?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RunSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.chatRunId = source["chatRunId"];
+	        this.sessionId = source["sessionId"];
+	        this.status = source["status"];
+	        this.startedAt = this.convertValues(source["startedAt"], null);
+	        this.endedAt = this.convertValues(source["endedAt"], null);
+	        this.outputSnippet = source["outputSnippet"];
+	        this.error = source["error"];
+	        this.model = source["model"];
+	        this.costUsd = source["costUsd"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ChatRunEntry {
 	    id: string;
 	    name: string;
@@ -6649,6 +6699,7 @@ export namespace scheduledchat {
 	    toolAllowlist?: string[];
 	    triggerKind: string;
 	    runAt?: string;
+	    lastRun?: RunSummary;
 	
 	    static createFrom(source: any = {}) {
 	        return new ChatRunEntry(source);
@@ -6670,7 +6721,26 @@ export namespace scheduledchat {
 	        this.toolAllowlist = source["toolAllowlist"];
 	        this.triggerKind = source["triggerKind"];
 	        this.runAt = source["runAt"];
+	        this.lastRun = this.convertValues(source["lastRun"], RunSummary);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class CreateInput {
 	    name: string;
@@ -6702,52 +6772,21 @@ export namespace scheduledchat {
 	        this.runAt = source["runAt"];
 	    }
 	}
-	export class RunSummary {
-	    id: string;
-	    chatRunId: string;
-	    sessionId?: string;
-	    status: string;
-	    // Go type: time
-	    startedAt: any;
-	    // Go type: time
-	    endedAt?: any;
-	    outputSnippet?: string;
-	    error?: string;
+	export class DefaultModel {
+	    profileId: string;
+	    model: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new RunSummary(source);
+	        return new DefaultModel(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.chatRunId = source["chatRunId"];
-	        this.sessionId = source["sessionId"];
-	        this.status = source["status"];
-	        this.startedAt = this.convertValues(source["startedAt"], null);
-	        this.endedAt = this.convertValues(source["endedAt"], null);
-	        this.outputSnippet = source["outputSnippet"];
-	        this.error = source["error"];
+	        this.profileId = source["profileId"];
+	        this.model = source["model"];
 	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
 	}
+	
 	export class UpdateInput {
 	    id: string;
 	    name: string;

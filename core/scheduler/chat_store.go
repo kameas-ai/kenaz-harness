@@ -148,6 +148,14 @@ type ChatRunHistoryRecord struct {
 	EndedAt       *time.Time
 	OutputSnippet string
 	Error         string
+	// Model is the model id the run was dispatched with — the row's
+	// override, or what "active default" resolved to at fire time
+	// (migration sessions/0345). Empty when unknown (pre-0345 rows, or a
+	// failure before the model was resolved).
+	Model string
+	// CostUSD is the run session's cumulative cost at the terminal event
+	// (sessions/0345). 0 when unknown or when the run cost nothing.
+	CostUSD float64
 }
 
 // ScheduledChatStore is the storage interface for scheduled chat runs.
@@ -340,8 +348,8 @@ func (s *SQLiteChatStore) SetEnabled(ctx context.Context, id string, enabled boo
 func (s *SQLiteChatStore) AppendHistory(ctx context.Context, h ChatRunHistoryRecord) error {
 	const q = `
 		INSERT INTO scheduled_chat_run_history
-			(id, chat_run_id, session_id, status, started_at, ended_at, output_snippet, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			(id, chat_run_id, session_id, status, started_at, ended_at, output_snippet, error, model, cost_usd)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	var endedAt *int64
 	if h.EndedAt != nil {
@@ -353,6 +361,7 @@ func (s *SQLiteChatStore) AppendHistory(ctx context.Context, h ChatRunHistoryRec
 			h.ID, h.ChatRunID, h.SessionID, h.Status,
 			h.StartedAt.Unix(), endedAt,
 			h.OutputSnippet, h.Error,
+			h.Model, h.CostUSD,
 		)
 		return err
 	})
@@ -361,7 +370,7 @@ func (s *SQLiteChatStore) AppendHistory(ctx context.Context, h ChatRunHistoryRec
 // History implements ScheduledChatStore.
 func (s *SQLiteChatStore) History(ctx context.Context, chatRunID string, limit int) ([]ChatRunHistoryRecord, error) {
 	const q = `
-		SELECT id, chat_run_id, session_id, status, started_at, ended_at, output_snippet, error
+		SELECT id, chat_run_id, session_id, status, started_at, ended_at, output_snippet, error, model, cost_usd
 		FROM scheduled_chat_run_history
 		WHERE chat_run_id = ?
 		ORDER BY started_at DESC
@@ -382,6 +391,7 @@ func (s *SQLiteChatStore) History(ctx context.Context, chatRunID string, limit i
 			&h.ID, &h.ChatRunID, &h.SessionID, &h.Status,
 			&startedAtRaw, &endedAtRaw,
 			&h.OutputSnippet, &h.Error,
+			&h.Model, &h.CostUSD,
 		); err != nil {
 			return nil, err
 		}

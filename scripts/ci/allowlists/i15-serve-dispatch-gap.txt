@@ -190,7 +190,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 187 entries.
+# 188 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -456,6 +456,12 @@
 # ScheduledInbox.vue, WorkflowsView.vue itself), boundary-panelled by
 # WorkflowsView. (Moved out of Settings by nav-ia-sweep-01DOGF0F, 2026-10-04.)
 "ScheduledChat_Create"
+# ScheduledChat_DefaultModel -- dogfood 2026-10-08 round 2 (dated
+# 2026-10-08, owner: alec): the New-schedule form's "active default
+# resolves to" hint. Same family, same posture as its siblings; its only
+# caller is ScheduledChatFormModal.vue under the boundary-panelled
+# WorkflowsView. Ports with the ScheduledChat_* family or not at all.
+"ScheduledChat_DefaultModel"
 "ScheduledChat_Delete"
 "ScheduledChat_Get"
 "ScheduledChat_History"

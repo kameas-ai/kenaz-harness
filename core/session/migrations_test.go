@@ -481,12 +481,13 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// WP09) + 0341 dedupe_user_turns (chat-single-writer-01DOGF0G WP05) +
 	// 0342 session_turn_runs (agentgraph-settings-linkage-01DOGF0D WP03) +
 	// 0343 agent_graph_run_specs (feat/graph-resolved-spec WP01) +
-	// 0344 turn_run_outcome (undelivered-message-retry)) =
-	// 47 applied entries (2 chassis bootstrap + 45 sessions migrations).
-	if got := len(db.ledger); got != 47 {
-		t.Fatalf("ledger size = %d, want 47", got)
+	// 0344 turn_run_outcome (undelivered-message-retry) +
+	// 0345 scheduled_chat_history_model_cost (dogfood 2026-10-08 r2)) =
+	// 48 applied entries (2 chassis bootstrap + 46 sessions migrations).
+	if got := len(db.ledger); got != 48 {
+		t.Fatalf("ledger size = %d, want 48", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345}
 
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {

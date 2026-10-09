@@ -7,7 +7,7 @@
  * Emits "saved" with the new/updated ChatRunEntry on success.
  * Emits "cancel" when the user dismisses without saving.
  */
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import type {
   ScheduledChatClient,
   ScheduledChatEntry,
@@ -40,6 +40,25 @@ const enabled = ref(true);
 // instead of requiring a fabricated cron expression.
 const triggerKind = ref<'cron' | 'once'>('cron');
 const runAt = ref('');
+
+// What "active default" resolves to (dogfood 2026-10-08 round 2): a blank
+// model field used to run on whatever the first profile's default model
+// was — a 131k model the user never chose — with nothing on the form
+// saying so. Read from the same resolution the dispatcher applies.
+const defaultModel = ref<string | null>(null);
+onMounted(async () => {
+  try {
+    const dm = await props.client.defaultModel();
+    defaultModel.value = dm.model || '';
+  } catch {
+    defaultModel.value = null;
+  }
+});
+const modelPlaceholder = computed(() =>
+  defaultModel.value
+    ? `Leave blank to use the active default (${defaultModel.value})`
+    : 'Leave blank to use the active default',
+);
 
 // Populate form when editing entry changes.
 watch(
@@ -308,9 +327,21 @@ async function handleSubmit() {
             v-model="model"
             type="text"
             class="w-full rounded-sm border border-border-muted bg-surface-1 px-3 py-1.5 font-ui text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
-            placeholder="Leave blank to use the active default"
+            :placeholder="modelPlaceholder"
             data-testid="sc-model-input"
           />
+          <p
+            v-if="!model && defaultModel !== null"
+            class="mt-1 font-ui text-xs text-ink-muted"
+            data-testid="sc-model-default-hint"
+          >
+            <template v-if="defaultModel">
+              Active default resolves to <span class="font-mono text-ink">{{ defaultModel }}</span>.
+            </template>
+            <template v-else>
+              No default model is configured — add a provider, or name a model here.
+            </template>
+          </p>
         </div>
 
         <!-- Output sink -->
