@@ -48,11 +48,32 @@ const policies = ref<readonly MCPToolPolicyRule[]>([]);
 const policyError = ref<string | null>(null);
 const policySaving = ref<string | null>(null); // server name currently saving, or null
 
+// Dogfood 2026-10-08 P3: this table said "No MCP servers configured" while
+// Fetch / Filesystem / Outlook were installed and running (and listed in
+// the surface above). MCP_ListServers reads a registry the production
+// chassis does not wire yet (core/rpc/views/mcp WithRegistry has no
+// non-test caller — see docs/dogfood/2026-10-08.md), so an empty answer
+// here does not mean nothing is installed. Count the installed MCP
+// capabilities the runtime consumer reports and say which case it is.
+const installedMcpCount = ref(0);
+
+async function refreshInstalledMcpCount() {
+  try {
+    const l = await client.capabilities.list({ kind: 'mcp_recipe' });
+    installedMcpCount.value = (l.items ?? []).filter(
+      (it) => it.kind === 'mcp_recipe' && it.state?.installed,
+    ).length;
+  } catch {
+    installedMcpCount.value = 0;
+  }
+}
+
 async function refresh() {
   loading.value = true;
   error.value = null;
   try {
     servers.value = await client.mcp.listServers();
+    if (servers.value.length === 0) await refreshInstalledMcpCount();
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load MCP servers.';
     servers.value = [];
@@ -185,8 +206,24 @@ onMounted(() => {
     >
       {{ policyError }}
     </div>
+    <!-- v-if, not v-else-if: chained to policyError above, the empty
+         state used to render alongside "Loading servers…" and the load
+         error. -->
     <div
-      v-else-if="servers.length === 0"
+      v-if="!loading && !error && servers.length === 0 && installedMcpCount > 0"
+      class="px-6 py-6 font-ui text-sm text-ink-muted"
+      data-testid="tools-empty-installed"
+    >
+      <div class="text-ink">
+        {{ installedMcpCount }} installed MCP server{{ installedMcpCount === 1 ? ' is' : 's are' }} listed above
+      </div>
+      <p class="mt-2 max-w-prose text-ink-muted">
+        Per-server tool policy cannot see them from this table yet, so
+        none are shown here.
+      </p>
+    </div>
+    <div
+      v-else-if="!loading && !error && servers.length === 0"
       class="px-6 py-6 font-ui text-sm text-ink-muted"
       data-testid="tools-empty"
     >
@@ -204,7 +241,7 @@ onMounted(() => {
         rel="noopener"
       >Read the MCP docs →</a>
     </div>
-    <table v-else class="w-full font-ui text-[12px] text-ink" data-testid="tools-table">
+    <table v-else-if="!loading && !error" class="w-full font-ui text-[12px] text-ink" data-testid="tools-table">
       <thead class="bg-surface-1 text-ink-muted">
         <tr>
           <th class="text-left px-4 py-2 font-medium">Name</th>

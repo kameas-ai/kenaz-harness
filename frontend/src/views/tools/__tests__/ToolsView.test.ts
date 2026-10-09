@@ -107,6 +107,52 @@ describe('ToolsView (FR-001b numbered-section header)', () => {
     expect(w.html()).toContain('docs/mcp.md');
   });
 
+  // Dogfood 2026-10-08 P3: "No MCP servers configured" while servers were
+  // installed and running (and listed in the surface above).
+  it('does not claim "No MCP servers configured" when MCP capabilities are installed', async () => {
+    const base = provide([]).client;
+    const client = createFakeHarnessClient({
+      mcp: base.mcp,
+      capabilities: {
+        ...base.capabilities,
+        list: async () => ({
+          items: [
+            {
+              kind: 'mcp_recipe',
+              id: 'fetch',
+              name: 'Fetch',
+              source: 'registry',
+              state: { installed: true, consumer: 'MCP supervisor', detail: 'running' },
+            },
+          ],
+          unavailable: [],
+        }),
+      } as any,
+    });
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid=tools-empty]').exists()).toBe(false);
+    const installed = w.get('[data-testid=tools-empty-installed]');
+    expect(installed.text()).toContain('1 installed MCP server is listed above');
+    expect(w.text()).not.toContain('No MCP servers configured');
+  });
+
+  it('a failed server load shows the error, not the empty-state copy', async () => {
+    const { client } = provide([], [], {
+      listServers: async () => {
+        throw new Error('registry offline');
+      },
+    });
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(w.text()).toContain('registry offline');
+    expect(w.find('[data-testid=tools-empty]').exists()).toBe(false);
+  });
+
   it('renders a row per server when the registry returns entries', async () => {
     const seed: MCPServer[] = [
       {
