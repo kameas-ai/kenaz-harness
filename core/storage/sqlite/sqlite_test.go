@@ -184,7 +184,8 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// 0345 (scheduled_chat_run_history model/cost columns) lands with the
 	// dogfood 2026-10-08 round 2 scheduled-chat fixes.
 	// 0347 (projects/sessions tool_exposure + sessions.tool_activations)
-	// lands with tool-context-budget-01TCBUD01 WP02; 0346 is unassigned.
+	// lands with tool-context-budget-01TCBUD01 WP02; 0346 belongs to the
+	// same mission's WP01 and joins this list when that branch merges.
 	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 347}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)

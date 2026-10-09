@@ -19,7 +19,7 @@ const (
 	LevelUser    Level = "user"
 	LevelDefault Level = "default"
 	// LevelInvariant marks LoadToolsName forced full because at least
-	// one tool resolved summary.
+	// one other tool resolved summary.
 	LevelInvariant Level = "invariant"
 )
 
@@ -52,30 +52,25 @@ type ResolvedTool struct {
 	Source Level
 }
 
-// ResolvedCatalog is every catalog tool's tier for one session, plus
-// the session's activated set and the effective budget and TTL.
+// ResolvedCatalog is every catalog tool's tier for one session, in
+// catalog order, plus the session's activated set and the effective
+// budget and TTL.
 type ResolvedCatalog struct {
 	Tools              []ResolvedTool
 	Activations        []Activation
 	SchemaBudgetTokens int
 	ActivationTTLTurns int
+
+	byName map[string]int
 }
 
 // Tool returns the resolved entry for a namespaced name.
 func (c ResolvedCatalog) Tool(name string) (ResolvedTool, bool) {
-	for _, t := range c.Tools {
-		if t.Name == name {
-			return t, true
-		}
+	i, ok := c.byName[name]
+	if !ok {
+		return ResolvedTool{}, false
 	}
-	return ResolvedTool{}, false
-}
-
-// CatalogSource lists every tool the session could be shown.
-//
-// wiring:deferred(the production adapter over the MCP pool + built-in registry lands with tool-context-budget-01TCBUD01 WP03, which first calls Resolve on the request path; dated 2026-10-08, owner: alec)
-type CatalogSource interface {
-	Catalog(ctx context.Context, sessionID string) ([]CatalogTool, error)
+	return c.Tools[i], true
 }
 
 // SettingsSource returns the user-level configuration.
@@ -114,7 +109,6 @@ type PinSource interface {
 // Deps are the resolver's inputs. Every source but Pins is required;
 // a nil Pins means the organisation pins nothing.
 type Deps struct {
-	Catalog  CatalogSource
 	Settings SettingsSource
 	Sessions SessionSource
 	Projects ProjectSource
@@ -124,23 +118,44 @@ type Deps struct {
 // ErrMissingDep is returned when a required dependency is nil.
 var ErrMissingDep = errors.New("toolexposure: resolver dependency not wired")
 
+func (d Deps) check() error {
+	if d.Settings == nil || d.Sessions == nil || d.Projects == nil {
+		return ErrMissingDep
+	}
+	return nil
+}
+
+// Resolver resolves catalogs against a fixed, checked set of sources.
+type Resolver struct{ deps Deps }
+
+// NewResolver checks the required sources once, at wiring time.
+func NewResolver(deps Deps) (*Resolver, error) {
+	if err := deps.check(); err != nil {
+		return nil, err
+	}
+	return &Resolver{deps: deps}, nil
+}
+
+// Resolve resolves catalog for sessionID; see the package-level Resolve.
+func (r *Resolver) Resolve(ctx context.Context, sessionID string, catalog []CatalogTool) (ResolvedCatalog, error) {
+	return Resolve(ctx, r.deps, sessionID, catalog)
+}
+
 // Resolve folds org pins, the session override, the project override,
 // the user's settings and the harness default into one tier per catalog
 // tool (spec §2.1; first layer with an opinion wins, and inside a layer
-// a tool entry beats its server's tier). LoadToolsName is then forced
-// full whenever any tool resolved summary.
-func Resolve(ctx context.Context, deps Deps, sessionID string) (ResolvedCatalog, error) {
-	if deps.Catalog == nil || deps.Settings == nil || deps.Sessions == nil || deps.Projects == nil {
-		return ResolvedCatalog{}, ErrMissingDep
-	}
-	tools, err := deps.Catalog.Catalog(ctx, sessionID)
-	if err != nil {
-		return ResolvedCatalog{}, fmt.Errorf("toolexposure: catalog: %w", err)
+// a tool entry beats its server's tier). A stored value that is not one
+// of the three tiers is no opinion. LoadToolsName is then forced full
+// whenever any other tool resolved summary.
+func Resolve(ctx context.Context, deps Deps, sessionID string, catalog []CatalogTool) (ResolvedCatalog, error) {
+	if err := deps.check(); err != nil {
+		return ResolvedCatalog{}, err
 	}
 	user, err := deps.Settings.GetToolExposure(ctx)
 	if err != nil {
 		return ResolvedCatalog{}, fmt.Errorf("toolexposure: settings: %w", err)
 	}
+	user = user.WithEffective()
 	sess, err := deps.Sessions.SessionToolExposure(ctx, sessionID)
 	if err != nil {
 		return ResolvedCatalog{}, fmt.Errorf("toolexposure: session %s: %w", sessionID, err)
@@ -170,14 +185,14 @@ func Resolve(ctx context.Context, deps Deps, sessionID string) (ResolvedCatalog,
 	}
 
 	out := ResolvedCatalog{
-		Tools:              make([]ResolvedTool, 0, len(tools)),
+		Tools:              make([]ResolvedTool, 0, len(catalog)),
 		Activations:        append([]Activation(nil), sess.Activations...),
-		SchemaBudgetTokens: user.EffectiveSchemaBudgetTokens(),
-		ActivationTTLTurns: user.EffectiveActivationTTLTurns(),
+		SchemaBudgetTokens: user.EffectiveSchemaBudgetTokens,
+		ActivationTTLTurns: user.EffectiveActivationTTLTurns,
+		byName:             make(map[string]int, len(catalog)),
 	}
 	anySummary := false
-	loadTools := -1
-	for _, c := range tools {
+	for _, c := range catalog {
 		rt := ResolvedTool{Name: c.Name, Server: c.Server, Running: c.Running}
 		bare := c.bareName()
 		for _, l := range layers {
@@ -189,17 +204,15 @@ func Resolve(ctx context.Context, deps Deps, sessionID string) (ResolvedCatalog,
 		if rt.Tier == "" {
 			rt.Tier, rt.Source = DefaultTier(c), LevelDefault
 		}
-		if rt.Tier == TierSummary {
+		if rt.Tier == TierSummary && c.Name != LoadToolsName {
 			anySummary = true
 		}
-		if c.Name == LoadToolsName {
-			loadTools = len(out.Tools)
-		}
+		out.byName[c.Name] = len(out.Tools)
 		out.Tools = append(out.Tools, rt)
 	}
-	if anySummary && loadTools >= 0 && out.Tools[loadTools].Tier != TierFull {
-		out.Tools[loadTools].Tier = TierFull
-		out.Tools[loadTools].Source = LevelInvariant
+	if i, ok := out.byName[LoadToolsName]; ok && anySummary && out.Tools[i].Tier != TierFull {
+		out.Tools[i].Tier = TierFull
+		out.Tools[i].Source = LevelInvariant
 	}
 	return out, nil
 }

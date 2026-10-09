@@ -5338,15 +5338,23 @@ export interface ToolExposure {
 export interface ToolActivation {
   name: string;
   server: string;
-  last_used_turn: number;
+  lastUsedTurn: number;
   sticky: boolean;
 }
 
-/** The user's tool-exposure settings; budget/TTL are effective values on read, 0 = default on write. */
+/**
+ * The user's tool-exposure settings. schemaBudgetTokens /
+ * activationTtlTurns are the stored values (0 = harness default) and are
+ * what a write persists; the effective* fields are read-only (what
+ * applies today) and are ignored on write, so writing back an unedited
+ * read never pins the current default.
+ */
 export interface ToolExposureSettings {
   exposure: ToolExposure;
   schemaBudgetTokens: number;
   activationTtlTurns: number;
+  effectiveSchemaBudgetTokens: number;
+  effectiveActivationTtlTurns: number;
 }
 
 /** A session's override layer and activated set. */

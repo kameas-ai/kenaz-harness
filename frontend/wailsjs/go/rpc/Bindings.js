@@ -1074,6 +1074,10 @@ export function Projects_GetAutonomy(arg1) {
   return window['go']['rpc']['Bindings']['Projects_GetAutonomy'](arg1);
 }
 
+export function Projects_GetToolExposure(arg1) {
+  return window['go']['rpc']['Bindings']['Projects_GetToolExposure'](arg1);
+}
+
 export function Projects_List() {
   return window['go']['rpc']['Bindings']['Projects_List']();
 }

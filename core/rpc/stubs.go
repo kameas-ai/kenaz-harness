@@ -336,6 +336,9 @@ func (s *stubProjects) LoadAutonomyProfile(_ context.Context, _ string) (autonom
 func (s *stubProjects) SaveAutonomyProfile(_ context.Context, _ string, _ autonomy.Layer) error {
 	return errNotWired
 }
+func (s *stubProjects) GetToolExposure(_ context.Context, _ string) (toolexposure.Exposure, error) {
+	return toolexposure.Exposure{}, errNotWired
+}
 func (s *stubProjects) SetToolExposure(_ context.Context, _ string, _ toolexposure.Exposure) error {
 	return errNotWired
 }

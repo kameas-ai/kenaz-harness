@@ -3,13 +3,16 @@
 // nothing (spec tool-context-budget-01TCBUD01 §2.1).
 //
 // The package owns the data model every layer stores (Exposure,
-// Activation), the harness defaults (hot set, schema budget, activation
-// TTL) and the resolver that folds the layers into one tier per tool.
-// It imports nothing from the rest of the harness so settings, projects
-// and sessions can all store its types without an import cycle.
+// Activation), its storage codec, the harness defaults (hot set, schema
+// budget, activation TTL) and the resolver that folds the layers into
+// one tier per tool. It imports nothing from the rest of the harness so
+// settings, projects and sessions can all store its types without an
+// import cycle.
 package toolexposure
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -40,15 +43,15 @@ func (t Tier) Valid() bool {
 }
 
 // BuiltinServer is the reserved server name built-in tools publish
-// under ("kenaz__<tool>").
+// under ("kenaz__<tool>"); equal to toolloop.BuiltinServerName.
 const BuiltinServer = "kenaz"
 
 // NameSeparator joins server and tool into the name the model sees.
 const NameSeparator = "__"
 
 // LoadToolsName is the built-in that loads summary tools on demand. It
-// resolves full whenever any tool resolves summary, whatever any layer
-// says, because otherwise summary tools are unreachable.
+// resolves full whenever any other tool resolves summary, whatever any
+// layer says, because otherwise summary tools are unreachable.
 const LoadToolsName = BuiltinServer + NameSeparator + "load_tools"
 
 // DefaultSchemaBudgetTokens is the schema budget when the user has not
@@ -129,8 +132,15 @@ func (e Exposure) IsZero() bool {
 	return true
 }
 
-// Validate rejects unknown tiers and empty server or tool names, so a
+// Validate rejects unknown tiers, empty server or tool names, and tool
+// keys in namespaced form ("outlook__send-mail" under "outlook"), so a
 // typo is refused at the write instead of silently ignored at resolve.
+//
+// It does not yet refuse turning LoadToolsName off while summary tools
+// exist (FR-E3): that needs the resolved catalog and lands with the
+// request builder in tool-context-budget-01TCBUD01 WP03; until then the
+// resolver's invariant forces it full regardless. Dated 2026-10-09,
+// owner: alec.
 func (e Exposure) Validate() error {
 	for server, s := range e.Servers {
 		if strings.TrimSpace(server) == "" {
@@ -142,6 +152,10 @@ func (e Exposure) Validate() error {
 		for tool, t := range s.Tools {
 			if strings.TrimSpace(tool) == "" {
 				return fmt.Errorf("toolexposure: server %q: empty tool name", server)
+			}
+			if strings.HasPrefix(tool, server+NameSeparator) {
+				return fmt.Errorf("toolexposure: server %q: tool key %q must be the bare name %q",
+					server, tool, strings.TrimPrefix(tool, server+NameSeparator))
 			}
 			if !t.Valid() {
 				return fmt.Errorf("toolexposure: tool %s%s%s: unknown tier %q (want full, summary or off)", server, NameSeparator, tool, t)
@@ -172,39 +186,47 @@ func (e Exposure) Clone() Exposure {
 }
 
 // lookup returns this layer's tier for (server, tool): the tool entry
-// if one exists, else the server-wide tier, else "" (no opinion).
+// if one exists, else the server-wide tier, else "" (no opinion). A
+// value that is not one of the three tiers (a hand-edited file, a row
+// written before validation) is no opinion, never a fourth tier.
 func (e Exposure) lookup(server, tool string) Tier {
 	s, ok := e.Servers[server]
 	if !ok {
 		return ""
 	}
-	if t, ok := s.Tools[tool]; ok && t != "" {
+	if t, ok := s.Tools[tool]; ok && t.Valid() {
 		return t
 	}
-	return s.Tier
+	if s.Tier.Valid() {
+		return s.Tier
+	}
+	return ""
 }
 
 // Activation is one tool the session has loaded on demand. Name is the
-// namespaced name the model sees; LastUsedTurn is the session turn
-// ordinal the tool was last loaded or called on; Sticky activations
-// survive TTL expiry.
+// namespaced name the model sees ("<server>__<tool>"); LastUsedTurn is
+// the session turn ordinal the tool was last loaded or called on;
+// Sticky activations survive TTL expiry.
 type Activation struct {
 	Name         string `json:"name"`
 	Server       string `json:"server"`
-	LastUsedTurn int    `json:"last_used_turn"`
+	LastUsedTurn int    `json:"lastUsedTurn"`
 	Sticky       bool   `json:"sticky"`
 }
 
-// ValidateActivations rejects activations with no name or server and
-// duplicate names.
+// ValidateActivations rejects activations whose name is not
+// "<server>__<tool>", negative turns, and duplicate names.
 func ValidateActivations(as []Activation) error {
 	seen := make(map[string]struct{}, len(as))
 	for _, a := range as {
-		if strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.Server) == "" {
-			return fmt.Errorf("toolexposure: activation needs a name and a server (got %q/%q)", a.Name, a.Server)
+		if strings.TrimSpace(a.Server) == "" {
+			return fmt.Errorf("toolexposure: activation %q has no server", a.Name)
+		}
+		if p := a.Server + NameSeparator; !strings.HasPrefix(a.Name, p) || len(a.Name) == len(p) {
+			return fmt.Errorf("toolexposure: activation %q: name must be %s<tool>", a.Name, p)
 		}
 		if a.LastUsedTurn < 0 {
-			return fmt.Errorf("toolexposure: activation %q: negative last_used_turn", a.Name)
+			return fmt.Errorf("toolexposure: activation %q: negative lastUsedTurn", a.Name)
 		}
 		if _, dup := seen[a.Name]; dup {
 			return fmt.Errorf("toolexposure: activation %q listed twice", a.Name)
@@ -215,15 +237,20 @@ func ValidateActivations(as []Activation) error {
 }
 
 // Settings is the user-level configuration: the per-server / per-tool
-// tiers plus the schema budget and activation TTL. Zero budget or TTL
-// means the harness default.
+// tiers plus the schema budget and activation TTL as stored (0 = the
+// harness default). The Effective* fields are read-only: filled on read
+// so a surface can show what applies, ignored on write so a read-edit-
+// write round trip never pins today's default into the user's file.
 type Settings struct {
-	Exposure           Exposure `json:"exposure"`
-	SchemaBudgetTokens int      `json:"schemaBudgetTokens"`
-	ActivationTTLTurns int      `json:"activationTtlTurns"`
+	Exposure                    Exposure `json:"exposure"`
+	SchemaBudgetTokens          int      `json:"schemaBudgetTokens"`
+	ActivationTTLTurns          int      `json:"activationTtlTurns"`
+	EffectiveSchemaBudgetTokens int      `json:"effectiveSchemaBudgetTokens"`
+	EffectiveActivationTTLTurns int      `json:"effectiveActivationTtlTurns"`
 }
 
 // Validate bounds the budget and TTL and validates the exposure layer.
+// The Effective* fields are not inputs and are not checked.
 func (s Settings) Validate() error {
 	if s.SchemaBudgetTokens < 0 || s.SchemaBudgetTokens > MaxSchemaBudgetTokens {
 		return fmt.Errorf("toolexposure: schema budget %d out of range [0, %d] (0 = default %d)",
@@ -236,18 +263,69 @@ func (s Settings) Validate() error {
 	return s.Exposure.Validate()
 }
 
-// EffectiveSchemaBudgetTokens is the budget with the default applied.
-func (s Settings) EffectiveSchemaBudgetTokens() int {
-	if s.SchemaBudgetTokens <= 0 {
-		return DefaultSchemaBudgetTokens
+// WithEffective returns s with the Effective* fields filled from the
+// stored values and the harness defaults.
+func (s Settings) WithEffective() Settings {
+	s.EffectiveSchemaBudgetTokens = s.SchemaBudgetTokens
+	if s.EffectiveSchemaBudgetTokens <= 0 {
+		s.EffectiveSchemaBudgetTokens = DefaultSchemaBudgetTokens
 	}
-	return s.SchemaBudgetTokens
+	s.EffectiveActivationTTLTurns = s.ActivationTTLTurns
+	if s.EffectiveActivationTTLTurns <= 0 {
+		s.EffectiveActivationTTLTurns = DefaultActivationTTLTurns
+	}
+	return s
 }
 
-// EffectiveActivationTTLTurns is the TTL with the default applied.
-func (s Settings) EffectiveActivationTTLTurns() int {
-	if s.ActivationTTLTurns <= 0 {
-		return DefaultActivationTTLTurns
+// MarshalExposureColumn encodes a layer for a nullable TEXT column: nil
+// (SQL NULL) for a zero layer, else its JSON. It does not validate;
+// writers validate once, at the manager.
+func MarshalExposureColumn(e Exposure) (any, error) {
+	if e.IsZero() {
+		return nil, nil
 	}
-	return s.ActivationTTLTurns
+	b, err := json.Marshal(e)
+	if err != nil {
+		return nil, fmt.Errorf("toolexposure: marshal exposure: %w", err)
+	}
+	return string(b), nil
+}
+
+// ParseExposureColumn decodes a nullable TEXT column; NULL or empty is
+// the zero layer.
+func ParseExposureColumn(raw sql.NullString) (Exposure, error) {
+	if !raw.Valid || raw.String == "" {
+		return Exposure{}, nil
+	}
+	var e Exposure
+	if err := json.Unmarshal([]byte(raw.String), &e); err != nil {
+		return Exposure{}, fmt.Errorf("toolexposure: decode exposure column: %w", err)
+	}
+	return e, nil
+}
+
+// MarshalActivationsColumn encodes an activated set for a nullable TEXT
+// column: nil (SQL NULL) when empty, else its JSON.
+func MarshalActivationsColumn(as []Activation) (any, error) {
+	if len(as) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(as)
+	if err != nil {
+		return nil, fmt.Errorf("toolexposure: marshal activations: %w", err)
+	}
+	return string(b), nil
+}
+
+// ParseActivationsColumn decodes a nullable TEXT column; NULL or empty
+// is nil.
+func ParseActivationsColumn(raw sql.NullString) ([]Activation, error) {
+	if !raw.Valid || raw.String == "" {
+		return nil, nil
+	}
+	var as []Activation
+	if err := json.Unmarshal([]byte(raw.String), &as); err != nil {
+		return nil, fmt.Errorf("toolexposure: decode activations column: %w", err)
+	}
+	return as, nil
 }

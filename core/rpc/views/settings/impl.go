@@ -1593,19 +1593,18 @@ func (a *API) SetMCPAutoRestart(_ context.Context, enabled bool) error {
 }
 
 // GetToolExposure returns the user's tool-exposure layer with budget
-// and TTL resolved to their effective values.
+// and TTL as stored (0 = default) and the read-only Effective* fields
+// filled. Reads settings.json in full on every call.
 func (a *API) GetToolExposure(_ context.Context) (toolexposure.Settings, error) {
 	ts, err := a.store.LoadToolExposure()
 	if err != nil {
 		return toolexposure.Settings{}, err
 	}
-	ts.SchemaBudgetTokens = ts.EffectiveSchemaBudgetTokens()
-	ts.ActivationTTLTurns = ts.EffectiveActivationTTLTurns()
-	return ts, nil
+	return ts.WithEffective(), nil
 }
 
 // SetToolExposure validates and persists the user's tool-exposure
-// layer, budget and TTL.
+// layer, budget and TTL; the Effective* fields are ignored.
 func (a *API) SetToolExposure(_ context.Context, ts toolexposure.Settings) error {
 	return a.store.SaveToolExposure(ts)
 }

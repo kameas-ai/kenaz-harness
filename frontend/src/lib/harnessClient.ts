@@ -380,6 +380,7 @@ interface WailsBindingsLike {
   // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
   Settings_GetToolExposure(): Promise<ToolExposureSettings>;
   Settings_SetToolExposure(settings: ToolExposureSettings): Promise<void>;
+  Projects_GetToolExposure(projectID: string): Promise<ToolExposure>;
   Projects_SetToolExposure(
     projectID: string,
     exposure: ToolExposure,
@@ -1816,6 +1817,8 @@ export interface ProjectsClient {
   setAutonomy(id: string, layer: AutonomyLayer): Promise<void>;
 
   // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
+  /** Read the project's tool-exposure override layer (empty when unset). */
+  getToolExposure(id: string): Promise<ToolExposure>;
   /** Persist the project's tool-exposure override; an empty layer clears it. */
   setToolExposure(id: string, exposure: ToolExposure): Promise<void>;
 }
@@ -2460,10 +2463,11 @@ export interface SettingsClient {
   // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
   /**
    * The user's per-server / per-tool exposure tiers, schema budget and
-   * activation TTL; budget and TTL come back as effective values.
+   * activation TTL as stored (0 = default), plus the read-only effective
+   * budget and TTL.
    */
   getToolExposure(): Promise<ToolExposureSettings>;
-  /** Persist exposure tiers, budget and TTL (0 = default). Unknown tiers are refused. */
+  /** Persist exposure tiers, budget and TTL (0 = default); effective* fields are ignored. Unknown tiers are refused. */
   setToolExposure(settings: ToolExposureSettings): Promise<void>;
   /** Returns the persisted embedder provider profileId and modelOverride. */
   getEmbedderConfig(): Promise<EmbedderConfigResult>;
@@ -4431,6 +4435,7 @@ export function createHarnessClient(): HarnessClient {
       listSessions: (projectId) => b().Projects_ListSessions(projectId),
       getAutonomy: (id) => b().Projects_GetAutonomy(id),
       setAutonomy: (id, layer) => b().Projects_SetAutonomy(id, layer),
+      getToolExposure: (id) => b().Projects_GetToolExposure(id),
       setToolExposure: (id, exposure) =>
         b().Projects_SetToolExposure(id, exposure),
     },
@@ -5829,6 +5834,7 @@ export function createFakeHarnessClient(
       listSessions: async () => [],
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: noop,
+      getToolExposure: async () => ({}),
       setToolExposure: noop,
     },
     documents: {
@@ -6158,8 +6164,10 @@ export function createFakeHarnessClient(
       setMCPAutoRestart: noop,
       getToolExposure: async () => ({
         exposure: {},
-        schemaBudgetTokens: 24000,
-        activationTtlTurns: 6,
+        schemaBudgetTokens: 0,
+        activationTtlTurns: 0,
+        effectiveSchemaBudgetTokens: 24000,
+        effectiveActivationTtlTurns: 6,
       }),
       setToolExposure: noop,
       getEmbedderConfig: async () => ({ profileId: '', modelOverride: '' }),

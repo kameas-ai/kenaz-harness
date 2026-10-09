@@ -31,12 +31,6 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
-type exposureCatalog []toolexposure.CatalogTool
-
-func (c exposureCatalog) Catalog(context.Context, string) ([]toolexposure.CatalogTool, error) {
-	return append([]toolexposure.CatalogTool(nil), c...), nil
-}
-
 func openExposureManagers(t *testing.T, dir string) (storage.DB, *session.Manager, *projects.Manager) {
 	t.Helper()
 	db, err := storagesqlite.Open(newConfig(dir))
@@ -160,16 +154,19 @@ func TestMigration0347_ToolExposure_UpgradesPopulatedV0932(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("settings SetToolExposure: %v", err)
 	}
-	deps := toolexposure.Deps{
-		Catalog: exposureCatalog{
-			{Name: "outlook__send-mail", Server: "outlook", Running: true},
-			{Name: "outlook__list-messages", Server: "outlook", Running: true},
-			{Name: "fetch__fetch", Server: "fetch", Running: true},
-			{Name: toolexposure.LoadToolsName, Server: toolexposure.BuiltinServer, Running: true},
-		},
+	resolver, err := toolexposure.NewResolver(toolexposure.Deps{
 		Settings: setAPI,
 		Sessions: sessMgr2,
 		Projects: projMgr2,
+	})
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+	catalog := []toolexposure.CatalogTool{
+		{Name: "outlook__send-mail", Server: "outlook", Running: true},
+		{Name: "outlook__list-messages", Server: "outlook", Running: true},
+		{Name: "fetch__fetch", Server: "fetch", Running: true},
+		{Name: toolexposure.LoadToolsName, Server: toolexposure.BuiltinServer, Running: true},
 	}
 	want := map[string]map[string]struct {
 		tier toolexposure.Tier
@@ -192,7 +189,7 @@ func TestMigration0347_ToolExposure_UpgradesPopulatedV0932(t *testing.T) {
 		},
 	}
 	for sid, tools := range want {
-		rc, err := toolexposure.Resolve(ctx, deps, sid)
+		rc, err := resolver.Resolve(ctx, sid, catalog)
 		if err != nil {
 			t.Fatalf("Resolve %s: %v", sid, err)
 		}

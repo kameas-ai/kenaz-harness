@@ -31,14 +31,17 @@ describe('createHarnessClient() — tool exposure', () => {
       exposure: layer,
       schemaBudgetTokens: 12000,
       activationTtlTurns: 4,
+      effectiveSchemaBudgetTokens: 12000,
+      effectiveActivationTtlTurns: 4,
     };
     const bindings = {
       Settings_GetToolExposure: vi.fn(async () => settings),
       Settings_SetToolExposure: vi.fn(async () => undefined),
+      Projects_GetToolExposure: vi.fn(async () => layer),
       Projects_SetToolExposure: vi.fn(async () => undefined),
       Sessions_GetToolExposure: vi.fn(async () => ({
         exposure: layer,
-        activations: [{ name: 'fetch__fetch', server: 'fetch', last_used_turn: 2, sticky: true }],
+        activations: [{ name: 'fetch__fetch', server: 'fetch', lastUsedTurn: 2, sticky: true }],
       })),
       Sessions_SetToolExposure: vi.fn(async () => undefined),
     };
@@ -49,6 +52,8 @@ describe('createHarnessClient() — tool exposure', () => {
     await client.settings.setToolExposure(settings);
     expect(bindings.Settings_SetToolExposure).toHaveBeenCalledWith(settings);
 
+    expect(await client.projects.getToolExposure('p1')).toEqual(layer);
+    expect(bindings.Projects_GetToolExposure).toHaveBeenCalledWith('p1');
     await client.projects.setToolExposure('p1', layer);
     expect(bindings.Projects_SetToolExposure).toHaveBeenCalledWith('p1', layer);
 

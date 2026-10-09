@@ -2,10 +2,13 @@ package settings
 
 // Tool-exposure settings (tool-context-budget-01TCBUD01 WP02): the tier
 // layer, schema budget and activation TTL persist through the real
-// settings.json file, read back as effective values, and are refused
-// when invalid on both the targeted and the full-record save paths.
+// settings.json file, read back as stored values beside read-only
+// effective ones, survive a no-edit read-write round trip unchanged,
+// and are refused when invalid on both the targeted and the
+// full-record save paths.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -25,11 +28,50 @@ func TestToolExposure_DefaultsOnFreshInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := toolexposure.Settings{
-		SchemaBudgetTokens: toolexposure.DefaultSchemaBudgetTokens,
-		ActivationTTLTurns: toolexposure.DefaultActivationTTLTurns,
+		EffectiveSchemaBudgetTokens: toolexposure.DefaultSchemaBudgetTokens,
+		EffectiveActivationTTLTurns: toolexposure.DefaultActivationTTLTurns,
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("fresh install = %+v, want %+v", got, want)
+		t.Fatalf("fresh install = %+v, want stored 0/0 with effective defaults %+v", got, want)
+	}
+}
+
+// A surface that reads, edits nothing and writes back must not pin
+// today's defaults into the user's file: unset budget and TTL stay
+// unset, and the file is byte-identical.
+func TestToolExposure_NoEditRoundTripLeavesFileUnchanged(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := NewAPI(store)
+	if err := api.SetToolExposure(ctx, toolexposure.Settings{
+		Exposure: toolexposure.Exposure{Servers: map[string]toolexposure.ServerExposure{"outlook": {Tier: toolexposure.TierOff}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := api.GetToolExposure(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.SetToolExposure(ctx, got); err != nil {
+		t.Fatalf("write back unedited: %v", err)
+	}
+	after, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("no-edit round trip rewrote settings.json:\nbefore %s\nafter  %s", before, after)
+	}
+	all, _ := store.LoadAll()
+	if all.ToolSchemaBudgetTokens != 0 || all.ToolActivationTTLTurns != 0 {
+		t.Fatalf("round trip pinned defaults: budget %d, ttl %d", all.ToolSchemaBudgetTokens, all.ToolActivationTTLTurns)
 	}
 }
 
@@ -61,8 +103,8 @@ func TestToolExposure_FileRoundTripAcrossStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, in) {
-		t.Fatalf("after reload = %+v, want %+v", got, in)
+	if !reflect.DeepEqual(got, in.WithEffective()) || got.EffectiveSchemaBudgetTokens != 9000 {
+		t.Fatalf("after reload = %+v, want %+v", got, in.WithEffective())
 	}
 
 	raw, err := os.ReadFile(store2.Path())
@@ -88,8 +130,8 @@ func TestToolExposure_FileRoundTripAcrossStores(t *testing.T) {
 	if err := store2.SaveAll(all); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := NewAPI(store2).GetToolExposure(ctx); !reflect.DeepEqual(got, in) {
-		t.Fatalf("after unrelated SaveAll = %+v, want %+v", got, in)
+	if got, _ := NewAPI(store2).GetToolExposure(ctx); !reflect.DeepEqual(got, in.WithEffective()) {
+		t.Fatalf("after unrelated SaveAll = %+v, want %+v", got, in.WithEffective())
 	}
 
 	// Clearing writes the fields away and reads back the defaults.
@@ -131,7 +173,7 @@ func TestToolExposure_InvalidRefusedOnEverySavePath(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !got.Exposure.IsZero() || got.SchemaBudgetTokens != toolexposure.DefaultSchemaBudgetTokens {
+		if !got.Exposure.IsZero() || got.SchemaBudgetTokens != 0 || got.ActivationTTLTurns != 0 {
 			t.Errorf("%s: a refused write leaked: %+v", name, got)
 		}
 	}

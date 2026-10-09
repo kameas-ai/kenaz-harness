@@ -1486,9 +1486,9 @@ type SettingsStore interface {
 	SaveMCPAutoRestart(enabled bool) error
 
 	// LoadToolExposure / SaveToolExposure expose the tool-exposure layer,
-	// schema budget and activation TTL as one toolexposure.Settings
-	// (tool-context-budget-01TCBUD01 WP02). Load reports the stored
-	// values (0 = default); Save validates and writes all three.
+	// schema budget and activation TTL as one toolexposure.Settings.
+	// Load reports the stored values (0 = default) with the Effective*
+	// fields unset; Save validates and writes the three stored values.
 	LoadToolExposure() (toolexposure.Settings, error)
 	SaveToolExposure(ts toolexposure.Settings) error
 
@@ -1632,12 +1632,13 @@ type SettingsAPI interface {
 	GetMCPAutoRestart(ctx context.Context) (bool, error)
 	// SetMCPAutoRestart persists the MCP auto-restart dial.
 	SetMCPAutoRestart(ctx context.Context, enabled bool) error
-	// GetToolExposure returns the user's tool-exposure layer with the
-	// schema budget and activation TTL resolved to their effective
-	// values. Satisfies toolexposure.SettingsSource.
+	// GetToolExposure returns the user's tool-exposure layer, schema
+	// budget and activation TTL as stored (0 = default), with the
+	// read-only Effective* fields filled. Satisfies
+	// toolexposure.SettingsSource.
 	GetToolExposure(ctx context.Context) (toolexposure.Settings, error)
 	// SetToolExposure validates and persists the user's tool-exposure
-	// layer, budget and TTL (0 = default).
+	// layer, budget and TTL (0 = default); Effective* are ignored.
 	SetToolExposure(ctx context.Context, ts toolexposure.Settings) error
 	// GetAutoTitleEnabled returns whether session auto-titling is on.
 	// Default true on a fresh install (zero-value → enabled).

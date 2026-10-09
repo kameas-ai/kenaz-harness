@@ -17,9 +17,8 @@ import (
 //   - sessions.tool_exposure     JSON toolexposure.Exposure
 //   - sessions.tool_activations  JSON []toolexposure.Activation
 //
-// The version space need not be dense: VerifyLedger's contiguity check
-// runs over registered migrations, not version numbers (see
-// migrationIDAutonomy's numbering note).
+// 0346 is reserved for the same mission's usage-columns migration
+// (WP01); once registered it sits before this one in Migrations().
 //
 // Additive only, so check-destructive-migration-coverage.sh has nothing
 // to cover. Each ALTER is guarded by a pragma_table_info probe so the

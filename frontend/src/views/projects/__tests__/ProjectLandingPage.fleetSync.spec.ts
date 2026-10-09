@@ -63,6 +63,7 @@ function buildClient(overrides: {
       listSessions: async () => [],
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: async () => {},
+      getToolExposure: async () => ({}),
       setToolExposure: async () => {},
     },
   });

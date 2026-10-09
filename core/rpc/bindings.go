@@ -318,7 +318,11 @@ func (b *Bindings) Sessions_SetKnobsDefault(id string, knobs *sessions.SessionKn
 }
 
 // Sessions_GetToolExposure returns the session's tool-exposure override
-// layer and activated tool set (tool-context-budget-01TCBUD01 WP02).
+// layer and activated tool set.
+//
+// Sessions_LoadTools (load / unload / pin from the composer) is not a
+// binding yet: it needs kenaz__load_tools' activation logic, which lands
+// with tool-context-budget-01TCBUD01 WP03. Dated 2026-10-09. Owner: alec.
 func (b *Bindings) Sessions_GetToolExposure(id string) (sessions.SessionToolExposure, error) {
 	defer sentry.WrapBinding("Sessions_GetToolExposure")()
 	return b.api.Sessions().GetToolExposure(b.ctx(), id)
@@ -1467,16 +1471,16 @@ func (b *Bindings) Settings_SetMCPAutoRestart(enabled bool) error {
 }
 
 // Settings_GetToolExposure returns the user's per-server / per-tool
-// exposure tiers, schema budget and activation TTL, the budget and TTL
-// resolved to their effective values (tool-context-budget-01TCBUD01
-// WP02).
+// exposure tiers, schema budget and activation TTL as stored (0 =
+// default), plus the read-only effective budget and TTL.
 func (b *Bindings) Settings_GetToolExposure() (toolexposure.Settings, error) {
 	defer sentry.WrapBinding("Settings_GetToolExposure")()
 	return b.api.Settings().GetToolExposure(b.ctx())
 }
 
 // Settings_SetToolExposure validates and persists the user's exposure
-// tiers, schema budget and activation TTL (0 = default).
+// tiers, schema budget and activation TTL (0 = default); the effective
+// fields are ignored.
 func (b *Bindings) Settings_SetToolExposure(ts toolexposure.Settings) error {
 	defer sentry.WrapBinding("Settings_SetToolExposure")()
 	return b.api.Settings().SetToolExposure(b.ctx(), ts)
@@ -3113,9 +3117,15 @@ func (b *Bindings) Projects_SetAutonomy(projectID string, layer autonomy.Layer) 
 	return b.api.Projects().SaveAutonomyProfile(b.ctx(), projectID, layer)
 }
 
+// Projects_GetToolExposure returns the project's tool-exposure override
+// layer; the empty layer when none is set.
+func (b *Bindings) Projects_GetToolExposure(projectID string) (toolexposure.Exposure, error) {
+	defer sentry.WrapBinding("Projects_GetToolExposure")()
+	return b.api.Projects().GetToolExposure(b.ctx(), projectID)
+}
+
 // Projects_SetToolExposure persists the project's tool-exposure
-// override layer; an empty layer clears it (tool-context-budget-
-// 01TCBUD01 WP02).
+// override layer; an empty layer clears it. Unknown tiers are refused.
 func (b *Bindings) Projects_SetToolExposure(projectID string, exposure toolexposure.Exposure) error {
 	defer sentry.WrapBinding("Projects_SetToolExposure")()
 	return b.api.Projects().SetToolExposure(b.ctx(), projectID, exposure)

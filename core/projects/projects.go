@@ -79,7 +79,7 @@ type Store interface {
 
 	// SetToolExposure persists the project's tool-exposure override layer
 	// (projects.tool_exposure, migration sessions/0347-tool-exposure). A
-	// zero Exposure clears it (NULL). Invalid tiers are refused.
+	// zero Exposure clears it (NULL). Callers validate (Manager does).
 	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
 	// GetToolExposure loads the project's override layer; the zero
 	// Exposure when none is set.
@@ -254,9 +254,12 @@ func (m *Manager) GetAutonomyProfile(ctx context.Context, id string) (autonomy.L
 	return m.store.GetAutonomyProfile(ctx, id)
 }
 
-// SetToolExposure persists the project's tool-exposure override layer;
-// a zero Exposure clears it.
+// SetToolExposure validates and persists the project's tool-exposure
+// override layer; a zero Exposure clears it.
 func (m *Manager) SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
 	return m.store.SetToolExposure(ctx, id, e)
 }
 

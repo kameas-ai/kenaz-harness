@@ -468,8 +468,7 @@ type SessionsAPI interface {
 	SetKnobsDefault(ctx context.Context, id string, knobs *SessionKnobs) error
 
 	// GetToolExposure returns the session's tool-exposure override layer
-	// and activated set (tool-context-budget-01TCBUD01 WP02, migration
-	// sessions/0347-tool-exposure).
+	// and activated set (migration sessions/0347-tool-exposure).
 	GetToolExposure(ctx context.Context, id string) (SessionToolExposure, error)
 	// SetToolExposure validates and persists the session's override
 	// layer; a zero Exposure clears it.

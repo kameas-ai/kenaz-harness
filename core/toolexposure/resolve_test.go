@@ -2,16 +2,12 @@ package toolexposure
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 )
-
-type fakeCatalog []CatalogTool
-
-func (f fakeCatalog) Catalog(context.Context, string) ([]CatalogTool, error) {
-	return append([]CatalogTool(nil), f...), nil
-}
 
 type fakeSettings struct {
 	s   Settings
@@ -52,13 +48,14 @@ func toolLevel(tier Tier) Exposure {
 
 var sendMail = CatalogTool{Name: "outlook__send-mail", Server: "outlook", Running: true}
 
+var allTiers = []Tier{TierFull, TierSummary, TierOff}
+
 // layerSet places an Exposure at each named level; LevelDefault is
 // never set (it is what remains when nothing else has an opinion).
 type layerSet map[Level]Exposure
 
-func depsFor(cat []CatalogTool, ls layerSet) Deps {
+func depsFor(ls layerSet) Deps {
 	return Deps{
-		Catalog:  fakeCatalog(cat),
 		Settings: fakeSettings{s: Settings{Exposure: ls[LevelUser]}},
 		Sessions: fakeSessions{st: SessionState{ProjectID: "p1", Override: ls[LevelSession]}},
 		Projects: fakeProjects{byID: map[string]Exposure{"p1": ls[LevelProject]}},
@@ -68,7 +65,7 @@ func depsFor(cat []CatalogTool, ls layerSet) Deps {
 
 func resolveOne(t *testing.T, cat []CatalogTool, ls layerSet, name string) ResolvedTool {
 	t.Helper()
-	rc, err := Resolve(context.Background(), depsFor(cat, ls), "s1")
+	rc, err := Resolve(context.Background(), depsFor(ls), "s1", cat)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -79,11 +76,13 @@ func resolveOne(t *testing.T, cat []CatalogTool, ls layerSet, name string) Resol
 	return rt
 }
 
-// TestResolve_PrecedenceEveryPair covers every pair of §2.1 levels: the
-// higher level is set to one tier, the lower to a different one, and
-// the higher must win and be named as the source. Each pair is run with
-// server-wide and tool-level entries at both ends, so "first layer
-// wins" is proven independent of how specific each layer's entry is.
+// TestResolve_PrecedenceEveryPair covers every pair of §2.1 levels and,
+// for each, every ordered pair of distinct tiers: the higher level must
+// win whichever tier it holds, so no ordering of the tiers themselves
+// (e.g. "most permissive wins") can pass. When the lower level is the
+// harness default (summary for an MCP tool) the higher level takes each
+// tier that differs from it. Each case runs with server-wide and
+// tool-level entries at both ends.
 func TestResolve_PrecedenceEveryPair(t *testing.T) {
 	order := []Level{LevelOrgPin, LevelSession, LevelProject, LevelUser, LevelDefault}
 	shapes := []struct {
@@ -95,35 +94,47 @@ func TestResolve_PrecedenceEveryPair(t *testing.T) {
 		{"server-over-tool", srv, toolLevel},
 		{"tool-over-server", toolLevel, srv},
 	}
-	pairs := 0
+	pairs, cases := 0, 0
 	for i := 0; i < len(order); i++ {
 		for j := i + 1; j < len(order); j++ {
 			hi, lo := order[i], order[j]
 			pairs++
-			for _, sh := range shapes {
-				// The default for an MCP tool is summary, so the higher
-				// level picks a tier that differs from whatever the lower
-				// level yields.
-				loTier, hiTier := TierOff, TierFull
-				if lo == LevelDefault {
-					loTier = DefaultTier(sendMail)
+			for _, hiTier := range allTiers {
+				for _, loTier := range allTiers {
+					if lo == LevelDefault {
+						loTier = DefaultTier(sendMail)
+					}
+					if hiTier == loTier {
+						continue
+					}
+					for _, sh := range shapes {
+						cases++
+						t.Run(fmt.Sprintf("%s=%s>%s=%s/%s", hi, hiTier, lo, loTier, sh.name), func(t *testing.T) {
+							ls := layerSet{hi: sh.hi(hiTier)}
+							if lo != LevelDefault {
+								ls[lo] = sh.lo(loTier)
+							}
+							got := resolveOne(t, []CatalogTool{sendMail}, ls, sendMail.Name)
+							if got.Tier != hiTier || got.Source != hi {
+								t.Fatalf("got tier %q from %q, want %q from %q (lower level %q had %q)",
+									got.Tier, got.Source, hiTier, hi, lo, loTier)
+							}
+						})
+					}
+					if lo == LevelDefault {
+						break
+					}
 				}
-				t.Run(fmt.Sprintf("%s>%s/%s", hi, lo, sh.name), func(t *testing.T) {
-					ls := layerSet{hi: sh.hi(hiTier)}
-					if lo != LevelDefault {
-						ls[lo] = sh.lo(loTier)
-					}
-					got := resolveOne(t, []CatalogTool{sendMail}, ls, sendMail.Name)
-					if got.Tier != hiTier || got.Source != hi {
-						t.Fatalf("got tier %q from %q, want %q from %q (lower level %q had %q)",
-							got.Tier, got.Source, hiTier, hi, lo, loTier)
-					}
-				})
 			}
 		}
 	}
 	if pairs != 10 {
 		t.Fatalf("covered %d level pairs, want all 10", pairs)
+	}
+	// 6 level pairs among the four set levels × 6 ordered tier pairs, plus
+	// 4 pairs against the default × 2 tiers, each × 4 shapes.
+	if want := (6*6 + 4*2) * 4; cases != want {
+		t.Fatalf("ran %d cases, want %d", cases, want)
 	}
 }
 
@@ -135,7 +146,7 @@ func TestResolve_ToolEntryBeatsServerTierWithinLayer(t *testing.T) {
 		Tools: map[string]Tier{"send-mail": TierFull},
 	}}}}
 	other := CatalogTool{Name: "outlook__list-messages", Server: "outlook", Running: true}
-	rc, err := Resolve(context.Background(), depsFor([]CatalogTool{sendMail, other}, ls), "s1")
+	rc, err := Resolve(context.Background(), depsFor(ls), "s1", []CatalogTool{sendMail, other})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +163,19 @@ func TestResolve_ToolEntryBeatsServerTierWithinLayer(t *testing.T) {
 	}
 }
 
+// A tier value that is not one of the three (a hand-edited settings
+// file, a row written before validation) is no opinion: resolution
+// falls through to the next layer and never yields a fourth tier.
+func TestResolve_InvalidStoredTierIsNoOpinion(t *testing.T) {
+	ls := layerSet{
+		LevelSession: {Servers: map[string]ServerExposure{"outlook": {Tier: "loud", Tools: map[string]Tier{"send-mail": "hidden"}}}},
+		LevelUser:    srv(TierOff),
+	}
+	if got := resolveOne(t, []CatalogTool{sendMail}, ls, sendMail.Name); got.Tier != TierOff || got.Source != LevelUser {
+		t.Fatalf("send-mail = %+v, want off from user past the invalid session entries", got)
+	}
+}
+
 func TestResolve_HarnessDefaults(t *testing.T) {
 	cat := []CatalogTool{
 		{Name: "kenaz__read_file", Server: BuiltinServer, Running: true},
@@ -163,7 +187,7 @@ func TestResolve_HarnessDefaults(t *testing.T) {
 		// not hot: the hot set is the kenaz server's.
 		{Name: "filesystem__read_file", Server: "filesystem", Running: true},
 	}
-	rc, err := Resolve(context.Background(), depsFor(cat, layerSet{}), "s1")
+	rc, err := Resolve(context.Background(), depsFor(layerSet{}), "s1", cat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,16 +199,22 @@ func TestResolve_HarnessDefaults(t *testing.T) {
 		"fetch__fetch":                TierSummary,
 		"filesystem__read_file":       TierSummary,
 	}
-	for _, rt := range rc.Tools {
+	if len(rc.Tools) != len(cat) {
+		t.Fatalf("resolved %d tools, want %d", len(rc.Tools), len(cat))
+	}
+	for i, rt := range rc.Tools {
+		if rt.Name != cat[i].Name {
+			t.Errorf("Tools[%d] = %s, want catalog order (%s)", i, rt.Name, cat[i].Name)
+		}
 		if rt.Tier != want[rt.Name] || rt.Source != LevelDefault {
 			t.Errorf("%s = %q from %q, want %q from default", rt.Name, rt.Tier, rt.Source, want[rt.Name])
-		}
-		if rt.Tier == TierOff {
-			t.Errorf("%s is off by default; nothing is off by default", rt.Name)
 		}
 	}
 	if f, _ := rc.Tool("fetch__fetch"); f.Running {
 		t.Error("fetch__fetch: Running must carry through from the catalog")
+	}
+	if _, ok := rc.Tool("outlook__nope"); ok {
+		t.Error("Tool found a name not in the catalog")
 	}
 	if rc.SchemaBudgetTokens != DefaultSchemaBudgetTokens || rc.ActivationTTLTurns != DefaultActivationTTLTurns {
 		t.Errorf("budget/ttl = %d/%d, want defaults %d/%d", rc.SchemaBudgetTokens, rc.ActivationTTLTurns,
@@ -199,29 +229,29 @@ func TestHotSet_MatchesSpec(t *testing.T) {
 		"kenaz__save_artifact", "kenaz__skill", "kenaz__todo_write", "kenaz__web_fetch",
 		"kenaz__web_search", "kenaz__write_file",
 	}
-	got := HotSet()
-	if fmt.Sprint(got) != fmt.Sprint(want) {
+	if got := HotSet(); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("HotSet() = %v\nwant       %v", got, want)
 	}
 }
 
 // TestResolve_LoadToolsInvariant: kenaz__load_tools is full whenever any
-// tool is summary — even when the user, the project or an org pin says
-// off — and is left to its layers when nothing is summary.
+// other tool is summary — even when the user, the project or an org pin
+// says off — and is left to its layers when nothing else is summary. Its
+// own tier never counts as "a summary tool exists".
 func TestResolve_LoadToolsInvariant(t *testing.T) {
 	loadTools := CatalogTool{Name: LoadToolsName, Server: BuiltinServer, Running: true}
-	offLoad := func() Exposure {
-		return Exposure{Servers: map[string]ServerExposure{BuiltinServer: {Tools: map[string]Tier{"load_tools": TierOff}}}}
+	loadAt := func(tier Tier) Exposure {
+		return Exposure{Servers: map[string]ServerExposure{BuiltinServer: {Tools: map[string]Tier{"load_tools": tier}}}}
 	}
 	for _, lvl := range []Level{LevelOrgPin, LevelSession, LevelProject, LevelUser} {
 		t.Run(string(lvl)+"/summary-present", func(t *testing.T) {
-			got := resolveOne(t, []CatalogTool{loadTools, sendMail}, layerSet{lvl: offLoad()}, LoadToolsName)
+			got := resolveOne(t, []CatalogTool{loadTools, sendMail}, layerSet{lvl: loadAt(TierOff)}, LoadToolsName)
 			if got.Tier != TierFull || got.Source != LevelInvariant {
 				t.Fatalf("load_tools = %+v, want full from invariant while send-mail is summary", got)
 			}
 		})
 		t.Run(string(lvl)+"/no-summary", func(t *testing.T) {
-			ls := layerSet{lvl: offLoad()}
+			ls := layerSet{lvl: loadAt(TierOff)}
 			ls[LevelUser] = mergeServers(ls[LevelUser], srv(TierFull))
 			got := resolveOne(t, []CatalogTool{loadTools, sendMail}, ls, LoadToolsName)
 			if got.Tier != TierOff || got.Source != lvl {
@@ -229,9 +259,13 @@ func TestResolve_LoadToolsInvariant(t *testing.T) {
 			}
 		})
 	}
+	// load_tools itself at summary, nothing else summary: it stays summary.
+	ls := layerSet{LevelUser: mergeServers(loadAt(TierSummary), srv(TierFull))}
+	if got := resolveOne(t, []CatalogTool{loadTools, sendMail}, ls, LoadToolsName); got.Tier != TierSummary || got.Source != LevelUser {
+		t.Fatalf("load_tools = %+v, want summary from user: its own tier must not trip the invariant", got)
+	}
 	// Default posture: load_tools is hot, so full from the default.
-	got := resolveOne(t, []CatalogTool{loadTools, sendMail}, layerSet{}, LoadToolsName)
-	if got.Tier != TierFull || got.Source != LevelDefault {
+	if got := resolveOne(t, []CatalogTool{loadTools, sendMail}, layerSet{}, LoadToolsName); got.Tier != TierFull || got.Source != LevelDefault {
 		t.Fatalf("load_tools = %+v, want full from default", got)
 	}
 }
@@ -250,12 +284,11 @@ func mergeServers(a, b Exposure) Exposure {
 func TestResolve_ProjectLayerOnlyForProjectSessions(t *testing.T) {
 	var seen []string
 	deps := Deps{
-		Catalog:  fakeCatalog{sendMail},
 		Settings: fakeSettings{},
 		Sessions: fakeSessions{st: SessionState{}},
 		Projects: fakeProjects{byID: map[string]Exposure{"": srv(TierOff)}, seen: &seen},
 	}
-	rc, err := Resolve(context.Background(), deps, "loose")
+	rc, err := Resolve(context.Background(), deps, "loose", []CatalogTool{sendMail})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,31 +302,36 @@ func TestResolve_ProjectLayerOnlyForProjectSessions(t *testing.T) {
 
 func TestResolve_CarriesActivationsBudgetAndTTL(t *testing.T) {
 	acts := []Activation{{Name: "outlook__send-mail", Server: "outlook", LastUsedTurn: 3, Sticky: true}}
-	deps := Deps{
-		Catalog:  fakeCatalog{sendMail},
+	r, err := NewResolver(Deps{
 		Settings: fakeSettings{s: Settings{SchemaBudgetTokens: 9000, ActivationTTLTurns: 2}},
 		Sessions: fakeSessions{st: SessionState{Activations: acts}},
 		Projects: fakeProjects{},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	rc, err := Resolve(context.Background(), deps, "s1")
+	rc, err := r.Resolve(context.Background(), "s1", []CatalogTool{sendMail})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rc.SchemaBudgetTokens != 9000 || rc.ActivationTTLTurns != 2 {
 		t.Fatalf("budget/ttl = %d/%d, want 9000/2", rc.SchemaBudgetTokens, rc.ActivationTTLTurns)
 	}
-	if len(rc.Activations) != 1 || rc.Activations[0] != acts[0] {
+	if !reflect.DeepEqual(rc.Activations, acts) {
 		t.Fatalf("activations = %+v, want %+v", rc.Activations, acts)
 	}
 }
 
 func TestResolve_ErrorsAreNotSwallowed(t *testing.T) {
-	if _, err := Resolve(context.Background(), Deps{}, "s1"); !errors.Is(err, ErrMissingDep) {
+	if _, err := NewResolver(Deps{Settings: fakeSettings{}, Sessions: fakeSessions{}}); !errors.Is(err, ErrMissingDep) {
+		t.Fatalf("NewResolver without Projects: err = %v, want ErrMissingDep", err)
+	}
+	if _, err := Resolve(context.Background(), Deps{}, "s1", nil); !errors.Is(err, ErrMissingDep) {
 		t.Fatalf("empty deps: err = %v, want ErrMissingDep", err)
 	}
 	boom := errors.New("boom")
-	deps := Deps{Catalog: fakeCatalog{}, Settings: fakeSettings{err: boom}, Sessions: fakeSessions{}, Projects: fakeProjects{}}
-	if _, err := Resolve(context.Background(), deps, "s1"); !errors.Is(err, boom) {
+	deps := Deps{Settings: fakeSettings{err: boom}, Sessions: fakeSessions{}, Projects: fakeProjects{}}
+	if _, err := Resolve(context.Background(), deps, "s1", nil); !errors.Is(err, boom) {
 		t.Fatalf("settings error: err = %v, want it wrapped", err)
 	}
 }
@@ -304,6 +342,7 @@ func TestValidate(t *testing.T) {
 		{Servers: map[string]ServerExposure{"outlook": {Tools: map[string]Tier{"send-mail": ""}}}},
 		{Servers: map[string]ServerExposure{"": {Tier: TierOff}}},
 		{Servers: map[string]ServerExposure{"outlook": {Tools: map[string]Tier{" ": TierOff}}}},
+		{Servers: map[string]ServerExposure{"outlook": {Tools: map[string]Tier{"outlook__send-mail": TierOff}}}},
 	}
 	for i, e := range bad {
 		if err := e.Validate(); err == nil {
@@ -319,11 +358,76 @@ func TestValidate(t *testing.T) {
 	if err := (Settings{ActivationTTLTurns: MaxActivationTTLTurns + 1}).Validate(); err == nil {
 		t.Error("over-max TTL validated")
 	}
-	if err := ValidateActivations([]Activation{{Name: "a__b", Server: "a"}, {Name: "a__b", Server: "a"}}); err == nil {
-		t.Error("duplicate activation validated")
+	if err := (Settings{EffectiveSchemaBudgetTokens: -7}).Validate(); err != nil {
+		t.Errorf("read-only effective field validated as input: %v", err)
 	}
-	if err := ValidateActivations([]Activation{{Name: "a__b"}}); err == nil {
-		t.Error("activation without a server validated")
+}
+
+func TestValidateActivations(t *testing.T) {
+	good := []Activation{{Name: "outlook__send-mail", Server: "outlook"}, {Name: "fetch__fetch", Server: "fetch", LastUsedTurn: 4, Sticky: true}}
+	if err := ValidateActivations(good); err != nil {
+		t.Fatalf("good activations: %v", err)
+	}
+	bad := [][]Activation{
+		{{Name: "a__b", Server: "a"}, {Name: "a__b", Server: "a"}},
+		{{Name: "a__b"}},
+		{{Name: "send-mail", Server: "outlook"}},
+		{{Name: "fetch__fetch", Server: "outlook"}},
+		{{Name: "outlook__", Server: "outlook"}},
+		{{Name: "outlook__x", Server: "outlook", LastUsedTurn: -1}},
+	}
+	for i, as := range bad {
+		if err := ValidateActivations(as); err == nil {
+			t.Errorf("bad[%d] %+v validated", i, as)
+		}
+	}
+}
+
+func TestColumnCodec(t *testing.T) {
+	if v, err := MarshalExposureColumn(Exposure{}); v != nil || err != nil {
+		t.Fatalf("zero layer = %v, %v; want NULL", v, err)
+	}
+	if v, err := MarshalActivationsColumn(nil); v != nil || err != nil {
+		t.Fatalf("empty activations = %v, %v; want NULL", v, err)
+	}
+	e := toolLevel(TierOff)
+	v, err := MarshalExposureColumn(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := ParseExposureColumn(sql.NullString{String: v.(string), Valid: true})
+	if err != nil || !reflect.DeepEqual(back, e) {
+		t.Fatalf("exposure round trip = %+v (%v), want %+v", back, err, e)
+	}
+	acts := []Activation{{Name: "fetch__fetch", Server: "fetch", LastUsedTurn: 2, Sticky: true}}
+	v, err = MarshalActivationsColumn(acts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.(string) != `[{"name":"fetch__fetch","server":"fetch","lastUsedTurn":2,"sticky":true}]` {
+		t.Fatalf("activations wire = %s", v)
+	}
+	ab, err := ParseActivationsColumn(sql.NullString{String: v.(string), Valid: true})
+	if err != nil || !reflect.DeepEqual(ab, acts) {
+		t.Fatalf("activations round trip = %+v (%v)", ab, err)
+	}
+	if z, err := ParseExposureColumn(sql.NullString{}); err != nil || !z.IsZero() {
+		t.Fatalf("NULL exposure = %+v, %v", z, err)
+	}
+	if _, err := ParseExposureColumn(sql.NullString{String: "{", Valid: true}); err == nil {
+		t.Fatal("corrupt column decoded")
+	}
+}
+
+func TestSettings_WithEffective(t *testing.T) {
+	got := Settings{}.WithEffective()
+	if got.SchemaBudgetTokens != 0 || got.EffectiveSchemaBudgetTokens != DefaultSchemaBudgetTokens ||
+		got.ActivationTTLTurns != 0 || got.EffectiveActivationTTLTurns != DefaultActivationTTLTurns {
+		t.Fatalf("WithEffective on unset = %+v", got)
+	}
+	got = Settings{SchemaBudgetTokens: 500, ActivationTTLTurns: 9}.WithEffective()
+	if got.EffectiveSchemaBudgetTokens != 500 || got.EffectiveActivationTTLTurns != 9 {
+		t.Fatalf("WithEffective on set = %+v", got)
 	}
 }
 

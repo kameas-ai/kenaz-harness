@@ -240,19 +240,19 @@ type Store interface {
 
 	// SetToolExposure persists the session's tool-exposure override layer
 	// (sessions.tool_exposure, migration sessions/0347-tool-exposure). A
-	// zero Exposure clears it (NULL). Invalid tiers are refused.
+	// zero Exposure clears it (NULL). Callers validate (Manager does).
 	// Returns ErrSessionNotFound when the session does not exist.
 	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
-	// GetToolExposure loads the session's override layer; the zero
-	// Exposure (not an error) when none is set.
-	GetToolExposure(ctx context.Context, id string) (toolexposure.Exposure, error)
 	// SetToolActivations replaces the session's activated tool set
 	// (sessions.tool_activations). An empty set clears it (NULL).
+	// Callers validate (Manager does).
 	// Returns ErrSessionNotFound when the session does not exist.
 	SetToolActivations(ctx context.Context, id string, as []toolexposure.Activation) error
-	// GetToolActivations loads the session's activated set; nil (not an
-	// error) when nothing is activated.
-	GetToolActivations(ctx context.Context, id string) ([]toolexposure.Activation, error)
+	// ToolExposureState loads the session's project, override layer and
+	// activated set in one read; the zero layer and nil activations (not
+	// errors) when none are set.
+	// Returns ErrSessionNotFound when the session does not exist.
+	ToolExposureState(ctx context.Context, id string) (toolexposure.SessionState, error)
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
@@ -481,6 +481,8 @@ func (s *memStore) Delete(_ context.Context, id string) error {
 	delete(s.records, id)
 	delete(s.messages, id)
 	delete(s.seqByID, id)
+	delete(s.toolExposure, id)
+	delete(s.toolActs, id)
 	// Mirror the SQL store's ON DELETE CASCADE on session_turn_runs
 	// (migration 0342): a deleted session's turn -> run links go with it.
 	for runID, tr := range s.turnRuns {

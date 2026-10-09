@@ -125,9 +125,6 @@ func (s *memStore) GetAutonomyProfile(_ context.Context, id string) (autonomy.La
 }
 
 func (s *memStore) SetToolExposure(_ context.Context, id string, e toolexposure.Exposure) error {
-	if err := e.Validate(); err != nil {
-		return err
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.projects[id]; !ok {

@@ -600,6 +600,8 @@ export function Projects_Get(arg1:string):Promise<projects.Project>;
 
 export function Projects_GetAutonomy(arg1:string):Promise<autonomy.Layer>;
 
+export function Projects_GetToolExposure(arg1:string):Promise<toolexposure.Exposure>;
+
 export function Projects_List():Promise<Array<projects.Project>>;
 
 export function Projects_ListSessions(arg1:string):Promise<Array<projects.Session>>;

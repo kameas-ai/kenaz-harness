@@ -8695,7 +8695,7 @@ export namespace toolexposure {
 	export class Activation {
 	    name: string;
 	    server: string;
-	    last_used_turn: number;
+	    lastUsedTurn: number;
 	    sticky: boolean;
 
 	    static createFrom(source: any = {}) {
@@ -8706,7 +8706,7 @@ export namespace toolexposure {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.server = source["server"];
-	        this.last_used_turn = source["last_used_turn"];
+	        this.lastUsedTurn = source["lastUsedTurn"];
 	        this.sticky = source["sticky"];
 	    }
 	}
@@ -8758,6 +8758,8 @@ export namespace toolexposure {
 	    exposure: Exposure;
 	    schemaBudgetTokens: number;
 	    activationTtlTurns: number;
+	    effectiveSchemaBudgetTokens: number;
+	    effectiveActivationTtlTurns: number;
 
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8768,6 +8770,8 @@ export namespace toolexposure {
 	        this.exposure = this.convertValues(source["exposure"], Exposure);
 	        this.schemaBudgetTokens = source["schemaBudgetTokens"];
 	        this.activationTtlTurns = source["activationTtlTurns"];
+	        this.effectiveSchemaBudgetTokens = source["effectiveSchemaBudgetTokens"];
+	        this.effectiveActivationTtlTurns = source["effectiveActivationTtlTurns"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
