@@ -124,6 +124,10 @@ type Adapter struct {
 	refreshInFlight  bool          // true while a background refresh is running
 	refreshFailedAt  time.Time     // when the last refresh failed (for backoff)
 	refreshBackoff   time.Duration // how long to wait after a failure
+
+	// cacheGuard is the cache_control degrade state shared by every
+	// profile of this adapter.
+	cacheGuard llm.PromptCacheGuard
 }
 
 // New constructs an Adapter with the OpenRouter defaults.
@@ -170,6 +174,26 @@ var (
 	_ llm.ModelLister           = (*Adapter)(nil)
 	_ llm.StructuredOutputAdapter = (*Adapter)(nil)
 )
+
+// SendsSystemSegments implements llm.SystemSegmentsAdapter: the request
+// body places SystemVolatile after the cache marker, or folds it into the
+// system message when nothing is marked.
+func (a *Adapter) SendsSystemSegments() bool { return true }
+
+var _ llm.SystemSegmentsAdapter = (*Adapter)(nil)
+
+// cacheLevel is the marking level for a request to model: none unless the
+// curated table supports the model and the model list, when loaded, has
+// not said otherwise.
+func (a *Adapter) cacheLevel(model string) llm.PromptCacheLevel {
+	if !llm.SupportsPromptCache(Kind, model) {
+		return llm.CacheMarkNone
+	}
+	if info, ok := a.LookupModelInfo(model); ok && !info.SupportsPromptCache {
+		return llm.CacheMarkNone
+	}
+	return a.cacheGuard.Level()
+}
 
 // ApplyResponseFormat implements llm.StructuredOutputAdapter. OpenRouter
 // speaks the OpenAI Chat Completions wire shape, so the same response_format
@@ -221,7 +245,12 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		return nil, &llm.ErrAuth{Message: "openrouter: empty credential"}
 	}
 
-	body, err := buildRequestBody(req, prof)
+	model := prof.Model
+	if req.Model != "" {
+		model = req.Model
+	}
+	level := a.cacheLevel(model)
+	body, err := buildRequestBodyAt(req, prof, level)
 	if err != nil {
 		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
 	}
@@ -230,6 +259,62 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	if prof.Endpoint != "" {
 		endpoint = prof.Endpoint
 	}
+
+	var (
+		resp   *http.Response
+		cancel context.CancelFunc
+	)
+	for {
+		resp, cancel, err = a.post(ctx, endpoint, prof.Model, cred, body)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode/100 == 2 {
+			break
+		}
+		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyByteLimit))
+		_ = resp.Body.Close()
+		cancel()
+		// A rejected cache marker degrades this adapter's marking one
+		// level and resends; the call itself does not fail over it.
+		if level != llm.CacheMarkNone && llm.IsCacheControlRejection(resp.StatusCode, bodySnippet) {
+			next, changed := a.cacheGuard.Degrade(llm.SentCacheLevel(req, level))
+			if changed {
+				logging.L().Warn("llm.prompt_cache.unsupported",
+					"provider", Kind, "model", model,
+					"status", resp.StatusCode, "now_marking", cacheLevelName(next),
+					"body", truncForLog(bodySnippet, 512))
+			}
+			level = next
+			if body, err = buildRequestBodyAt(req, prof, level); err != nil {
+				return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+			}
+			continue
+		}
+		// Log the non-2xx status + body snippet; classifyStatus decides
+		// retryability.
+		classified := classifyStatus(resp.StatusCode, bodySnippet)
+		logging.L().Warn("openrouter.http.error",
+			"model", prof.Model, "status", resp.StatusCode,
+			"body", string(bodySnippet),
+			"retryable", llm.IsTransient(classified))
+		return nil, classified
+	}
+
+	s := &chatStream{
+		resp:   resp,
+		cancel: cancel,
+		events: make(chan llm.StreamEvent, 16),
+		done:   make(chan struct{}),
+	}
+	go s.pump()
+	return s, nil
+}
+
+// post sends one chat-completions request. The returned cancel severs the
+// stream: it fires on ctx.Done or when the caller calls it, so Cancel()
+// works after ctx's scope ends.
+func (a *Adapter) post(ctx context.Context, endpoint, model string, cred, body []byte) (*http.Response, context.CancelFunc, error) {
 
 	// Per-call cancellation handle: ctx threads into the transport, but
 	// Cancel() must work even after ctx scope ends. We derive a per-call
@@ -247,7 +332,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		return nil, nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -268,35 +353,23 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		// (e.g. frontend disconnect on desktop focus loss) from a real
 		// network fault.
 		logging.L().Warn("openrouter.http.error",
-			"model", prof.Model, "endpoint", endpoint,
+			"model", model, "endpoint", endpoint,
 			"err", err.Error(), "ctx_err", ctx.Err())
-		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+		return nil, nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
 	}
+	return resp, cancel, nil
+}
 
-	if resp.StatusCode/100 != 2 {
-		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyByteLimit))
-		_ = resp.Body.Close()
-		cancel()
-		// Log the non-2xx status + body snippet. Without this the actual
-		// provider rejection (429 rate limit, 5xx, 400 invalid request)
-		// was invisible — only the post-retry generic error reached the
-		// log. classifyStatus decides retryability; we log it either way.
-		classified := classifyStatus(resp.StatusCode, bodySnippet)
-		logging.L().Warn("openrouter.http.error",
-			"model", prof.Model, "status", resp.StatusCode,
-			"body", string(bodySnippet),
-			"retryable", llm.IsTransient(classified))
-		return nil, classified
+// cacheLevelName is the log value for a marking level.
+func cacheLevelName(l llm.PromptCacheLevel) string {
+	switch l {
+	case llm.CacheMarkAll:
+		return "system+tools"
+	case llm.CacheMarkSystemOnly:
+		return "system"
+	default:
+		return "none"
 	}
-
-	s := &chatStream{
-		resp:   resp,
-		cancel: cancel,
-		events: make(chan llm.StreamEvent, 16),
-		done:   make(chan struct{}),
-	}
-	go s.pump()
-	return s, nil
 }
 
 // ListModels implements llm.ModelLister. It calls OpenRouter's /models
@@ -348,10 +421,11 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 			display = m.ID
 		}
 		info := llm.ModelInfo{
-			ID:            m.ID,
-			DisplayName:   display,
-			Description:   m.Description,
-			ContextWindow: m.ContextLength,
+			ID:                  m.ID,
+			DisplayName:         display,
+			Description:         m.Description,
+			ContextWindow:       m.ContextLength,
+			SupportsPromptCache: promptCacheListed(m.ID, m.Pricing),
 		}
 		out = append(out, info)
 		// Populate the per-adapter cache so LookupModelInfo can serve
@@ -479,11 +553,32 @@ func (a *Adapter) RefreshModelsAsync() {
 // modelsResponse mirrors the JSON shape returned by /api/v1/models.
 type modelsResponse struct {
 	Data []struct {
-		ID            string `json:"id"`
-		Name          string `json:"name"`
-		Description   string `json:"description"`
-		ContextLength int    `json:"context_length"`
+		ID            string        `json:"id"`
+		Name          string        `json:"name"`
+		Description   string        `json:"description"`
+		ContextLength int           `json:"context_length"`
+		Pricing       *modelPricing `json:"pricing,omitempty"`
 	} `json:"data"`
+}
+
+// modelPricing is the subset of a /models entry's pricing object that
+// reports prompt-cache support. Prices are decimal strings.
+type modelPricing struct {
+	InputCacheRead string `json:"input_cache_read"`
+}
+
+// promptCacheListed is ModelInfo.SupportsPromptCache for one /models
+// entry: the curated table, vetoed when the entry reports pricing with no
+// non-zero cache-read price.
+func promptCacheListed(id string, p *modelPricing) bool {
+	if !llm.SupportsPromptCache(Kind, id) {
+		return false
+	}
+	if p == nil {
+		return true
+	}
+	v := strings.TrimSpace(p.InputCacheRead)
+	return v != "" && strings.Trim(v, "0.") != ""
 }
 
 // modelsURL derives the /models URL from the configured chat URL. The
@@ -528,22 +623,81 @@ func useOpenAIWire() bool {
 // then applies OpenRouter-specific overrides (model ID, ranking headers,
 // OpenRouter usage field). Falls back to the pre-WP04 legacy builder when
 // the kill-switch is off.
+//
+// buildRequestBody sends no cache marker; Stream uses buildRequestBodyAt
+// with the adapter's current marking level.
 func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
-	if useOpenAIWire() {
-		model := prof.Model
-		if req.Model != "" {
-			model = req.Model
-		}
-		body, err := openaiwire.BuildRequestBody(req, model, prof.Defaults)
-		if err != nil {
-			return nil, err
-		}
-		// OpenRouter uses "usage" instead of "stream_options.include_usage".
-		delete(body, "stream_options")
-		body["usage"] = map[string]any{"include": true}
-		return json.Marshal(body)
+	return buildRequestBodyAt(req, prof, llm.CacheMarkNone)
+}
+
+// buildRequestBodyAt builds the body with cache markers at level: the
+// stable system text becomes a content part carrying cache_control at
+// CacheMarkAll and CacheMarkSystemOnly, followed by a part holding
+// req.SystemVolatile; the last stable tool carries cache_control at
+// CacheMarkAll. Unmarked, SystemVolatile is folded into the system
+// message. The legacy builder never marks.
+func buildRequestBodyAt(req llm.GenerationRequest, prof llm.ProviderProfile, level llm.PromptCacheLevel) ([]byte, error) {
+	if !useOpenAIWire() {
+		return buildRequestBodyLegacy(llm.FoldSystemSegments(req), prof)
 	}
-	return buildRequestBodyLegacy(req, prof)
+	model := prof.Model
+	if req.Model != "" {
+		model = req.Model
+	}
+	wire := llm.FoldSystemSegments(req)
+	if level != llm.CacheMarkNone {
+		wire = req
+		wire.SystemVolatile = ""
+	}
+	body, err := openaiwire.BuildRequestBody(wire, model, prof.Defaults)
+	if err != nil {
+		return nil, err
+	}
+	// OpenRouter uses "usage" instead of "stream_options.include_usage".
+	delete(body, "stream_options")
+	body["usage"] = map[string]any{"include": true}
+	if level != llm.CacheMarkNone {
+		applyPromptCache(body, req, level)
+	}
+	return json.Marshal(body)
+}
+
+// applyPromptCache rewrites the leading system message into content parts
+// around the cache marker and marks the last stable tool. body is
+// openaiwire's output for req with SystemVolatile removed.
+func applyPromptCache(body map[string]any, req llm.GenerationRequest, level llm.PromptCacheLevel) {
+	volatile := strings.TrimSpace(req.SystemVolatile)
+	msgs, _ := body["messages"].([]map[string]any)
+	var parts []map[string]any
+	hasSystem := len(msgs) > 0 && msgs[0]["role"] == "system"
+	if hasSystem {
+		if text, ok := msgs[0]["content"].(string); ok && text != "" {
+			parts = append(parts, map[string]any{
+				"type":          "text",
+				"text":          text,
+				"cache_control": llm.EphemeralCacheControl(),
+			})
+		}
+	}
+	if volatile != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": volatile})
+	}
+	switch {
+	case len(parts) == 0:
+	case hasSystem:
+		msgs[0]["content"] = parts
+	default:
+		msgs = append([]map[string]any{{"role": "system", "content": parts}}, msgs...)
+		body["messages"] = msgs
+	}
+
+	if level != llm.CacheMarkAll {
+		return
+	}
+	idx := llm.CacheMarkerToolIndex(req)
+	if tools, ok := body["tools"].([]map[string]any); ok && idx >= 0 && idx < len(tools) {
+		tools[idx]["cache_control"] = llm.EphemeralCacheControl()
+	}
 }
 
 // buildRequestBodyLegacy is the pre-WP04 local builder kept for kill-switch

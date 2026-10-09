@@ -530,6 +530,12 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		return nil, err
 	}
 
+	// Only an adapter that places SystemVolatile after its cache marker
+	// sees the two system segments; every other adapter reads one System.
+	if seg, ok := adapter.(llm.SystemSegmentsAdapter); !ok || !seg.SendsSystemSegments() {
+		req = llm.FoldSystemSegments(req)
+	}
+
 	// Per-call model override: when the chat surface (or a bundled/
 	// user agent profile forwarding its declared model as an override
 	// — core/agents.Profile.Model) picks a model other than the

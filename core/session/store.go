@@ -1683,7 +1683,8 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
                compacted_into_id, compacted_at, archived_at,
                streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of,
                prompt_tokens, completion_tokens, cost_usd, cost_source,
-               kind, move_index, turn_span_id, model_tool_args
+               kind, move_index, turn_span_id, model_tool_args,
+               cached_tokens
         FROM session_messages
         WHERE session_id = ?
     `
@@ -1719,13 +1720,15 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 			moveIndexCol         sql.NullInt64
 			turnSpanCol          sql.NullString
 			modelToolArgsCol     sql.NullString
+			cachedTokens         sql.NullInt64
 		)
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
 			&m.Content, &toolCalls, &createdAt, &contentJSON,
 			&compactedIntoID, &compactedAt, &archivedAt,
 			&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf,
 			&promptTokens, &completionTokens, &costUSD, &costSource,
-			&moveKindCol, &moveIndexCol, &turnSpanCol, &modelToolArgsCol); err != nil {
+			&moveKindCol, &moveIndexCol, &turnSpanCol, &modelToolArgsCol,
+			&cachedTokens); err != nil {
 			return nil, err
 		}
 		// model-moves-transcript-01PMCH01 WP01 + WP03: rehydrate the move
@@ -1788,6 +1791,10 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 		}
 		if costSource.Valid {
 			m.MessageCostSource = costSource.String
+		}
+		if cachedTokens.Valid {
+			v := int(cachedTokens.Int64)
+			m.CachedTokens = &v
 		}
 		out = append(out, m)
 	}

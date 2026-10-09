@@ -7850,6 +7850,45 @@ func usageCost(resp corellm.Response) (*float64, string) {
 	return nil, "unknown"
 }
 
+// usageTurnRecord is the usage row for a turn's billed calls. Prompt
+// counts are the whole prompt under either provider convention
+// (llm.PromptTokensTotal): Anthropic's input_tokens leaves out cache reads
+// and writes, so once caching is on the raw value under-reports.
+func usageTurnRecord(sessionID, messageID, providerKind, modelID string, billed corellm.Response) usage.UsageTurn {
+	cost, source := usageCost(billed)
+	return usage.UsageTurn{
+		SessionID:        sessionID,
+		MessageID:        messageID,
+		ProviderKind:     providerKind,
+		ModelID:          modelID,
+		PromptTokens:     corellm.PromptTokensTotal(billed.Usage, providerKind),
+		CompletionTokens: billed.Usage.OutputTokens,
+		CachedTokens:     billed.Usage.CachedInputRead,
+		CacheWriteTokens: billed.Usage.CachedInputWrite,
+		CostUSD:          cost,
+		CostSource:       source,
+	}
+}
+
+// lastUsageSnapshot is the context-bar snapshot for a row's own call, its
+// prompt count normalised the same way as usageTurnRecord's.
+func lastUsageSnapshot(resp corellm.Response, providerKind string) session.LastUsage {
+	cost, source := usageCost(resp)
+	costVal := 0.0
+	if cost != nil {
+		costVal = *cost
+	}
+	prompt := corellm.PromptTokensTotal(resp.Usage, providerKind)
+	return session.LastUsage{
+		PromptTokens:     prompt,
+		CompletionTokens: resp.Usage.OutputTokens,
+		TotalTokens:      prompt + resp.Usage.OutputTokens,
+		CostUSD:          costVal,
+		CostSource:       source,
+		Composition:      usageComposition(resp.Composition),
+	}
+}
+
 // usageComposition maps a measured request composition onto the
 // persisted last-usage snapshot; nil stays nil (the call was not
 // measured).
@@ -8196,31 +8235,15 @@ func buildChatRunner(
 			// resp = this row's own (latest) call: drives the context bar.
 			// billed = resp + any earlier tool-only calls of the turn that
 			// had no row of their own: what the cumulative footer counts.
-			costUSD, source := usageCost(resp)
-			billedCost, billedSource := usageCost(billed)
+			billedCost, _ := usageCost(billed)
 			if capturedUsageMgr != nil {
-				turn := usage.UsageTurn{
-					SessionID:        sessionID,
-					MessageID:        messageID,
-					ProviderKind:     providerKind,
-					ModelID:          modelID,
-					PromptTokens:     billed.Usage.InputTokens,
-					CompletionTokens: billed.Usage.OutputTokens,
-					CachedTokens:     billed.Usage.CachedInputRead,
-					CacheWriteTokens: billed.Usage.CachedInputWrite,
-					CostUSD:          billedCost,
-					CostSource:       billedSource,
-				}
+				turn := usageTurnRecord(sessionID, messageID, providerKind, modelID, billed)
 				if err := capturedUsageMgr.Add(ctx, turn); err != nil {
 					logging.L().Warn("usage.add.failed",
 						"session_id", sessionID,
 						"message_id", messageID,
 						"err", err.Error())
 				}
-			}
-			costVal := 0.0
-			if costUSD != nil {
-				costVal = *costUSD
 			}
 			// Fleet usage lifecycle: token + cost totals for the session's
 			// open conversation segment — a running total, so it takes the
@@ -8232,14 +8255,7 @@ func buildChatRunner(
 				billedVal = *billedCost
 			}
 			fleetUsage.LLMResponse(ctx, sessionID, billed.Usage.InputTokens, billed.Usage.OutputTokens, billedVal)
-			snap := session.LastUsage{
-				PromptTokens:     resp.Usage.InputTokens,
-				CompletionTokens: resp.Usage.OutputTokens,
-				TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
-				CostUSD:          costVal,
-				CostSource:       source,
-				Composition:      usageComposition(resp.Composition),
-			}
+			snap := lastUsageSnapshot(resp, providerKind)
 			// Persist the per-session last_usage_json snapshot so the frontend
 			// context-window indicator refreshes without a full GetUsage RPC.
 			if capturedSessionMgr != nil {

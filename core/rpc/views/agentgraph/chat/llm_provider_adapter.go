@@ -415,12 +415,13 @@ func (a *LLMProviderAdapter) envClockNow() time.Time {
 	return time.Now()
 }
 
-// buildEnvBlock gathers the live environment facts and renders the
-// compact environment-context Markdown block. Called once per Generate.
-// The workspace entry count is a cheap top-level os.ReadDir; a failure
+// buildEnvBlock gathers the live environment facts and renders them as
+// the session-stable environment block (system prefix) and the per-call
+// state block (after the cache marker). Called once per Generate. The
+// workspace entry count is a cheap top-level os.ReadDir; a failure
 // (missing dir, permission) degrades gracefully to "path only" rather
 // than aborting the turn. (system-prompt-layers WP03)
-func (a *LLMProviderAdapter) buildEnvBlock() string {
+func (a *LLMProviderAdapter) buildEnvBlock() (stable, state string) {
 	in := envContextInput{
 		Now:    a.envClockNow(),
 		GOOS:   runtime.GOOS,
@@ -437,7 +438,7 @@ func (a *LLMProviderAdapter) buildEnvBlock() string {
 			in.WorkspaceCounted = true
 		}
 	}
-	return buildEnvContext(in)
+	return buildEnvContext(in), buildEnvState(in)
 }
 
 // WithRecapStyle pins the autonomy recapStyle resolver onto the adapter
@@ -755,6 +756,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		sel = a.exposure.selectTools(ctx, a.windowFor(model))
 		sendTools = sel.tools
 	}
+	envStable, envState := a.buildEnvBlock()
 	gen := corellm.GenerationRequest{
 		ProfileID: a.profileID,
 		Model:     model,
@@ -766,16 +768,21 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		// plain join byte-for-byte, so this is a deliberate, documented
 		// gap rather than a half-wire.
 		// Recap sits before the user's custom instructions so a user
-		// instruction about verbosity still wins the last word.
-		// The hook-context layer is the second-to-last layer (review
-		// follow-up L4): it appears and disappears turn to turn, so it
-		// sits as late as possible to keep the stable prefix (node prompt,
-		// attachments, env, recap, ask bar) byte-identical for prompt
-		// caching — and directly BEFORE the user's custom instructions,
-		// which keep the last word.
-		System:   composeSystemPrompt(nil, req.SystemPrompt, attachmentsBlock, a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), renderPendingContext(pending), a.buildUserInstructionsBlock()),
-		Messages: llmMsgs,
-		Tools:    sendTools,
+		// instruction about verbosity still wins the last word among the
+		// standing layers.
+		//
+		// System is the cacheable prefix and must be byte-identical
+		// across calls with unchanged settings (tool-context-budget-
+		// 01TCBUD01 FR-C1): every layer in it is session-stable.
+		// SystemVolatile carries what changes call to call — the
+		// environment's date / workspace count / tool inventory and the
+		// hook-context layer, which appears and disappears turn to turn —
+		// and adapters place it after the cache marker (or append it to
+		// System where nothing is marked).
+		System:         composeSystemPrompt(nil, req.SystemPrompt, attachmentsBlock, envStable, a.buildRecapBlock(), a.buildAskBarBlock(), a.buildUserInstructionsBlock()),
+		SystemVolatile: composeSystemPrompt(nil, envState, renderPendingContext(pending)),
+		Messages:       llmMsgs,
+		Tools:          sendTools,
 	}
 	// The digest of tools not loaded is per-call material: it goes after
 	// every other system layer, past the cacheable prefix.
@@ -837,7 +844,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		compErr   error
 	)
 	defer func() {
-		logComposition(a.sessionID, a.ProviderKind(), comp, len(gen.System), sel.stable, sel.autoActivated, compUsage, compErr)
+		logComposition(a.sessionID, a.ProviderKind(), comp, len(gen.FullSystem()), sel.stable, sel.autoActivated, compUsage, compErr)
 	}()
 
 	// Carry the per-node sampling knobs already threaded through the
@@ -1167,7 +1174,7 @@ func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
 // fills it.
 func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) corellm.PromptComposition {
 	attachments := corellm.EstimateTokens(attachmentsBlock)
-	system := corellm.SystemTokens(gen.System) - attachments
+	system := corellm.SystemTokens(gen.FullSystem()) - attachments
 	if system < 0 {
 		system = 0
 	}

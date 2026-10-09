@@ -310,7 +310,10 @@ type Message struct {
 	// NULL on rows that pre-date the migration or had no usage captured.
 	PromptTokens     *int
 	CompletionTokens *int
-	CostUSD          *float64
+	// CachedTokens is the part of PromptTokens the provider served from
+	// its prompt cache (session_messages.cached_tokens, migration 0346).
+	CachedTokens *int
+	CostUSD      *float64
 	// CostSource mirrors the token-cost-telemetry taxonomy:
 	// "provider" | "derived" | "mixed" | "unknown". Empty on rows
 	// with no usage data.

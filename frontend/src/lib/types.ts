@@ -1709,6 +1709,12 @@ export interface Message {
   promptTokens?: number;
   completionTokens?: number;
   costUsd?: number;
+  /**
+   * Part of promptTokens the provider served from its prompt cache
+   * (session_messages.cached_tokens). promptTokens is the whole prompt for
+   * every provider, so this is a share of it. Absent on rows without usage.
+   */
+  cachedTokens?: number;
   /** "provider" | "derived" | "mixed" | "unknown". Empty when absent. */
   messageCostSource?: string;
 

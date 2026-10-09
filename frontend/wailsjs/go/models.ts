@@ -7296,11 +7296,12 @@ export namespace sessions {
 	    promptTokens?: number;
 	    completionTokens?: number;
 	    costUsd?: number;
+	    cachedTokens?: number;
 	    messageCostSource?: string;
 	    kind?: string;
 	    moveIndex?: number;
 	    turnSpanId?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Message(source);
 	    }
@@ -7324,6 +7325,7 @@ export namespace sessions {
 	        this.promptTokens = source["promptTokens"];
 	        this.completionTokens = source["completionTokens"];
 	        this.costUsd = source["costUsd"];
+	        this.cachedTokens = source["cachedTokens"];
 	        this.messageCostSource = source["messageCostSource"];
 	        this.kind = source["kind"];
 	        this.moveIndex = source["moveIndex"];

@@ -6378,22 +6378,24 @@ follow-up that routes each through `tokenizer.CountText` /
 `CountRequestTokens` (and a small TS port for the two views) deletes this
 entry.
 
-### 2026-10-09 (tool-context-budget-01TCBUD01 WP01) — derived cost double-charges cached prompt tokens on inclusive providers
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP05) — prompt-cache surfaces with a partial consumer
 
-`core/llm/cost/reducer.go:150-155` (`Reducer.Derive`) and `:233-237`
-(`DeriveWithSource`, pricing-table branch) charge `Usage.InputTokens` at
-the full input rate **plus** `Usage.CachedInputRead` at the cached rate.
-That is right for Anthropic, whose `input_tokens` excludes cache reads,
-and wrong for providers whose `InputTokens` already includes them
-(OpenRouter's `prompt_tokens`, Gemini's `promptTokenCount`,
-`llm.InputExcludesCache`): the cached tokens are charged twice. Latent
-until WP01, because only Gemini reported cache reads and OpenRouter
-returns a provider cost (branch 1) on every call; WP01 makes OpenRouter
-report them, so a derived fallback on OpenRouter now over-charges.
-**Blocker:** WP05 settles one cost convention (charge
-`InputTokens - CachedInputRead` at the input rate on inclusive
-providers). **Owner:** WP05 of tool-context-budget-01TCBUD01 — deletes
-this entry.
+- `llm.ModelInfo.SupportsPromptCache` is read on the request path only by
+  the OpenRouter adapter (`cacheLevel`, which lets a loaded model list veto
+  the curated table). The Anthropic adapter's `ListModels` populates it from
+  the same curated table its request path consults directly, and nothing in
+  `core/rpc/views/llm` carries it to the UI. Not a lie (the value is what
+  the request does), but a written field with no reader on that path.
+  **Blocker:** WP06's Capabilities UI decides whether the model picker
+  shows a cache badge. **Owner:** WP06 of tool-context-budget-01TCBUD01 —
+  wires it into the picker or deletes the Anthropic write.
+- `newFleetUsageObserver.LLMResponse` (`core/rpc/api.go` usage hook) still
+  receives raw `Usage.InputTokens`, so on Anthropic it excludes cache reads
+  while the usage row and the context bar now carry `llm.PromptTokensTotal`.
+  The fleet usage lifecycle is a cross-repo contract; changing its token
+  meaning needs the fleet side's agreement. **Owner:** alec — the fleet
+  usage-contract follow-up either adopts the normalised total or documents
+  the raw count; deletes this bullet.
 
 ### 2026-10-09 (tool-context-budget-01TCBUD01 WP07) — org tool-exposure entries have no `.vue` reader yet
 
@@ -6441,6 +6443,25 @@ does not fix the cross-org id. Pre-existing, not introduced by WP07.
 this entry.
 
 ## Drained
+
+### 2026-10-09 · CLOSED — derived cost double-charged cached prompt tokens on inclusive providers (`tool-context-budget-01TCBUD01` WP01 → WP05)
+
+Class: **two token conventions read as one.** `core/llm/cost/reducer.go`
+(`Reducer.Derive` and `DeriveWithSource`'s pricing-table branch) charged
+`Usage.InputTokens` at the input rate **plus** the cache counts at their
+cache rates. Right for Anthropic, whose `input_tokens` excludes the cache;
+wrong for OpenRouter (`prompt_tokens`) and Gemini (`promptTokenCount`),
+whose input count already includes it (`llm.InputExcludesCache`).
+**Closed by WP05:** both branches go through `cost.splitPrompt`, which on
+inclusive providers moves each cache count with a known rate out of the
+input bucket (`InputTokens − CachedInputRead − CachedInputWrite` at the
+input rate, clamped at 0) and leaves a count whose rate is unknown in the
+input bucket, billed once. Anthropic is unchanged. `pricing.yaml` gained
+OpenRouter `anthropic/claude-{opus,sonnet}-4*` rows carrying Anthropic's
+cache rates, so the fallback now prices cached OpenRouter-Anthropic calls
+instead of billing them at the wildcard input rate. Proof:
+`core/llm/cost/reducer_cache_test.go` (same prompt, same cost on every
+provider kind; clamp; `DeriveWithSource` per convention).
 
 ### 2026-10-07 · CLOSED — project sync advertised an agent-memory class that shipped nothing (`memory-sync-01MEMSY01` WP01)
 

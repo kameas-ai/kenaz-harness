@@ -660,6 +660,7 @@ func messageToView(m session.Message) Message {
 	out.PromptTokens = m.PromptTokens
 	out.CompletionTokens = m.CompletionTokens
 	out.CostUSD = m.CostUSD
+	out.CachedTokens = m.CachedTokens
 	out.MessageCostSource = m.MessageCostSource
 	// Move metadata (model-moves-transcript-01PMCH01 WP01). Read through
 	// the accessors — the durable fields are unexported precisely so no

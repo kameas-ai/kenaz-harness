@@ -501,6 +501,7 @@ defineExpose({ scrollToBottom });
             :completion-tokens="item.message.completionTokens"
             :cost-usd="item.message.costUsd"
             :message-cost-source="item.message.messageCostSource"
+            :cached-tokens="item.message.cachedTokens"
             :streaming-failed-at="item.message.streamingFailedAt"
             :streaming-recoverable="item.message.streamingRecoverable"
             :streaming-failure-kind="item.message.streamingFailureKind"

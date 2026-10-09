@@ -8,7 +8,7 @@
  *                 (or just the token count when cost is unknown)
  *
  * Click opens an inline popover with the full breakdown:
- *   - Prompt tokens
+ *   - Prompt tokens (and the cached share of them, when reported)
  *   - Completion tokens
  *   - Total tokens
  *   - Cost in USD (with source annotation: exact / estimated / unknown)
@@ -30,6 +30,12 @@ const props = defineProps<{
    * Drives the cost prefix (~) and the popover source label.
    */
   costSource?: string;
+  /**
+   * Part of promptTokens the provider served from its prompt cache.
+   * promptTokens is the whole prompt for every provider, so this is a
+   * share of it, not an addition. Absent or 0 hides the row.
+   */
+  cachedTokens?: number;
 }>();
 
 const open = ref(false);
@@ -126,6 +132,15 @@ function closePopover() {
           <dt class="text-ink-muted">Prompt tokens</dt>
           <dd class="tabular-nums text-ink" data-testid="token-meter-prompt">
             {{ promptTokens?.toLocaleString() ?? '—' }}
+          </dd>
+        </div>
+        <div
+          v-if="cachedTokens && cachedTokens > 0"
+          class="flex justify-between gap-4 pl-3"
+        >
+          <dt class="text-ink-muted">of which cached</dt>
+          <dd class="tabular-nums text-ink" data-testid="token-meter-cached">
+            {{ cachedTokens.toLocaleString() }}
           </dd>
         </div>
         <div class="flex justify-between gap-4">

@@ -16,6 +16,7 @@ import (
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/llm/httpx"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // Kind is the canonical provider kind for the Anthropic adapter. It
@@ -84,6 +85,9 @@ type Adapter struct {
 	endpoint   string
 	apiVersion string
 	cat        *capabilities.Catalog
+	// cacheGuard is the cache_control degrade state shared by every
+	// profile of this adapter.
+	cacheGuard llm.PromptCacheGuard
 }
 
 // New constructs an Adapter. Failures are limited to the embedded
@@ -154,9 +158,10 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 			cw = a.cat.ContextWindow(Kind, m.ID)
 		}
 		out = append(out, llm.ModelInfo{
-			ID:            m.ID,
-			DisplayName:   display,
-			ContextWindow: cw,
+			ID:                  m.ID,
+			DisplayName:         display,
+			ContextWindow:       cw,
+			SupportsPromptCache: llm.SupportsPromptCache(Kind, m.ID),
 		})
 	}
 	return out, nil
@@ -226,6 +231,20 @@ func (a *Adapter) Capabilities(model string) llm.CapabilityDescriptor {
 
 // Compile-time assertion: *Adapter satisfies llm.ProviderAdapter.
 var _ llm.ProviderAdapter = (*Adapter)(nil)
+
+// SendsSystemSegments implements llm.SystemSegmentsAdapter: the request
+// body places SystemVolatile in a system block after the cache marker.
+func (a *Adapter) SendsSystemSegments() bool { return true }
+
+var _ llm.SystemSegmentsAdapter = (*Adapter)(nil)
+
+// cacheLevel is the marking level for a request to model.
+func (a *Adapter) cacheLevel(model string) llm.PromptCacheLevel {
+	if !llm.SupportsPromptCache(Kind, model) {
+		return llm.CacheMarkNone
+	}
+	return a.cacheGuard.Level()
+}
 
 // Compile-time assertion: *Adapter satisfies llm.StructuredOutputAdapter.
 var _ llm.StructuredOutputAdapter = (*Adapter)(nil)
@@ -310,7 +329,8 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		return nil, &llm.ErrAuth{Status: 0, Message: "anthropic: empty credential bytes"}
 	}
 
-	body, err := buildRequestBody(req, prof)
+	level := a.cacheLevel(prof.Model)
+	body, err := buildRequestBodyAt(req, prof, level)
 	if err != nil {
 		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
 	}
@@ -324,51 +344,38 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		apiVersion = v
 	}
 
-	// Per-call cancellation handle: req.WithContext threads ctx into the
-	// transport, but Cancel() must work even after ctx scope ends. We
-	// derive a per-call ctx from a context.Background() and cancel it on
-	// either ctx.Done or explicit Cancel.
-	streamCtx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-ctx.Done():
-			cancel()
-		case <-streamCtx.Done():
+	var (
+		resp   *http.Response
+		cancel context.CancelFunc
+	)
+	for {
+		resp, cancel, err = a.post(ctx, endpoint, apiVersion, cred, body)
+		if err != nil {
+			return nil, err
 		}
-	}()
-
-	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		cancel()
-		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("anthropic-version", apiVersion)
-	// x-api-key uses the resolved credential bytes. We copy into a
-	// header value via string conversion; net/http retains a string
-	// reference, so this is the unavoidable boundary where bytes
-	// become a string. The registry's auditedStream zeroizes its copy
-	// on Final/Cancel; the wider zeroization story for header strings
-	// is tracked under WP14 hardening and is deliberately out of scope
-	// for the v1 adapter (R2: no plaintext in payloads).
-	httpReq.Header.Set("x-api-key", string(cred))
-
-	resp, err := a.httpc.Do(httpReq)
-	if err != nil {
-		cancel()
-		// Network failures are transient by default — connection reset,
-		// DNS hiccup, dialer timeout. The retry middleware decides
-		// whether to retry given the configured budget.
-		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
-	}
-
-	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
 		// Drain a small body so we have a redaction-safe error message.
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		// A rejected cache marker degrades this adapter's marking one
+		// level and resends; the call itself does not fail over it.
+		if level == llm.CacheMarkNone || !llm.IsCacheControlRejection(resp.StatusCode, bodySnippet) {
+			return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		}
+		next, changed := a.cacheGuard.Degrade(llm.SentCacheLevel(req, level))
+		if changed {
+			logging.L().Warn("llm.prompt_cache.unsupported",
+				"provider", Kind, "model", prof.Model,
+				"status", resp.StatusCode, "now_marking", cacheLevelName(next),
+				"body", truncateSnippet(bodySnippet, 512))
+		}
+		level = next
+		if body, err = buildRequestBodyAt(req, prof, level); err != nil {
+			return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		}
 	}
 
 	// Determine the synthetic tool name for response normalization (WP04).
@@ -396,6 +403,61 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	return s, nil
 }
 
+// post sends one Messages API request. The returned cancel severs the
+// stream: it fires on ctx.Done or when the caller calls it, so Cancel()
+// works after ctx's scope ends.
+func (a *Adapter) post(ctx context.Context, endpoint, apiVersion string, cred, body []byte) (*http.Response, context.CancelFunc, error) {
+	streamCtx, cancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel()
+		case <-streamCtx.Done():
+		}
+	}()
+
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return nil, nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("anthropic-version", apiVersion)
+	// net/http keeps the header value as a string; this is the boundary
+	// where the credential bytes become one. The registry's auditedStream
+	// zeroizes its own copy on Final/Cancel.
+	httpReq.Header.Set("x-api-key", string(cred))
+
+	resp, err := a.httpc.Do(httpReq)
+	if err != nil {
+		cancel()
+		// Network failures are transient; the retry middleware decides
+		// whether to retry within its budget.
+		return nil, nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+	}
+	return resp, cancel, nil
+}
+
+// cacheLevelName is the log value for a marking level.
+func cacheLevelName(l llm.PromptCacheLevel) string {
+	switch l {
+	case llm.CacheMarkAll:
+		return "system+tools"
+	case llm.CacheMarkSystemOnly:
+		return "system"
+	default:
+		return "none"
+	}
+}
+
+func truncateSnippet(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[:n])
+}
+
 // classifyStatus delegates to the canonical top-level
 // llm.ClassifyStatus (WP01 of provider-implementation-uniformity-01KQ8V4F).
 // Kept as a thin package-local alias so call sites don't need updating;
@@ -421,7 +483,19 @@ func classifyStatus(status int, body []byte) error {
 //	  "temperature": 0.7,
 //	  ...
 //	}
+//
+// buildRequestBody sends no cache marker; Stream uses buildRequestBodyAt
+// with the adapter's current marking level.
 func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
+	return buildRequestBodyAt(req, prof, llm.CacheMarkNone)
+}
+
+// buildRequestBodyAt builds the Messages API body with cache markers at
+// level: the stable system block gets cache_control at CacheMarkAll and
+// CacheMarkSystemOnly, the last stable tool at CacheMarkAll only.
+// req.SystemVolatile follows the marked system block as its own block,
+// or is appended to the system string when nothing is marked.
+func buildRequestBodyAt(req llm.GenerationRequest, prof llm.ProviderProfile, level llm.PromptCacheLevel) ([]byte, error) {
 	out := map[string]any{
 		"model":  prof.Model,
 		"stream": true,
@@ -572,7 +646,62 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		}
 	}
 
+	applyPromptCache(out, req, level)
+
 	return json.Marshal(out)
+}
+
+// applyPromptCache shapes the system field around the cache marker and
+// marks the last stable tool. It runs after every other writer of
+// "system" and "tools", which all treat "system" as a string.
+func applyPromptCache(out map[string]any, req llm.GenerationRequest, level llm.PromptCacheLevel) {
+	stable, _ := out["system"].(string)
+	volatile := strings.TrimSpace(req.SystemVolatile)
+	if level == llm.CacheMarkNone {
+		if volatile != "" {
+			if stable == "" {
+				out["system"] = volatile
+			} else {
+				out["system"] = stable + "\n\n" + volatile
+			}
+		}
+		return
+	}
+
+	var blocks []map[string]any
+	if stable != "" {
+		blocks = append(blocks, map[string]any{
+			"type":          "text",
+			"text":          stable,
+			"cache_control": llm.EphemeralCacheControl(),
+		})
+	}
+	if volatile != "" {
+		blocks = append(blocks, map[string]any{"type": "text", "text": volatile})
+	}
+	if len(blocks) > 0 {
+		out["system"] = blocks
+	}
+
+	if level != llm.CacheMarkAll {
+		return
+	}
+	idx := llm.CacheMarkerToolIndex(req)
+	if idx < 0 {
+		return
+	}
+	switch tools := out["tools"].(type) {
+	case []map[string]any:
+		if idx < len(tools) {
+			tools[idx]["cache_control"] = llm.EphemeralCacheControl()
+		}
+	case []any:
+		if idx < len(tools) {
+			if t, ok := tools[idx].(map[string]any); ok {
+				t["cache_control"] = llm.EphemeralCacheControl()
+			}
+		}
+	}
 }
 
 // applyJSONModeAnthropic translates a JSONModeSpec into the Anthropic wire

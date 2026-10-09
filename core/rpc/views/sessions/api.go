@@ -196,6 +196,10 @@ type Message struct {
 	PromptTokens     *int     `json:"promptTokens,omitempty"`
 	CompletionTokens *int     `json:"completionTokens,omitempty"`
 	CostUSD          *float64 `json:"costUsd,omitempty"`
+	// CachedTokens is the part of PromptTokens the provider served from
+	// its prompt cache. PromptTokens is the whole prompt under either
+	// provider convention, so CachedTokens never adds to it.
+	CachedTokens *int `json:"cachedTokens,omitempty"`
 	// MessageCostSource mirrors the token-cost-telemetry taxonomy:
 	// "provider" | "derived" | "mixed" | "unknown". Empty on rows
 	// with no usage data.

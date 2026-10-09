@@ -432,6 +432,62 @@ entries:
     adapter: custom-openai
     unsupported: "Per-adapter wire-shape test pending. Serialized by the same shared encoder already covered for openai's StopSequences entry above; no custom-openai-specific test yet."
 
+  # SystemVolatile (tool-context-budget-01TCBUD01 WP05): per-call system
+  # material placed after the cache marker. Only adapters implementing
+  # llm.SystemSegmentsAdapter see it; the registry folds it into System for
+  # every other adapter before dispatch (TestRegistry_Stream_FoldsSystemSegmentsPerAdapter).
+  - struct: GenerationRequest
+    field: SystemVolatile
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_SystemVolatile_SystemVolatileSerialized, TestAnthropicAdapter_PromptCache_MarkerSerialized]
+  - struct: GenerationRequest
+    field: SystemVolatile
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_SystemVolatile_SystemVolatileSerialized, TestOpenRouterAdapter_PromptCache_MarkerSerialized]
+  - struct: GenerationRequest
+    field: SystemVolatile
+    adapter: openai
+    unsupported: "folded into System by the registry before dispatch (llm.FoldSystemSegments); the adapter reads System only"
+  - struct: GenerationRequest
+    field: SystemVolatile
+    adapter: bedrock
+    unsupported: "folded into System by the registry before dispatch (llm.FoldSystemSegments); the adapter reads System only"
+  - struct: GenerationRequest
+    field: SystemVolatile
+    adapter: azure-openai
+    unsupported: "folded into System by the registry before dispatch (llm.FoldSystemSegments); the adapter reads System only"
+  - struct: GenerationRequest
+    field: SystemVolatile
+    adapter: custom-openai
+    unsupported: "folded into System by the registry before dispatch (llm.FoldSystemSegments); the adapter reads System only"
+
+  # CacheStableTools (tool-context-budget-01TCBUD01 WP05): where the tool
+  # cache marker goes. Only providers in llm.SupportsPromptCache mark.
+  - struct: GenerationRequest
+    field: CacheStableTools
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_CacheStableTools_CacheStableToolsSerialized]
+  - struct: GenerationRequest
+    field: CacheStableTools
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_CacheStableTools_CacheStableToolsSerialized]
+  - struct: GenerationRequest
+    field: CacheStableTools
+    adapter: openai
+    unsupported: "no cache_control marker for this provider (llm.SupportsPromptCache is false); OpenAI caches prompts automatically"
+  - struct: GenerationRequest
+    field: CacheStableTools
+    adapter: bedrock
+    unsupported: "no cache_control marker for this provider (llm.SupportsPromptCache is false); Bedrock cachePoint blocks are not emitted"
+  - struct: GenerationRequest
+    field: CacheStableTools
+    adapter: azure-openai
+    unsupported: "no cache_control marker for this provider (llm.SupportsPromptCache is false)"
+  - struct: GenerationRequest
+    field: CacheStableTools
+    adapter: custom-openai
+    unsupported: "no cache_control marker for this provider (llm.SupportsPromptCache is false)"
+
   # ============================================================
   # Response fields
   # ============================================================

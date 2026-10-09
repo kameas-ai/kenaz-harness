@@ -36,15 +36,58 @@ func TestBuildEnvContext_DeterministicSnapshot(t *testing.T) {
 
 	want := strings.Join([]string{
 		"## Environment",
-		"- Kenaz Harness on darwin/arm64. Current date: 2026-07-25.",
+		"- Kenaz Harness on darwin/arm64.",
 		"- Model in use: openai/gpt-4o.",
-		"- Workspace: /data/agent-workspace (empty) — a sandboxed agent workspace, not the user's project.",
+		"- Workspace: /data/agent-workspace — a sandboxed agent workspace, not the user's project.",
 		"- Some paths require approval via the request-filesystem-access tool.",
-		"- Tools: 3 available across filesystem, web, and connected servers.",
 	}, "\n")
 
 	if got != want {
 		t.Fatalf("env block mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestBuildEnvState_DeterministicSnapshot(t *testing.T) {
+	got := buildEnvState(envContextInput{
+		Now:              fixedClock()(),
+		WorkspaceDir:     "/data/agent-workspace",
+		WorkspaceKnown:   true,
+		WorkspaceEntries: 0,
+		WorkspaceCounted: true,
+		Tools: []corellm.ToolSpec{
+			{Name: "kenaz__read_file"},
+			{Name: "kenaz__web_fetch"},
+			{Name: "github__list_issues"},
+		},
+	})
+	want := strings.Join([]string{
+		"## Current state",
+		"- Current date: 2026-07-25.",
+		"- Workspace contents: empty.",
+		"- Tools: 3 available across filesystem, web, and connected servers.",
+	}, "\n")
+	if got != want {
+		t.Fatalf("state block mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// The stable environment block renders nothing that changes call to
+// call: a different clock, entry count or tool list leaves it
+// byte-identical.
+func TestBuildEnvContext_HasNoPerCallMaterial(t *testing.T) {
+	in := envContextInput{
+		Now: fixedClock()(), GOOS: "darwin", GOARCH: "arm64", Model: "m",
+		WorkspaceDir: "/w", WorkspaceKnown: true, WorkspaceEntries: 0, WorkspaceCounted: true,
+	}
+	later := in
+	later.Now = in.Now.Add(36 * time.Hour)
+	later.WorkspaceEntries = 7
+	later.Tools = []corellm.ToolSpec{{Name: "kenaz__bash"}}
+	if a, b := buildEnvContext(in), buildEnvContext(later); a != b {
+		t.Fatalf("stable env block changed with per-call facts:\n%s\n---\n%s", a, b)
+	}
+	if a, b := buildEnvState(in), buildEnvState(later); a == b {
+		t.Fatalf("state block should carry the per-call facts:\n%s", a)
 	}
 }
 
@@ -81,15 +124,15 @@ func TestBuildEnvContext_UnknownWorkspaceAndNoTools(t *testing.T) {
 	if !strings.Contains(got, "- Workspace: a sandboxed agent workspace, not the user's project.") {
 		t.Errorf("expected generic workspace note when workspace unknown:\n%s", got)
 	}
-	if !strings.Contains(got, "- Tools: no tools are available this turn.") {
-		t.Errorf("expected empty-tools note:\n%s", got)
+	if state := buildEnvState(envContextInput{Now: fixedClock()()}); !strings.Contains(state, "- Tools: no tools are available this turn.") {
+		t.Errorf("expected empty-tools note:\n%s", state)
 	}
 }
 
 func TestBuildEnvContext_TokenBudget(t *testing.T) {
 	// A generous fixture; the block should stay well under ~120 tokens.
 	// Rough proxy: 4 chars/token → ~480 chars.
-	got := buildEnvContext(envContextInput{
+	in := envContextInput{
 		Now:              fixedClock()(),
 		GOOS:             "darwin",
 		GOARCH:           "arm64",
@@ -103,8 +146,10 @@ func TestBuildEnvContext_TokenBudget(t *testing.T) {
 			{Name: "kenaz__web_fetch"}, {Name: "kenaz__save_artifact"},
 			{Name: "kenaz__todo_write"}, {Name: "github__list_issues"},
 		},
-	})
-	if len(got) > 520 {
+	}
+	// Both halves together: the split added one heading's worth of text.
+	got := buildEnvContext(in) + "\n\n" + buildEnvState(in)
+	if len(got) > 560 {
 		t.Errorf("env block too large (%d chars, budget ~480): %q", len(got), got)
 	}
 }

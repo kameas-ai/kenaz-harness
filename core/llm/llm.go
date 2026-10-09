@@ -472,10 +472,21 @@ type GenerationRequest struct {
 	// When set and present in profile.AvailableModels(), the registry
 	// substitutes prof.Model = req.Model before dispatching to the
 	// adapter. Empty means "use the profile default."
-	Model    string     `json:"model,omitempty"`
-	System   string     `json:"system,omitempty"`
-	Messages []Message  `json:"messages"`
-	Tools    []ToolSpec `json:"tools,omitempty"`
+	Model  string `json:"model,omitempty"`
+	System string `json:"system,omitempty"`
+	// SystemVolatile is per-call system material (date, workspace state,
+	// hook context). Adapters that mark a cacheable prefix send it after
+	// the marker; the registry folds it into System for every other
+	// adapter (FoldSystemSegments). Empty means System is the whole
+	// system prompt.
+	SystemVolatile string     `json:"system_volatile,omitempty"`
+	Messages       []Message  `json:"messages"`
+	Tools          []ToolSpec `json:"tools,omitempty"`
+	// CacheStableTools is the number of leading Tools that form the
+	// stable, cacheable segment: the cache marker goes on tool
+	// CacheStableTools-1. 0 means all of Tools; negative means none
+	// (CacheMarkerToolIndex).
+	CacheStableTools int `json:"cache_stable_tools,omitempty"`
 	// Deprecated: use Message.Content blocks (ContentBlock with Type "image"
 	// or "document") instead. The legacy Attachment slice is still honoured by
 	// RequestedCapabilities and the registry's capability gate so existing
@@ -803,6 +814,11 @@ type ModelInfo struct {
 	// cap in that case. Sourced from the capabilities catalog
 	// (backend-context-window-length-01KQ8TD3 WP01).
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"` // max completion tokens per turn; 0 = unknown
+	// SupportsPromptCache reports whether requests for this model carry
+	// explicit cache_control markers: SupportsPromptCache's curated table,
+	// narrowed by the provider's model list where it reports cache
+	// pricing.
+	SupportsPromptCache bool `json:"supports_prompt_cache,omitempty"`
 }
 
 // ModelLister is the optional capability adapters opt into when their

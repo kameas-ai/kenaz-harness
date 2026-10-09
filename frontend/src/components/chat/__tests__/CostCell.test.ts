@@ -87,9 +87,10 @@ describe('CostCell', () => {
 
   it('states cached prompt tokens in the tooltip when the provider reported any', () => {
     const cached = mount(CostCell, { props: { usage: makeUsage({ cachedTokens: 200_000 }) } });
-    expect(cached.find('[data-testid="session-cost-cell"]').attributes('title')).toContain(
-      `${(200_000).toLocaleString()} prompt tokens served from cache`,
-    );
+    const title = cached.find('[data-testid="session-cost-cell"]').attributes('title') ?? '';
+    expect(title).toContain(`of which ${(200_000).toLocaleString()} prompt tokens were served from cache`);
+    // One wording for every provider: no per-provider caveat.
+    expect(title).not.toMatch(/OpenRouter|Gemini|Anthropic/);
     const none = mount(CostCell, { props: { usage: makeUsage() } });
     expect(none.find('[data-testid="session-cost-cell"]').attributes('title')).not.toContain('cache');
   });
