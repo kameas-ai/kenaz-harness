@@ -208,3 +208,103 @@ func TestTables_AreConsistent(t *testing.T) {
 		}
 	}
 }
+
+// ── custom-openai (host-granted OpenAI-compatible endpoint) ────────────────
+
+var customOpts = Options{
+	ProviderVar:   agentProviderVar,
+	CredVar:       agentCredVar,
+	ModelVar:      "T_MODEL",
+	BaseURLVar:    "T_BASE_URL",
+	AuthSchemeVar: "T_AUTH_SCHEME",
+}
+
+func TestResolve_CustomOpenAI_NoCredentialIsAuthNone(t *testing.T) {
+	got, err := Resolve(env(map[string]string{
+		agentProviderVar: CustomOpenAIKind,
+		"T_BASE_URL":     "http://192.168.64.1:8081/v1",
+		"T_MODEL":        "qwen3.8-27b-q4_k_m",
+	}), customOpts)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.Kind != CustomOpenAIKind || got.BaseURL != "http://192.168.64.1:8081/v1" || got.Model != "qwen3.8-27b-q4_k_m" {
+		t.Fatalf("unexpected resolution %+v", got)
+	}
+	if got.AuthScheme != "none" || got.CredEnv != "" {
+		t.Fatalf("no credential granted → auth none with no cred ref, got %+v", got)
+	}
+	p := got.Profile("kenaz-host")
+	if p.Endpoint != got.BaseURL {
+		t.Fatalf("profile endpoint = %q", p.Endpoint)
+	}
+	if p.Defaults["auth_scheme"] != "none" {
+		t.Fatalf("profile auth_scheme default = %v", p.Defaults["auth_scheme"])
+	}
+	if p.Cred.Kind != "" || p.Cred.Locator != "" {
+		t.Fatalf("auth none must carry no credential reference, got %+v", p.Cred)
+	}
+}
+
+func TestResolve_CustomOpenAI_CredentialImpliesBearer(t *testing.T) {
+	got, err := Resolve(env(map[string]string{
+		agentProviderVar: CustomOpenAIKind,
+		agentCredVar:     "MY_KEY",
+		"MY_KEY":         "k",
+		"T_BASE_URL":     "https://api.groq.com/openai/v1",
+		"T_MODEL":        "llama-3.3-70b",
+	}), customOpts)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.AuthScheme != "bearer" || got.CredEnv != "MY_KEY" {
+		t.Fatalf("want bearer/MY_KEY, got %+v", got)
+	}
+	if p := got.Profile("x"); p.Cred.Kind != "env" || p.Cred.Locator != "MY_KEY" {
+		t.Fatalf("profile cred = %+v", p.Cred)
+	}
+}
+
+func TestResolve_CustomOpenAI_ExplicitSchemeNoneDropsCredRef(t *testing.T) {
+	got, err := Resolve(env(map[string]string{
+		agentProviderVar: CustomOpenAIKind,
+		agentCredVar:     "MY_KEY",
+		"MY_KEY":         "k",
+		"T_AUTH_SCHEME":  "none",
+		"T_BASE_URL":     "http://127.0.0.1:8081/v1",
+		"T_MODEL":        "m",
+	}), customOpts)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.AuthScheme != "none" || got.CredEnv != "" {
+		t.Fatalf("explicit none must drop the credential reference, got %+v", got)
+	}
+}
+
+func TestResolve_CustomOpenAI_RequiresBaseURLAndModel(t *testing.T) {
+	if _, err := Resolve(env(map[string]string{
+		agentProviderVar: CustomOpenAIKind,
+		"T_MODEL":        "m",
+	}), customOpts); err == nil || !strings.Contains(err.Error(), "T_BASE_URL") {
+		t.Fatalf("missing base URL must name the var, got %v", err)
+	}
+	if _, err := Resolve(env(map[string]string{
+		agentProviderVar: CustomOpenAIKind,
+		"T_BASE_URL":     "http://127.0.0.1:8081/v1",
+	}), customOpts); err == nil || !strings.Contains(err.Error(), "T_MODEL") {
+		t.Fatalf("custom-openai has no default model; error must name the var, got %v", err)
+	}
+}
+
+func TestResolve_CustomOpenAI_EmptyGrantedCredentialIsAnError(t *testing.T) {
+	_, err := Resolve(env(map[string]string{
+		agentProviderVar: CustomOpenAIKind,
+		agentCredVar:     "MY_KEY",
+		"T_BASE_URL":     "http://127.0.0.1:8081/v1",
+		"T_MODEL":        "m",
+	}), customOpts)
+	if err == nil || !strings.Contains(err.Error(), "MY_KEY") {
+		t.Fatalf("a named-but-empty credential var must fail loudly, got %v", err)
+	}
+}
