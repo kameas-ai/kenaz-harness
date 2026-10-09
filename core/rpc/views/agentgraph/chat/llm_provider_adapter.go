@@ -77,6 +77,14 @@ type LLMProviderAdapter struct {
 	// discoverer; the kernel's LLMRequest.Tools slice is just a string
 	// allowlist, but the registry needs the full ToolSpec shape.
 	tools []corellm.ToolSpec
+	// exposure, when set, picks which of tools each call carries (hot,
+	// pinned and activated tools in full; the rest summarised in
+	// kenaz__load_tools' description). nil sends every tool.
+	exposure *exposureTurn
+	// modelWindow returns a (provider kind, model id) pair's context
+	// window in tokens, 0 when unknown; the schema budget is capped at
+	// 15 % of it. nil leaves every window unknown.
+	modelWindow ModelWindowFunc
 	// lastRespMu protects lastResp.
 	lastRespMu sync.Mutex
 	// lastResp stores the most recent llm.Response produced by Generate —
@@ -264,6 +272,39 @@ func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string
 	}
 }
 
+// withToolExposure attaches the turn's tool-exposure view. nil sends the
+// whole catalog on every call.
+func (a *LLMProviderAdapter) withToolExposure(t *exposureTurn) *LLMProviderAdapter {
+	a.exposure = t
+	return a
+}
+
+// withModelWindow attaches the context-window lookup the schema budget
+// is capped against.
+func (a *LLMProviderAdapter) withModelWindow(f ModelWindowFunc) *LLMProviderAdapter {
+	a.modelWindow = f
+	return a
+}
+
+// windowFor returns the context window of the model this call is
+// dispatched to — model, or the profile's dispatch default when empty
+// (llm.ProviderProfile.DispatchModel) — on this adapter's provider; 0
+// when unknown.
+func (a *LLMProviderAdapter) windowFor(model string) int {
+	if a.modelWindow == nil || a.reg == nil || a.profileID == "" {
+		return 0
+	}
+	prof, err := a.reg.Profile(a.profileID)
+	if err != nil {
+		return 0
+	}
+	dispatched := prof.DispatchModel(model)
+	if prof.Kind == "" || dispatched == "" {
+		return 0
+	}
+	return a.modelWindow(prof.Kind, dispatched)
+}
+
 // WithMoveJournal attaches the turn's move journal
 // (model-moves-transcript-01PMCH01 WP02). Returns the same pointer so
 // callers can chain at construction time. A nil journal leaves the
@@ -374,12 +415,13 @@ func (a *LLMProviderAdapter) envClockNow() time.Time {
 	return time.Now()
 }
 
-// buildEnvBlock gathers the live environment facts and renders the
-// compact environment-context Markdown block. Called once per Generate.
-// The workspace entry count is a cheap top-level os.ReadDir; a failure
+// buildEnvBlock gathers the live environment facts and renders them as
+// the session-stable environment block (system prefix) and the per-call
+// state block (after the cache marker). Called once per Generate. The
+// workspace entry count is a cheap top-level os.ReadDir; a failure
 // (missing dir, permission) degrades gracefully to "path only" rather
 // than aborting the turn. (system-prompt-layers WP03)
-func (a *LLMProviderAdapter) buildEnvBlock() string {
+func (a *LLMProviderAdapter) buildEnvBlock() (stable, state string) {
 	in := envContextInput{
 		Now:    a.envClockNow(),
 		GOOS:   runtime.GOOS,
@@ -396,7 +438,7 @@ func (a *LLMProviderAdapter) buildEnvBlock() string {
 			in.WorkspaceCounted = true
 		}
 	}
-	return buildEnvContext(in)
+	return buildEnvContext(in), buildEnvState(in)
 }
 
 // WithRecapStyle pins the autonomy recapStyle resolver onto the adapter
@@ -705,6 +747,19 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	if req.Model != "" && req.Model != "default" {
 		model = req.Model
 	}
+	attachmentsBlock := a.buildAttachmentsBlock(ctx)
+	// The tools this call carries are chosen per call, not per turn: a
+	// kenaz__load_tools call earlier in the turn must reach this request.
+	// Tools go out in corellm.OrderTools order: hot then pinned, each by
+	// name (the stable, cache-marked prefix), then activated. Without
+	// exposure the whole list is one stable segment.
+	sendTools, stableTools := corellm.OrderTools(a.tools, nil, nil)
+	var sel toolSelection
+	if a.exposure != nil {
+		sel = a.exposure.selectTools(ctx, a.windowFor(model))
+		sendTools, stableTools = sel.tools, sel.stable
+	}
+	envStable, envState := a.buildEnvBlock()
 	gen := corellm.GenerationRequest{
 		ProfileID: a.profileID,
 		Model:     model,
@@ -715,18 +770,22 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		// composeSystemPrompt's default renderer reproduces today's
 		// plain join byte-for-byte, so this is a deliberate, documented
 		// gap rather than a half-wire.
-		// Recap sits before the user's custom instructions so a user
-		// instruction about verbosity still wins the last word.
-		// The hook-context layer is the second-to-last layer (review
-		// follow-up L4): it appears and disappears turn to turn, so it
-		// sits as late as possible to keep the stable prefix (node prompt,
-		// attachments, env, recap, ask bar) byte-identical for prompt
-		// caching — and directly BEFORE the user's custom instructions,
-		// which keep the last word.
-		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildAttachmentsBlock(ctx), a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), renderPendingContext(pending), a.buildUserInstructionsBlock()),
-		Messages: llmMsgs,
-		Tools:    a.tools,
+		//
+		// System is the cacheable prefix and must be byte-identical
+		// across calls with unchanged settings (FR-C1): every layer in it
+		// is session-stable. SystemVolatile follows it on the wire (after
+		// the cache marker) and holds what changes call to call — the
+		// environment's date / workspace count / tool inventory, the
+		// hook-context layer, and the digest of tools not loaded (it
+		// changes with every activation; reference material, so it sits
+		// before the instructions) — then the user's custom instructions,
+		// which must be the last instruction layer in the whole system
+		// prompt so the user's standing preferences keep the last word.
+		System:         composeSystemPrompt(nil, req.SystemPrompt, attachmentsBlock, envStable, a.buildRecapBlock(), a.buildAskBarBlock()),
+		SystemVolatile: composeSystemPrompt(nil, envState, renderPendingContext(pending), sel.digest, a.buildUserInstructionsBlock()),
+		Messages:       llmMsgs,
 	}
+	gen.SetTools(sendTools, stableTools)
 
 	// Merge the session-level RequestKnobs default (model-settings-reach-
 	// the-model-01PMZ101 UNIT-6 / WP10) onto the wire request. Before this,
@@ -768,6 +827,24 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		"count", len(toolNames),
 		"tools", toolNames,
 	)
+
+	// What this request sends, by part, measured once with the shared
+	// estimator; logged as llm.request.composition when the call ends
+	// (with the provider's own counts on success) and carried on the
+	// response for the usage hook.
+	comp := measureComposition(gen, attachmentsBlock)
+	comp.ToolsSummary = sel.summary
+	comp.Budget = sel.budget
+	comp.Evicted = sel.evicted
+	comp.PinnedOverBudgetBy = sel.pinnedOverBy
+	comp.HotOverBudgetBy = sel.hotOverBy
+	var (
+		compUsage corellm.Usage
+		compErr   error
+	)
+	defer func() {
+		logComposition(a.sessionID, a.ProviderKind(), comp, len(gen.FullSystem()), sel.stable, sel.autoActivated, compUsage, compErr)
+	}()
 
 	// Carry the per-node sampling knobs already threaded through the
 	// kernel seam (agentgraph.LLMRequest.MaxTokens/Temperature, populated
@@ -903,6 +980,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	}
 	stream, err := retry.RetryStream(ctx, retryPolicy, streamFn)
 	if err != nil {
+		compErr = err
 		return coreag.LLMResponse{}, fmt.Errorf("chat: registry stream: %w", err)
 	}
 
@@ -925,6 +1003,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	recordMoves := req.StreamToChat && a.moves.records()
 
 	sink, _ := coreag.StreamSinkFromContext(ctx)
+	providerKind := a.ProviderKind()
 	for ev := range stream.Events() {
 		// Open the move BEFORE the first token of the segment reaches
 		// the surface — a boundary that arrives after the text cannot
@@ -948,16 +1027,22 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		if sink == nil {
 			continue
 		}
-		sink.Emit(translateLLMStreamEvent(ev))
+		sink.Emit(translateLLMStreamEvent(ev, providerKind))
 	}
 
 	resp, ferr := stream.Final()
 	if ferr != nil {
+		compErr = ferr
 		// On error the kernel surfaces the error up the run; the
 		// runner's terminal goroutine is responsible for emitting the
 		// stream-closed payload with reason=backend-error.
 		return coreag.LLMResponse{}, fmt.Errorf("chat: stream final: %w", ferr)
 	}
+
+	compUsage = resp.Usage
+	comp.Cached = resp.Usage.CachedInputRead
+	measured := comp
+	resp.Composition = &measured
 
 	// Store the response for the HookPostLLM callback (token-cost-
 	// telemetry WP02). The session_write node fires after Generate
@@ -970,8 +1055,10 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	out := coreag.LLMResponse{
 		Content:      flattenContent(resp.Content),
 		FinishReason: resp.FinishReason,
-		TokensUsed:   resp.Usage.InputTokens + resp.Usage.OutputTokens,
-		CostUSD:      resp.Cost.Total,
+		// The run budget (max_tokens_per_run) counts the whole prompt, so
+		// a cache-heavy Anthropic call weighs what an OpenRouter one does.
+		TokensUsed: corellm.PromptTokensTotal(resp.Usage, providerKind) + resp.Usage.OutputTokens,
+		CostUSD:    resp.Cost.Total,
 	}
 	if len(resp.ToolCalls) > 0 {
 		calls := make([]coreag.ToolCallRequest, 0, len(resp.ToolCalls))
@@ -1036,8 +1123,10 @@ func flattenContent(blocks []corellm.ContentBlock) string {
 
 // translateLLMStreamEvent maps a corellm.StreamEvent → the kernel's
 // agentgraph.StreamEvent shape. Inverse of translateAGStreamEvent in
-// stream_bridge.go.
-func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
+// stream_bridge.go. UsageInputTokens is the whole prompt under
+// providerKind's convention (corellm.PromptTokensTotal), the same number
+// the persisted context-bar snapshot carries.
+func translateLLMStreamEvent(ev corellm.StreamEvent, providerKind string) coreag.StreamEvent {
 	out := coreag.StreamEvent{
 		Text:   ev.Text,
 		Finish: ev.Finish,
@@ -1052,7 +1141,7 @@ func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
 		out.Reasoning = ev.Reasoning.Content
 	}
 	if ev.Usage != nil {
-		out.UsageInputTokens = ev.Usage.InputTokens
+		out.UsageInputTokens = corellm.PromptTokensTotal(*ev.Usage, providerKind)
 		out.UsageOutputTokens = ev.Usage.OutputTokens
 		out.UsageReasoningTokens = ev.Usage.ReasoningTokens
 	}
@@ -1073,4 +1162,83 @@ func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
 		out.Kind = coreag.StreamEventKind(string(ev.Kind))
 	}
 	return out
+}
+
+// measureComposition estimates each part of an outbound request with
+// the shared tokenizer rule, so System + History equals what compaction
+// and the request-too-large check count for the same request.
+// attachmentsBlock is the attachments layer already joined into
+// gen.System; it is reported as its own part and subtracted from the
+// system part so the parts do not double-count.
+//
+// Memory is 0 (2026-10-09; owner alec): no producer feeds a memory part
+// to this seam — memory.retrieve output arrives as an ordinary message,
+// indistinguishable here from the rest of the history, and is counted in
+// History. A recall layer that reaches the request separately is what
+// fills it.
+func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) corellm.PromptComposition {
+	attachments := corellm.EstimateTokens(attachmentsBlock)
+	system := corellm.SystemTokens(gen.FullSystem()) - attachments
+	if system < 0 {
+		system = 0
+	}
+	return corellm.PromptComposition{
+		System:      system,
+		Attachments: attachments,
+		Tools:       corellm.ToolsTokens(gen.Tools),
+		History:     corellm.MessagesTokens(gen.Messages),
+		ToolsFull:   len(gen.Tools),
+	}
+}
+
+// logComposition writes the one llm.request.composition line of a model
+// call. usage is the provider's report (zero when the call failed before
+// one arrived). prompt_tokens is the provider's input count as reported;
+// prompt_tokens_total is the whole prompt under every provider's
+// convention (llm.PromptTokensTotal), which is the figure the estimates
+// are comparable with.
+//
+// tools_summary is the number of catalog tools listed only in
+// kenaz__load_tools' digest on this call; tools_stable is how many
+// leading tools are the hot + pinned prefix that stays identical from
+// call to call; auto_activated is how many
+// summary tools this turn has activated because the model called them by
+// name before loading them.
+//
+// budget is the call's effective schema budget (0 when no exposure view
+// applied one); evicted is how many loaded tools were left out to fit
+// it; pinned_over_budget_by is how much of the overage pinned tools
+// account for, and hot_over_budget_by how far the always-sent core tools
+// alone exceed it (the window is too small for them).
+// FR-H3 — the estimated parts reconciling with prompt_tokens_total
+// within 10 % — is asserted on the 2026-10-08 dogfood's recorded frames
+// by core/rpc/composition_recorded_frames_test.go (tool definitions at
+// the measured 2.5 bytes per token: 101 % there).
+func logComposition(sessionID, providerKind string, comp corellm.PromptComposition, systemChars, toolsStable, autoActivated int, usage corellm.Usage, err error) {
+	outcome := "ok"
+	if err != nil {
+		outcome = "error"
+	}
+	logging.L().Info("llm.request.composition",
+		"session_id", sessionID,
+		"provider_kind", providerKind,
+		"outcome", outcome,
+		"tools_full", comp.ToolsFull,
+		"tools_summary", comp.ToolsSummary,
+		"tools_tokens_est", comp.Tools,
+		"system_chars", systemChars,
+		"system_tokens_est", comp.System,
+		"attachments_tokens_est", comp.Attachments,
+		"history_tokens_est", comp.History,
+		"prompt_tokens", usage.InputTokens,
+		"prompt_tokens_total", corellm.PromptTokensTotal(usage, providerKind),
+		"cached_tokens", usage.CachedInputRead,
+		"cache_write_tokens", usage.CachedInputWrite,
+		"tools_stable", toolsStable,
+		"auto_activated", autoActivated,
+		"budget", comp.Budget,
+		"evicted", comp.Evicted,
+		"pinned_over_budget_by", comp.PinnedOverBudgetBy,
+		"hot_over_budget_by", comp.HotOverBudgetBy,
+	)
 }

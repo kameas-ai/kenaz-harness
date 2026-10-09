@@ -105,6 +105,41 @@ type LastUsage struct {
 	TotalTokens      int     `json:"totalTokens"`
 	CostUSD          float64 `json:"costUsd"`
 	CostSource       string  `json:"costSource"`
+	// Composition is the last call's prompt by part, in tokens. nil on
+	// a snapshot written before the field existed or by a call that was
+	// not measured.
+	Composition *UsageComposition `json:"composition,omitempty"`
+}
+
+// UsageComposition is one model call's prompt by part. Every part but
+// Cached is the harness estimate (tool definitions at 2.5 bytes per token, text at ~4 characters per token); Cached is the
+// provider-reported prompt-cache read.
+type UsageComposition struct {
+	System      int `json:"system"`
+	Tools       int `json:"tools"`
+	History     int `json:"history"`
+	Attachments int `json:"attachments"`
+	Memory      int `json:"memory"`
+	Cached      int `json:"cached"`
+	// ToolsFull is the number of tool definitions the call carried.
+	ToolsFull int `json:"toolsFull"`
+	// ToolsSummary is the number of tools listed only by summary (0 until
+	// summary-tier exposure exists).
+	ToolsSummary int `json:"toolsSummary"`
+	// SchemaBudget is the tool-schema budget the call was fitted to; 0
+	// when none was applied.
+	SchemaBudget int `json:"schemaBudget,omitempty"`
+	// ToolsEvicted is how many loaded tools were left out of the call to
+	// fit SchemaBudget.
+	ToolsEvicted int `json:"toolsEvicted,omitempty"`
+	// PinnedOverBudgetBy is how much of the overage pinned tools account
+	// for, in tokens (at most their total size); > 0 is the composer's
+	// "Pinned tools exceed the schema budget by N tokens" warning.
+	PinnedOverBudgetBy int `json:"pinnedOverBudgetBy,omitempty"`
+	// HotOverBudgetBy is how far the always-sent core tools alone exceed
+	// SchemaBudget, in tokens; > 0 means the model's window is too small
+	// for the core tools.
+	HotOverBudgetBy int `json:"hotOverBudgetBy,omitempty"`
 }
 
 // StreamCheckpoint is a durable mid-run snapshot of one active stream
@@ -275,7 +310,10 @@ type Message struct {
 	// NULL on rows that pre-date the migration or had no usage captured.
 	PromptTokens     *int
 	CompletionTokens *int
-	CostUSD          *float64
+	// CachedTokens is the part of PromptTokens the provider served from
+	// its prompt cache (session_messages.cached_tokens, migration 0346).
+	CachedTokens *int
+	CostUSD      *float64
 	// CostSource mirrors the token-cost-telemetry taxonomy:
 	// "provider" | "derived" | "mixed" | "unknown". Empty on rows
 	// with no usage data.

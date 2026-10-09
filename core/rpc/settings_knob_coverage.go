@@ -632,14 +632,17 @@ func init() {
 		"LongSessionNudgeTokens",
 		"controls-and-readouts-that-tell-the-truth-01PMZ808 WP13/UNIT-8: "+
 			"EffectiveLongSessionNudgeTokens() read by the long-session "+
-			"nudge against cumulative usage (mission-branch commit "+
-			"12906668).",
+			"nudge against the last request's history tokens "+
+			"(SessionUsage.composition.history; tool-context-budget-"+
+			"01TCBUD01 WP01).",
 	)
 	knobcoverage.Register[settings.Settings](
 		"ContextWindowOverrides",
 		"read by the frontend context-window meter (backend-context-"+
 			"window-length-01KQ8TD3 WP05) as a per-provider-kind override "+
-			"of the catalog's context-window size.",
+			"of the catalog's context-window size; and by rpc.modelWindows "+
+			"(the model picker's ContextWindow and the chat request's "+
+			"tool-schema budget cap, 15 % of the window).",
 	)
 	knobcoverage.RegisterDeferred[settings.Settings](
 		"LocalRuntimeRAMOverrideGB",

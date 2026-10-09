@@ -123,6 +123,12 @@ type BundleSource interface {
 // per-provider llm.model_info.miss line names.
 const modelInfoMissSampleMax = 5
 
+// WindowLookup resolves a model's context window on a provider kind; 0
+// is unknown.
+type WindowLookup interface {
+	ContextWindow(kind, model string) int
+}
+
 // CapCatalog is the capability-lookup seam used to populate ModelInfos
 // (contextWindow, maxOutputTokens) on Provider at ListProviders time and
 // to resolve per-provider attachment limits (multimodal-io-01KQ8TDF WP04).
@@ -440,6 +446,7 @@ type API struct {
 	// capCatalog, when non-nil, is consulted by ListProviders to populate
 	// Provider.ModelInfos with contextWindow data from the curated table.
 	capCatalog CapCatalog
+	windows    WindowLookup
 	// attachments is the WP03 source of truth for resolved starting
 	// context. nil falls back to the SessionContextReader probe so
 	// Mission A behaviour stays intact during the one-release buffer.
@@ -555,6 +562,11 @@ type Config struct {
 	// Provider.Redaction for each profile. nil = Redaction field
 	// is omitted (zero value) — no breaking change for existing tests.
 	CredPeeker CredPeeker
+	// Windows, when non-nil, is the context-window lookup the chat
+	// request path caps its tool-schema budget with; ListProviders reports
+	// its answer as each model's ContextWindow so the picker and the
+	// budget agree.
+	Windows WindowLookup
 	// CapCatalog, when non-nil, is consulted by ListProviders to populate
 	// Provider.ModelInfos with contextWindow data from the curated table.
 	// nil = ModelInfos fields default to 0 (unknown) — frontend falls
@@ -616,6 +628,7 @@ func New(cfg Config) *API {
 		artifacts:       cfg.Artifacts,
 		credPeeker:      cfg.CredPeeker,
 		capCatalog:      cfg.CapCatalog,
+		windows:         cfg.Windows,
 		credInvalidator: cfg.CredInvalidator,
 		auditRotation:   cfg.AuditRotation,
 		customAdapter:   cfg.CustomAdapter,
@@ -917,8 +930,10 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 			for _, modelID := range v.Models {
 				info := ModelInfo{ID: modelID, DisplayName: modelID}
 				resolved := false
+				var listed *corellm.ModelInfo
 				if lookup != nil {
 					if mi, ok := lookup.LookupModelInfo(modelID); ok {
+						listed = &mi
 						info.ContextWindow = mi.ContextWindow
 						info.MaxOutputTokens = mi.MaxOutputTokens
 						if mi.DisplayName != "" {
@@ -939,6 +954,12 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 						catalogHits++
 					}
 				}
+				if a.windows != nil {
+					if cw := a.windows.ContextWindow(v.Kind, modelID); cw > 0 {
+						info.ContextWindow = cw
+					}
+				}
+				info.SupportsPromptCache = modelCachesPrompts(v.Kind, modelID, listed)
 				if !resolved {
 					missCount++
 					if len(missSample) < modelInfoMissSampleMax {
@@ -1411,16 +1432,45 @@ func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]M
 		return nil, err
 	}
 	out := make([]ModelInfo, 0, len(models))
-	for _, m := range models {
+	for i := range models {
+		m := models[i]
 		out = append(out, ModelInfo{
-			ID:              m.ID,
-			DisplayName:     m.DisplayName,
-			Description:     m.Description,
-			ContextWindow:   m.ContextWindow,
-			MaxOutputTokens: m.MaxOutputTokens,
+			ID:                  m.ID,
+			DisplayName:         m.DisplayName,
+			Description:         m.Description,
+			ContextWindow:       m.ContextWindow,
+			MaxOutputTokens:     m.MaxOutputTokens,
+			SupportsPromptCache: modelCachesPrompts(kind, m.ID, &m),
 		})
 	}
 	return out, nil
+}
+
+// modelCachesPrompts mirrors the adapters' request-time decision to send
+// cache_control markers for (kind, modelID), so the "caches prompts"
+// badge never claims more than the wire does. A model-list entry that
+// reports llm.ModelInfo.SupportsPromptCache is believed. Otherwise the
+// curated llm.SupportsPromptCache table decides, except that for
+// OpenRouter — the one adapter that writes the flag, vetoing the table
+// from its /models cache pricing (openrouter cacheLevel) — a listed entry
+// without the flag is a veto. Anthropic direct never writes the flag, so
+// its models fall through to the table. listed is nil when the model has
+// no model-list entry.
+//
+// Constraint: the badge reflects this request-time capability table, not
+// the runtime llm.PromptCacheGuard. When a provider rejects cache_control
+// the guard degrades that (profile, model) to fewer or no markers for the
+// life of the process, and the badge still says "caches prompts"
+// (2026-10-09, owner alec — ledger: "expose the guard level to the
+// badge").
+func modelCachesPrompts(kind, modelID string, listed *corellm.ModelInfo) bool {
+	if listed != nil && listed.SupportsPromptCache {
+		return true
+	}
+	if !corellm.SupportsPromptCache(kind, modelID) {
+		return false
+	}
+	return !(listed != nil && kind == "openrouter")
 }
 
 // UpdateProviderCredential writes a new plaintext API key for profileID

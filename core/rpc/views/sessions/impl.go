@@ -19,6 +19,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 	"github.com/kameas-ai/kenaz-harness/core/sessions/export"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 	"github.com/kameas-ai/kenaz-harness/core/usage"
 )
 
@@ -109,6 +110,15 @@ type managerAPI struct {
 	// session-level + tier-default chain still resolves correctly.
 	// (autonomy-dial-01KR3M2A WP03)
 	autonomyCtx AutonomyContextProvider
+	// toolLoader and exposureGuard back LoadTools and SetToolExposure's
+	// write guard (tool-context-budget-01TCBUD01). nil toolLoader makes
+	// LoadTools return ErrToolLoadingNotConfigured; nil exposureGuard
+	// checks nothing beyond validation.
+	toolLoader    ToolLoader
+	exposureGuard toolexposure.WriteGuard
+	// orgPins fills GetToolExposure's read-only Org projection; nil
+	// reports no organisation entries.
+	orgPins toolexposure.PinSource
 	// deleteHook is the optional per-session teardown hook wired by
 	// WithDeleteHookOpt; runs after a successful delete.
 	deleteHook func(sessionID string)
@@ -650,6 +660,7 @@ func messageToView(m session.Message) Message {
 	out.PromptTokens = m.PromptTokens
 	out.CompletionTokens = m.CompletionTokens
 	out.CostUSD = m.CostUSD
+	out.CachedTokens = m.CachedTokens
 	out.MessageCostSource = m.MessageCostSource
 	// Move metadata (model-moves-transcript-01PMCH01 WP01). Read through
 	// the accessors — the durable fields are unexported precisely so no
@@ -997,7 +1008,7 @@ func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, err
 	if err != nil {
 		return SessionUsage{}, fmt.Errorf("rpc/sessions: GetUsage: %w", err)
 	}
-	return SessionUsage{
+	out := SessionUsage{
 		PromptTokens:     agg.PromptTokens,
 		CompletionTokens: agg.CompletionTokens,
 		TotalTokens:      agg.TotalTokens,
@@ -1005,7 +1016,32 @@ func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, err
 		CostSource:       agg.CostSource,
 		MessageCount:     agg.MessageCount,
 		PricingDataDate:  pricingDate,
-	}, nil
+		CachedTokens:     agg.CachedTokens,
+	}
+	// The composition is the last call's, not a sum: it reads the
+	// last-usage snapshot. A failed read leaves it nil — the aggregate
+	// above is still the answer to what this RPC was asked.
+	if a.mgr != nil {
+		if last, lerr := a.mgr.GetLastUsage(ctx, id); lerr == nil && last.Composition != nil {
+			c := last.Composition
+			out.Composition = &UsageComposition{
+				System:       c.System,
+				Tools:        c.Tools,
+				History:      c.History,
+				Attachments:  c.Attachments,
+				Memory:       c.Memory,
+				Cached:       c.Cached,
+				ToolsFull:    c.ToolsFull,
+				ToolsSummary: c.ToolsSummary,
+
+				SchemaBudget:       c.SchemaBudget,
+				ToolsEvicted:       c.ToolsEvicted,
+				PinnedOverBudgetBy: c.PinnedOverBudgetBy,
+				HotOverBudgetBy:    c.HotOverBudgetBy,
+			}
+		}
+	}
+	return out, nil
 }
 
 // ResumeMessage implements SessionsAPI. Validates the partial row's

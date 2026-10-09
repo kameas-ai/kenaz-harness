@@ -163,6 +163,8 @@ const props = defineProps<{
   costUsd?: number;
   /** Cost source: "provider" | "derived" | "mixed" | "unknown". */
   messageCostSource?: string;
+  /** Part of promptTokens served from the provider's prompt cache. */
+  cachedTokens?: number;
 }>();
 
 const emit = defineEmits<{
@@ -488,6 +490,7 @@ function onResumeClick() {
           :completion-tokens="completionTokens"
           :cost-usd="costUsd"
           :cost-source="messageCostSource"
+          :cached-tokens="cachedTokens"
           class="ml-2 normal-case tracking-normal"
         />
         <span

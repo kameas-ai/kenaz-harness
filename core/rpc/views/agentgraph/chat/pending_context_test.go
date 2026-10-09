@@ -39,13 +39,13 @@ func TestPendingContext_GenerateDrainsIntoSystemPromptOnce(t *testing.T) {
 	if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: "base"}); err != nil {
 		t.Fatalf("Generate (aux): %v", err)
 	}
-	if sys := reg.snapshot().System; strings.Contains(sys, "repo uses tabs") {
+	if sys := reg.snapshot().FullSystem(); strings.Contains(sys, "repo uses tabs") {
 		t.Fatalf("an auxiliary call consumed the hook context:\n%s", sys)
 	}
 	if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: "base", StreamToChat: true}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	sys := reg.snapshot().System
+	sys := reg.snapshot().FullSystem()
 	if !strings.Contains(sys, pendingContextHeading) || !strings.Contains(sys, "repo uses tabs") {
 		t.Fatalf("hook context missing from the next model call's system prompt:\n%s", sys)
 	}
@@ -56,7 +56,7 @@ func TestPendingContext_GenerateDrainsIntoSystemPromptOnce(t *testing.T) {
 	if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: "base", StreamToChat: true}); err != nil {
 		t.Fatalf("Generate #2: %v", err)
 	}
-	if sys2 := reg.snapshot().System; strings.Contains(sys2, "repo uses tabs") {
+	if sys2 := reg.snapshot().FullSystem(); strings.Contains(sys2, "repo uses tabs") {
 		t.Fatalf("drained context was re-sent on the following call:\n%s", sys2)
 	}
 	if got := q.drain("s2"); !strings.Contains(got, "other session") {

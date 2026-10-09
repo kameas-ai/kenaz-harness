@@ -9,14 +9,19 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
-// env_context.go builds the dynamic *environment* layer that the LLM seam
-// stacks on top of the composed graph-base + node-role system prompt
-// (WP01/WP02). The block states facts the model cannot otherwise know —
-// product + platform, current date, the model in use, the sandboxed
-// workspace, the filesystem-approval affordance, and a category-level
-// tool inventory. Schemas are NOT included here (they are sent separately
-// on the wire); the inventory is a one-liner so the whole block stays
-// compact (≤ ~120 tokens).
+// env_context.go builds the *environment* layers that the LLM seam stacks
+// on top of the composed graph-base + node-role system prompt (WP01/WP02).
+// They state facts the model cannot otherwise know — product + platform,
+// current date, the model in use, the sandboxed workspace, the
+// filesystem-approval affordance, and a category-level tool inventory.
+// Schemas are NOT included here (they are sent separately on the wire);
+// the two blocks together stay compact (≤ ~120 tokens).
+//
+// The facts are split by lifetime because the system prefix must stay
+// byte-identical across calls for provider prompt caching:
+// buildEnvContext renders only session-stable facts (system prefix);
+// buildEnvState renders the per-call ones (date, workspace entry count,
+// tool inventory), which go after the cache marker.
 //
 // buildEnvContext is deliberately pure: every fact it renders arrives via
 // envContextInput so tests can pin a deterministic clock, GOOS/GOARCH,
@@ -60,10 +65,12 @@ type envContextInput struct {
 	Tools []corellm.ToolSpec
 }
 
-// buildEnvContext renders the compact Markdown environment block. The
-// output carries no trailing newline noise that would survive the
-// composeSystemPrompt trim; callers stack it via composeSystemPrompt so
-// an empty upstream layer never leaves a dangling separator.
+// buildEnvContext renders the stable half of the environment: facts that
+// hold for the whole session (platform, model, workspace location, the
+// approval affordance). It sits in the cacheable system prefix, so it
+// must not render anything that changes call to call — that belongs in
+// buildEnvState. The output carries no trailing newline; callers stack it
+// via composeSystemPrompt.
 func buildEnvContext(in envContextInput) string {
 	goos := in.GOOS
 	if goos == "" {
@@ -76,33 +83,40 @@ func buildEnvContext(in envContextInput) string {
 
 	var b strings.Builder
 	b.WriteString("## Environment\n")
-	fmt.Fprintf(&b, "- Kenaz Harness on %s/%s. Current date: %s.\n",
-		goos, goarch, in.Now.Format("2006-01-02"))
+	fmt.Fprintf(&b, "- Kenaz Harness on %s/%s.\n", goos, goarch)
 	if m := strings.TrimSpace(in.Model); m != "" {
 		fmt.Fprintf(&b, "- Model in use: %s.\n", m)
 	}
 	if in.WorkspaceKnown && strings.TrimSpace(in.WorkspaceDir) != "" {
-		state := ""
-		if in.WorkspaceCounted {
-			switch in.WorkspaceEntries {
-			case 0:
-				state = " (empty)"
-			case 1:
-				state = " (1 entry)"
-			default:
-				state = fmt.Sprintf(" (%d entries)", in.WorkspaceEntries)
-			}
-		}
 		note := strings.TrimSpace(in.WorkspaceNote)
 		if note == "" {
 			note = "a sandboxed agent workspace, not the user's project."
 		}
-		fmt.Fprintf(&b, "- Workspace: %s%s — %s\n",
-			strings.TrimSpace(in.WorkspaceDir), state, note)
+		fmt.Fprintf(&b, "- Workspace: %s — %s\n", strings.TrimSpace(in.WorkspaceDir), note)
 	} else {
 		b.WriteString("- Workspace: a sandboxed agent workspace, not the user's project.\n")
 	}
-	b.WriteString("- Some paths require approval via the request-filesystem-access tool.\n")
+	b.WriteString("- Some paths require approval via the request-filesystem-access tool.")
+	return b.String()
+}
+
+// buildEnvState renders the per-call half of the environment: the date,
+// the workspace's current entry count and the tool inventory. It goes in
+// GenerationRequest.SystemVolatile, after the cache marker.
+func buildEnvState(in envContextInput) string {
+	var b strings.Builder
+	b.WriteString("## Current state\n")
+	fmt.Fprintf(&b, "- Current date: %s.\n", in.Now.Format("2006-01-02"))
+	if in.WorkspaceKnown && strings.TrimSpace(in.WorkspaceDir) != "" && in.WorkspaceCounted {
+		switch in.WorkspaceEntries {
+		case 0:
+			b.WriteString("- Workspace contents: empty.\n")
+		case 1:
+			b.WriteString("- Workspace contents: 1 entry.\n")
+		default:
+			fmt.Fprintf(&b, "- Workspace contents: %d entries.\n", in.WorkspaceEntries)
+		}
+	}
 	fmt.Fprintf(&b, "- Tools: %s", summarizeToolInventory(in.Tools))
 	return b.String()
 }

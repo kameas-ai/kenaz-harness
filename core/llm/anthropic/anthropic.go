@@ -84,6 +84,9 @@ type Adapter struct {
 	endpoint   string
 	apiVersion string
 	cat        *capabilities.Catalog
+	// cacheGuard is the per-model cache_control degrade state, shared by
+	// every profile of this adapter.
+	cacheGuard llm.PromptCacheGuard
 }
 
 // New constructs an Adapter. Failures are limited to the embedded
@@ -227,6 +230,20 @@ func (a *Adapter) Capabilities(model string) llm.CapabilityDescriptor {
 // Compile-time assertion: *Adapter satisfies llm.ProviderAdapter.
 var _ llm.ProviderAdapter = (*Adapter)(nil)
 
+// PlacesSystemVolatile implements llm.SystemVolatileAdapter: the request
+// body places SystemVolatile in a system block after the cache marker.
+func (a *Adapter) PlacesSystemVolatile() {}
+
+var _ llm.SystemVolatileAdapter = (*Adapter)(nil)
+
+// cacheLevel is the marking level for a request to model.
+func (a *Adapter) cacheLevel(profileID, model string) llm.PromptCacheLevel {
+	if !llm.SupportsPromptCache(Kind, model) {
+		return llm.CacheMarkNone
+	}
+	return a.cacheGuard.Level(profileID, model)
+}
+
 // Compile-time assertion: *Adapter satisfies llm.StructuredOutputAdapter.
 var _ llm.StructuredOutputAdapter = (*Adapter)(nil)
 
@@ -310,7 +327,8 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		return nil, &llm.ErrAuth{Status: 0, Message: "anthropic: empty credential bytes"}
 	}
 
-	body, err := buildRequestBody(req, prof)
+	level := a.cacheLevel(prof.ID, prof.Model)
+	body, err := buildRequestBodyAt(req, prof, level)
 	if err != nil {
 		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
 	}
@@ -324,51 +342,32 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		apiVersion = v
 	}
 
-	// Per-call cancellation handle: req.WithContext threads ctx into the
-	// transport, but Cancel() must work even after ctx scope ends. We
-	// derive a per-call ctx from a context.Background() and cancel it on
-	// either ctx.Done or explicit Cancel.
-	streamCtx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-ctx.Done():
-			cancel()
-		case <-streamCtx.Done():
+	var (
+		resp   *http.Response
+		cancel context.CancelFunc
+	)
+	for {
+		resp, cancel, err = a.post(ctx, endpoint, apiVersion, cred, body)
+		if err != nil {
+			return nil, err
 		}
-	}()
-
-	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		cancel()
-		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("anthropic-version", apiVersion)
-	// x-api-key uses the resolved credential bytes. We copy into a
-	// header value via string conversion; net/http retains a string
-	// reference, so this is the unavoidable boundary where bytes
-	// become a string. The registry's auditedStream zeroizes its copy
-	// on Final/Cancel; the wider zeroization story for header strings
-	// is tracked under WP14 hardening and is deliberately out of scope
-	// for the v1 adapter (R2: no plaintext in payloads).
-	httpReq.Header.Set("x-api-key", string(cred))
-
-	resp, err := a.httpc.Do(httpReq)
-	if err != nil {
-		cancel()
-		// Network failures are transient by default — connection reset,
-		// DNS hiccup, dialer timeout. The retry middleware decides
-		// whether to retry given the configured budget.
-		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
-	}
-
-	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
 		// Drain a small body so we have a redaction-safe error message.
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		// A rejected cache marker degrades this model's marking and
+		// resends; the call itself does not fail over it.
+		next, retry := a.cacheGuard.Rejected(Kind, prof.ID, prof.Model, req, level, resp.StatusCode, bodySnippet)
+		if !retry {
+			return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		}
+		level = next
+		if body, err = buildRequestBodyAt(req, prof, level); err != nil {
+			return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		}
 	}
 
 	// Determine the synthetic tool name for response normalization (WP04).
@@ -396,6 +395,42 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	return s, nil
 }
 
+// post sends one Messages API request. The returned cancel severs the
+// stream: it fires on ctx.Done or when the caller calls it, so Cancel()
+// works after ctx's scope ends.
+func (a *Adapter) post(ctx context.Context, endpoint, apiVersion string, cred, body []byte) (*http.Response, context.CancelFunc, error) {
+	streamCtx, cancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel()
+		case <-streamCtx.Done():
+		}
+	}()
+
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return nil, nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("anthropic-version", apiVersion)
+	// net/http keeps the header value as a string; this is the boundary
+	// where the credential bytes become one. The registry's auditedStream
+	// zeroizes its own copy on Final/Cancel.
+	httpReq.Header.Set("x-api-key", string(cred))
+
+	resp, err := a.httpc.Do(httpReq)
+	if err != nil {
+		cancel()
+		// Network failures are transient; the retry middleware decides
+		// whether to retry within its budget.
+		return nil, nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+	}
+	return resp, cancel, nil
+}
+
 // classifyStatus delegates to the canonical top-level
 // llm.ClassifyStatus (WP01 of provider-implementation-uniformity-01KQ8V4F).
 // Kept as a thin package-local alias so call sites don't need updating;
@@ -421,7 +456,19 @@ func classifyStatus(status int, body []byte) error {
 //	  "temperature": 0.7,
 //	  ...
 //	}
+//
+// buildRequestBody sends no cache marker; Stream uses buildRequestBodyAt
+// with the adapter's current marking level.
 func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
+	return buildRequestBodyAt(req, prof, llm.CacheMarkNone)
+}
+
+// buildRequestBodyAt builds the Messages API body with cache markers at
+// level: the stable system block gets cache_control at CacheMarkAll and
+// CacheMarkSystemOnly, the last stable tool at CacheMarkAll only.
+// req.SystemVolatile follows the marked system block as its own block,
+// or is appended to the system string when nothing is marked.
+func buildRequestBodyAt(req llm.GenerationRequest, prof llm.ProviderProfile, level llm.PromptCacheLevel) ([]byte, error) {
 	out := map[string]any{
 		"model":  prof.Model,
 		"stream": true,
@@ -556,6 +603,11 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		out["tools"] = tools
 	}
 
+	// The JSON-output instruction ResponseFormat / JSONMode append to the
+	// system string is per-request output shaping: it is split off below
+	// and sent last, after the per-call segment, not in the cached prefix.
+	baseSystem, _ := out["system"].(string)
+
 	// Apply ResponseFormat if set (structured-output-and-grammar-01KX5R8A WP03a).
 	if req.ResponseFormat != nil {
 		a := &Adapter{}
@@ -572,7 +624,81 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		}
 	}
 
+	var instruction string
+	if full, _ := out["system"].(string); len(full) > len(baseSystem) && strings.HasPrefix(full, baseSystem) {
+		instruction = strings.TrimSpace(full[len(baseSystem):])
+		if baseSystem == "" {
+			delete(out, "system")
+		} else {
+			out["system"] = baseSystem
+		}
+	}
+	tail := strings.TrimSpace(req.SystemVolatile)
+	switch {
+	case instruction == "":
+	case tail == "":
+		tail = instruction
+	default:
+		tail = tail + "\n\n" + instruction
+	}
+
+	applyPromptCache(out, req, tail, level)
+
 	return json.Marshal(out)
+}
+
+// applyPromptCache shapes the system field around the cache marker and
+// marks the last stable tool. volatile is everything that follows the
+// cached prefix (req.SystemVolatile, then any output instruction). It
+// runs after every other writer of "system" and "tools", which all treat
+// "system" as a string.
+func applyPromptCache(out map[string]any, req llm.GenerationRequest, volatile string, level llm.PromptCacheLevel) {
+	stable, _ := out["system"].(string)
+	if level == llm.CacheMarkNone {
+		if volatile != "" {
+			if stable == "" {
+				out["system"] = volatile
+			} else {
+				out["system"] = stable + "\n\n" + volatile
+			}
+		}
+		return
+	}
+
+	var blocks []map[string]any
+	if stable != "" {
+		blocks = append(blocks, map[string]any{
+			"type":          "text",
+			"text":          stable,
+			"cache_control": llm.EphemeralCacheControl(),
+		})
+	}
+	if volatile != "" {
+		blocks = append(blocks, map[string]any{"type": "text", "text": volatile})
+	}
+	if len(blocks) > 0 {
+		out["system"] = blocks
+	}
+
+	if level != llm.CacheMarkAll {
+		return
+	}
+	idx := llm.CacheMarkerToolIndex(req)
+	if idx < 0 {
+		return
+	}
+	switch tools := out["tools"].(type) {
+	case []map[string]any:
+		if idx < len(tools) {
+			tools[idx]["cache_control"] = llm.EphemeralCacheControl()
+		}
+	case []any:
+		if idx < len(tools) {
+			if t, ok := tools[idx].(map[string]any); ok {
+				t["cache_control"] = llm.EphemeralCacheControl()
+			}
+		}
+	}
 }
 
 // applyJSONModeAnthropic translates a JSONModeSpec into the Anthropic wire
@@ -985,8 +1111,10 @@ func (s *stream) handleSSEData(_ string, raw []byte) {
 		if env.Message != nil {
 			var ms struct {
 				Usage *struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
+					InputTokens        int `json:"input_tokens"`
+					OutputTokens       int `json:"output_tokens"`
+					CacheCreationInput int `json:"cache_creation_input_tokens"`
+					CacheReadInput     int `json:"cache_read_input_tokens"`
 				} `json:"usage"`
 			}
 			if err := json.Unmarshal(env.Message, &ms); err == nil && ms.Usage != nil {
@@ -995,6 +1123,10 @@ func (s *stream) handleSSEData(_ string, raw []byte) {
 				if s.usage.OutputTokens == 0 {
 					s.usage.OutputTokens = ms.Usage.OutputTokens
 				}
+				// The cache split is reported here; message_delta may
+				// repeat it, and a non-zero value there wins.
+				s.usage.CachedInputRead = ms.Usage.CacheReadInput
+				s.usage.CachedInputWrite = ms.Usage.CacheCreationInput
 				s.mu.Unlock()
 			}
 		}

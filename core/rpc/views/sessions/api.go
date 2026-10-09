@@ -8,6 +8,8 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 )
 
 // AutonomyKnobValues is the wire shape for a ResolvedKnobs payload.
@@ -194,6 +196,10 @@ type Message struct {
 	PromptTokens     *int     `json:"promptTokens,omitempty"`
 	CompletionTokens *int     `json:"completionTokens,omitempty"`
 	CostUSD          *float64 `json:"costUsd,omitempty"`
+	// CachedTokens is the part of PromptTokens the provider served from
+	// its prompt cache. PromptTokens is the whole prompt under either
+	// provider convention, so CachedTokens never adds to it.
+	CachedTokens *int `json:"cachedTokens,omitempty"`
 	// MessageCostSource mirrors the token-cost-telemetry taxonomy:
 	// "provider" | "derived" | "mixed" | "unknown". Empty on rows
 	// with no usage data.
@@ -338,6 +344,43 @@ type SessionUsage struct {
 	// PricingDataDate is the last_updated date of the pricing table
 	// ("YYYY-MM-DD") so the UI tooltip can surface data age.
 	PricingDataDate string `json:"pricingDataDate"`
+	// CachedTokens is the sum of provider-reported prompt-cache reads
+	// across the session's assistant rows (session_messages.cached_tokens).
+	CachedTokens int `json:"cachedTokens"`
+	// Composition is the most recent model call's prompt by part, from
+	// the session's last-usage snapshot. nil until a measured call has
+	// completed.
+	Composition *UsageComposition `json:"composition,omitempty"`
+}
+
+// UsageComposition is the wire mirror of session.UsageComposition: one
+// model call's prompt by part, in tokens. Every part but Cached is the
+// harness estimate (tool definitions at 2.5 bytes per token, text at ~4 characters per token); Cached is provider-reported.
+type UsageComposition struct {
+	System      int `json:"system"`
+	Tools       int `json:"tools"`
+	History     int `json:"history"`
+	Attachments int `json:"attachments"`
+	Memory      int `json:"memory"`
+	Cached      int `json:"cached"`
+	// ToolsFull is the number of tool definitions the call carried.
+	ToolsFull int `json:"toolsFull"`
+	// ToolsSummary is the number of tools listed only by summary.
+	ToolsSummary int `json:"toolsSummary"`
+	// SchemaBudget is the tool-schema budget the call was fitted to; 0
+	// when none was applied.
+	SchemaBudget int `json:"schemaBudget,omitempty"`
+	// ToolsEvicted is how many loaded tools were left out of the call to
+	// fit SchemaBudget.
+	ToolsEvicted int `json:"toolsEvicted,omitempty"`
+	// PinnedOverBudgetBy is how much of the overage pinned tools account
+	// for, in tokens (at most their total size); > 0 is the composer's
+	// "Pinned tools exceed the schema budget by N tokens" warning.
+	PinnedOverBudgetBy int `json:"pinnedOverBudgetBy,omitempty"`
+	// HotOverBudgetBy is how far the always-sent core tools alone exceed
+	// SchemaBudget, in tokens; > 0 means the model's window is too small
+	// for the core tools.
+	HotOverBudgetBy int `json:"hotOverBudgetBy,omitempty"`
 }
 
 // SessionsAPI is the view-scoped accessor for session CRUD + streams.
@@ -465,6 +508,18 @@ type SessionsAPI interface {
 	// is the "reaches the model" half; without it the column round-trips
 	// but nothing downstream ever reads it.
 	SetKnobsDefault(ctx context.Context, id string, knobs *SessionKnobs) error
+
+	// GetToolExposure returns the session's tool-exposure override layer
+	// and activated set (migration sessions/0347-tool-exposure).
+	GetToolExposure(ctx context.Context, id string) (SessionToolExposure, error)
+	// SetToolExposure validates and persists the session's override
+	// layer; a zero Exposure clears it.
+	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
+	// LoadTools activates tools for the session — server names, exact
+	// tool names or "server__prefix*" globs — exactly as the model's
+	// kenaz__load_tools call does, and reports what was and was not
+	// loaded and why. sticky activations survive TTL expiry.
+	LoadTools(ctx context.Context, id string, servers, tools []string, sticky bool) (loadtools.Result, error)
 
 	// Export serialises a session transcript to the local filesystem.
 	// format is "markdown" or "json". The file-picker dialog is opened

@@ -110,6 +110,11 @@ type ModelInfo struct {
 	// response. 0 / missing means unknown — the UI should not render an
 	// explicit cap in that case (backend-context-window-length-01KQ8TD3 WP01).
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+	// SupportsPromptCache is true when requests for this model carry
+	// explicit cache_control markers (tool-context-budget-01TCBUD01 WP05):
+	// the model picker's and session MODEL row's "caches prompts" badge.
+	// See modelCachesPrompts for how it is derived.
+	SupportsPromptCache bool `json:"supportsPromptCache,omitempty"`
 }
 
 // AttachmentLimitsView is the wire-safe view of capabilities.AttachmentDescriptor

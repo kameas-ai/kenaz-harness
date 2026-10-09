@@ -12,6 +12,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // Sentinel errors. Stable typed errors so callers can errors.Is.
@@ -236,6 +237,22 @@ type Store interface {
 	// best-effort observability, so a run whose RecordTurnRun failed has
 	// no row to annotate and the outcome is simply not kept.
 	RecordTurnRunOutcome(ctx context.Context, sessionID, runID string, o TurnRunOutcome) error
+
+	// SetToolExposure persists the session's tool-exposure override layer
+	// (sessions.tool_exposure, migration sessions/0347-tool-exposure). A
+	// zero Exposure clears it (NULL). Callers validate (Manager does).
+	// Returns ErrSessionNotFound when the session does not exist.
+	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
+	// SetToolActivations replaces the session's activated tool set
+	// (sessions.tool_activations). An empty set clears it (NULL).
+	// Callers validate (Manager does).
+	// Returns ErrSessionNotFound when the session does not exist.
+	SetToolActivations(ctx context.Context, id string, as []toolexposure.Activation) error
+	// ToolExposureState loads the session's project, override layer and
+	// activated set in one read; the zero layer and nil activations (not
+	// errors) when none are set.
+	// Returns ErrSessionNotFound when the session does not exist.
+	ToolExposureState(ctx context.Context, id string) (toolexposure.SessionState, error)
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
@@ -250,6 +267,8 @@ type memStore struct {
 	knobsDefault map[string]*llm.RequestKnobs // session_id -> knobs_default override
 	checkpoints  map[string]*StreamCheckpoint // "sessionID\x00subID" -> checkpoint
 	turnRuns     map[string]TurnRun           // run_id -> mapping
+	toolExposure map[string]toolexposure.Exposure
+	toolActs     map[string][]toolexposure.Activation
 }
 
 // NewMemoryStore returns an in-memory Store. Useful for tests and as
@@ -263,6 +282,8 @@ func NewMemoryStore() Store {
 		knobsDefault: map[string]*llm.RequestKnobs{},
 		checkpoints:  map[string]*StreamCheckpoint{},
 		turnRuns:     map[string]TurnRun{},
+		toolExposure: map[string]toolexposure.Exposure{},
+		toolActs:     map[string][]toolexposure.Activation{},
 	}
 }
 
@@ -460,6 +481,8 @@ func (s *memStore) Delete(_ context.Context, id string) error {
 	delete(s.records, id)
 	delete(s.messages, id)
 	delete(s.seqByID, id)
+	delete(s.toolExposure, id)
+	delete(s.toolActs, id)
 	// Mirror the SQL store's ON DELETE CASCADE on session_turn_runs
 	// (migration 0342): a deleted session's turn -> run links go with it.
 	for runID, tr := range s.turnRuns {
@@ -583,6 +606,19 @@ func (s *memStore) RecordTurnRunOutcome(_ context.Context, sessionID, runID stri
 	tr.Outcome = o
 	s.turnRuns[runID] = tr
 	return nil
+}
+
+// CountTurnRuns counts a session's recorded turn runs.
+func (s *memStore) CountTurnRuns(_ context.Context, sessionID string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, tr := range s.turnRuns {
+		if tr.SessionID == sessionID {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (s *memStore) ListTurnRuns(_ context.Context, sessionID string) ([]TurnRun, error) {
@@ -1375,6 +1411,14 @@ func (s *sqlStore) RecordTurnRun(ctx context.Context, tr TurnRun) error {
 	})
 }
 
+// CountTurnRuns counts a session's recorded turn runs.
+func (s *sqlStore) CountTurnRuns(ctx context.Context, sessionID string) (int, error) {
+	var n int
+	err := s.db.Reader().QueryRow(ctx,
+		"SELECT COUNT(*) FROM session_turn_runs WHERE session_id = ?", sessionID).Scan(&n)
+	return n, err
+}
+
 // ListTurnRuns returns a session's recorded turn -> run mappings, oldest
 // first. A session whose turns all predate migration 0342 returns an
 // empty slice.
@@ -1639,7 +1683,8 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
                compacted_into_id, compacted_at, archived_at,
                streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of,
                prompt_tokens, completion_tokens, cost_usd, cost_source,
-               kind, move_index, turn_span_id, model_tool_args
+               kind, move_index, turn_span_id, model_tool_args,
+               cached_tokens
         FROM session_messages
         WHERE session_id = ?
     `
@@ -1675,13 +1720,15 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 			moveIndexCol         sql.NullInt64
 			turnSpanCol          sql.NullString
 			modelToolArgsCol     sql.NullString
+			cachedTokens         sql.NullInt64
 		)
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
 			&m.Content, &toolCalls, &createdAt, &contentJSON,
 			&compactedIntoID, &compactedAt, &archivedAt,
 			&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf,
 			&promptTokens, &completionTokens, &costUSD, &costSource,
-			&moveKindCol, &moveIndexCol, &turnSpanCol, &modelToolArgsCol); err != nil {
+			&moveKindCol, &moveIndexCol, &turnSpanCol, &modelToolArgsCol,
+			&cachedTokens); err != nil {
 			return nil, err
 		}
 		// model-moves-transcript-01PMCH01 WP01 + WP03: rehydrate the move
@@ -1744,6 +1791,10 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 		}
 		if costSource.Valid {
 			m.MessageCostSource = costSource.String
+		}
+		if cachedTokens.Valid {
+			v := int(cachedTokens.Int64)
+			m.CachedTokens = &v
 		}
 		out = append(out, m)
 	}

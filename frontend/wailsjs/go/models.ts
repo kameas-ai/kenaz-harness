@@ -4014,6 +4014,7 @@ export namespace llm {
 	    description?: string;
 	    contextWindow?: number;
 	    maxOutputTokens?: number;
+	    supportsPromptCache?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelInfo(source);
@@ -4026,6 +4027,7 @@ export namespace llm {
 	        this.description = source["description"];
 	        this.contextWindow = source["contextWindow"];
 	        this.maxOutputTokens = source["maxOutputTokens"];
+	        this.supportsPromptCache = source["supportsPromptCache"];
 	    }
 	}
 	export class ProbeCustomEndpointInput {
@@ -4323,6 +4325,135 @@ export namespace llm {
 	    }
 	}
 	
+
+}
+
+export namespace loadtools {
+	
+	export class NotLoaded {
+	    name: string;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NotLoaded(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class Result {
+	    loaded: string[];
+	    loaded_by_server: Record<string, number>;
+	    next_turn?: string[];
+	    not_loaded: NotLoaded[];
+	    summary: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Result(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.loaded = source["loaded"];
+	        this.loaded_by_server = source["loaded_by_server"];
+	        this.next_turn = source["next_turn"];
+	        this.not_loaded = this.convertValues(source["not_loaded"], NotLoaded);
+	        this.summary = source["summary"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ToolCost {
+	    name: string;
+	    tokenEst: number;
+	    tier: string;
+	    source: string;
+	    activated: boolean;
+	    sendable: boolean;
+	    hot: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolCost(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.tokenEst = source["tokenEst"];
+	        this.tier = source["tier"];
+	        this.source = source["source"];
+	        this.activated = source["activated"];
+	        this.sendable = source["sendable"];
+	        this.hot = source["hot"];
+	    }
+	}
+	export class ServerCost {
+	    server: string;
+	    state: string;
+	    running: boolean;
+	    toolCount: number;
+	    tokenEst: number;
+	    tier: string;
+	    source: string;
+	    pinned: boolean;
+	    sendableTokenEst: number;
+	    tools: ToolCost[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerCost(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.server = source["server"];
+	        this.state = source["state"];
+	        this.running = source["running"];
+	        this.toolCount = source["toolCount"];
+	        this.tokenEst = source["tokenEst"];
+	        this.tier = source["tier"];
+	        this.source = source["source"];
+	        this.pinned = source["pinned"];
+	        this.sendableTokenEst = source["sendableTokenEst"];
+	        this.tools = this.convertValues(source["tools"], ToolCost);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 
@@ -7167,6 +7298,7 @@ export namespace sessions {
 	    promptTokens?: number;
 	    completionTokens?: number;
 	    costUsd?: number;
+	    cachedTokens?: number;
 	    messageCostSource?: string;
 	    kind?: string;
 	    moveIndex?: number;
@@ -7195,6 +7327,7 @@ export namespace sessions {
 	        this.promptTokens = source["promptTokens"];
 	        this.completionTokens = source["completionTokens"];
 	        this.costUsd = source["costUsd"];
+	        this.cachedTokens = source["cachedTokens"];
 	        this.messageCostSource = source["messageCostSource"];
 	        this.kind = source["kind"];
 	        this.moveIndex = source["moveIndex"];
@@ -7358,6 +7491,74 @@ export namespace sessions {
 		    return a;
 		}
 	}
+	export class SessionToolExposure {
+	    exposure: toolexposure.Exposure;
+	    activations: toolexposure.Activation[];
+	    org: toolexposure.OrgExposure;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionToolExposure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.exposure = this.convertValues(source["exposure"], toolexposure.Exposure);
+	        this.activations = this.convertValues(source["activations"], toolexposure.Activation);
+	        this.org = this.convertValues(source["org"], toolexposure.OrgExposure);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class UsageComposition {
+	    system: number;
+	    tools: number;
+	    history: number;
+	    attachments: number;
+	    memory: number;
+	    cached: number;
+	    toolsFull: number;
+	    toolsSummary: number;
+	    schemaBudget?: number;
+	    toolsEvicted?: number;
+	    pinnedOverBudgetBy?: number;
+	    hotOverBudgetBy?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageComposition(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.system = source["system"];
+	        this.tools = source["tools"];
+	        this.history = source["history"];
+	        this.attachments = source["attachments"];
+	        this.memory = source["memory"];
+	        this.cached = source["cached"];
+	        this.toolsFull = source["toolsFull"];
+	        this.toolsSummary = source["toolsSummary"];
+	        this.schemaBudget = source["schemaBudget"];
+	        this.toolsEvicted = source["toolsEvicted"];
+	        this.pinnedOverBudgetBy = source["pinnedOverBudgetBy"];
+	        this.hotOverBudgetBy = source["hotOverBudgetBy"];
+	    }
+	}
 	export class SessionUsage {
 	    promptTokens: number;
 	    completionTokens: number;
@@ -7366,6 +7567,8 @@ export namespace sessions {
 	    costSource: string;
 	    messageCount: number;
 	    pricingDataDate: string;
+	    cachedTokens: number;
+	    composition?: UsageComposition;
 	
 	    static createFrom(source: any = {}) {
 	        return new SessionUsage(source);
@@ -7380,8 +7583,29 @@ export namespace sessions {
 	        this.costSource = source["costSource"];
 	        this.messageCount = source["messageCount"];
 	        this.pricingDataDate = source["pricingDataDate"];
+	        this.cachedTokens = source["cachedTokens"];
+	        this.composition = this.convertValues(source["composition"], UsageComposition);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
+	
 	export class TurnRun {
 	    runId: string;
 	    turnSpanId: string;
@@ -7741,6 +7965,9 @@ export namespace settings {
 		    return a;
 		}
 	}
+	
+	
+	
 	export class FleetTelemetryStatusView {
 	    wired: boolean;
 	    enrolled: boolean;
@@ -7940,6 +8167,9 @@ export namespace settings {
 	    skippedUpdateVersions?: string[];
 	    monthlyCostNotifyUsd?: number;
 	    mcpAutoRestartDisabled?: boolean;
+	    toolExposure?: toolexposure.Exposure;
+	    toolSchemaBudgetTokens?: number;
+	    toolActivationTtlTurns?: number;
 	    agenticTurnRouting?: boolean;
 	    autoTitleDisabled?: boolean;
 	    moveFidelityHistoryDisabled?: boolean;
@@ -7980,7 +8210,7 @@ export namespace settings {
 	    adviceCompactNowDisabled?: boolean;
 	    adviceEscalateModelDisabled?: boolean;
 	    adviceLabelCaptureDisabled?: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
@@ -8035,6 +8265,9 @@ export namespace settings {
 	        this.skippedUpdateVersions = source["skippedUpdateVersions"];
 	        this.monthlyCostNotifyUsd = source["monthlyCostNotifyUsd"];
 	        this.mcpAutoRestartDisabled = source["mcpAutoRestartDisabled"];
+	        this.toolExposure = this.convertValues(source["toolExposure"], toolexposure.Exposure);
+	        this.toolSchemaBudgetTokens = source["toolSchemaBudgetTokens"];
+	        this.toolActivationTtlTurns = source["toolActivationTtlTurns"];
 	        this.agenticTurnRouting = source["agenticTurnRouting"];
 	        this.autoTitleDisabled = source["autoTitleDisabled"];
 	        this.moveFidelityHistoryDisabled = source["moveFidelityHistoryDisabled"];
@@ -8076,7 +8309,7 @@ export namespace settings {
 	        this.adviceEscalateModelDisabled = source["adviceEscalateModelDisabled"];
 	        this.adviceLabelCaptureDisabled = source["adviceLabelCaptureDisabled"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -8117,32 +8350,18 @@ export namespace settings {
 }
 
 export namespace sidecar {
-
-	export class ReleaseView {
-	    version: string;
-	    sizeMB: number;
-
-	    static createFrom(source: any = {}) {
-	        return new ReleaseView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.version = source["version"];
-	        this.sizeMB = source["sizeMB"];
-	    }
-	}
+	
 	export class LaneView {
 	    kind: string;
 	    reason: string;
 	    code: string;
 	    detail: string;
 	    until: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LaneView(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
@@ -8150,6 +8369,20 @@ export namespace sidecar {
 	        this.code = source["code"];
 	        this.detail = source["detail"];
 	        this.until = source["until"];
+	    }
+	}
+	export class ReleaseView {
+	    version: string;
+	    sizeMB: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReleaseView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.sizeMB = source["sizeMB"];
 	    }
 	}
 	export class StatusView {
@@ -8166,11 +8399,11 @@ export namespace sidecar {
 	    installLocation: string;
 	    updateAvailable: boolean;
 	    labelLanes: LaneView[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StatusView(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.state = source["state"];
@@ -8187,7 +8420,7 @@ export namespace sidecar {
 	        this.updateAvailable = source["updateAvailable"];
 	        this.labelLanes = this.convertValues(source["labelLanes"], LaneView);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -8648,6 +8881,169 @@ export namespace tasks {
 	        this.endedAt = source["endedAt"];
 	        this.ageMs = source["ageMs"];
 	    }
+	}
+
+}
+
+export namespace toolexposure {
+	
+	export class Activation {
+	    name: string;
+	    server: string;
+	    lastUsedTurn: number;
+	    sticky: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Activation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.server = source["server"];
+	        this.lastUsedTurn = source["lastUsedTurn"];
+	        this.sticky = source["sticky"];
+	    }
+	}
+	export class ServerExposure {
+	    tier?: string;
+	    tools?: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerExposure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tier = source["tier"];
+	        this.tools = source["tools"];
+	    }
+	}
+	export class Exposure {
+	    servers?: Record<string, ServerExposure>;
+	
+	    static createFrom(source: any = {}) {
+	        return new Exposure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.servers = this.convertValues(source["servers"], ServerExposure, true);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OrgSetting {
+	    server: string;
+	    tool?: string;
+	    tier: string;
+	    pinned: boolean;
+	    pinnedBy?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrgSetting(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.server = source["server"];
+	        this.tool = source["tool"];
+	        this.tier = source["tier"];
+	        this.pinned = source["pinned"];
+	        this.pinnedBy = source["pinnedBy"];
+	    }
+	}
+	export class OrgExposure {
+	    settings: OrgSetting[];
+	    schemaBudgetTokens: number;
+	    bundleId: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrgExposure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.settings = this.convertValues(source["settings"], OrgSetting);
+	        this.schemaBudgetTokens = source["schemaBudgetTokens"];
+	        this.bundleId = source["bundleId"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class Settings {
+	    exposure: Exposure;
+	    schemaBudgetTokens: number;
+	    activationTtlTurns: number;
+	    effectiveSchemaBudgetTokens: number;
+	    effectiveActivationTtlTurns: number;
+	    org: OrgExposure;
+	
+	    static createFrom(source: any = {}) {
+	        return new Settings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.exposure = this.convertValues(source["exposure"], Exposure);
+	        this.schemaBudgetTokens = source["schemaBudgetTokens"];
+	        this.activationTtlTurns = source["activationTtlTurns"];
+	        this.effectiveSchemaBudgetTokens = source["effectiveSchemaBudgetTokens"];
+	        this.effectiveActivationTtlTurns = source["effectiveActivationTtlTurns"];
+	        this.org = this.convertValues(source["org"], OrgExposure);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

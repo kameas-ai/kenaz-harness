@@ -1288,3 +1288,37 @@
 "Fleet_MemorySyncDisable"
 "Fleet_MemorySyncEnable"
 "Fleet_MemorySyncStatus"
+
+# CLASS: gated -- tool-context-budget-01TCBUD01 WP06, 2026-10-09.
+# 7 entries.
+#
+# The tool-exposure bindings the composer Tools menu calls
+# (components/chat/ToolsMenu.vue, spec §2.2/§2.6). WP02/WP03 landed them
+# untriaged pending the surface. The menu sits in the served chat surface
+# (SessionsView's status bar), so — per the 2026-08-22 correction above
+# (Settings_GetMultimodalInput: ChatInput.vue IS the served chat surface,
+# so its callers are gated, not panelled) — these are gated: with
+# servedMode set the menu renders NotAvailableInServedMode in place of its
+# panel and refresh() returns before any call, and SessionsView passes
+# servedMode and hides the request_too_large "Open tools" remedy and skips
+# its Tools_SchemaCosts read in served mode. The same bindings' other
+# callers (views/tools/ToolExposurePanel.vue under ToolsView's boundary
+# panel; ScheduledChatFormModal.vue under the boundary-panelled
+# WorkflowsView) are inaccessible in served mode. Tools_SchemaCosts is
+# WP06's one new read binding. Ports together if the exposure family is
+# ever served.
+"Projects_GetToolExposure"
+"Projects_SetToolExposure"
+"Sessions_GetToolExposure"
+"Sessions_LoadTools"
+"Sessions_SetToolExposure"
+"Settings_GetToolExposure"
+"Tools_SchemaCosts"
+
+# CLASS: boundary-panelled -- tool-context-budget-01TCBUD01 WP06, 2026-10-09.
+# 1 entries.
+#
+# Settings_SetToolExposure: the user layer, budget and TTL writer. Its only
+# caller is views/tools/ToolExposurePanel.vue, mounted only by
+# views/tools/ToolsView.vue, which renders NotAvailableInServedMode.
+"Settings_SetToolExposure"

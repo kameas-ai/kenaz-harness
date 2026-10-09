@@ -15,6 +15,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
 )
 
@@ -80,6 +81,12 @@ type kernelToolAdapter struct {
 	// (model-moves-transcript-01PMCH01 WP02). Non-nil on the chat path;
 	// nil (or inert) leaves Call byte-identical to the pre-mission path.
 	moves *turnJournal
+
+	// exposure, when set, stops calls to catalog tools the session was
+	// not sent (summary tier and not activated, or off) before any
+	// permission check: see exposureTurn.gateCall. nil dispatches every
+	// call as before.
+	exposure *exposureTurn
 
 	// autonomy is the optional knobs provider for autonomy-dial WP04.
 	// When non-nil the adapter reads AutoApproveFamilies before each
@@ -181,6 +188,12 @@ func newKernelToolAdapter(pool ToolPool, perms ToolPermissionResolver, sessionID
 // callers can chain at construction time.
 func (a *kernelToolAdapter) withMoves(j *turnJournal) *kernelToolAdapter {
 	a.moves = j
+	return a
+}
+
+// withToolExposure attaches the turn's tool-exposure view.
+func (a *kernelToolAdapter) withToolExposure(t *exposureTurn) *kernelToolAdapter {
+	a.exposure = t
 	return a
 }
 
@@ -387,6 +400,15 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 			return coreag.ToolResult{}, fmt.Errorf("chat: unknown tool %q", call.Name)
 		}
 	}
+	if a.exposure != nil {
+		// The namespaced name, not call.Name: a bare-name call resolved
+		// to (server, tool) above must face the same exposure gate.
+		if res, stopped := a.exposure.gateCall(ctx, server+"__"+tool); stopped {
+			return res, nil
+		}
+		ctx = loadtools.WithTurnView(ctx, a.exposure.willSend)
+		ctx = loadtools.WithTurnBudget(ctx, a.exposure.fitLoaded)
+	}
 	if a.perms != nil {
 		v, err := a.perms.Resolve(ctx, a.sessionID, server, tool)
 		if err != nil {
@@ -441,6 +463,12 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 				IsError: true,
 			}, nil
 		}
+	}
+
+	// Past every gate: the call runs, so it counts as a use of the tool
+	// (a denied or declined call does not).
+	if a.exposure != nil {
+		a.exposure.markCalled(ctx, server+"__"+tool)
 	}
 
 	argsJSON, err := json.Marshal(call.Args)

@@ -147,10 +147,11 @@ func (r *Reducer) Derive(usage llm.Usage, kind, model string) llm.Cost {
 	}
 	rates := entry.PerMillionTokens
 	const million = 1_000_000.0
-	inputCost := float64(usage.InputTokens) / million * rates["input"]
+	full, read, write := splitPrompt(usage, kind, rates["cached_input_read"], rates["cached_input_write"])
+	inputCost := float64(full) / million * rates["input"]
 	outputCost := float64(usage.OutputTokens) / million * rates["output"]
-	cachedCost := float64(usage.CachedInputRead)/million*rates["cached_input_read"] +
-		float64(usage.CachedInputWrite)/million*rates["cached_input_write"]
+	cachedCost := float64(read)/million*rates["cached_input_read"] +
+		float64(write)/million*rates["cached_input_write"]
 	reasoningCost := float64(usage.ReasoningTokens) / million * rates["reasoning"]
 	total := inputCost + outputCost + cachedCost + reasoningCost
 	return llm.Cost{
@@ -230,16 +231,43 @@ func DeriveWithSource(usage llm.Usage, kind, model string, providerCostUSD *floa
 	entry, ok := pricing.Lookup(kind, model)
 	if ok {
 		const million = 1_000_000.0
-		total := float64(usage.InputTokens)/million*entry.InputPer1MUSD +
+		full, read, write := splitPrompt(usage, kind, entry.CachedInputPer1MUSD, entry.CachedInputWritePer1MUSD)
+		total := float64(full)/million*entry.InputPer1MUSD +
 			float64(usage.OutputTokens)/million*entry.OutputPer1MUSD +
-			float64(usage.CachedInputRead)/million*entry.CachedInputPer1MUSD +
-			float64(usage.CachedInputWrite)/million*entry.CachedInputWritePer1MUSD +
+			float64(read)/million*entry.CachedInputPer1MUSD +
+			float64(write)/million*entry.CachedInputWritePer1MUSD +
 			float64(usage.ReasoningTokens)/million*entry.ReasoningPer1MUSD
 		return &total, SourceDerived
 	}
 
 	// Branch 3: unknown.
 	return nil, SourceUnknown
+}
+
+// splitPrompt divides a call's prompt into the tokens billed at the input
+// rate, the cache-read rate and the cache-write rate, under kind's
+// InputTokens convention (llm.InputExcludesCache):
+//
+//   - exclusive (Anthropic): InputTokens is already the uncached
+//     remainder; the cache counts are billed on top of it.
+//   - inclusive (OpenRouter, Gemini, OpenAI-compatible): InputTokens
+//     contains the cache counts, so each cache count with a known rate is
+//     moved out of the input bucket and billed at its own rate. A cache
+//     count whose rate is unknown (0) stays in the input bucket.
+func splitPrompt(u llm.Usage, kind string, readRate, writeRate float64) (full, read, write int) {
+	if llm.InputExcludesCache(kind) {
+		return u.InputTokens, u.CachedInputRead, u.CachedInputWrite
+	}
+	full = u.InputTokens
+	if readRate > 0 {
+		read = min(max(u.CachedInputRead, 0), full)
+		full -= read
+	}
+	if writeRate > 0 {
+		write = min(max(u.CachedInputWrite, 0), full)
+		full -= write
+	}
+	return full, read, write
 }
 
 func (r *Reducer) lookup(kind, model string) (Entry, bool) {

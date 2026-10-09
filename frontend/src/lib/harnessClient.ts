@@ -215,6 +215,11 @@ import type {
   FleetAcceptedSessionView,
   FleetRecipientDeviceView,
   ComplianceStatus,
+  ToolExposure,
+  ToolExposureSettings,
+  SessionToolExposure,
+  LoadToolsResult,
+  ServerSchemaCost,
 } from './types';
 
 /**
@@ -374,6 +379,25 @@ interface WailsBindingsLike {
     id: string,
     knobs: WireSessionKnobs | null,
   ): Promise<void>;
+  // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
+  Settings_GetToolExposure(): Promise<ToolExposureSettings>;
+  Settings_SetToolExposure(settings: ToolExposureSettings): Promise<void>;
+  Projects_GetToolExposure(projectID: string): Promise<ToolExposure>;
+  Projects_SetToolExposure(
+    projectID: string,
+    exposure: ToolExposure,
+  ): Promise<void>;
+  Sessions_GetToolExposure(sessionID: string): Promise<SessionToolExposure>;
+  Sessions_SetToolExposure(
+    sessionID: string,
+    exposure: ToolExposure,
+  ): Promise<void>;
+  Sessions_LoadTools(
+    sessionID: string,
+    servers: string[],
+    tools: string[],
+    sticky: boolean,
+  ): Promise<LoadToolsResult>;
 
   LLM_ListProviders(): Promise<Provider[]>;
   LLM_StartStream(
@@ -691,6 +715,11 @@ interface WailsBindingsLike {
     path: string,
     reason: string,
   ): Promise<{ granted: boolean; expanded: string; message: string }>;
+  // ── tool-context-budget-01TCBUD01 WP06 ──────────────────────────────
+  Tools_SchemaCosts(
+    sessionID: string,
+    projectID: string,
+  ): Promise<ServerSchemaCost[]>;
 
   Bash_Exec(sessionID: string, command: string): Promise<BashExecResult>;
 
@@ -1695,6 +1724,23 @@ export interface SessionsClient {
    */
   setKnobsDefault(id: string, knobs: ReasoningConfig | null): Promise<void>;
 
+  // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
+  /** Read the session's tool-exposure override layer and activated set. */
+  getToolExposure(id: string): Promise<SessionToolExposure>;
+  /** Persist the session's tool-exposure override; an empty layer clears it. */
+  setToolExposure(id: string, exposure: ToolExposure): Promise<void>;
+  /**
+   * Load tools into the session (server names, exact "server__tool"
+   * names or "server__prefix*" globs) — the activation the model's
+   * kenaz__load_tools performs. Reports every name not loaded and why.
+   */
+  loadTools(
+    id: string,
+    servers: string[],
+    tools: string[],
+    sticky: boolean,
+  ): Promise<LoadToolsResult>;
+
   // ── session-export-01NDFSEX05 WP03 ──────────────────────────────────
   /**
    * Export the session to a user-chosen local file via the OS-native
@@ -1793,6 +1839,12 @@ export interface ProjectsClient {
   getAutonomy(id: string): Promise<AutonomyLayer>;
   /** Persist the project's autonomy.Layer override. */
   setAutonomy(id: string, layer: AutonomyLayer): Promise<void>;
+
+  // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
+  /** Read the project's tool-exposure override layer (empty when unset). */
+  getToolExposure(id: string): Promise<ToolExposure>;
+  /** Persist the project's tool-exposure override; an empty layer clears it. */
+  setToolExposure(id: string, exposure: ToolExposure): Promise<void>;
 }
 
 export interface LLMConnectorClient {
@@ -2431,6 +2483,16 @@ export interface SettingsClient {
   getMCPAutoRestart(): Promise<boolean>;
   /** Persist the MCP auto-restart dial. */
   setMCPAutoRestart(enabled: boolean): Promise<void>;
+
+  // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
+  /**
+   * The user's per-server / per-tool exposure tiers, schema budget and
+   * activation TTL as stored (0 = default), plus the read-only effective
+   * budget and TTL.
+   */
+  getToolExposure(): Promise<ToolExposureSettings>;
+  /** Persist exposure tiers, budget and TTL (0 = default); effective* fields are ignored. Unknown tiers are refused. */
+  setToolExposure(settings: ToolExposureSettings): Promise<void>;
   /** Returns the persisted embedder provider profileId and modelOverride. */
   getEmbedderConfig(): Promise<EmbedderConfigResult>;
   /** Persists embedder provider selection and optional model override.
@@ -2866,6 +2928,13 @@ export interface ToolsClient {
     reason: string,
     recipeID?: string,
   ): Promise<FSAccessResult>;
+  /**
+   * Every tool server's schema cost and resolved exposure tier
+   * (tool-context-budget-01TCBUD01 §2.5). With sessionId set the tiers
+   * are that session's (override and activated set included); otherwise
+   * projectId's, or the user's default when projectId is empty.
+   */
+  schemaCosts(sessionId: string, projectId: string): Promise<ServerSchemaCost[]>;
 }
 
 /**
@@ -4361,6 +4430,11 @@ export function createHarnessClient(): HarnessClient {
           .then(wireToReasoningConfig),
       setKnobsDefault: (id, knobs) =>
         b().Sessions_SetKnobsDefault(id, reasoningConfigToWire(knobs)),
+      getToolExposure: (id) => b().Sessions_GetToolExposure(id),
+      setToolExposure: (id, exposure) =>
+        b().Sessions_SetToolExposure(id, exposure),
+      loadTools: (id, servers, tools, sticky) =>
+        b().Sessions_LoadTools(id, servers, tools, sticky),
       export: (sessionId, format) => b().Sessions_Export(sessionId, format),
     },
     artifacts: {
@@ -4394,6 +4468,9 @@ export function createHarnessClient(): HarnessClient {
       listSessions: (projectId) => b().Projects_ListSessions(projectId),
       getAutonomy: (id) => b().Projects_GetAutonomy(id),
       setAutonomy: (id, layer) => b().Projects_SetAutonomy(id, layer),
+      getToolExposure: (id) => b().Projects_GetToolExposure(id),
+      setToolExposure: (id, exposure) =>
+        b().Projects_SetToolExposure(id, exposure),
     },
     documents: {
       list: (sessionId) => b().Documents_List(sessionId),
@@ -4605,6 +4682,8 @@ export function createHarnessClient(): HarnessClient {
       setAutonomy: (layer) => b().Settings_SetAutonomy(layer),
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
       setMCPAutoRestart: (enabled) => b().Settings_SetMCPAutoRestart(enabled),
+      getToolExposure: () => b().Settings_GetToolExposure(),
+      setToolExposure: (settings) => b().Settings_SetToolExposure(settings),
       getEmbedderConfig: () => b().Settings_GetEmbedderConfig(),
       setEmbedderConfig: (profileID, modelOverride) =>
         b().Settings_SetEmbedderConfig(profileID, modelOverride),
@@ -4734,6 +4813,8 @@ export function createHarnessClient(): HarnessClient {
         b().Tools_PickDirectory(title ?? '', defaultDir ?? ''),
       requestAdditionalAllowedDir: (path, reason, recipeID = 'filesystem') =>
         b().Tools_RequestAdditionalAllowedDir(recipeID, path, reason),
+      schemaCosts: async (sessionId, projectId) =>
+        (await b().Tools_SchemaCosts(sessionId, projectId)) ?? [],
     },
     shell: {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
@@ -5760,6 +5841,18 @@ export function createFakeHarnessClient(
       }),
       getKnobsDefault: async () => null,
       setKnobsDefault: noop,
+      getToolExposure: async () => ({
+        exposure: {},
+        activations: [],
+        org: { settings: [], schemaBudgetTokens: 0, bundleId: 0 },
+      }),
+      setToolExposure: noop,
+      loadTools: async (_id, servers, tools) => ({
+        loaded: [],
+        loaded_by_server: {},
+        not_loaded: [...servers, ...tools].map((name) => ({ name, reason: 'unknown' })),
+        summary: 'loaded no tools',
+      }),
       export: async (_sessionId, _format) => ({ path: '/fake/export.md', byteCount: 0 }),
     },
     projects: {
@@ -5786,6 +5879,8 @@ export function createFakeHarnessClient(
       listSessions: async () => [],
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: noop,
+      getToolExposure: async () => ({}),
+      setToolExposure: noop,
     },
     documents: {
       list: async () => [],
@@ -6112,6 +6207,15 @@ export function createFakeHarnessClient(
       setAutonomy: noop,
       getMCPAutoRestart: async () => true,
       setMCPAutoRestart: noop,
+      getToolExposure: async () => ({
+        exposure: {},
+        schemaBudgetTokens: 0,
+        activationTtlTurns: 0,
+        effectiveSchemaBudgetTokens: 24000,
+        effectiveActivationTtlTurns: 6,
+        org: { settings: [], schemaBudgetTokens: 0, bundleId: 0 },
+      }),
+      setToolExposure: noop,
       getEmbedderConfig: async () => ({ profileId: '', modelOverride: '' }),
       setEmbedderConfig: noop,
       getShowPerMessageTokenMeter: async () => false,
@@ -6401,6 +6505,7 @@ export function createFakeHarnessClient(
         expanded: '',
         message: 'stub',
       }),
+      schemaCosts: async () => [],
     },
     shell: {
       openInOSBrowser: noop,

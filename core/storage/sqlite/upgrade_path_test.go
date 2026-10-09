@@ -374,6 +374,14 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	_, hasSchedHistory := preOpen["scheduled_chat_run_history"]
 	schedHistoryPredates0345 := hasSchedHistory &&
 		!columnExists(t, raw, "scheduled_chat_run_history", "model")
+	// sessions/0346 adds columns to session_messages; same decision.
+	_, hasSessionMessages := preOpen["session_messages"]
+	sessionMessagesPredates0346 := hasSessionMessages &&
+		!columnExists(t, raw, "session_messages", "cached_tokens")
+	// sessions/0347 adds projects.tool_exposure; same question for the
+	// projects digest waiver below.
+	_, hasProjects := preOpen["projects"]
+	projectsPredate0347 := hasProjects && !columnExists(t, raw, "projects", "tool_exposure")
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -582,6 +590,33 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 			t.Errorf("table scheduled_chat_run_history present before Open, missing after")
 		} else if before.RowCount != after.RowCount {
 			t.Errorf("table scheduled_chat_run_history row count changed: %d -> %d (0345 only adds columns)", before.RowCount, after.RowCount)
+		}
+	}
+	// sessions/0346-session-usage-cache-tokens ADDs cached_tokens +
+	// cache_write_tokens (nullable) to session_messages, so every seeded
+	// row's digest changes on a snapshot whose table predates 0346. Same
+	// treatment as 0345 above: digest waived for those snapshots only,
+	// row count asserted exactly. TestMigration0346_* proves the old rows'
+	// usage columns read back intact.
+	if before, ok := preOpen["session_messages"]; ok && sessionMessagesPredates0346 && !changed["session_messages"] {
+		changed["session_messages"] = true
+		if after, ok := postOpen["session_messages"]; !ok {
+			t.Errorf("table session_messages present before Open, missing after")
+		} else if before.RowCount != after.RowCount {
+			t.Errorf("table session_messages row count changed: %d -> %d (0346 only adds columns)", before.RowCount, after.RowCount)
+		}
+	}
+	// sessions/0347-tool-exposure ADDs projects.tool_exposure (nullable,
+	// no default), which changes every seeded project row's digest on a
+	// snapshot that predates it. Waived for those snapshots only; the row
+	// count is still asserted exactly. TestMigration0347_* proves the old
+	// rows read back intact with no override.
+	if before, ok := preOpen["projects"]; ok && projectsPredate0347 {
+		changed["projects"] = true
+		if after, ok := postOpen["projects"]; !ok {
+			t.Errorf("table projects present before Open, missing after")
+		} else if before.RowCount != after.RowCount {
+			t.Errorf("table projects row count changed: %d -> %d (0347 only adds columns)", before.RowCount, after.RowCount)
 		}
 	}
 	for table, before := range preOpen {

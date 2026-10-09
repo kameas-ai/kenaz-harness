@@ -51,6 +51,7 @@ import (
 	coresecrets "github.com/kameas-ai/kenaz-harness/core/secrets"
 	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 )
 
@@ -1210,6 +1211,16 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// starts no run and touches no other conversation.
 			return true
 
+		case loadtools.Name:
+			// kenaz__load_tools (tool-context-budget-01TCBUD01 §2.2):
+			// always on. It is how summary-tier tools become reachable, so
+			// a dial that hid it would strand them; the exposure write
+			// guard refuses turning it off while summary tools exist
+			// (FR-E3). It changes only which schemas the session is sent;
+			// every tool it loads still passes the per-call use_tool
+			// resolution, which this call takes too.
+			return true
+
 		case coremonitor.ToolName:
 			// kenaz__monitor (subagent-control-and-background-tasks-
 			// 01PMZB11 UNIT-5): always-on at this coarse gate, same
@@ -1257,6 +1268,21 @@ func registerReadContextFileTool(
 		Library: lib,
 		Modules: moduleSource,
 	})
+	registry.Register(tool)
+	logging.L().Info("rpc.builtins.register", "tool", tool.Name())
+}
+
+// registerLoadToolsTool wires kenaz__load_tools (tool-context-budget-
+// 01TCBUD01 §2.2) over the shared load core. Registered from
+// newLLMStack after the tool discoverer exists, because the tool lists
+// the session's catalog through it; the registry is live, so the next
+// catalog read sees it. A nil service (nil-core chassis) registers
+// nothing.
+func registerLoadToolsTool(registry *toolloop.BuiltinRegistry, svc *loadtools.Service) {
+	if registry == nil || svc == nil {
+		return
+	}
+	tool := loadtools.New(svc)
 	registry.Register(tool)
 	logging.L().Info("rpc.builtins.register", "tool", tool.Name())
 }

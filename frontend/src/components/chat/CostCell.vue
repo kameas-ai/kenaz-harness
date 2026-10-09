@@ -47,6 +47,12 @@ const title = (() => {
           : 'Unknown cost source';
   return [
     `${u.promptTokens.toLocaleString()} prompt + ${u.completionTokens.toLocaleString()} completion = ${u.totalTokens.toLocaleString()} tokens`,
+    // promptTokens is the whole prompt for every provider (the backend
+    // normalises Anthropic's cache-exclusive count), so cached tokens
+    // are a part of it, never an addition.
+    u.cachedTokens
+      ? `of which ${u.cachedTokens.toLocaleString()} prompt tokens were served from cache`
+      : '',
     u.costUsd > 0 ? `$${u.costUsd.toFixed(6)} USD — ${src}` : src,
     u.pricingDataDate ? `Pricing data: ${u.pricingDataDate}` : '',
   ]

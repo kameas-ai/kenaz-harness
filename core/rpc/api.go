@@ -93,6 +93,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/policy/blockedrequests"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
+	"github.com/kameas-ai/kenaz-harness/core/projects"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
@@ -160,6 +161,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
 	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
 	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
@@ -188,6 +190,11 @@ type HarnessAPI interface {
 	// owned by a sibling mission (compaction-strategy-ui-01KQ8TDI) and
 	// this reader has nothing to do with strategy config.
 	CompactionOverhead(ctx context.Context) (CompactionOverheadInfo, error)
+
+	// ToolSchemaCosts reports every tool server's schema cost and
+	// resolved exposure tier for a session, or (sessionID empty) for a
+	// project or the user's default (tool-context-budget-01TCBUD01 §2.5).
+	ToolSchemaCosts(ctx context.Context, sessionID, projectID string) ([]loadtools.ServerCost, error)
 
 	// Advice_Respond is laya-advisors-01LAYA001 WP07's chip response RPC:
 	// action is "accept" or "dismiss". Returns the newly created child
@@ -478,6 +485,10 @@ type WindowSize struct {
 // stable for the lifetime of API. Real wiring lands in feature missions.
 type API struct {
 	core *core.Core
+
+	// toolExposure is the on-demand tool-exposure core behind
+	// ToolSchemaCosts; nil on the nil-core chassis.
+	toolExposure *loadtools.Service
 
 	// builtins holds the in-binary tool registry so the chat-input
 	// `!cmd` shell-escape can dispatch directly to kenaz__bash without
@@ -2626,6 +2637,19 @@ func New(c *core.Core, opts ...Option) *API {
 	// compaction pair above, for the chat runner's auto-title caller.
 	a.autotitleLLM = stack.autotitleLLM
 	a.chatRunner = stack.chatRunner
+	// tool-context-budget-01TCBUD01: bind the load core's late
+	// dependencies (the audit log and user-imported recipes, both built
+	// outside newLLMStack) and install it behind Sessions_LoadTools and
+	// the three exposure write paths' kenaz__load_tools guard (FR-E3).
+	if stack.loadTools != nil {
+		stack.toolsAudit.bind(a.auditImpl)
+		stack.toolServers.setUserRecipes(mcpUserRecipeSource(a.mcpUserStore))
+		a.sessionsAPI = sessions.WithToolLoading(a.sessionsAPI, stack.loadTools, stack.loadTools)
+		a.sessionsAPI = sessions.WithOrgPins(a.sessionsAPI, settingsImpl)
+		a.projectsAPI = projectsview.WithToolExposureGuard(a.projectsAPI, stack.loadTools)
+		settingsImpl.SetToolExposureGuard(stack.loadTools)
+		a.toolExposure = stack.loadTools
+	}
 	// CK-09 (chat-turn-integrity-01PMZ606 WP13): capture the sweep
 	// scheduler newLLMStack already started so Shutdown can Stop() it.
 	a.compactionScheduler = stack.compactionScheduler
@@ -5953,6 +5977,13 @@ func (f *keychainForgetter) Forget(ctx context.Context, locator string) error {
 // shared secrets backend is what InstallRecipe writes credentials
 // into so the resolver finds them on the next ResolveEnv).
 type llmStack struct {
+	// loadTools is the shared on-demand tool-exposure core; nil on the
+	// nil-core chassis. toolServers is its server directory and
+	// toolsAudit its late-bound audit sink (see New()).
+	loadTools   *loadtools.Service
+	toolServers *toolServerDirectory
+	toolsAudit  *toolsAuditEmitter
+
 	api     llm.LLMConnectorAPI
 	pool    *stdio.Pool
 	secrets *secrets.MemoryBackend
@@ -6558,6 +6589,24 @@ func newLLMStack(
 	// when those Settings toggles are ON.
 	toolDiscoverer := llm.NewMCPToolDiscovererWithBuiltins(dispatchPool, perms, builtinFilter)
 
+	// On-demand tool exposure (tool-context-budget-01TCBUD01): one load
+	// core shared by the chat runner's request builder (which sends hot,
+	// pinned and activated tools in full and summarises the rest in
+	// kenaz__load_tools' description), the kenaz__load_tools built-in,
+	// Sessions_LoadTools and the exposure write guard. nil on the
+	// nil-core chassis, which then sends the whole catalog.
+	var projectMgr *projects.Manager
+	if c != nil {
+		projectMgr = c.ProjectManager()
+	}
+	toolsAudit := &toolsAuditEmitter{}
+	loadToolsSvc, toolServers := buildLoadToolsService(settingsImpl, sessionMgr, projectMgr, toolDiscoverer, dispatchPool, toolsAudit)
+	var chatExposure chat.ToolExposure
+	if loadToolsSvc != nil {
+		chatExposure = loadToolsSvc
+		registerLoadToolsTool(builtinRegistry, loadToolsSvc)
+	}
+
 	// chat-migration cutover (this mission, WP-A): construct the kernel-
 	// driven ChatRunner and hand it to the LLM impl via Config.ChatRunner.
 	// When the runner is wired the LLM view's StartStream forwards every
@@ -7046,7 +7095,7 @@ func newLLMStack(
 			},
 		}
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatRiskRater, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner, chatAdvisor, adviceDeps)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatExposure, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatRiskRater, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner, chatAdvisor, adviceDeps)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -7064,6 +7113,7 @@ func newLLMStack(
 		Tools:         toolDiscoverer,
 		Artifacts:     &llmArtifactSinkAdapter{inner: artifactSink},
 		CapCatalog:    capCatalog,
+		Windows:       newModelWindows(reg, settingsImpl),
 		HostProviders: hostProviders,
 	})
 
@@ -7102,6 +7152,9 @@ func newLLMStack(
 		historyAdapter:      historyAdapter,
 		wrappedPool:         wrappedPool,
 		toolDiscoverer:      toolDiscoverer,
+		loadTools:           loadToolsSvc,
+		toolServers:         toolServers,
+		toolsAudit:          toolsAudit,
 		dispatchPool:        dispatchPool,
 		perms:               perms,
 		sessionArm:          sessionArm,
@@ -7797,6 +7850,69 @@ func usageCost(resp corellm.Response) (*float64, string) {
 	return nil, "unknown"
 }
 
+// usageTurnRecord is the usage row for a turn's billed calls. Prompt
+// counts are the whole prompt under either provider convention
+// (llm.PromptTokensTotal): Anthropic's input_tokens leaves out cache reads
+// and writes, so once caching is on the raw value under-reports.
+func usageTurnRecord(sessionID, messageID, providerKind, modelID string, billed corellm.Response) usage.UsageTurn {
+	cost, source := usageCost(billed)
+	return usage.UsageTurn{
+		SessionID:        sessionID,
+		MessageID:        messageID,
+		ProviderKind:     providerKind,
+		ModelID:          modelID,
+		PromptTokens:     corellm.PromptTokensTotal(billed.Usage, providerKind),
+		CompletionTokens: billed.Usage.OutputTokens,
+		CachedTokens:     billed.Usage.CachedInputRead,
+		CacheWriteTokens: billed.Usage.CachedInputWrite,
+		CostUSD:          cost,
+		CostSource:       source,
+	}
+}
+
+// lastUsageSnapshot is the context-bar snapshot for a row's own call, its
+// prompt count normalised the same way as usageTurnRecord's.
+func lastUsageSnapshot(resp corellm.Response, providerKind string) session.LastUsage {
+	cost, source := usageCost(resp)
+	costVal := 0.0
+	if cost != nil {
+		costVal = *cost
+	}
+	prompt := corellm.PromptTokensTotal(resp.Usage, providerKind)
+	return session.LastUsage{
+		PromptTokens:     prompt,
+		CompletionTokens: resp.Usage.OutputTokens,
+		TotalTokens:      prompt + resp.Usage.OutputTokens,
+		CostUSD:          costVal,
+		CostSource:       source,
+		Composition:      usageComposition(resp.Composition),
+	}
+}
+
+// usageComposition maps a measured request composition onto the
+// persisted last-usage snapshot; nil stays nil (the call was not
+// measured).
+func usageComposition(c *corellm.PromptComposition) *session.UsageComposition {
+	if c == nil {
+		return nil
+	}
+	return &session.UsageComposition{
+		System:       c.System,
+		Tools:        c.Tools,
+		History:      c.History,
+		Attachments:  c.Attachments,
+		Memory:       c.Memory,
+		Cached:       c.Cached,
+		ToolsFull:    c.ToolsFull,
+		ToolsSummary: c.ToolsSummary,
+
+		SchemaBudget:       c.Budget,
+		ToolsEvicted:       c.Evicted,
+		PinnedOverBudgetBy: c.PinnedOverBudgetBy,
+		HotOverBudgetBy:    c.HotOverBudgetBy,
+	}
+}
+
 // buildChatRunner constructs the *chat.ChatRunner that replaces
 // core/toolloop as the chassis chat path. Returns nil when the graph
 // manager is unavailable (test path or boot failure) so the LLM view
@@ -7816,6 +7932,10 @@ func buildChatRunner(
 	settingsImpl *settings.API,
 	graphMgr *graphview.Manager,
 	tools corellm.ToolDiscoverer,
+	// toolExposure picks each model call's tools from the discovered
+	// catalog (tool-context-budget-01TCBUD01). nil sends the whole
+	// catalog — the nil-core chassis.
+	toolExposure chat.ToolExposure,
 	// attachments resolves session-scoped system attachments onto every
 	// LLMProviderAdapter (first-run-onboarding-01PMOB01 WP02) — the read
 	// half of SetSystemPrompt's attachments-aware write. nil (attMgr
@@ -8115,29 +8235,15 @@ func buildChatRunner(
 			// resp = this row's own (latest) call: drives the context bar.
 			// billed = resp + any earlier tool-only calls of the turn that
 			// had no row of their own: what the cumulative footer counts.
-			costUSD, source := usageCost(resp)
-			billedCost, billedSource := usageCost(billed)
+			billedCost, _ := usageCost(billed)
 			if capturedUsageMgr != nil {
-				turn := usage.UsageTurn{
-					SessionID:        sessionID,
-					MessageID:        messageID,
-					ProviderKind:     providerKind,
-					ModelID:          modelID,
-					PromptTokens:     billed.Usage.InputTokens,
-					CompletionTokens: billed.Usage.OutputTokens,
-					CostUSD:          billedCost,
-					CostSource:       billedSource,
-				}
+				turn := usageTurnRecord(sessionID, messageID, providerKind, modelID, billed)
 				if err := capturedUsageMgr.Add(ctx, turn); err != nil {
 					logging.L().Warn("usage.add.failed",
 						"session_id", sessionID,
 						"message_id", messageID,
 						"err", err.Error())
 				}
-			}
-			costVal := 0.0
-			if costUSD != nil {
-				costVal = *costUSD
 			}
 			// Fleet usage lifecycle: token + cost totals for the session's
 			// open conversation segment — a running total, so it takes the
@@ -8148,14 +8254,12 @@ func buildChatRunner(
 			if billedCost != nil {
 				billedVal = *billedCost
 			}
-			fleetUsage.LLMResponse(ctx, sessionID, billed.Usage.InputTokens, billed.Usage.OutputTokens, billedVal)
-			snap := session.LastUsage{
-				PromptTokens:     resp.Usage.InputTokens,
-				CompletionTokens: resp.Usage.OutputTokens,
-				TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
-				CostUSD:          costVal,
-				CostSource:       source,
-			}
+			// tokenIn is the whole prompt (usageTurnRecord's
+			// PromptTokens), so fleet totals agree with the local
+			// readout under either provider convention.
+			turnRecord := usageTurnRecord(sessionID, messageID, providerKind, modelID, billed)
+			fleetUsage.LLMResponse(ctx, sessionID, turnRecord.PromptTokens, billed.Usage.OutputTokens, billedVal)
+			snap := lastUsageSnapshot(resp, providerKind)
 			// Persist the per-session last_usage_json snapshot so the frontend
 			// context-window indicator refreshes without a full GetUsage RPC.
 			if capturedSessionMgr != nil {
@@ -8277,6 +8381,8 @@ func buildChatRunner(
 		CustomInstructions: customInstructions,
 		EnvDefaults:        envDefaults,
 		ToolDiscoverer:     chatToolDiscovererAdapter{inner: tools},
+		ToolExposure:       toolExposure,
+		ModelWindow:        newModelWindows(reg, settingsImpl).ContextWindow,
 		Attachments:        attachments,
 		// model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10:
 		// *session.Manager satisfies chat.KnobsDefaultResolver directly
@@ -10775,6 +10881,18 @@ type CompactionOverheadInfo struct {
 	AutoTitleIndeterminateCalls int     `json:"autoTitleIndeterminateCalls"`
 	AutoTitleInputTokens        int     `json:"autoTitleInputTokens"`
 	AutoTitleOutputTokens       int     `json:"autoTitleOutputTokens"`
+}
+
+// ErrToolExposureNotConfigured is returned by ToolSchemaCosts when the
+// chassis wired no tool-exposure core.
+var ErrToolExposureNotConfigured = errors.New("rpc: tool exposure not configured")
+
+// ToolSchemaCosts implements HarnessAPI.
+func (a *API) ToolSchemaCosts(ctx context.Context, sessionID, projectID string) ([]loadtools.ServerCost, error) {
+	if a.toolExposure == nil {
+		return nil, ErrToolExposureNotConfigured
+	}
+	return a.toolExposure.SchemaCosts(ctx, sessionID, projectID)
 }
 
 // CompactionOverhead implements HarnessAPI. Returns the zero value (not

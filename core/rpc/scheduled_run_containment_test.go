@@ -665,8 +665,12 @@ func TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins(t *testing.
 		sort.Strings(out)
 		return out
 	}
-	if got := names(contained.ID); len(got) != 1 || got[0] != "kenaz__sleep" {
-		t.Fatalf("contained listing = %v, want exactly [kenaz__sleep]", got)
+	// kenaz__load_tools is listed in every contained run: it loads only
+	// tools this filtered listing already holds, and without it an
+	// allowlisted summary-tier tool would be reachable from nowhere
+	// (ScheduledRunContainmentRegistry.Check).
+	if got := names(contained.ID); strings.Join(got, ",") != "kenaz__load_tools,kenaz__sleep" {
+		t.Fatalf("contained listing = %v, want exactly [kenaz__load_tools kenaz__sleep]", got)
 	}
 	var full []string
 	for _, b := range api.Builtins().List() {

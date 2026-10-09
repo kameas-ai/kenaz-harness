@@ -35,6 +35,10 @@ import (
 // pool. It must be stable so Cedar policy authors can target it.
 const ServerName = "harness-self"
 
+// Purpose is the server's one-line description, shown wherever a
+// recipe's description would be (it has no recipe: it is in-process).
+const Purpose = "Read and change the harness's own sessions, settings, models and connectors."
+
 // ServerVersion is the build-time version reported in initialize results.
 const ServerVersion = "0.1.0"
 

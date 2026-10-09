@@ -332,7 +332,7 @@ func EntryFromEvent(ev event.Event) Entry {
 func categoryForKind(k event.Kind) string {
 	s := string(k)
 	switch {
-	case strings.HasPrefix(s, "llm."):
+	case strings.HasPrefix(s, "llm."), strings.HasPrefix(s, "tools."):
 		return "LLM"
 	case strings.HasPrefix(s, "mcp."):
 		return "MCP"

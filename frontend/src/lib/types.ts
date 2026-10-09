@@ -120,6 +120,44 @@ export interface TurnRun {
   failureMessage?: string;
 }
 
+/**
+ * UsageComposition — one model call's prompt by part, in tokens.
+ * Mirrors core/rpc/views/sessions.UsageComposition. Every part but
+ * `cached` is the harness estimate (tool definitions at 2.5 bytes per token, text at ~4 characters per token); `cached` is the
+ * provider-reported prompt-cache read.
+ */
+export interface UsageComposition {
+  system: number;
+  tools: number;
+  history: number;
+  attachments: number;
+  memory: number;
+  cached: number;
+  /** Number of tool definitions the call carried. */
+  toolsFull: number;
+  /**
+   * Number of tools listed only by summary. Optional so older backends
+   * and fakes type-check; absent reads as 0.
+   */
+  toolsSummary?: number;
+  /** Tool-schema budget the call was fitted to; absent when none applied. */
+  schemaBudget?: number;
+  /** Loaded tools left out of the call to fit the schema budget. */
+  toolsEvicted?: number;
+  /**
+   * Tokens of the overage pinned tools account for; > 0 is
+   * the composer's "Pinned tools exceed the schema budget by N tokens"
+   * warning. Absent reads as 0.
+   */
+  pinnedOverBudgetBy?: number;
+  /**
+   * Tokens by which the always-sent core tools alone exceed the schema
+   * budget; > 0 means this model's window is too small for the core
+   * tools. Absent reads as 0.
+   */
+  hotOverBudgetBy?: number;
+}
+
 export interface SessionUsage {
   /** Sum of all input tokens for the session. */
   promptTokens: number;
@@ -141,6 +179,16 @@ export interface SessionUsage {
   messageCount: number;
   /** Last-updated date of the pricing table used ("YYYY-MM-DD"). */
   pricingDataDate: string;
+  /**
+   * Sum of provider-reported prompt-cache reads across the session.
+   * Optional so older backends and fakes type-check; absent reads as 0.
+   */
+  cachedTokens?: number;
+  /**
+   * The most recent model call's prompt by part. Absent until a measured
+   * call has completed (and on sessions whose last call predates it).
+   */
+  composition?: UsageComposition;
   /**
    * True when the auto-titling engine wrote the session name. Mirrors
    * session.Record.AutoTitled. The rail renders auto-titled sessions
@@ -373,6 +421,13 @@ export interface ModelInfo {
   description?: string;
   /** Max context length in tokens; 0 / undefined = unknown. */
   contextWindow?: number;
+  /**
+   * True when requests for this model carry prompt-cache markers
+   * (tool-context-budget-01TCBUD01 WP05). Go views/llm.ModelInfo derives
+   * it from the adapter's llm.ModelInfo flag, falling back to the curated
+   * llm.SupportsPromptCache table (Anthropic direct); omitted when false.
+   */
+  supportsPromptCache?: boolean;
   /**
    * Provider's hard cap on output tokens per turn.
    * 0 / undefined = unknown — the UI should not render an explicit cap.
@@ -1320,8 +1375,10 @@ export interface Settings {
   longSessionNudgeTurns?: number;
 
   /**
-   * longSessionNudgeTokens — cumulative prompt-token threshold after
-   * which the nudge banner appears regardless of turn count.
+   * longSessionNudgeTokens — conversation-history token threshold (the
+   * history part of the last request's composition, not the whole
+   * prompt) after which the nudge banner appears regardless of turn
+   * count.
    * Default 50000. Zero == use default.
    */
   longSessionNudgeTokens?: number;
@@ -1659,6 +1716,12 @@ export interface Message {
   promptTokens?: number;
   completionTokens?: number;
   costUsd?: number;
+  /**
+   * Part of promptTokens the provider served from its prompt cache
+   * (session_messages.cached_tokens). promptTokens is the whole prompt for
+   * every provider, so this is a share of it. Absent on rows without usage.
+   */
+  cachedTokens?: number;
   /** "provider" | "derived" | "mixed" | "unknown". Empty when absent. */
   messageCostSource?: string;
 
@@ -5314,4 +5377,150 @@ export interface CapabilityEvent {
   verified: boolean;
   verify_reason?: string;
   consumer?: string;
+}
+
+// ── tool-context-budget-01TCBUD01 WP02 ────────────────────────────────
+// Wire shapes of core/toolexposure (Settings_/Projects_/Sessions_
+// {Get,Set}ToolExposure). Field names match the Go JSON tags.
+
+/** How much of a tool the model sees on a call (spec §2.1). */
+export type ToolExposureTier = 'full' | 'summary' | 'off';
+
+/** One server's setting at one layer; `tools` is keyed by bare tool name. */
+export interface ToolServerExposure {
+  tier?: ToolExposureTier;
+  tools?: Record<string, ToolExposureTier>;
+}
+
+/** One layer's tier settings (user, project or session). */
+export interface ToolExposure {
+  servers?: Record<string, ToolServerExposure>;
+}
+
+/** One tool a session has loaded on demand. */
+export interface ToolActivation {
+  name: string;
+  server: string;
+  lastUsedTurn: number;
+  sticky: boolean;
+}
+
+/**
+ * The user's tool-exposure settings. schemaBudgetTokens /
+ * activationTtlTurns are the stored values (0 = harness default) and are
+ * what a write persists; the effective* fields are read-only (what
+ * applies today) and are ignored on write, so writing back an unedited
+ * read never pins the current default.
+ */
+export interface ToolExposureSettings {
+  exposure: ToolExposure;
+  schemaBudgetTokens: number;
+  activationTtlTurns: number;
+  effectiveSchemaBudgetTokens: number;
+  effectiveActivationTtlTurns: number;
+  /** Read-only: the organisation's entries; ignored on write. */
+  org: ToolExposureOrg;
+}
+
+/**
+ * One organisation entry (Go toolexposure.OrgSetting, WP07). `tool` is
+ * the bare tool name; absent means the server-wide tier. `pinned` entries
+ * are read-only ("set by your organisation", pinnedBy "org"); unpinned
+ * ones are org defaults the user may override.
+ */
+export interface ToolExposureOrgSetting {
+  server: string;
+  tool?: string;
+  tier: ToolExposureTier;
+  pinned: boolean;
+  pinnedBy?: 'org';
+}
+
+/**
+ * The organisation's tool-exposure entries from the last applied fleet
+ * config bundle (read-only). schemaBudgetTokens is 0 when the budget is
+ * not pinned; bundleId is 0 when no bundle carries the section.
+ */
+export interface ToolExposureOrg {
+  settings: ToolExposureOrgSetting[];
+  schemaBudgetTokens: number;
+  bundleId: number;
+}
+
+/** A session's override layer and activated set, plus the org's entries. */
+export interface SessionToolExposure {
+  exposure: ToolExposure;
+  activations: ToolActivation[];
+  /** Read-only: the organisation's entries. */
+  org: ToolExposureOrg;
+}
+
+/** One requested name Sessions_LoadTools could not load, and why. */
+export interface LoadToolsNotLoaded {
+  name: string;
+  reason: string;
+}
+
+/**
+ * Sessions_LoadTools result (Go loadtools.Result): loaded tools counted
+ * per server (named in `loaded` only when there are at most 10), tools
+ * that arrive only from the next turn, every name that was not loaded
+ * with its reason, and a one-line summary.
+ */
+export interface LoadToolsResult {
+  loaded: string[];
+  loaded_by_server: Record<string, number>;
+  next_turn?: string[];
+  not_loaded: LoadToolsNotLoaded[];
+  summary: string;
+}
+
+// ── tool-context-budget-01TCBUD01 WP06 ────────────────────────────────
+// Tools_SchemaCosts wire shapes (Go loadtools.ServerCost / ToolCost).
+
+/** The layer that decided a tool's tier (Go toolexposure.Level). */
+export type ToolExposureLevel =
+  | 'org_pin'
+  | 'session'
+  | 'project'
+  | 'user'
+  /** An organisation entry marked pinned:false: below the user layer (WP07). */
+  | 'org_default'
+  | 'default'
+  /** The organisation added the tool to the hot set (hot_set_extra): always full (WP07). */
+  | 'org_hot_set'
+  | 'invariant'
+  | '';
+
+/** One tool's schema cost and resolved tier; `name` is the bare tool name. */
+export interface ToolSchemaCost {
+  name: string;
+  tokenEst: number;
+  tier: ToolExposureTier;
+  source: ToolExposureLevel;
+  activated: boolean;
+  /** True when a call in this scope sends this tool's schema. */
+  sendable: boolean;
+  /** One of the built-in hot set (full by harness default). */
+  hot: boolean;
+}
+
+/**
+ * One server's schema cost and resolved tier in one scope. `tier` is
+ * 'mixed' when its tools differ; `source` is '' when they came from
+ * different layers. A server that is not running reports no tools.
+ */
+export interface ServerSchemaCost {
+  server: string;
+  state: string;
+  running: boolean;
+  toolCount: number;
+  tokenEst: number;
+  tier: ToolExposureTier | 'mixed';
+  source: ToolExposureLevel;
+  /** An organisation pin decided at least one tool's tier. */
+  pinned: boolean;
+  /** Tokens of the tools a call in this scope sends. */
+  sendableTokenEst: number;
+  tools: ToolSchemaCost[];
 }

@@ -15,13 +15,13 @@ import { mount } from '@vue/test-utils';
 import { useLongSessionNudge } from '@/lib/useLongSessionNudge';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 
-function mountNudge(turnCount: ReturnType<typeof ref<number>>, promptTokens = ref(0)) {
+function mountNudge(turnCount: ReturnType<typeof ref<number>>, historyTokens = ref(0)) {
   let nudge: ReturnType<typeof useLongSessionNudge> | null = null;
   const Comp = defineComponent({
     setup() {
       nudge = useLongSessionNudge({
         turnCount: turnCount as ReturnType<typeof ref<number>> & { value: number },
-        promptTokens,
+        historyTokens,
       });
       return () => h('div');
     },

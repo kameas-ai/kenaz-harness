@@ -13,11 +13,13 @@
  * — built-in tool toggles, MCP servers, skills, workflows, and the fleet
  * catalog's bundles / agent packs (listed, not installable yet: Phase 3 has
  * not shipped) in one list + detail. Below it: every MCP server registered
- * with the harness, with its per-server tool policy.
+ * with the harness, with its per-server tool policy. Between them: how much
+ * of each server the model is sent per request (ToolExposurePanel).
  */
 import { onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import CapabilitySurface from '@/views/capabilities/CapabilitySurface.vue';
+import ToolExposurePanel from '@/views/tools/ToolExposurePanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
@@ -177,6 +179,8 @@ onMounted(() => {
     </CanvasHead>
 
     <CapabilitySurface ref="surfaceRef" />
+
+    <ToolExposurePanel />
 
     <div class="px-6 pt-2 pb-1">
       <h2

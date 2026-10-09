@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // FileStore is a SettingsStore backed by a single JSON file. Safe for
@@ -119,6 +121,9 @@ func (s *FileStore) SaveAll(in Settings) error {
 		return err
 	}
 	if err := validateBranchFields(in); err != nil {
+		return err
+	}
+	if err := in.toolExposureSettings().Validate(); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -917,6 +922,28 @@ func (s *FileStore) SaveMCPAutoRestart(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadToolExposure returns the stored tool-exposure layer, budget and
+// TTL (0 = default).
+func (s *FileStore) LoadToolExposure() (toolexposure.Settings, error) {
+	got, err := s.LoadAll()
+	return got.toolExposureSettings(), err
+}
+
+// SaveToolExposure validates and persists the tool-exposure layer,
+// budget and TTL under the store lock.
+func (s *FileStore) SaveToolExposure(ts toolexposure.Settings) error {
+	if err := ts.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	return s.saveLocked(got.withToolExposureSettings(ts))
+}
+
 // LoadAutoTitleEnabled returns whether session auto-titling is on.
 // Default true (zero-value Disabled → feature enabled).
 func (s *FileStore) LoadAutoTitleEnabled() (bool, error) {
@@ -1440,6 +1467,11 @@ type API struct {
 	// lane is built. Atomic: boot installs it while the UI may read.
 	memorySync atomic.Pointer[fleet.MemorySync]
 
+	// exposureGuard vets SetToolExposure's user layer against the live
+	// catalog (spec FR-E3), installed by SetToolExposureGuard at boot.
+	// Atomic: boot installs it while the UI may write.
+	exposureGuard atomic.Pointer[toolexposure.WriteGuard]
+
 	// syncNotify is the optional fleet-sync mutation hook
 	// (harness-fleet-sync-activation-01NSYNC01 gap #1). When set via
 	// SetSyncNotifier, Set() calls it with the affected sync category so the
@@ -1531,7 +1563,19 @@ func (a *API) Get(_ context.Context) (Settings, error) {
 }
 
 // Set persists every field.
-func (a *API) Set(_ context.Context, s Settings) error {
+func (a *API) Set(ctx context.Context, s Settings) error {
+	// A whole-settings save is also a tool-exposure write: vet the user
+	// layer like SetToolExposure does, but only when it differs from the
+	// stored one, so an unrelated save is never refused over a layer the
+	// user did not touch.
+	if g := a.exposureGuard.Load(); g != nil && *g != nil {
+		next := s.toolExposureSettings().Exposure
+		if cur, err := a.store.LoadToolExposure(); err != nil || !reflect.DeepEqual(cur.Exposure, next) {
+			if err := (*g).CheckLayerWrite(ctx, toolexposure.LayerWrite{Level: toolexposure.LevelUser, Exposure: next}); err != nil {
+				return err
+			}
+		}
+	}
 	if err := a.store.SaveAll(s); err != nil {
 		return err
 	}
@@ -1565,6 +1609,78 @@ func (a *API) GetMCPAutoRestart(_ context.Context) (bool, error) {
 func (a *API) SetMCPAutoRestart(_ context.Context, enabled bool) error {
 	return a.store.SaveMCPAutoRestart(enabled)
 }
+
+// GetToolExposure returns the user's tool-exposure layer with budget
+// and TTL as stored (0 = default) and the read-only Effective* fields
+// filled. Reads settings.json in full on every call.
+//
+// Org carries the organisation's entries (pinned ones read-only) and an
+// org-pinned budget replaces EffectiveSchemaBudgetTokens.
+func (a *API) GetToolExposure(ctx context.Context) (toolexposure.Settings, error) {
+	ts, err := a.store.LoadToolExposure()
+	if err != nil {
+		return toolexposure.Settings{}, err
+	}
+	ts = ts.WithEffective()
+	org, err := a.ToolExposurePolicy(ctx)
+	if err != nil {
+		return toolexposure.Settings{}, err
+	}
+	ts.Org = org.View()
+	if org.SchemaBudgetTokens > 0 {
+		ts.EffectiveSchemaBudgetTokens = org.SchemaBudgetTokens
+	}
+	return ts, nil
+}
+
+// SetToolExposure validates and persists the user's tool-exposure
+// layer, budget and TTL; the Effective* fields are ignored. A layer that
+// would turn kenaz__load_tools off while summary tools exist is refused
+// by the installed guard.
+//
+// An entry or budget the organisation pinned cannot be changed: the write
+// is refused with a *toolexposure.PinnedError naming it.
+func (a *API) SetToolExposure(ctx context.Context, ts toolexposure.Settings) error {
+	if err := ts.Validate(); err != nil {
+		return err
+	}
+	org, err := a.ToolExposurePolicy(ctx)
+	if err != nil {
+		return err
+	}
+	if !org.IsZero() {
+		stored, err := a.store.LoadToolExposure()
+		if err != nil {
+			return err
+		}
+		if err := toolexposure.CheckOrgBudget(org, stored.SchemaBudgetTokens, ts.SchemaBudgetTokens); err != nil {
+			return err
+		}
+		if err := toolexposure.CheckOrgPins(org, stored.Exposure, ts.Exposure); err != nil {
+			return err
+		}
+	}
+	if g := a.exposureGuard.Load(); g != nil && *g != nil {
+		if err := (*g).CheckLayerWrite(ctx, toolexposure.LayerWrite{
+			Level: toolexposure.LevelUser, Exposure: ts.Exposure,
+		}); err != nil {
+			return err
+		}
+	}
+	return a.store.SaveToolExposure(ts)
+}
+
+// SetToolExposureGuard installs the guard SetToolExposure consults
+// after validation. nil removes it.
+func (a *API) SetToolExposureGuard(g toolexposure.WriteGuard) {
+	if g == nil {
+		a.exposureGuard.Store(nil)
+		return
+	}
+	a.exposureGuard.Store(&g)
+}
+
+var _ toolexposure.SettingsSource = (*API)(nil)
 
 // GetAutoTitleEnabled returns whether session auto-titling is on.
 // (p0-wiring-fixes-3TVMG0MX WP05)
@@ -1782,6 +1898,9 @@ func (m *memoryStore) SaveAll(s Settings) error {
 		return err
 	}
 	if err := validateUpdateFields(s); err != nil {
+		return err
+	}
+	if err := s.toolExposureSettings().Validate(); err != nil {
 		return err
 	}
 	m.mu.Lock()
@@ -2082,6 +2201,22 @@ func (m *memoryStore) SaveMCPAutoRestart(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.MCPAutoRestartDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadToolExposure() (toolexposure.Settings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.toolExposureSettings(), nil
+}
+
+func (m *memoryStore) SaveToolExposure(ts toolexposure.Settings) error {
+	if err := ts.Validate(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data = m.data.withToolExposureSettings(ts)
 	return nil
 }
 

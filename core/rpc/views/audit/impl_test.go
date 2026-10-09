@@ -156,6 +156,10 @@ func TestObserveEvent_KindToCategory(t *testing.T) {
 		category string
 	}{
 		{"llm.request.started", "LLM"},
+		// tool-context-budget-01TCBUD01: the exposure audit kinds file
+		// under LLM, where the audit view's category filter finds them.
+		{"tools.activated", "LLM"},
+		{"tools.evicted", "LLM"},
 		{"mcp.tool.invoked", "MCP"},
 		{"a2a.card.received", "A2A"},
 		{"policy.decision.denied", "POLICY"},

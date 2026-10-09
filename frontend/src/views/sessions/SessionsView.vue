@@ -30,7 +30,8 @@ import {
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ComposerError from '@/components/chat/ComposerError.vue';
 import DeliveryBanner from '@/components/chat/DeliveryBanner.vue';
-import { STOPPED_CODE, type DeliveryFailure } from '@/lib/delivery';
+import { STOPPED_CODE, offersToolsMenu, type DeliveryFailure } from '@/lib/delivery';
+import { sendableTokens } from '@/lib/toolExposure';
 import ReasoningControl from '@/components/chat/ReasoningControl.vue';
 import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
@@ -52,6 +53,9 @@ import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
+import ContextCompositionPopover from '@/components/chat/ContextCompositionPopover.vue';
+import ToolsMenu from '@/components/chat/ToolsMenu.vue';
+import type { RequestSizeContext } from '@/lib/delivery';
 import AdviceChip from '@/components/chat/AdviceChip.vue';
 import AdviceAutoActedBanner from '@/components/chat/AdviceAutoActedBanner.vue';
 import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
@@ -388,7 +392,29 @@ watch(
 const switcherOpen = ref(false);
 function toggleSwitcher() {
   switcherOpen.value = !switcherOpen.value;
+  if (switcherOpen.value) toolsMenuOpen.value = false;
 }
+
+// Composer Tools menu (tool-context-budget-01TCBUD01 WP06, FR-K2). Opened
+// from the status bar or from a request_too_large remedy.
+const toolsMenuOpen = ref(false);
+function openToolsMenu() {
+  switcherOpen.value = false;
+  toolsMenuOpen.value = true;
+}
+
+/**
+ * True when the model's catalog entry says requests carry prompt-cache
+ * markers (ModelInfo.supportsPromptCache, set by LLM_ListProviders from
+ * the adapter's flag or the curated table). Absent renders nothing.
+ */
+function modelCachesPrompts(providerId: string, modelId: string): boolean {
+  const p = providers.value.find((x) => x.id === providerId);
+  return p?.modelInfos?.find((m) => m.id === modelId)?.supportsPromptCache === true;
+}
+const activeModelCachesPrompts = computed(() =>
+  modelCachesPrompts(activeProvider.value?.id ?? '', activeModelId.value),
+);
 function pickModel(providerId: string, modelId: string) {
   activeProviderId.value = providerId;
   activeModelId.value = modelId;
@@ -522,6 +548,33 @@ const contextDenominator = computed((): number => {
 
 // hasContextWindow: true when the backend has supplied a non-zero cap.
 const hasContextWindow = computed(() => contextDenominator.value > 0);
+
+// The request_too_large remedy names the tool definitions the NEXT
+// request would send (Tools_SchemaCosts' sendable tokens for this session,
+// before budget) against the active model's window. A failed first turn
+// has no measured composition, so the last call's numbers cannot be used.
+// Either number 0 = unknown, and the remedy falls back to plain copy.
+const nextToolTokens = ref(0);
+const tooLargePending = computed(() =>
+  [...session.undelivered.value.values()].some((f) => offersToolsMenu(f)),
+);
+async function refreshNextToolTokens() {
+  const sid = sessionId.value;
+  if (!tooLargePending.value || servedMode || !sid) {
+    nextToolTokens.value = 0;
+    return;
+  }
+  try {
+    const costs = await client.tools.schemaCosts(sid, '');
+    if (sid === sessionId.value) nextToolTokens.value = sendableTokens(costs);
+  } catch {
+    if (sid === sessionId.value) nextToolTokens.value = 0;
+  }
+}
+const deliverySizeContext = computed<RequestSizeContext>(() => ({
+  toolsTokens: nextToolTokens.value,
+  windowTokens: contextDenominator.value,
+}));
 
 // contextNumerator: the cumulative input-token count for the session.
 // Reads from session.lastUsage which is updated in near-real-time via
@@ -1138,6 +1191,17 @@ const hasAnyProvider = computed(() => providers.value.length > 0);
  */
 const servedMode = isServedMode();
 
+// Re-read the remedy's tool tokens when a request_too_large failure
+// appears, the session changes, or the Tools menu closes (its writes
+// change what the next request sends).
+watch(
+  [tooLargePending, sessionId, toolsMenuOpen],
+  ([, , menuOpen]) => {
+    if (!menuOpen) void refreshNextToolTokens();
+  },
+  { immediate: true },
+);
+
 const noProviderHelp = computed(() =>
   servedMode
     ? 'No provider was delivered to this workbench. Add one in Kenaz → profile → provider, then reopen the workbench.'
@@ -1491,7 +1555,7 @@ function formatSize(bytes: number): string {
 //
 // The nudge banner fires when the session crosses either threshold:
 //   - 30 human turns (counted by countTurns — NOT a row count), OR
-//   - 50,000 cumulative prompt tokens
+//   - 50,000 conversation-history tokens (last request's composition)
 // Both thresholds are configurable via Settings → Display.
 //
 // Per-session dismiss: the user can click "Dismiss for this session" and
@@ -1505,35 +1569,33 @@ function formatSize(bytes: number): string {
 // (model-moves-transcript-01PMCH01 WP04).
 const _nudgeTurnCount = computed(() => countTurns(visibleMessages.value));
 
-// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
-// FR-020): session.lastUsage.promptTokens is a PER-TURN snapshot,
-// overwritten on every session.usage.updated event (see useSession.ts
-// — correct for the context-window meter above, which wants "how full
-// is the model's context right now"). useLongSessionNudge's threshold
-// is documented as CUMULATIVE prompt tokens; against a per-turn value
-// it essentially never crosses the 50,000 default. Sessions_GetUsage
-// returns the real cumulative aggregate — refetch it whenever a turn
-// completes or the session switches.
-const _nudgeCumulativePromptTokens = ref(0);
-async function refreshNudgeCumulativeUsage() {
+// The nudge measures how long the CONVERSATION is: the history part of
+// the last request's composition (Sessions_GetUsage). Prompt tokens —
+// per-turn or cumulative — also count the system prompt and every tool
+// definition, so a one-message session with ~220k tokens of tool schemas
+// would read as "long" on turn 1. Refetched whenever a turn completes or
+// the session switches. A session whose last call predates the
+// composition has no history figure and is judged on turn count alone.
+const _nudgeHistoryTokens = ref(0);
+async function refreshNudgeHistoryTokens() {
   const id = sessionId.value;
   if (!id) {
-    _nudgeCumulativePromptTokens.value = 0;
+    _nudgeHistoryTokens.value = 0;
     return;
   }
   try {
     const usage = await client.sessions.getUsage(id);
-    _nudgeCumulativePromptTokens.value = usage.promptTokens ?? 0;
+    _nudgeHistoryTokens.value = usage.composition?.history ?? 0;
   } catch {
     // Transient RPC failure: keep the last known value rather than
     // flapping the nudge visibility to zero.
   }
 }
-watch(() => session.lastUsage.value, () => { void refreshNudgeCumulativeUsage(); });
+watch(() => session.lastUsage.value, () => { void refreshNudgeHistoryTokens(); });
 
 const longSessionNudge = useLongSessionNudge({
   turnCount: _nudgeTurnCount,
-  promptTokens: _nudgeCumulativePromptTokens,
+  historyTokens: _nudgeHistoryTokens,
 });
 
 // laya-advisors-01LAYA001 WP07: the advisor seam's passive chip.
@@ -1569,7 +1631,7 @@ function onAdviceAutoActedDismiss() {
 // composable, restoring correct per-session behaviour.
 watch(sessionId, () => {
   longSessionNudge.reset();
-  void refreshNudgeCumulativeUsage();
+  void refreshNudgeHistoryTokens();
 }, { immediate: true });
 
 // ── Scroll position (controls-and-readouts-that-tell-the-truth-01PMZ808
@@ -2285,6 +2347,9 @@ async function onShared() {
                 :undelivered="undeliveredForList"
                 :retry-message-id="retryMessageId"
                 :auto-retry="session.autoRetry.value"
+                :delivery-size-context="deliverySizeContext"
+                :tools-menu-available="!servedMode"
+                @open-tools="openToolsMenu"
                 @retry-delivery="onRetryDelivery"
                 @cancel-retry="onCancelDeliveryRetry"
                 @new-session="onNudgeNewSession"
@@ -2318,6 +2383,9 @@ async function onShared() {
             :undelivered="undeliveredForList"
             :retry-message-id="retryMessageId"
             :auto-retry="session.autoRetry.value"
+            :delivery-size-context="deliverySizeContext"
+            :tools-menu-available="!servedMode"
+            @open-tools="openToolsMenu"
             @retry-delivery="onRetryDelivery"
             @cancel-retry="onCancelDeliveryRetry"
             @new-session="onNudgeNewSession"
@@ -2480,6 +2548,12 @@ async function onShared() {
             <span class="font-mono text-ink-muted">
               {{ activeModelId || '—' }}
             </span>
+            <span
+              v-if="activeModelCachesPrompts"
+              class="rounded-sm border border-border-muted px-1 text-[10px] text-ink-subtle"
+              title="Requests to this model mark the system prompt and loaded tools for the provider's prompt cache."
+              data-testid="session-model-caches-prompts"
+            >caches prompts</span>
             <span aria-hidden="true">▾</span>
           </button>
           <div
@@ -2509,7 +2583,7 @@ async function onShared() {
             >
               <div class="font-mono text-xs">{{ c.modelId }}</div>
               <div class="text-[10px] text-ink-dim">
-                {{ c.providerName }}
+                {{ c.providerName }}<template v-if="modelCachesPrompts(c.providerId, c.modelId)"> · caches prompts</template>
               </div>
             </button>
             <div
@@ -2533,6 +2607,15 @@ async function onShared() {
               </div>
             </div>
           </div>
+          <ToolsMenu
+            v-if="hasSession"
+            v-model:open="toolsMenuOpen"
+            :session-id="sessionId"
+            :project-id="session.session.value?.projectId ?? ''"
+            :composition="sessionUsage?.composition ?? null"
+            :window-tokens="contextDenominator"
+            :served-mode="servedMode"
+          />
           <!-- Cost pill (token-cost-telemetry-01KQ8TD7 WP04) -->
           <CostCell
             :usage="sessionUsage"
@@ -2542,12 +2625,18 @@ async function onShared() {
                Known window (hasContextWindow): bar + pct + used/max label.
                Unknown window (!hasContextWindow): greyed label only — no bar,
                no percentage, no misleading 200k fallback. -->
-          <div
+          <ContextCompositionPopover
+            v-slot="{ open: compositionOpen }"
+            :composition="sessionUsage?.composition ?? null"
+          >
+          <span
             class="flex items-center gap-2"
             data-testid="session-context-meter"
-            :title="hasContextWindow
-              ? `Context use — ${contextNumerator.toLocaleString()} of ${contextDenominator.toLocaleString()} tokens`
-              : 'Context window size unknown for this model'"
+            :title="compositionOpen
+              ? undefined
+              : hasContextWindow
+                ? `Context use — ${contextNumerator.toLocaleString()} of ${contextDenominator.toLocaleString()} tokens`
+                : 'Context window size unknown for this model'"
           >
             <span
               class="uppercase tracking-[0.14em]"
@@ -2556,17 +2645,17 @@ async function onShared() {
               context
             </span>
             <template v-if="hasContextWindow">
-              <div class="h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
-                <div
-                  class="h-full transition-[width] duration-300"
+              <span class="block h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
+                <span
+                  class="block h-full transition-[width] duration-300"
                   :class="{
                     'bg-signal-ok': contextBarTone === 'ok',
                     'bg-signal-warn': contextBarTone === 'warn',
                     'bg-signal-danger': contextBarTone === 'danger',
                   }"
                   :style="{ width: contextWindowPct + '%' }"
-                ></div>
-              </div>
+                ></span>
+              </span>
               <span class="font-mono text-ink-muted tabular-nums">
                 {{ contextWindowPct }}%
               </span>
@@ -2581,7 +2670,8 @@ async function onShared() {
             >
               unknown
             </span>
-          </div>
+          </span>
+          </ContextCompositionPopover>
         </div>
         <!-- Long-session nudge banner (v0.5.6 memory-trust-signals).
              Appears once per session when message/token thresholds are crossed.
@@ -2632,7 +2722,10 @@ async function onShared() {
           :failure="deliveryBannerFailure"
           :auto-retry="session.autoRetry.value"
           :settings-available="!servedMode"
+          :size-context="deliverySizeContext"
+          :tools-available="!servedMode"
           class="mx-3 mb-2"
+          @open-tools="openToolsMenu"
           @retry="onRetryDelivery()"
           @cancel-retry="onCancelDeliveryRetry"
           @open-settings="onOpenProviderSettings"

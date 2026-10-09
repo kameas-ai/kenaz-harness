@@ -573,6 +573,8 @@ func mutateFieldForTest(t *testing.T, name string, v reflect.Value) {
 		v.Set(reflect.ValueOf([]json.RawMessage{json.RawMessage(`{"mutated_for_test":true}`)}))
 	case *BundleModelPrefs:
 		v.Set(reflect.ValueOf(&BundleModelPrefs{DefaultModel: "mutated-for-test"}))
+	case *BundleToolExposure:
+		v.Set(reflect.ValueOf(&BundleToolExposure{BudgetTokens: 1234}))
 	case []BundleMandatedItem:
 		v.Set(reflect.ValueOf([]BundleMandatedItem{{CatalogID: "mutated-for-test", Kind: "skill", Version: "1", Payload: json.RawMessage(`{}`)}}))
 	case []ProvisionedMCP:

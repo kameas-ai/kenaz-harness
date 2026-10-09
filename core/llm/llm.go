@@ -310,10 +310,23 @@ type ToolResult struct {
 }
 
 // ToolSpec declares a callable tool the model may invoke (FR-006).
+//
+// Name, Description and InputSchema are the provider-facing definition.
+// Server and TokenEst are harness-side catalog metadata: they
+// are tagged `json:"-"` and no adapter reads them, so a request's wire
+// payload is identical whether or not they are set.
 type ToolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`
+
+	// Server is the catalog source: the MCP server id for pool tools,
+	// "kenaz" for built-ins. Empty when the producer did not say.
+	Server string `json:"-"`
+	// TokenEst is EstimateToolSpecTokens of this definition, computed by
+	// the producer at discovery. 0 means "not computed"; ToolSpecTokens
+	// falls back to computing it.
+	TokenEst int `json:"-"`
 }
 
 // Attachment carries non-text input for a message (vision images, audio,
@@ -459,10 +472,21 @@ type GenerationRequest struct {
 	// When set and present in profile.AvailableModels(), the registry
 	// substitutes prof.Model = req.Model before dispatching to the
 	// adapter. Empty means "use the profile default."
-	Model    string     `json:"model,omitempty"`
-	System   string     `json:"system,omitempty"`
-	Messages []Message  `json:"messages"`
-	Tools    []ToolSpec `json:"tools,omitempty"`
+	Model  string `json:"model,omitempty"`
+	System string `json:"system,omitempty"`
+	// SystemVolatile is per-call system material (date, workspace state,
+	// hook context). Adapters that mark a cacheable prefix send it after
+	// the marker; the registry folds it into System for every other
+	// adapter (FoldSystemSegments). Empty means System is the whole
+	// system prompt.
+	SystemVolatile string     `json:"system_volatile,omitempty"`
+	Messages       []Message  `json:"messages"`
+	Tools          []ToolSpec `json:"tools,omitempty"`
+	// CacheStableTools is the number of leading Tools that form the
+	// stable, cacheable segment: the cache marker goes on tool
+	// CacheStableTools-1. 0 means all of Tools; negative means none
+	// (CacheMarkerToolIndex).
+	CacheStableTools int `json:"cache_stable_tools,omitempty"`
 	// Deprecated: use Message.Content blocks (ContentBlock with Type "image"
 	// or "document") instead. The legacy Attachment slice is still honoured by
 	// RequestedCapabilities and the registry's capability gate so existing
@@ -699,6 +723,15 @@ type ReasoningBlock struct {
 }
 
 // Usage aggregates per-request token accounting (FR-011).
+//
+// CachedInputRead is the prompt tokens the provider served from its
+// prompt cache; CachedInputWrite is the prompt tokens it wrote to the
+// cache on this call. Whether InputTokens already includes them is the
+// provider's convention, kept as reported: Anthropic's input_tokens
+// excludes both, while OpenAI-compatible prompt_tokens (OpenRouter) and
+// Gemini's promptTokenCount include them.
+//
+// PromptTokensTotal normalises the two conventions.
 type Usage struct {
 	InputTokens      int `json:"input_tokens"`
 	OutputTokens     int `json:"output_tokens"`
@@ -747,6 +780,12 @@ type Response struct {
 	Cost         Cost             `json:"cost"`
 	Attempts     int              `json:"attempts"`
 	SnapshotID   string           `json:"snapshot_id,omitempty"`
+
+	// Composition is what the request that produced this response sent,
+	// by part. Set by the caller that built the request (the chat
+	// adapter), never by a provider adapter; nil when the caller did not
+	// measure it. Not part of any wire or persisted Response encoding.
+	Composition *PromptComposition `json:"-"`
 }
 
 // ProviderAdapter is the per-provider plug-in contract (FR-018).
@@ -775,6 +814,11 @@ type ModelInfo struct {
 	// cap in that case. Sourced from the capabilities catalog
 	// (backend-context-window-length-01KQ8TD3 WP01).
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"` // max completion tokens per turn; 0 = unknown
+	// SupportsPromptCache reports whether requests for this model carry
+	// explicit cache_control markers. Written only by the OpenRouter
+	// adapter (the curated SupportsPromptCache table, vetoed by the
+	// model list's cache pricing) and read by its request path.
+	SupportsPromptCache bool `json:"supports_prompt_cache,omitempty"`
 }
 
 // ModelLister is the optional capability adapters opt into when their

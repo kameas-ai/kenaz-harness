@@ -51,6 +51,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 )
 
 // toolFamilyBlocked is the blocked_permission_requests.family value for a
@@ -150,6 +151,15 @@ func (r *ScheduledRunContainmentRegistry) Check(ctx context.Context, sessionID, 
 	}
 	name := server + "__" + tool
 	if _, allowed := c.allow[name]; allowed {
+		return toolloop.Resolution{}, false
+	}
+	// kenaz__load_tools is outside every allowlist's reach: it only
+	// loads definitions of tools this session's catalog already lists,
+	// and that catalog is filtered through this same check, so it cannot
+	// widen the run. Without it an allowlisted summary-tier tool would be
+	// listed nowhere the model can see (spec tool-context-budget-01TCBUD01
+	// §2.6: scheduled chats run with the same exposure tiers).
+	if name == loadtools.Name {
 		return toolloop.Resolution{}, false
 	}
 	reason := "not on this scheduled run's tool allowlist"

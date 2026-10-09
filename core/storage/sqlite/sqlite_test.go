@@ -183,7 +183,11 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// undelivered-message-retry: whether each chat run reached the model.
 	// 0345 (scheduled_chat_run_history model/cost columns) lands with the
 	// dogfood 2026-10-08 round 2 scheduled-chat fixes.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345}
+	// 0346 (session_messages cached_tokens / cache_write_tokens) lands
+	// with tool-context-budget-01TCBUD01 WP01.
+	// 0347 (projects/sessions tool_exposure + sessions.tool_activations)
+	// lands with tool-context-budget-01TCBUD01 WP02.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -298,8 +302,12 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// composed value is the SUM of the bumps, not either branch's number.
 	// sessions/0345-scheduled-chat-history-model-cost (dogfood 2026-10-08
 	// round 2) one more, hence 67.
-	if count != 67 {
-		t.Errorf("ledger count = %d, want 67", count)
+	// sessions/0346-session-usage-cache-tokens (tool-context-budget-
+	// 01TCBUD01 WP01) one more, hence 68.
+	// sessions/0347-tool-exposure (tool-context-budget-01TCBUD01 WP02)
+	// one more, hence 69.
+	if count != 69 {
+		t.Errorf("ledger count = %d, want 69", count)
 	}
 }
 

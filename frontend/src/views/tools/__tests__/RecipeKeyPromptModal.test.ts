@@ -806,6 +806,7 @@ describe('RecipeKeyPromptModal — prereq pre-flight', () => {
                   },
                   pickDirectory: async () => '',
                   requestAdditionalAllowedDir: async () => ({ granted: false, expanded: '', message: '' }),
+                  schemaCosts: async () => [],
                 },
               } as Partial<import('@/lib/harnessClient').HarnessClient>);
               app.provide(
@@ -906,6 +907,7 @@ describe('RecipeKeyPromptModal — file prereq guided setup', () => {
         },
         pickDirectory: async () => '',
         requestAdditionalAllowedDir: async () => ({ granted: false, expanded: '', message: '' }),
+        schemaCosts: async () => [],
       },
       shell: {
         openInOSBrowser: async () => {},

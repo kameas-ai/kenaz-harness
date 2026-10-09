@@ -43,6 +43,7 @@ shipped product boundary, not unwired code. Read that doc before flagging
 | I15 | `check-cedar-engine-singleton.sh` | *(none — no allowlist by design)* | more than one Cedar engine construction (`buildCedarGate`/`buildCedarEngineOrNil` call, or a direct `cedar.NewEngine` call) reachable from `rpc.New` — **added 2026-08-18 (consent-surfaces-truth-01PMTR01 WP05)**. I13 checks the *argument* at a call site; it has no vocabulary for *instance count*, which is why thirteen independent engine constructions (nine `buildCedarGate` + four `buildCedarEngineOrNil`) all passed it clean before the WP05 hoist. Wired into `pr.yml`. |
 | G-1 | `check-transport-parity.sh` | *(none — no allowlist by design)* | a transport tag in `dispatch.Pool.closeOneByTag`'s switch whose case body has no real `.CloseOne(ctx, id)` call — comment-only, empty, or dispatching something else — **added 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-15)**. Hand-scoped to the one production switch this mission found broken (pre-UNIT-6, http/sse's cases were comment-only and fell through to the function's shared tail, then a bare `return nil`); the header states explicitly it is not a general arm-parity gate. Tag set is derived from the switch's own `case` lines, not hardcoded. Wired into `pr.yml`. |
 | G-2 | `check-recipe-token-substitution.sh` | `g2-recipe-substituted-paths.txt` | a `${...}` token in `registry.json`/`shipped.json` on a JSON path with no declared, still-matching production `Substitute*` call site — **added 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-15)**. Path set is derived from the catalogs each run (a path with no token today needs no manifest entry); a manifest entry whose grep pattern stops matching also fails, so the manifest cannot degrade into an opt-out list. Measured clean today over 7 discovered paths. Wired into `pr.yml`. |
+| TE-1 | `check-tool-exposure-gate.sh` | `tool-exposure-writers.txt` | a non-test writer of `llm.GenerationRequest.Tools` under `core/` (a `Tools:` key in a `GenerationRequest` literal, a `SetTools` call, or `x.Tools = …` on a visibly `GenerationRequest`-typed `x`; AST scan, `scripts/ci/cmd/checktoolexposure`) that is neither the exposure-partition path nor a dated gap; plus the FR-E1 seed test and the production-wiring first-turn test must run and pass — **added 2026-10-09 (tool-context-budget-01TCBUD01 WP08)**. Planted proofs: `TestToolExposureGate_*` in `gates_can_fail_test.go` (direct assignment, literal key, stale entry, cwd independence). One open entry: workflow `model_turn` steps. Wired into `pr.yml`. |
 
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
@@ -341,6 +342,139 @@ prose and in a TS union; they do not call `MoveKinds()`.
 ---
 
 ## Open — ungated findings
+
+### 2026-10-09 (tool-context-budget-01TCBUD01, re-swept by WP08) · tool-exposure gaps still open
+
+**WP08 sweep (2026-10-09, scoped to `git diff v0.93.3..HEAD`).** Closed
+since WP02–WP06 wrote this entry:
+
+- Every FR-K1 control now has a request-level test — the setting is
+  written the way its binding writes it and the NEXT chat turn's wire
+  request is asserted, through newLLMStack's real chat runner over real
+  sqlite: `core/rpc/tool_exposure_dials_test.go` (schema budget → the
+  next request's `tools_tokens_est` ≤ budget; activation TTL → expiry in
+  the next turn; user per-server and per-tool tiers; project tier;
+  session Load / Unload; org pins incl. the pinned budget). The WP06
+  "request-level tests deferred to WP08" line is deleted.
+- The seven `*_ToolExposure` / `Sessions_LoadTools` bindings and
+  `Tools_SchemaCosts` each have a `harnessClient.ts` method and a `.vue`
+  caller (`ToolsMenu.vue`, `ToolExposurePanel.vue`, `SessionsView.vue`,
+  `ScheduledChatFormModal.vue`); both components are mounted.
+- `tools.activated` / `tools.evicted` have emit sites
+  (`core/tools/loadtools`) and a reader: the audit view's LLM category
+  (`views/audit.categoryForKind`, now pinned in
+  `TestObserveEvent_KindToCategory`).
+- `ContextCompositionPopover.vue` carried "no schema-budget line until
+  WP04 adds it": WP04 shipped `composition.schemaBudget` /
+  `toolsEvicted`; the popover now renders the budget line (spec §2.5).
+- Zero-non-test-reader exports in the new surface:
+  `llm.OrderToolsFlat` **deleted** (live substitute:
+  `llm.OrderTools(all, nil, nil)`, which the no-exposure path already
+  calls); `toolexposure.Partition.SendNames` **unexported** (package test
+  oracle only); `toolexposure.HotSet` **kept, dated** at its declaration
+  (sole reader is core/rpc's anchor test against the tool packages'
+  Name constants, which toolexposure cannot import).
+- New gate `check-tool-exposure-gate.sh` (see the gate inventory) makes
+  FR-E1 mechanical.
+
+**Still open** — each with its blocker; **owner: alec**:
+
+- **Workflow steps are not tiered (spec §2.6).** `model_turn` steps send
+  their own tool list (all discovered tools with `tools: all`) through
+  `wfLLMStreamerAdapter.Stream`. Gated: the only listed non-exposure
+  writer in `scripts/ci/allowlists/tool-exposure-writers.txt`.
+  Blocker: a step has no session to hold activations and no
+  `kenaz__load_tools` loop; the follow-up "workflow-step tool exposure"
+  deletes the allowlist line.
+- **FR-E2 — never-started recipes are missing from the digest.** The
+  "(stopped)" marker covers servers the dispatch pool knows; an enabled
+  recipe that never reached the pool (env resolution failed at boot) is
+  omitted, not marked (`toolServerDirectory`,
+  `core/rpc/tool_exposure_wiring.go`). Blocker: no recipe-store reader of
+  enabled-but-unstarted recipes and their failure reason in the
+  directory; that follow-up deletes this bullet.
+- **Schedule tool set.** The schedule form's "Custom servers" option is
+  disabled with its reason; the schedule record has no tool-set field;
+  the cost line is the user's default tiers, and a contained schedule
+  says "cost not shown". Blocker / owner: follow-up mission "schedule
+  tool set" (`ScheduledChatFormModal.vue` carries the dated TODO).
+- **Tools menu meter is "before budget".** It uses `Tools_SchemaCosts`'
+  sendable set, which does not apply WP04's eviction or TTL expiry (the
+  meter says so); the composition popover shows the last call's real
+  fitted figure. Blocker: a budget-aware cost read (fit the partition in
+  `SchemaCosts`); deleted when the meter reads it.
+- ~~**FR-H3 does not hold: the estimator under-counts tool schemas by
+  ~37 %.**~~ — **closed 2026-10-09 (owner ruling)**: tool definitions now
+  estimate at the measured 2.5 bytes/token (`tokenizer.CountToolSchema`,
+  via `llm.EstimateToolSpecTokens`); prose/messages keep per-rune/4. The
+  dogfood's three recorded frames read 101.0 % of `prompt_tokens` (were
+  63.2 %); `TestComposition_RecordedDogfoodFrames_WithinFRH3` asserts
+  FR-H3's 0.90–1.10. In-sample fit (2.5 came from these frames): the live
+  re-measure in the acceptance doc is the out-of-sample check.
+- Activations of tools whose server was later uninstalled stay in
+  `sessions.tool_activations` (never sent: the catalog no longer lists
+  them). Non-sticky ones leave with the TTL; sticky ones stay until the
+  user unloads them from the Tools menu. Accepted, not a defect.
+- `toolexposure.SettingsSource` — `wiring:deferred` at its declaration
+  (checkseams skips the settings package; the implementation is
+  compile-time asserted).
+
+**Rulings recorded (2026-10-09, owner alec, WP03 review).**
+- Auto-activation does not retry on the harness side: it activates the
+  tool and returns `not_loaded`; the model re-calls with the schema in
+  view. Its audit rows carry `by: "auto"`, an addition to the spec's
+  model|user enum (spec amended).
+- `sticky` is an activation flag (`Activation.Sticky`), not a write to
+  the session override layer; equivalent for §2.1 step 2 (spec amended).
+- The FR-E3 write guard checks only the layer being written: a stored
+  user-layer `load_tools: off` followed by a project write that makes
+  tools summary is not refused. The resolver invariant forces
+  `load_tools` full in that state, so nothing becomes unreachable.
+- `Settings_Set` (whole-settings save) runs the same guard when the
+  exposure layer differs from the stored one.
+- The digest is a per-call system section after the cacheable prefix,
+  not `kenaz__load_tools`' description (which is static); spec §2.2
+  amended.
+
+**Rulings recorded (2026-10-09, owner alec, WP04 review).**
+- Fork inheritance widens past "subagent children" (spec §2.6): every
+  `conversation.Manager` fork — subagent, advice fork, workflow branch,
+  user "Branch from this turn" / "+ Fork", `kenaz__fork_conversation` —
+  copies the parent's session override (a failed copy fails the fork:
+  consent surface) and its activations (a failed copy is logged). Intended.
+- Eviction is per call and never persisted: an evicted tool stays
+  activated, returns when there is room, and still dispatches if the
+  model calls it by name (it passes the exposure gate as activated).
+- The schema budget counts tool definitions only; the per-call digest
+  section is not counted.
+- Tools called this turn are never evicted; tools loaded this turn go
+  after every older activated and pinned tool, and a load that still
+  does not fit reports them `not_loaded` ("over the schema budget by N
+  tokens" / "pinned but over the schema budget by N tokens").
+- Failed turns count toward the activation TTL (the ordinal is the
+  number of recorded turn runs).
+
+**Disposition: dated-justified (2026-10-09, owner alec).** Every
+bullet above names the change that deletes it.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP04 review) · compaction's context-window lookup is keyed by profile id
+
+**Finding.** `compactionwiring.CapabilityLookup.MaxContextTokens`
+(`core/agentgraph/compaction/wiring/capabilities.go`) is called with
+`ProviderProfileRef{ProviderID: <profile id>, ...}` by
+`request_too_large.go:147`, `session_compaction.go:171/173`,
+`overflow_recovery.go:64` (all in `core/rpc/views/agentgraph/chat/`) and
+`core/rpc/compaction_summary_llm.go:95`. Its table
+and the capability catalog are keyed by provider *kind*, and it never
+consults the adapter's live model info, so for most profiles it answers
+`(0, false)`: the pre-send threshold compaction, `ErrSessionFull` and the
+request-too-large window fallback are effectively skipped.
+
+**Disposition: dated-justified.** Fix is a separate `fix:` PR: route
+those callers through `rpc.modelWindows.ContextWindow(kind, model)`
+(`core/rpc/model_window_lookup.go`: override → live adapter ModelInfo →
+catalog), which the chat tool-schema budget and the model picker already
+use. **Owner:** alec. Dated 2026-10-09.
 
 ### 2026-10-08 (dogfood 2026-10-08 fix PR, fix/dogfood-2026-10-08) · audit actor filter has no emitter to match — input disabled, not deleted
 
@@ -6221,7 +6355,172 @@ should not settle in passing. **Blocker:** none technical — needs the refresh
 design. **Owner:** alec — the Settings-health refresh follow-up deletes this
 entry.
 
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP01) — ad-hoc token estimators beside the canonical one
+
+`core/llm/tokenizer.CountRequestTokens` (ceil(runes / 4) + 4 framing per
+message) is the one token estimator: compaction (`core/agentgraph/
+exec_compute.go` `estimateTokens`), the chat request-too-large check, the
+session compaction strategy and, as of WP01, the request composition
+(`core/llm/token_estimate.go`) all go through it. Five call sites still
+carry their own `/ 4` arithmetic and can drift from it:
+
+- `core/workflows/catalog/preview.go:95` — `len(st.UserPrompt) / 4` (bytes, floor) for the cost preview.
+- `core/contextbootstrap/extraction.go:511` — `len(s) / 4` (bytes, floor).
+- `core/agentgraph/compaction/strategies.go:743` `approxTokens(b int)` — `ceil(bytes / 4)`. Not a one-line convergence: its ~10 callers hold byte counts, not text, so moving it to the per-rune rule means threading the strings (or rune counts) through the strategies.
+- `frontend/src/shell/NewSessionDialog.vue:69` and `frontend/src/views/contexts/ContextPreview.vue:51` — client-side `/ 4` previews; the frontend has no shared estimator.
+
+Same rule for ASCII text; they disagree on non-ASCII text (bytes vs runes)
+and on framing. **Blocker:** none technical. **Owner:** alec — a
+follow-up that routes each through `tokenizer.CountText` /
+`CountRequestTokens` (and a small TS port for the two views) deletes this
+entry.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP05) — prompt-cache deviations from the spec
+
+Recorded deviations of WP05's cacheable prefix from spec §2.4 / tasks.md.
+Each bullet is deleted by the change its owner names.
+
+- **Curated table is code, not the capabilities catalog.**
+  `llm.SupportsPromptCache` (`core/llm/prompt_cache.go`) decides which
+  (provider kind, model) pairs carry `cache_control`: `anthropic` +
+  `claude*`, `openrouter` + `anthropic/…` / `~anthropic/…`. It is not a
+  flag in `core/llm/capabilities/data/*.yaml`, so the capability cache,
+  probes and Settings do not see it. **Blocker:** a `prompt_cache` key in
+  the catalog schema (`ProviderCapabilities`, `CapabilitySchemaVersion`
+  bump, cache invalidation). **Owner:** alec — the capabilities-catalog
+  follow-up moves the table into the YAML and deletes this bullet.
+- **No breakpoint on the conversation history.** Markers sit on the
+  system block and the last stable tool only, so a multi-call tool loop
+  re-bills the growing history on every call. **Blocker:** WP03's tiered
+  builder fixes the tool segments first; a third breakpoint on the last
+  stable message is the follow-up. **Owner:** WP03 of
+  tool-context-budget-01TCBUD01 (or its follow-up mission) — adds the
+  message breakpoint and deletes this bullet.
+- **OpenRouter tool-object `cache_control` is unverified live.** The
+  adapter puts `cache_control` beside `type`/`function` on the last
+  stable tool; OpenRouter documents it inside message content parts. A
+  rejection costs only the tool marker (the guard degrades to
+  system-only for that profile + model), but acceptance criterion 4
+  (`cached_tokens ≥ 0.9 × prefix` on OpenRouter-Anthropic) depends on
+  what OpenRouter does with it. **Blocker:** a live call. **Owner:** alec —
+  the live AC4 dogfood run (pending in
+  `docs/dogfood/2026-10-09-tool-context-acceptance.md`; WP08 is hermetic
+  and cannot make it) records the result and deletes this bullet.
+- **The "caches prompts" badge does not see the guard.**
+  `views/llm.modelCachesPrompts` mirrors the request-time capability
+  table; a `PromptCacheGuard` degrade (a provider rejected
+  `cache_control` for a profile + model) leaves the badge on while the
+  wire sends fewer or no markers. **Blocker:** the guard's per-(profile,
+  model) level is process state with no read API. **Owner:** alec —
+  "expose the guard level to the badge" deletes this bullet (2026-10-09).
+- **Degrade scope and lifetime.** `llm.PromptCacheGuard` degrades per
+  (profile id, model id) — a proxy or one routed model rejecting
+  `cache_control` leaves other profiles and models marking — and the
+  degrade lasts for the life of the process, logged once per step
+  (`llm.prompt_cache.unsupported`). There is no re-probe: a provider that
+  later accepts markers stays degraded until restart. **Blocker:** none
+  technical; needs a re-probe policy (TTL or settings reset). **Owner:**
+  alec — a re-probe follow-up deletes this bullet.
+
+The fleet usage observer (`core/rpc/api.go` usage hook) now receives the
+normalised prompt total (`usageTurnRecord(...).PromptTokens`, i.e.
+`llm.PromptTokensTotal`), so fleet token totals include cache reads and
+writes on every provider, the same number the local readout shows.
+`llm.ModelInfo.SupportsPromptCache` is written and read by the OpenRouter
+adapter only; the Anthropic `ListModels` write was removed.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP07) — org tool-exposure entries have no `.vue` reader yet — FIXED
+
+**FIXED at release integration (2026-10-09).** The TS `ToolExposureLevel`
+union carries `org_default` and `org_hot_set`; `lib/toolExposure.ts`
+`isOrgLocked` (org pin or org hot set) makes those tool rows read-only in
+`ToolExposurePanel` ("always sent — set by your organisation") and takes
+every move off the row in `ToolsMenu`; an org default stays editable. The
+budget input is disabled with a "set by your organisation" note when
+`Settings.org.schemaBudgetTokens > 0`, and `ToolsMenu` names an org budget
+from `SessionToolExposure.org`. Tests: `ToolExposurePanel.test.ts`,
+`ToolsMenu.test.ts`. The original entry follows for the record.
+
+WP07 puts the organisation's entries on the wire read-only
+(`toolexposure.Settings.org`, `sessions.SessionToolExposure.org`:
+`OrgExposure{settings[], schemaBudgetTokens, bundleId}`, each entry with
+`pinned` / `pinnedBy: "org"`), and every writer refuses a pinned entry
+with `*toolexposure.PinnedError`. No component reads them yet, so the UI
+still shows pinned rows as editable and lets a write fail at the backend.
+The WP06/WP07 integration task, exactly:
+
+- add `org_default` and `org_hot_set` to the TS `ToolExposureLevel` union;
+- `hot_set_extra` rows render read-only ("set by your organisation"), not editable;
+- the budget input is disabled when `org.schemaBudgetTokens > 0`;
+- `Settings.org` / `SessionToolExposure.org` get a `.vue` reader in `ToolExposurePanel` / `ToolsMenu`.
+
+**Blocker:** WP06 (the panels) is built in parallel off the WP03 tip.
+**Owner:** the coordinator, at release-branch integration time — deletes
+this entry.
+
+### 2026-10-09 (found in tool-context-budget-01TCBUD01 WP07 review) — bundle apply state survives sign-out
+
+`FleetSignOut` / `handleNodeRemoved` stop the pollers but leave
+`<dataDir>/fleet/bundle_id.txt`, `bundle_checksum.txt` and
+`bundle_apply_meta.json`. A sign-in to a **different** org then starts the
+config poller with the previous org's `lastAppliedID`: that org's bundles
+are refused as non-monotonic until its ids pass the old one, and the old
+checksum is sent on the first poll. WP07's `ToolExposurePins.Clear` drops
+`bundle_apply_meta.json` (forcing one re-apply for the same org), which
+does not fix the cross-org id. Pre-existing, not introduced by WP07.
+**Blocker:** none technical; needs a decision on what sign-out resets
+(id + checksum + meta, per org). **Owner:** alec — a separate fix deletes
+this entry.
+
 ## Drained
+
+### 2026-10-09 · CLOSED — owner-accepted extensions of FR-K4's `tool_exposure` shape (tool-context-budget-01TCBUD01 WP07)
+
+**Closed by the WP08 sweep (2026-10-09):** spec §2.1 now records them
+(the "Ruling 2026-10-09 (WP07 review)" paragraph: `pinned:false` org
+defaults below the user layer, per-tool `tools{}` entries,
+`budget_tokens`, `hot_set_extra` beating a pinned `off`), and
+`TestToolExposureDial_OrgPinsReachTheRequest` drives a pinned tier and a
+pinned budget to the request. The original entry follows.
+
+FR-K4 names `{servers:{<name>:{tier, pinned}}, budget_tokens?,
+hot_set_extra?}`. WP07 ships two accepted extensions, recorded so the
+spec catches up (coordinator to write them into spec §2.1): `pinned:false`
+entries are **org defaults** that sit *below* the user layer (org pin →
+session → project → user → org default → harness default), and a per-server
+`tools{<bare>:{tier, pinned}}` sub-map. `hot_set_extra` beats a pinned
+`off` on the same tool (logged at decode; the overridden pin row is left
+out of the read-only view). Not a gap; this entry is deleted when spec
+§2.1 records them.
+
+
+### 2026-10-09 · CLOSED — derived cost double-charged cached prompt tokens on inclusive providers (`tool-context-budget-01TCBUD01` WP01 → WP05)
+
+Class: **two token conventions read as one.** `core/llm/cost/reducer.go`
+(`Reducer.Derive` and `DeriveWithSource`'s pricing-table branch) charged
+`Usage.InputTokens` at the input rate **plus** the cache counts at their
+cache rates. Right for Anthropic, whose `input_tokens` excludes the cache;
+wrong for OpenRouter (`prompt_tokens`) and Gemini (`promptTokenCount`),
+whose input count already includes it (`llm.InputExcludesCache`).
+**Closed by WP05:** both branches go through `cost.splitPrompt`, which on
+inclusive providers moves each cache count with a known rate out of the
+input bucket (`InputTokens − CachedInputRead − CachedInputWrite` at the
+input rate, clamped at 0) and leaves a count whose rate is unknown in the
+input bucket, billed once. Anthropic is unchanged.
+
+What is actually priced with cache rates on the live cost path
+(`Reducer.Derive` over `core/llm/cost/starter_table.yaml`): OpenRouter
+`anthropic/claude-opus-4.5*`, `-opus-4.6*`, `-opus-4*` (Opus 4 / 4.1),
+`-sonnet-4*` and `-haiku-4.5*`; direct Anthropic `claude-sonnet-*` and
+`claude-haiku-*`. Every other OpenRouter model falls to the `*` row (no
+cache rates), so its cached tokens stay in the input bucket and are
+billed once at the input rate — correct, not discounted. Gemini rows
+carry no cache rates (same). `core/llm/pricing/pricing.yaml` (read only by
+`DeriveWithSource`, which has no production caller) carries the same
+OpenRouter rows. Proof: `core/llm/cost/reducer_cache_test.go` (same
+prompt, same cost on every provider kind; clamp; `DeriveWithSource` per
+convention; the starter table prices OpenRouter Haiku 4.5 / Opus 4.6 /
+Opus 4.1 / Sonnet cached reads at their cache rates).
 
 ### 2026-10-07 · CLOSED — project sync advertised an agent-memory class that shipped nothing (`memory-sync-01MEMSY01` WP01)
 

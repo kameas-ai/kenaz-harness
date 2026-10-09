@@ -84,6 +84,22 @@ func TestMessageToView_TokenMeter_PopulatesPointers(t *testing.T) {
 	}
 }
 
+// TestMessageToView_TokenMeter_CachedTokens: the per-message cached count
+// reaches the wire Message (tool-context-budget-01TCBUD01 WP05).
+func TestMessageToView_TokenMeter_CachedTokens(t *testing.T) {
+	t.Parallel()
+	view := messageToView(session.Message{
+		ID: "m", SessionID: "s", Role: session.RoleAssistant, CreatedAt: time.Now().UTC(),
+		PromptTokens: iptr(10000), CachedTokens: iptr(9000),
+	})
+	if view.CachedTokens == nil || *view.CachedTokens != 9000 {
+		t.Errorf("CachedTokens = %v, want 9000", view.CachedTokens)
+	}
+	if v := messageToView(session.Message{ID: "u", Role: session.RoleUser}); v.CachedTokens != nil {
+		t.Errorf("user row CachedTokens = %v, want nil", *v.CachedTokens)
+	}
+}
+
 // TestMessageToView_TokenMeter_NilOnMissingUsage verifies that messageToView
 // produces nil pointers (omitempty serialisation) for messages with no usage
 // data — i.e., the typical user-turn row.

@@ -106,7 +106,8 @@ type ForkOptions struct {
 // records a branches row pointing at it. Returns the populated Branch
 // + the child session record. Callers (Bundle B kernel) write the
 // compacted handoff prompt as the first message on the returned child
-// session.
+// session. The child inherits the parent's tool-exposure override and
+// activated tool set (session.Manager.InheritToolExposure).
 //
 // Requires the Manager to have been constructed with a non-nil
 // session.Manager. CreateRaw is the alternate entry point for callers
@@ -129,6 +130,9 @@ func (m *Manager) CreateBranch(ctx context.Context, opts ForkOptions) (Branch, s
 	child, err := m.sessions.CreateInProject(ctx, childName, parent.ProjectID)
 	if err != nil {
 		return Branch{}, session.Record{}, fmt.Errorf("conversation: create child session: %w", err)
+	}
+	if err := m.sessions.InheritToolExposure(ctx, opts.ParentSessionID, child.ID); err != nil {
+		return Branch{}, session.Record{}, fmt.Errorf("conversation: inherit tool exposure: %w", err)
 	}
 
 	id, err := m.idGen()
@@ -261,8 +265,10 @@ type ForkAtMessageOptions struct {
 }
 
 // CreateBranchAtMessage allocates a child session whose message history
-// is exactly the parent's messages [0..ParentMessageID] (inclusive).
-// Returns the populated Branch + the child session.Record.
+// is exactly the parent's messages [0..ParentMessageID] (inclusive) and
+// whose tool-exposure override and activated tool set are the parent's
+// (session.Manager.InheritToolExposure). Returns the populated Branch
+// + the child session.Record.
 //
 // Requires the Manager to have been constructed with a non-nil session.Manager.
 func (m *Manager) CreateBranchAtMessage(ctx context.Context, opts ForkAtMessageOptions) (Branch, session.Record, error) {
@@ -322,6 +328,9 @@ func (m *Manager) CreateBranchAtMessage(ctx context.Context, opts ForkAtMessageO
 	// branch's first turn. See session.Manager.ReplayTranscript.
 	if _, err := m.sessions.ReplayTranscript(ctx, child.ID, slice); err != nil {
 		return Branch{}, session.Record{}, fmt.Errorf("conversation: replay message: %w", err)
+	}
+	if err := m.sessions.InheritToolExposure(ctx, opts.ParentSessionID, child.ID); err != nil {
+		return Branch{}, session.Record{}, fmt.Errorf("conversation: inherit tool exposure: %w", err)
 	}
 
 	// Create branch row.

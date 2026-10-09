@@ -37,6 +37,11 @@ type UsageTurn struct {
 	PromptTokens int
 	// CompletionTokens is the provider-reported output/completion token count.
 	CompletionTokens int
+	// CachedTokens / CacheWriteTokens are the provider-reported prompt-
+	// cache read and write counts (llm.Usage.CachedInputRead /
+	// CachedInputWrite), persisted by migration sessions/0346.
+	CachedTokens     int
+	CacheWriteTokens int
 	// CostUSD is the derived-or-provider-reported cost in USD. Nil means
 	// the cost is unknown (no pricing entry + no provider cost).
 	CostUSD *float64
@@ -52,6 +57,10 @@ type Aggregate struct {
 	CompletionTokens int
 	// TotalTokens is PromptTokens + CompletionTokens.
 	TotalTokens int
+	// CachedTokens is the sum of all cached_tokens rows (NULL counts 0).
+	CachedTokens int
+	// CacheWriteTokens is the sum of all cache_write_tokens rows.
+	CacheWriteTokens int
 	// CostUSD is the sum of all non-NULL cost_usd rows (0.0 when no rows
 	// have cost data yet).
 	CostUSD float64
@@ -132,10 +141,13 @@ func (m *sqlManager) Add(ctx context.Context, turn UsageTurn) error {
 		}
 		_, err := tx.Exec(ctx,
 			`UPDATE session_messages
-			 SET prompt_tokens = ?, completion_tokens = ?, cost_usd = ?, cost_source = ?
+			 SET prompt_tokens = ?, completion_tokens = ?, cached_tokens = ?, cache_write_tokens = ?,
+			     cost_usd = ?, cost_source = ?
 			 WHERE id = ?`,
 			turn.PromptTokens,
 			turn.CompletionTokens,
+			turn.CachedTokens,
+			turn.CacheWriteTokens,
 			costArg,
 			sourceArg,
 			turn.MessageID,
@@ -220,6 +232,8 @@ func (m *sqlManager) GetSession(ctx context.Context, sessionID string) (Aggregat
 		`SELECT
 		   COALESCE(SUM(prompt_tokens), 0),
 		   COALESCE(SUM(completion_tokens), 0),
+		   COALESCE(SUM(cached_tokens), 0),
+		   COALESCE(SUM(cache_write_tokens), 0),
 		   COALESCE(SUM(COALESCE(cost_usd, 0)), 0.0),
 		   COUNT(CASE WHEN prompt_tokens IS NOT NULL THEN 1 END),
 		   COUNT(CASE WHEN cost_source = 'provider' THEN 1 END),
@@ -230,10 +244,11 @@ func (m *sqlManager) GetSession(ctx context.Context, sessionID string) (Aggregat
 	)
 	var (
 		prompt, completion                   int
+		cached, cacheWrite                   int
 		costTotal                            float64
 		msgCount, providerCount, derivedCount int
 	)
-	if err := row.Scan(&prompt, &completion, &costTotal, &msgCount, &providerCount, &derivedCount); err != nil {
+	if err := row.Scan(&prompt, &completion, &cached, &cacheWrite, &costTotal, &msgCount, &providerCount, &derivedCount); err != nil {
 		return Aggregate{}, fmt.Errorf("usage: GetSession: %w", err)
 	}
 	src := deriveAggSource(providerCount, derivedCount, msgCount)
@@ -241,6 +256,8 @@ func (m *sqlManager) GetSession(ctx context.Context, sessionID string) (Aggregat
 		PromptTokens:     prompt,
 		CompletionTokens: completion,
 		TotalTokens:      prompt + completion,
+		CachedTokens:     cached,
+		CacheWriteTokens: cacheWrite,
 		CostUSD:          costTotal,
 		CostSource:       src,
 		MessageCount:     msgCount,
