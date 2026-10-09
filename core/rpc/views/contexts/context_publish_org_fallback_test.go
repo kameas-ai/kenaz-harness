@@ -276,3 +276,46 @@ func TestContextPublish_RequestTeamID_WinsOverIdentity(t *testing.T) {
 		t.Errorf("sent = %+v, want team_id request-team", sent.Nodes)
 	}
 }
+
+// The production wiring (core/rpc/api.go calls WithSelfIdentityFromDataDir
+// with the fleet data dir): an identity.json written at enroll with a
+// team_id makes a team publish carry that team; removing the team (a
+// re-enroll into a teamless org) is seen on the next publish without
+// rewiring.
+func TestContextPublish_IdentityFileOnDisk_DrivesTeam(t *testing.T) {
+	api, fake := setupPublishTest(t)
+	dataDir := t.TempDir()
+	if err := corefleet.SaveIdentity(dataDir, corefleet.Identity{
+		UserID: "u-1", OrgID: "o-1", TeamID: "1147eb64-everyone", TeamName: "Everyone",
+	}); err != nil {
+		t.Fatalf("SaveIdentity: %v", err)
+	}
+	api.WithSelfIdentityFromDataDir(dataDir)
+
+	publish := func(node string) contextsview.ContextPublishResult {
+		t.Helper()
+		res, err := api.Context_Publish(context.Background(), contextsview.ContextPublishRequest{
+			NodeID: node, Layer: "team", Kind: "guidance", Title: "t", Body: "b", Version: 1,
+		})
+		if err != nil {
+			t.Fatalf("Context_Publish: %v", err)
+		}
+		return res
+	}
+
+	if res := publish("node-7"); res.EffectiveLayer != "team" {
+		t.Errorf("EffectiveLayer = %q, want team", res.EffectiveLayer)
+	}
+	sent := fake.snapshot()
+	if len(sent.Nodes) != 1 || sent.Nodes[0].Classification != "team_shared" ||
+		sent.Nodes[0].TeamID == nil || *sent.Nodes[0].TeamID != "1147eb64-everyone" {
+		t.Fatalf("sent = %+v, want team_shared with the identity file's team_id", sent.Nodes)
+	}
+
+	if err := corefleet.SaveIdentity(dataDir, corefleet.Identity{UserID: "u-1", OrgID: "o-1"}); err != nil {
+		t.Fatalf("SaveIdentity (teamless): %v", err)
+	}
+	if res := publish("node-8"); res.EffectiveLayer != "org" {
+		t.Errorf("teamless identity: EffectiveLayer = %q, want org", res.EffectiveLayer)
+	}
+}

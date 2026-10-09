@@ -4265,31 +4265,10 @@ func New(c *core.Core, opts ...Option) *API {
 			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps).
 				WithAuditEmitter(&contextSyncAuditBridge{impl: a.auditImpl})
 			impl.WithSyncer(ctxSyncer)
-			// Review F3: hide pulled copies of the user's own entries.
-			selfDataDir := flDataDir
-			impl.WithSelfUserID(func() string {
-				if selfDataDir == "" {
-					return ""
-				}
-				id, err := corefleet.LoadIdentity(selfDataDir)
-				if err != nil {
-					return ""
-				}
-				return id.UserID
-			})
-			// Dogfood 2026-10-08: a "team"-layer publish lands in the
-			// enrolled identity's team (fleet enroll returns team_id);
-			// only a teamless identity falls back to the org layer.
-			impl.WithSelfTeamID(func() string {
-				if selfDataDir == "" {
-					return ""
-				}
-				id, err := corefleet.LoadIdentity(selfDataDir)
-				if err != nil {
-					return ""
-				}
-				return id.TeamID
-			})
+			// The enrolled identity supplies the user id (to hide pulled
+			// copies of the user's own entries, review F3) and the team id
+			// a "team"-layer publish lands in.
+			impl.WithSelfIdentityFromDataDir(flDataDir)
 
 			// FR-012: wire the library merger so each successful PullDelta
 			// applies team/org entries to the local context library. The

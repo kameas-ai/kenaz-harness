@@ -61,7 +61,7 @@ type API struct {
 	selfUserID func() string
 	// selfTeamID returns the enrolled fleet identity's team id ("" when
 	// unknown / teamless) — the team a "team"-layer publish lands in when
-	// the request names none (dogfood 2026-10-08).
+	// the request names none.
 	selfTeamID func() string
 }
 
@@ -77,6 +77,27 @@ func (a *API) WithSelfUserID(f func() string) *API {
 func (a *API) WithSelfTeamID(f func() string) *API {
 	a.selfTeamID = f
 	return a
+}
+
+// WithSelfIdentityFromDataDir wires both identity sources (user id and
+// team id) from the fleet identity cached under dataDir (identity.json,
+// written at enroll). Read on every call, so a re-enroll or sign-out is
+// seen without rewiring. An empty dataDir or unreadable identity yields
+// "" for both.
+func (a *API) WithSelfIdentityFromDataDir(dataDir string) *API {
+	load := func() fleet.Identity {
+		if dataDir == "" {
+			return fleet.Identity{}
+		}
+		id, err := fleet.LoadIdentity(dataDir)
+		if err != nil {
+			return fleet.Identity{}
+		}
+		return id
+	}
+	return a.
+		WithSelfUserID(func() string { return load().UserID }).
+		WithSelfTeamID(func() string { return load().TeamID })
 }
 
 // ErrInvalidModule is returned by AttachModule when the directory exists
@@ -345,22 +366,11 @@ func toWire(in corecontexts.Node) Node {
 // rejected with ErrPersonalLayerNotSyncable.
 // Requires a wired ContextGraphSyncer; returns ErrFleetDisabled otherwise.
 //
-// Team resolution (dogfood 2026-10-08; supersedes the finding #97
-// THROWAWAY note):
-//
-// The request carries no team_id — the UI has no team picker. When it
-// asks for the "team" layer, the team is the enrolled fleet identity's
-// team_id (selfTeamID, read from identity.json). Fleet's enroll response
-// has carried one since the server shipped a default "Everyone" team per
-// org; before this the harness never used it, and every "Share to team"
-// went org-wide (log: `contexts.publish.start requested_layer=team
-// effective_layer=org team_fallback_to_org=true team_id_present=false`
-// on a device whose identity.json had a team_id).
-//
-// Only when the identity genuinely has no team_id (a teamless org, or no
-// identity loaded) does the finding #97 fallback still apply: widen to
-// the "org" layer and say so — EffectiveLayer always reflects what
-// actually happened, and the frontend surfaces it (ContextsView.vue).
+// Team resolution for a "team"-layer request, in order: req.TeamID; else
+// the enrolled fleet identity's team_id (selfTeamID — the UI has no team
+// picker); else no team, and the publish widens to the "org" layer.
+// EffectiveLayer always reports the layer actually published, and the
+// frontend surfaces a team→org widening (ContextsView.vue).
 func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (ContextPublishResult, error) {
 	if a == nil || a.syncer == nil {
 		return ContextPublishResult{}, fleet.ErrFleetDisabled

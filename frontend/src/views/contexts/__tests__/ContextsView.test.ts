@@ -704,7 +704,7 @@ describe('ContextsView', () => {
       expect(req.layer).toBe('team');
       const resultText = w.find('[data-testid=context-publish-result]').text();
       expect(resultText).toContain('Published org-wide');
-      expect(resultText).toContain("team sync isn't available yet");
+      expect(resultText).toContain("you're not in a team yet");
       // Must NOT claim it went only to the team — that's the exact lie
       // this fix exists to prevent.
       expect(resultText).not.toContain('Published to your team');

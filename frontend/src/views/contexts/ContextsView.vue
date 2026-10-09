@@ -54,14 +54,13 @@
  *     the decoded payload. Both are disabled-with-a-reason under the same
  *     fleet gate as promote, for the same reason.
  *
- * Finding #97 additions (2026-09-14), revised dogfood 2026-10-08:
+ * Publish layer:
  *   - The publish confirm dialog offers an explicit "team" vs. "org"
  *     choice (`publishLayer`), and `confirmPublish` never sends a team_id —
  *     there is no team picker. The backend resolves a "team" request to
- *     the enrolled fleet identity's team_id (fleet enroll returns one —
- *     the org's default "Everyone" team; Context_Publish in
- *     core/rpc/views/contexts/impl.go). Only a teamless identity still
- *     falls back to "org". `publishResult.effective_layer` is the ONLY
+ *     the enrolled fleet identity's team_id (Context_Publish in
+ *     core/rpc/views/contexts/impl.go); only a teamless identity widens
+ *     to "org". `publishResult.effective_layer` is the ONLY
  *     source of truth for what actually happened, and
  *     `publishFellBackToOrg` drives an explicit "published org-wide
  *     instead" notice rather than letting a team request quietly become
@@ -953,8 +952,7 @@ onBeforeUnmount(() => {
     >
       <template v-if="publishFellBackToOrg">
         Published org-wide ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
-        — team sync isn't available yet, so this went to everyone in your organisation instead
-        of just your team.
+        — you're not in a team yet, so this went to everyone in your organisation.
       </template>
       <template v-else>
         Published to {{ publishResult.effective_layer === 'org' ? 'your organisation' : 'your team' }}
