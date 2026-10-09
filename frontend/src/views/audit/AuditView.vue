@@ -114,6 +114,16 @@ const richFilter = computed<AuditFilterQuery>(() => ({
   limit: 500,
 }));
 
+// The query actually run (audit.filter, export): richFilter minus
+// actor_ids. Audit rows record no emitter, so an actor term would match
+// nothing — it is ignored (and says so) rather than emptying the trail.
+// richFilter keeps it so a saved query round-trips its actor_ids.
+const appliedFilter = computed<AuditFilterQuery>(() => {
+  const { actor_ids: _ignored, ...rest } = richFilter.value;
+  return rest;
+});
+const actorFilterIgnored = computed(() => actorIds.value.length > 0);
+
 // ── Entry state ─────────────────────────────────────────────────────────
 const seeded = ref<readonly AuditEntry[]>([]);
 const verifyResult = ref<null | { ok: boolean; checked: number; brokenAt?: string }>(null);
@@ -151,7 +161,7 @@ async function refresh(opts: { invalidate?: boolean } = {}) {
   // exactly the fabrication this WP exists to stop (see the module-level
   // comment above).
   if (servedMode.value) return;
-  const query = richFilter.value;
+  const query = appliedFilter.value;
   const key = JSON.stringify(query);
   const mySeq = ++refreshSeq;
   loading.value = true;
@@ -176,7 +186,7 @@ async function refresh(opts: { invalidate?: boolean } = {}) {
   }
 }
 
-watch(richFilter, () => {
+watch(appliedFilter, () => {
   void refresh();
 }, { immediate: true });
 
@@ -244,7 +254,7 @@ async function verifyVisible() {
 async function exportAudit() {
   exportToast.value = 'Exporting…';
   const opts: AuditExportOptions = {
-    filter: richFilter.value,
+    filter: appliedFilter.value,
     format: exportFormat.value,
   };
   try {
@@ -593,6 +603,17 @@ onBeforeUnmount(() => {
           ? 'chain intact'
           : `tamper detected${verifyResult.brokenAt ? ' at ' + verifyResult.brokenAt : ''}` }}
       </div>
+    </div>
+
+    <div
+      v-if="actorFilterIgnored"
+      role="note"
+      class="mx-6 mt-3 rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+      data-testid="audit-actor-ignored"
+    >
+      This saved query's actor filter can't be applied yet — ignored. Audit
+      entries do not record which emitter produced them
+      (docs/unwired-ledger.md, "audit actor filter has no emitter to match").
     </div>
 
     <!-- Entry list -->
