@@ -76,6 +76,7 @@ import (
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
 	"github.com/kameas-ai/kenaz-harness/core/sentry"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // Bindings is the Wails-reflected JS-callable surface. Every method has a
@@ -314,6 +315,20 @@ func (b *Bindings) Sessions_GetKnobsDefault(id string) (*sessions.SessionKnobs, 
 func (b *Bindings) Sessions_SetKnobsDefault(id string, knobs *sessions.SessionKnobs) error {
 	defer sentry.WrapBinding("Sessions_SetKnobsDefault")()
 	return b.api.Sessions().SetKnobsDefault(b.ctx(), id, knobs)
+}
+
+// Sessions_GetToolExposure returns the session's tool-exposure override
+// layer and activated tool set (tool-context-budget-01TCBUD01 WP02).
+func (b *Bindings) Sessions_GetToolExposure(id string) (sessions.SessionToolExposure, error) {
+	defer sentry.WrapBinding("Sessions_GetToolExposure")()
+	return b.api.Sessions().GetToolExposure(b.ctx(), id)
+}
+
+// Sessions_SetToolExposure persists the session's tool-exposure override
+// layer; an empty layer clears it. Unknown tiers are refused.
+func (b *Bindings) Sessions_SetToolExposure(id string, exposure toolexposure.Exposure) error {
+	defer sentry.WrapBinding("Sessions_SetToolExposure")()
+	return b.api.Sessions().SetToolExposure(b.ctx(), id, exposure)
 }
 
 // Sessions_SuggestTitle triggers a manual auto-title generation for the
@@ -1449,6 +1464,22 @@ func (b *Bindings) Settings_GetMCPAutoRestart() (bool, error) {
 func (b *Bindings) Settings_SetMCPAutoRestart(enabled bool) error {
 	defer sentry.WrapBinding("Settings_SetMCPAutoRestart")()
 	return b.api.Settings().SetMCPAutoRestart(b.ctx(), enabled)
+}
+
+// Settings_GetToolExposure returns the user's per-server / per-tool
+// exposure tiers, schema budget and activation TTL, the budget and TTL
+// resolved to their effective values (tool-context-budget-01TCBUD01
+// WP02).
+func (b *Bindings) Settings_GetToolExposure() (toolexposure.Settings, error) {
+	defer sentry.WrapBinding("Settings_GetToolExposure")()
+	return b.api.Settings().GetToolExposure(b.ctx())
+}
+
+// Settings_SetToolExposure validates and persists the user's exposure
+// tiers, schema budget and activation TTL (0 = default).
+func (b *Bindings) Settings_SetToolExposure(ts toolexposure.Settings) error {
+	defer sentry.WrapBinding("Settings_SetToolExposure")()
+	return b.api.Settings().SetToolExposure(b.ctx(), ts)
 }
 
 // Settings_GetAutoTitleEnabled returns whether session auto-titling is on.
@@ -3080,6 +3111,14 @@ func (b *Bindings) Projects_GetAutonomy(projectID string) (autonomy.Layer, error
 func (b *Bindings) Projects_SetAutonomy(projectID string, layer autonomy.Layer) error {
 	defer sentry.WrapBinding("Projects_SetAutonomy")()
 	return b.api.Projects().SaveAutonomyProfile(b.ctx(), projectID, layer)
+}
+
+// Projects_SetToolExposure persists the project's tool-exposure
+// override layer; an empty layer clears it (tool-context-budget-
+// 01TCBUD01 WP02).
+func (b *Bindings) Projects_SetToolExposure(projectID string, exposure toolexposure.Exposure) error {
+	defer sentry.WrapBinding("Projects_SetToolExposure")()
+	return b.api.Projects().SetToolExposure(b.ctx(), projectID, exposure)
 }
 
 // Sessions_GetAutonomy returns the session's persisted autonomy.Layer

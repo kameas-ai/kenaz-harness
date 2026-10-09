@@ -20,6 +20,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trust"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/workflow"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // errNotWired is returned by every stub method. Feature missions replace
@@ -192,6 +193,12 @@ func (s *stubSessions) GetKnobsDefault(_ context.Context, _ string) (*sessions.S
 func (s *stubSessions) SetKnobsDefault(_ context.Context, _ string, _ *sessions.SessionKnobs) error {
 	return errNotWired
 }
+func (s *stubSessions) GetToolExposure(_ context.Context, _ string) (sessions.SessionToolExposure, error) {
+	return sessions.SessionToolExposure{}, errNotWired
+}
+func (s *stubSessions) SetToolExposure(_ context.Context, _ string, _ toolexposure.Exposure) error {
+	return errNotWired
+}
 func (s *stubSessions) Export(_ context.Context, _, _ string) (sessions.ExportResult, error) {
 	return sessions.ExportResult{}, errNotWired
 }
@@ -327,6 +334,9 @@ func (s *stubProjects) LoadAutonomyProfile(_ context.Context, _ string) (autonom
 	return autonomy.Layer{}, nil
 }
 func (s *stubProjects) SaveAutonomyProfile(_ context.Context, _ string, _ autonomy.Layer) error {
+	return errNotWired
+}
+func (s *stubProjects) SetToolExposure(_ context.Context, _ string, _ toolexposure.Exposure) error {
 	return errNotWired
 }
 

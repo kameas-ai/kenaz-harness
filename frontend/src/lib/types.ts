@@ -5315,3 +5315,42 @@ export interface CapabilityEvent {
   verify_reason?: string;
   consumer?: string;
 }
+
+// ── tool-context-budget-01TCBUD01 WP02 ────────────────────────────────
+// Wire shapes of core/toolexposure (Settings_/Projects_/Sessions_
+// {Get,Set}ToolExposure). Field names match the Go JSON tags.
+
+/** How much of a tool the model sees on a call (spec §2.1). */
+export type ToolExposureTier = 'full' | 'summary' | 'off';
+
+/** One server's setting at one layer; `tools` is keyed by bare tool name. */
+export interface ToolServerExposure {
+  tier?: ToolExposureTier;
+  tools?: Record<string, ToolExposureTier>;
+}
+
+/** One layer's tier settings (user, project or session). */
+export interface ToolExposure {
+  servers?: Record<string, ToolServerExposure>;
+}
+
+/** One tool a session has loaded on demand. */
+export interface ToolActivation {
+  name: string;
+  server: string;
+  last_used_turn: number;
+  sticky: boolean;
+}
+
+/** The user's tool-exposure settings; budget/TTL are effective values on read, 0 = default on write. */
+export interface ToolExposureSettings {
+  exposure: ToolExposure;
+  schemaBudgetTokens: number;
+  activationTtlTurns: number;
+}
+
+/** A session's override layer and activated set. */
+export interface SessionToolExposure {
+  exposure: ToolExposure;
+  activations: ToolActivation[];
+}

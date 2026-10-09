@@ -30,6 +30,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // FileStore is a SettingsStore backed by a single JSON file. Safe for
@@ -119,6 +120,9 @@ func (s *FileStore) SaveAll(in Settings) error {
 		return err
 	}
 	if err := validateBranchFields(in); err != nil {
+		return err
+	}
+	if err := in.toolExposureSettings().Validate(); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -917,6 +921,28 @@ func (s *FileStore) SaveMCPAutoRestart(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadToolExposure returns the stored tool-exposure layer, budget and
+// TTL (0 = default).
+func (s *FileStore) LoadToolExposure() (toolexposure.Settings, error) {
+	got, err := s.LoadAll()
+	return got.toolExposureSettings(), err
+}
+
+// SaveToolExposure validates and persists the tool-exposure layer,
+// budget and TTL under the store lock.
+func (s *FileStore) SaveToolExposure(ts toolexposure.Settings) error {
+	if err := ts.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	return s.saveLocked(got.withToolExposureSettings(ts))
+}
+
 // LoadAutoTitleEnabled returns whether session auto-titling is on.
 // Default true (zero-value Disabled → feature enabled).
 func (s *FileStore) LoadAutoTitleEnabled() (bool, error) {
@@ -1566,6 +1592,26 @@ func (a *API) SetMCPAutoRestart(_ context.Context, enabled bool) error {
 	return a.store.SaveMCPAutoRestart(enabled)
 }
 
+// GetToolExposure returns the user's tool-exposure layer with budget
+// and TTL resolved to their effective values.
+func (a *API) GetToolExposure(_ context.Context) (toolexposure.Settings, error) {
+	ts, err := a.store.LoadToolExposure()
+	if err != nil {
+		return toolexposure.Settings{}, err
+	}
+	ts.SchemaBudgetTokens = ts.EffectiveSchemaBudgetTokens()
+	ts.ActivationTTLTurns = ts.EffectiveActivationTTLTurns()
+	return ts, nil
+}
+
+// SetToolExposure validates and persists the user's tool-exposure
+// layer, budget and TTL.
+func (a *API) SetToolExposure(_ context.Context, ts toolexposure.Settings) error {
+	return a.store.SaveToolExposure(ts)
+}
+
+var _ toolexposure.SettingsSource = (*API)(nil)
+
 // GetAutoTitleEnabled returns whether session auto-titling is on.
 // (p0-wiring-fixes-3TVMG0MX WP05)
 func (a *API) GetAutoTitleEnabled(_ context.Context) (bool, error) {
@@ -1782,6 +1828,9 @@ func (m *memoryStore) SaveAll(s Settings) error {
 		return err
 	}
 	if err := validateUpdateFields(s); err != nil {
+		return err
+	}
+	if err := s.toolExposureSettings().Validate(); err != nil {
 		return err
 	}
 	m.mu.Lock()
@@ -2082,6 +2131,22 @@ func (m *memoryStore) SaveMCPAutoRestart(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.MCPAutoRestartDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadToolExposure() (toolexposure.Settings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.toolExposureSettings(), nil
+}
+
+func (m *memoryStore) SaveToolExposure(ts toolexposure.Settings) error {
+	if err := ts.Validate(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data = m.data.withToolExposureSettings(ts)
 	return nil
 }
 

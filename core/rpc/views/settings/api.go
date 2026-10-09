@@ -11,6 +11,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // Settings is the persisted UI state shape (plan §5.5). lastRoute drives
@@ -466,6 +467,21 @@ type Settings struct {
 	// without user intervention on a fresh install. Read via the
 	// MCPAutoRestart() accessor; never read directly.
 	MCPAutoRestartDisabled bool `json:"mcpAutoRestartDisabled,omitempty"`
+
+	// ToolExposure is the user's per-server / per-tool exposure tier
+	// layer (tool-context-budget-01TCBUD01 §2.1 step 4): below org pins,
+	// session and project overrides, above the harness default. nil has
+	// no opinion about any tool. Read through toolexposure.Resolve;
+	// written via SaveToolExposure, which validates every tier.
+	ToolExposure *toolexposure.Exposure `json:"toolExposure,omitempty"`
+	// ToolSchemaBudgetTokens caps the tokens of tool schemas sent per
+	// call (§2.3). 0 = toolexposure.DefaultSchemaBudgetTokens; range
+	// [0, toolexposure.MaxSchemaBudgetTokens].
+	ToolSchemaBudgetTokens int `json:"toolSchemaBudgetTokens,omitempty"`
+	// ToolActivationTTLTurns is how many unused turns a non-sticky
+	// activation survives (§2.3). 0 = toolexposure.DefaultActivationTTLTurns;
+	// range [0, toolexposure.MaxActivationTTLTurns].
+	ToolActivationTTLTurns int `json:"toolActivationTtlTurns,omitempty"`
 
 	// AgenticTurnRouting is the LAUNCH GATE for the routed chat turn
 	// (agentgraph-total-convergence-01PMGX01 WP11b; design in
@@ -1469,6 +1485,13 @@ type SettingsStore interface {
 	LoadMCPAutoRestart() (bool, error)
 	SaveMCPAutoRestart(enabled bool) error
 
+	// LoadToolExposure / SaveToolExposure expose the tool-exposure layer,
+	// schema budget and activation TTL as one toolexposure.Settings
+	// (tool-context-budget-01TCBUD01 WP02). Load reports the stored
+	// values (0 = default); Save validates and writes all three.
+	LoadToolExposure() (toolexposure.Settings, error)
+	SaveToolExposure(ts toolexposure.Settings) error
+
 	// LoadAutoTitleEnabled / SaveAutoTitleEnabled expose the session
 	// auto-title feature flag (p0-wiring-fixes-3TVMG0MX WP05). Default
 	// true on a fresh install (zero-value Disabled → feature enabled).
@@ -1609,6 +1632,13 @@ type SettingsAPI interface {
 	GetMCPAutoRestart(ctx context.Context) (bool, error)
 	// SetMCPAutoRestart persists the MCP auto-restart dial.
 	SetMCPAutoRestart(ctx context.Context, enabled bool) error
+	// GetToolExposure returns the user's tool-exposure layer with the
+	// schema budget and activation TTL resolved to their effective
+	// values. Satisfies toolexposure.SettingsSource.
+	GetToolExposure(ctx context.Context) (toolexposure.Settings, error)
+	// SetToolExposure validates and persists the user's tool-exposure
+	// layer, budget and TTL (0 = default).
+	SetToolExposure(ctx context.Context, ts toolexposure.Settings) error
 	// GetAutoTitleEnabled returns whether session auto-titling is on.
 	// Default true on a fresh install (zero-value → enabled).
 	// (p0-wiring-fixes-3TVMG0MX WP05)
@@ -2035,4 +2065,29 @@ type ShortcutsStore interface {
 	LoadShortcuts() (map[string]string, error)
 	// SaveShortcuts atomically replaces the full KeyboardShortcuts map.
 	SaveShortcuts(m map[string]string) error
+}
+
+// toolExposureSettings projects the three tool-exposure fields.
+func (s Settings) toolExposureSettings() toolexposure.Settings {
+	out := toolexposure.Settings{
+		SchemaBudgetTokens: s.ToolSchemaBudgetTokens,
+		ActivationTTLTurns: s.ToolActivationTTLTurns,
+	}
+	if s.ToolExposure != nil {
+		out.Exposure = s.ToolExposure.Clone()
+	}
+	return out
+}
+
+// withToolExposureSettings writes the three tool-exposure fields; a
+// zero exposure layer is stored as absent.
+func (s Settings) withToolExposureSettings(ts toolexposure.Settings) Settings {
+	s.ToolSchemaBudgetTokens = ts.SchemaBudgetTokens
+	s.ToolActivationTTLTurns = ts.ActivationTTLTurns
+	s.ToolExposure = nil
+	if !ts.Exposure.IsZero() {
+		e := ts.Exposure.Clone()
+		s.ToolExposure = &e
+	}
+	return s
 }

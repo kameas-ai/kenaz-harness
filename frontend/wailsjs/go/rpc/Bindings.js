@@ -1094,6 +1094,10 @@ export function Projects_SetAutonomy(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Projects_SetAutonomy'](arg1, arg2);
 }
 
+export function Projects_SetToolExposure(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Projects_SetToolExposure'](arg1, arg2);
+}
+
 export function Projects_UpdateDescription(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Projects_UpdateDescription'](arg1, arg2);
 }
@@ -1222,6 +1226,10 @@ export function Sessions_GetKnobsDefault(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_GetKnobsDefault'](arg1);
 }
 
+export function Sessions_GetToolExposure(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_GetToolExposure'](arg1);
+}
+
 export function Sessions_GetUsage(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_GetUsage'](arg1);
 }
@@ -1296,6 +1304,10 @@ export function Sessions_SetKnobsDefault(arg1, arg2) {
 
 export function Sessions_SetSystemPrompt(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Sessions_SetSystemPrompt'](arg1, arg2, arg3);
+}
+
+export function Sessions_SetToolExposure(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_SetToolExposure'](arg1, arg2);
 }
 
 export function Sessions_StartCapture(arg1) {
@@ -1502,6 +1514,10 @@ export function Settings_GetTodoEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetTodoEnabled']();
 }
 
+export function Settings_GetToolExposure() {
+  return window['go']['rpc']['Bindings']['Settings_GetToolExposure']();
+}
+
 export function Settings_GetWebFetchEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetWebFetchEnabled']();
 }
@@ -1624,6 +1640,10 @@ export function Settings_SetShowPerMessageTokenMeter(arg1) {
 
 export function Settings_SetTodoEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetTodoEnabled'](arg1);
+}
+
+export function Settings_SetToolExposure(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetToolExposure'](arg1);
 }
 
 export function Settings_SetWebFetchEnabled(arg1) {

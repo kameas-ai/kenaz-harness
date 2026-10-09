@@ -3,12 +3,14 @@ package projects
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // sqlStore persists projects through a storage.DB-shaped connection.
@@ -142,6 +144,50 @@ func (s *sqlStore) GetAutonomyProfile(ctx context.Context, id string) (autonomy.
 		return autonomy.Layer{}, err
 	}
 	return decodeAutonomySQL(level, overrides)
+}
+
+// SetToolExposure writes projects.tool_exposure (migration
+// sessions/0347-tool-exposure); a zero Exposure writes NULL.
+func (s *sqlStore) SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	var arg any
+	if !e.IsZero() {
+		b, err := json.Marshal(e)
+		if err != nil {
+			return fmt.Errorf("projects: marshal tool_exposure: %w", err)
+		}
+		arg = string(b)
+	}
+	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		res, err := tx.Exec(ctx, "UPDATE projects SET tool_exposure = ? WHERE id = ?", arg, id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+// GetToolExposure reads projects.tool_exposure; NULL is the zero
+// Exposure.
+func (s *sqlStore) GetToolExposure(ctx context.Context, id string) (toolexposure.Exposure, error) {
+	var raw sql.NullString
+	if err := s.db.Reader().QueryRow(ctx,
+		"SELECT tool_exposure FROM projects WHERE id = ?", id).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return toolexposure.Exposure{}, ErrNotFound
+		}
+		return toolexposure.Exposure{}, err
+	}
+	if !raw.Valid || raw.String == "" {
+		return toolexposure.Exposure{}, nil
+	}
+	var e toolexposure.Exposure
+	if err := json.Unmarshal([]byte(raw.String), &e); err != nil {
+		return toolexposure.Exposure{}, fmt.Errorf("projects: decode tool_exposure: %w", err)
+	}
+	return e, nil
 }
 
 func (s *sqlStore) Delete(ctx context.Context, id string) error {

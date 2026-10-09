@@ -42,6 +42,7 @@ import {planmode} from '../models';
 import {policy} from '../models';
 import {projects} from '../models';
 import {autonomy} from '../models';
+import {toolexposure} from '../models';
 import {scheduledchat} from '../models';
 import {search} from '../models';
 import {secrets} from '../models';
@@ -609,6 +610,8 @@ export function Projects_Rename(arg1:string,arg2:string):Promise<void>;
 
 export function Projects_SetAutonomy(arg1:string,arg2:autonomy.Layer):Promise<void>;
 
+export function Projects_SetToolExposure(arg1:string,arg2:toolexposure.Exposure):Promise<void>;
+
 export function Projects_UpdateDescription(arg1:string,arg2:string):Promise<void>;
 
 export function SaveRoute(arg1:string):Promise<void>;
@@ -673,6 +676,8 @@ export function Sessions_GetAutonomy(arg1:string):Promise<autonomy.Layer>;
 
 export function Sessions_GetKnobsDefault(arg1:string):Promise<llm.RequestKnobs>;
 
+export function Sessions_GetToolExposure(arg1:string):Promise<sessions.SessionToolExposure>;
+
 export function Sessions_GetUsage(arg1:string):Promise<sessions.SessionUsage>;
 
 export function Sessions_List():Promise<Array<sessions.Session>>;
@@ -710,6 +715,8 @@ export function Sessions_SetAutonomy(arg1:string,arg2:autonomy.Layer):Promise<vo
 export function Sessions_SetKnobsDefault(arg1:string,arg2:llm.RequestKnobs):Promise<void>;
 
 export function Sessions_SetSystemPrompt(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function Sessions_SetToolExposure(arg1:string,arg2:toolexposure.Exposure):Promise<void>;
 
 export function Sessions_StartCapture(arg1:string):Promise<void>;
 
@@ -813,6 +820,8 @@ export function Settings_GetShowPerMessageTokenMeter():Promise<boolean>;
 
 export function Settings_GetTodoEnabled():Promise<boolean>;
 
+export function Settings_GetToolExposure():Promise<toolexposure.Settings>;
+
 export function Settings_GetWebFetchEnabled():Promise<boolean>;
 
 export function Settings_GetWebSearch():Promise<boolean>;
@@ -874,6 +883,8 @@ export function Settings_SetShortcuts(arg1:Record<string, string>):Promise<void>
 export function Settings_SetShowPerMessageTokenMeter(arg1:boolean):Promise<void>;
 
 export function Settings_SetTodoEnabled(arg1:boolean):Promise<void>;
+
+export function Settings_SetToolExposure(arg1:toolexposure.Settings):Promise<void>;
 
 export function Settings_SetWebFetchEnabled(arg1:boolean):Promise<void>;
 

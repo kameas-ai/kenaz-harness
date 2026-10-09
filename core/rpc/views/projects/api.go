@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // Project is the wire shape for a project entity. Timestamps render as
@@ -58,4 +59,9 @@ type ProjectsAPI interface {
 	// SaveAutonomyProfile persists the per-project autonomy.Layer.
 	// Pass an empty Layer to clear the override.
 	SaveAutonomyProfile(ctx context.Context, projectID string, layer autonomy.Layer) error
+
+	// SetToolExposure validates and persists the project's tool-exposure
+	// override layer (tool-context-budget-01TCBUD01 WP02); a zero
+	// Exposure clears it.
+	SetToolExposure(ctx context.Context, projectID string, e toolexposure.Exposure) error
 }

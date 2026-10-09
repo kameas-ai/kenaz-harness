@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // Project is the durable representation of a project entity.
@@ -75,6 +76,14 @@ type Store interface {
 	// GetAutonomyProfile loads the per-project autonomy.Layer. Returns
 	// the empty Layer when both columns are NULL.
 	GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error)
+
+	// SetToolExposure persists the project's tool-exposure override layer
+	// (projects.tool_exposure, migration sessions/0347-tool-exposure). A
+	// zero Exposure clears it (NULL). Invalid tiers are refused.
+	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
+	// GetToolExposure loads the project's override layer; the zero
+	// Exposure when none is set.
+	GetToolExposure(ctx context.Context, id string) (toolexposure.Exposure, error)
 }
 
 // IDGen is the project-id generator. Tests override; production uses
@@ -244,6 +253,20 @@ func (m *Manager) SetAutonomyProfile(ctx context.Context, id string, layer auton
 func (m *Manager) GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error) {
 	return m.store.GetAutonomyProfile(ctx, id)
 }
+
+// SetToolExposure persists the project's tool-exposure override layer;
+// a zero Exposure clears it.
+func (m *Manager) SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error {
+	return m.store.SetToolExposure(ctx, id, e)
+}
+
+// ProjectToolExposure loads the project's override layer. *Manager
+// satisfies toolexposure.ProjectSource with it.
+func (m *Manager) ProjectToolExposure(ctx context.Context, id string) (toolexposure.Exposure, error) {
+	return m.store.GetToolExposure(ctx, id)
+}
+
+var _ toolexposure.ProjectSource = (*Manager)(nil)
 
 // defaultIDGen returns a 16-byte hex id (32 chars). Matches the
 // session manager's id shape so the two namespaces look uniform in
