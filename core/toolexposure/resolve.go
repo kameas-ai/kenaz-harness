@@ -25,10 +25,14 @@ const (
 
 // CatalogTool is one tool the harness could expose: its namespaced
 // name, the server that serves it, and whether that server is running.
+// Probe marks the entry standing for an installed server that is not
+// running (see ServerProbe): it is no tool, never sent, and resolves to
+// the server-wide tier.
 type CatalogTool struct {
 	Name    string
 	Server  string
 	Running bool
+	Probe   bool
 }
 
 // bareName strips the "<server>__" prefix; a name without it is
@@ -47,7 +51,9 @@ type ResolvedTool struct {
 	Name    string
 	Server  string
 	Running bool
-	Tier    Tier
+	// Probe is copied from CatalogTool.Probe.
+	Probe bool
+	Tier  Tier
 	// Source is the layer that decided Tier.
 	Source Level
 }
@@ -193,8 +199,11 @@ func Resolve(ctx context.Context, deps Deps, sessionID string, catalog []Catalog
 	}
 	anySummary := false
 	for _, c := range catalog {
-		rt := ResolvedTool{Name: c.Name, Server: c.Server, Running: c.Running}
+		rt := ResolvedTool{Name: c.Name, Server: c.Server, Running: c.Running, Probe: c.Probe}
 		bare := c.bareName()
+		if c.Probe {
+			bare = ""
+		}
 		for _, l := range layers {
 			if t := l.exp.lookup(c.Server, bare); t != "" {
 				rt.Tier, rt.Source = t, l.level

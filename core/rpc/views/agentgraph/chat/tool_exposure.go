@@ -81,6 +81,11 @@ type toolSelection struct {
 	stable int
 	// summary is the number of catalog tools listed only in the digest.
 	summary int
+	// digest is the per-call "Available but not loaded" system section
+	// (loadtools.RenderDigest); "" when nothing is unloaded. It changes
+	// with every activation, so it travels after the cacheable prefix
+	// (appendDigest), never in a tool description.
+	digest string
 	// autoActivated is the turn's auto-activation count so far.
 	autoActivated int
 }
@@ -91,19 +96,20 @@ func (t *exposureTurn) resolve(ctx context.Context) (toolexposure.ResolvedCatalo
 	if t.resolver == nil {
 		return toolexposure.ResolvedCatalog{}, servers, fmt.Errorf("chat: tool exposure: no settings snapshot for this turn")
 	}
-	rc, err := t.resolver.Resolve(ctx, t.sessionID, loadtools.CatalogWithProbes(t.entries, servers))
+	rc, err := loadtools.ResolveCatalog(ctx, t.resolver, t.sessionID, t.entries, servers)
 	return rc, servers, err
 }
 
-// selectTools builds the tools array of one model call: the partition's
-// hot, pinned and activated segments in that order, with
-// kenaz__load_tools' description replaced by the digest of everything
-// else. Only tools toolexposure.ResolvedCatalog.Sendable admits are
-// sent (FR-E1).
+// selectTools builds one model call's tools array — the partition's hot,
+// pinned and activated segments in that order — and the digest of
+// everything else. Only tools toolexposure.ResolvedCatalog.Sendable
+// admits are sent (FR-E1). Every tool keeps its own static description,
+// so the hot + pinned prefix is byte-identical from call to call.
 //
 // If resolution fails the call carries the catalog's harness-default
 // full tools only (toolexposure.DefaultTier): never a summary tool, so
-// the failure costs reach, not budget.
+// the failure costs reach, not budget. Its digest lists the default
+// summary tools under a note that settings could not be read.
 func (t *exposureTurn) selectTools(ctx context.Context) toolSelection {
 	t.mu.Lock()
 	auto := t.autoActivated
@@ -114,38 +120,65 @@ func (t *exposureTurn) selectTools(ctx context.Context) toolSelection {
 		logging.L().Warn("chat.tool_exposure.resolve_failed",
 			"session_id", t.sessionID, "err", err.Error())
 		var hot []corellm.ToolSpec
-		summary := 0
 		for _, e := range t.entries {
-			if toolexposure.DefaultTier(toolexposure.CatalogTool{Name: e.Name, Server: e.Server}) != toolexposure.TierFull {
-				summary++
-				continue
+			if toolexposure.DefaultTier(toolexposure.CatalogTool{Name: e.Name, Server: e.Server}) == toolexposure.TierFull {
+				hot = append(hot, t.byName[e.Name])
 			}
-			hot = append(hot, t.byName[e.Name])
 		}
 		sort.SliceStable(hot, func(i, j int) bool { return hot[i].Name < hot[j].Name })
 		tools, stable := assembleRequestTools(hot, nil, nil)
-		return toolSelection{tools: tools, stable: stable, summary: summary, autoActivated: auto}
+		digestServers := loadtools.DefaultDigest(t.entries, loadtools.Purposes(servers))
+		summary := 0
+		for _, d := range digestServers {
+			summary += d.Count
+		}
+		return toolSelection{
+			tools: tools, stable: stable, summary: summary, autoActivated: auto,
+			digest: loadtools.RenderDigest(digestServers, loadtools.NoteDefaultsApply),
+		}
 	}
 
 	p := rc.Partition()
-	digest := loadtools.RenderDigest(loadtools.BuildDigest(p, loadtools.Purposes(servers)))
 	specs := func(seg []toolexposure.ResolvedTool) []corellm.ToolSpec {
 		out := make([]corellm.ToolSpec, 0, len(seg))
 		for _, rt := range seg {
-			spec, ok := t.byName[rt.Name]
-			if !ok {
-				continue
+			if spec, ok := t.byName[rt.Name]; ok {
+				out = append(out, spec)
 			}
-			if rt.Name == loadtools.Name {
-				spec.Description = digest
-				spec.TokenEst = corellm.EstimateToolSpecTokens(spec)
-			}
-			out = append(out, spec)
 		}
 		return out
 	}
 	tools, stable := assembleRequestTools(specs(p.Hot), specs(p.Pinned), specs(p.Activated))
-	return toolSelection{tools: tools, stable: stable, summary: len(p.Digest), autoActivated: auto}
+	return toolSelection{
+		tools: tools, stable: stable, summary: len(p.Digest), autoActivated: auto,
+		digest: loadtools.RenderDigest(loadtools.BuildDigest(p, loadtools.Purposes(servers)), ""),
+	}
+}
+
+// appendDigest adds the per-call digest section after everything else
+// in the system prompt, so the stable system text before it stays a
+// cacheable prefix. "" leaves system unchanged.
+func appendDigest(system, digest string) string {
+	if digest == "" {
+		return system
+	}
+	if system == "" {
+		return digest
+	}
+	return system + "\n\n" + digest
+}
+
+// willSend reports whether this turn's next model call carries name's
+// schema: the tool is in the turn's catalog and, resolved against the
+// turn's settings snapshot and the session's current activations, is
+// sendable. A loaded tool outside the turn's catalog (its server started
+// mid-turn, or the turn withholds it) is sent from the next turn.
+func (t *exposureTurn) willSend(ctx context.Context, name string) bool {
+	if _, ok := t.byName[name]; !ok {
+		return false
+	}
+	rc, _, err := t.resolve(ctx)
+	return err == nil && rc.Sendable(name)
 }
 
 // assembleRequestTools lays out one call's tools array from its three

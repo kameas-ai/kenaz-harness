@@ -5404,12 +5404,15 @@ export interface LoadToolsNotLoaded {
 }
 
 /**
- * Sessions_LoadTools result (Go loadtools.Result): the tools whose
- * schemas the session is now sent, every name that was not loaded with
- * its reason, and a one-line summary.
+ * Sessions_LoadTools result (Go loadtools.Result): loaded tools counted
+ * per server (named in `loaded` only when there are at most 10), tools
+ * that arrive only from the next turn, every name that was not loaded
+ * with its reason, and a one-line summary.
  */
 export interface LoadToolsResult {
   loaded: string[];
+  loaded_by_server: Record<string, number>;
+  next_turn?: string[];
   not_loaded: LoadToolsNotLoaded[];
   summary: string;
 }

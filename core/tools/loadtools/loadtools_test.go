@@ -183,15 +183,14 @@ func TestDigest_RendersSummaryServersAndStoppedMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := RenderDigest(BuildDigest(rc.Partition(), Purposes(servers)))
+	got := RenderDigest(BuildDigest(rc.Partition(), Purposes(servers)), "")
 
-	want := baseDescription + " Available but not loaded:\n" +
-		"  fetch (1 tool): Fetch a URL and read it — e.g. fetch\n" +
-		"  github (stopped): GitHub issues and pull requests — not running; its tools cannot be loaded until it is started\n" +
-		"  kenaz (1 tool) — e.g. monitor\n" +
-		"  mixed (1 tool) — e.g. keep\n" +
-		"  outlook (6 tools): Read, search, send and organise Microsoft 365 mail — e.g. create-event, delete-mail, list-events, list-messages, search-contacts, …\n" +
-		inputLine
+	want := "## Available but not loaded\n" + introLine + "\n" +
+		"- fetch (1 tool): Fetch a URL and read it — e.g. fetch\n" +
+		"- github (stopped): GitHub issues and pull requests — not running; its tools cannot be loaded until it is started\n" +
+		"- kenaz (1 tool) — e.g. monitor\n" +
+		"- mixed (1 tool) — e.g. keep\n" +
+		"- outlook (6 tools): Read, search, send and organise Microsoft 365 mail — e.g. create-event, delete-mail, list-events, list-messages, search-contacts, …"
 	if got != want {
 		t.Fatalf("digest mismatch\n got: %q\nwant: %q", got, want)
 	}
@@ -199,17 +198,44 @@ func TestDigest_RendersSummaryServersAndStoppedMarker(t *testing.T) {
 		t.Fatalf("digest lists an off server or tool:\n%s", got)
 	}
 	// Deterministic: a second render of an unchanged catalog is
-	// byte-identical (the description is part of the cacheable prefix).
+	// byte-identical.
 	rc2, servers2, _ := f.svc.resolve(ctx, "s1")
-	if again := RenderDigest(BuildDigest(rc2.Partition(), Purposes(servers2))); again != got {
+	if again := RenderDigest(BuildDigest(rc2.Partition(), Purposes(servers2)), ""); again != got {
 		t.Fatal("digest is not byte-identical across two renders of the same catalog")
 	}
 }
 
-func TestDigest_EverythingLoaded(t *testing.T) {
-	got := RenderDigest(nil)
-	if !strings.Contains(got, "Every available tool is already loaded.") || !strings.HasSuffix(got, inputLine) {
-		t.Fatalf("empty digest = %q", got)
+func TestDigest_EverythingLoadedRendersNothing(t *testing.T) {
+	if got := RenderDigest(nil, ""); got != "" {
+		t.Fatalf("empty digest = %q, want no section", got)
+	}
+	if got := RenderDigest(nil, NoteDefaultsApply); got != "## Available but not loaded\n"+NoteDefaultsApply {
+		t.Fatalf("note-only digest = %q", got)
+	}
+}
+
+// TestDigest_DefaultDigestListsDefaultSummaryTools: with tiers
+// unresolvable, every non-hot entry is listed under its server.
+func TestDigest_DefaultDigestListsDefaultSummaryTools(t *testing.T) {
+	got := RenderDigest(DefaultDigest(catalogFixture(), Purposes(map[string]ServerInfo{
+		"fetch": {Name: "fetch", Purpose: "Fetch a URL and read it."},
+	})), NoteDefaultsApply)
+	for _, want := range []string{NoteDefaultsApply, "- fetch (1 tool): Fetch a URL and read it", "- outlook (6 tools)", "- secret (1 tool)", "- kenaz (1 tool) — e.g. monitor"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("default digest lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "read_file") {
+		t.Errorf("default digest lists a hot tool:\n%s", got)
+	}
+}
+
+// TestTool_DescriptionIsStatic: the description never carries the
+// digest, so the tool stays inside the cacheable prefix.
+func TestTool_DescriptionIsStatic(t *testing.T) {
+	d := New(nil).Description()
+	if !strings.Contains(d, "'Available but not loaded'") || strings.Contains(d, "outlook") {
+		t.Fatalf("description = %q", d)
 	}
 }
 
@@ -231,6 +257,9 @@ func TestLoad_ServersToolsAndGlobsWithHonestRefusals(t *testing.T) {
 	if !reflect.DeepEqual(res.Loaded, wantLoaded) {
 		t.Errorf("Loaded = %v, want %v", res.Loaded, wantLoaded)
 	}
+	if want := map[string]int{"fetch": 1, "kenaz": 1, "mixed": 1, "outlook": 3}; !reflect.DeepEqual(res.LoadedByServer, want) {
+		t.Errorf("LoadedByServer = %v, want %v", res.LoadedByServer, want)
+	}
 	wantNL := map[string]string{
 		"secret":               "off — turned off in Settings → Capabilities",
 		"github":               "server github is not running (state: failed)",
@@ -238,7 +267,7 @@ func TestLoad_ServersToolsAndGlobsWithHonestRefusals(t *testing.T) {
 		"mixed__drop":          "off — turned off in Settings → Capabilities",
 		"github__create-issue": "server github is not running (state: failed)",
 		"outlook__nope":        ReasonUnknown,
-		"zzz__*":               ReasonUnknown,
+		"zzz__*":               ReasonInvalidGlob,
 	}
 	gotNL := map[string]string{}
 	for _, nl := range res.NotLoaded {
@@ -415,5 +444,71 @@ func TestTool_CallLoadsForTheContextSession(t *testing.T) {
 	}
 	if _, err := tool.Call(context.Background(), json.RawMessage(`{"servers":["fetch"]}`)); err == nil {
 		t.Fatal("call without a session accepted")
+	}
+}
+
+// TestLoad_GlobsAreServerScopedAndHonest: a glob loads within one known
+// server only, refuses each off tool it matched by name (FR-H2), and is
+// refused outright when bare, cross-server or over an unknown server.
+func TestLoad_GlobsAreServerScopedAndHonest(t *testing.T) {
+	f := newFixture(t, userOffSecretAndMixedDrop())
+	res, err := f.svc.Load(context.Background(), "s1", Request{
+		Tools: []string{"mixed__*", "*", "outlook*", "nosuch__*", "github__*", "outlook__zz*", "secret__*"},
+	}, audit.ToolsActivatedByModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(res.Loaded, []string{"mixed__keep"}) {
+		t.Errorf("Loaded = %v, want [mixed__keep]", res.Loaded)
+	}
+	want := map[string]string{
+		"mixed__drop":  "off — turned off in Settings → Capabilities",
+		"*":            ReasonInvalidGlob,
+		"outlook*":     ReasonInvalidGlob,
+		"nosuch__*":    ReasonInvalidGlob,
+		"github__*":    "server github is not running (state: failed)",
+		"outlook__zz*": ReasonUnknown,
+		"secret__*":    "off — turned off in Settings → Capabilities",
+	}
+	got := map[string]string{}
+	for _, nl := range res.NotLoaded {
+		got[nl.Name] = nl.Reason
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("NotLoaded = %v\nwant       %v", got, want)
+	}
+}
+
+// TestLoad_ManyToolsAreCountedNotListed: past MaxLoadedNames the result
+// counts per server and the summary says so.
+func TestLoad_ManyToolsAreCountedNotListed(t *testing.T) {
+	f := newFixture(t, userOffSecretAndMixedDrop())
+	res, err := f.svc.Load(context.Background(), "s1", Request{Servers: []string{"outlook", "fetch", "mixed", "kenaz"}}, audit.ToolsActivatedByModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Loaded) != 0 {
+		t.Errorf("Loaded lists %d names past the cap", len(res.Loaded))
+	}
+	if want := map[string]int{"outlook": 6, "fetch": 1, "mixed": 1, "kenaz": 3}; !reflect.DeepEqual(res.LoadedByServer, want) {
+		t.Errorf("LoadedByServer = %v, want %v", res.LoadedByServer, want)
+	}
+	if !strings.Contains(res.Summary, "6 tools from outlook") {
+		t.Errorf("Summary = %q", res.Summary)
+	}
+}
+
+// TestLoad_ReportsToolsTheTurnWillNotCarry: with a turn view attached,
+// a loaded tool the turn's next call will not carry is reported as
+// arriving on the next turn.
+func TestLoad_ReportsToolsTheTurnWillNotCarry(t *testing.T) {
+	f := newFixture(t, toolexposure.Exposure{})
+	ctx := WithTurnView(context.Background(), func(_ context.Context, name string) bool { return name != "fetch__fetch" })
+	res, err := f.svc.Load(ctx, "s1", Request{Tools: []string{"fetch__fetch", "outlook__send-mail"}}, audit.ToolsActivatedByModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(res.NextTurn, []string{"fetch__fetch"}) || !strings.Contains(res.Summary, "1 available from your next turn") {
+		t.Fatalf("NextTurn = %v, Summary = %q", res.NextTurn, res.Summary)
 	}
 }

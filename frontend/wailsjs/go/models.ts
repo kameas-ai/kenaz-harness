@@ -4344,6 +4344,8 @@ export namespace loadtools {
 	}
 	export class Result {
 	    loaded: string[];
+	    loaded_by_server: Record<string, number>;
+	    next_turn?: string[];
 	    not_loaded: NotLoaded[];
 	    summary: string;
 	
@@ -4354,6 +4356,8 @@ export namespace loadtools {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.loaded = source["loaded"];
+	        this.loaded_by_server = source["loaded_by_server"];
+	        this.next_turn = source["next_turn"];
 	        this.not_loaded = this.convertValues(source["not_loaded"], NotLoaded);
 	        this.summary = source["summary"];
 	    }

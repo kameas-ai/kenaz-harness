@@ -56,7 +56,7 @@ func TestPartition_SegmentsAndOrder(t *testing.T) {
 		{Name: "fetch__fetch", Server: "fetch", Running: true},
 		{Name: "git__status", Server: "git", Running: true},
 		{Name: "secret__dump", Server: "secret", Running: true},
-		{Name: ServerProbeName("github"), Server: "github"},
+		ServerProbe("github"),
 	}
 	deps := Deps{
 		Settings: &countingSettings{s: Settings{Exposure: Exposure{Servers: map[string]ServerExposure{
@@ -89,15 +89,15 @@ func TestPartition_SegmentsAndOrder(t *testing.T) {
 	check("Pinned", p.Pinned, "fetch__fetch", "git__status")
 	check("Activated", p.Activated, "outlook__list-messages", "outlook__send-mail")
 	check("Digest", p.Digest, "kenaz__monitor", "outlook__create-event")
-	check("Stopped", p.Stopped, ServerProbeName("github"))
+	check("Stopped", p.Stopped, "github__")
 
-	send := p.Send()
+	send := p.SendNames()
 	for _, n := range send {
 		if !rc.Sendable(n) {
-			t.Errorf("Send() includes %q but Sendable reports false", n)
+			t.Errorf("SendNames() includes %q but Sendable reports false", n)
 		}
 	}
-	for _, n := range []string{"secret__dump", "kenaz__monitor", "outlook__create-event", ServerProbeName("github"), "nope__x"} {
+	for _, n := range []string{"secret__dump", "kenaz__monitor", "outlook__create-event", "github__", "nope__x"} {
 		if rc.Sendable(n) {
 			t.Errorf("Sendable(%q) = true, want false (off, summary-not-activated, stopped or unknown)", n)
 		}
@@ -153,11 +153,30 @@ func TestDeps_WithLayer(t *testing.T) {
 	}
 }
 
-func TestServerProbeName(t *testing.T) {
-	if n := ServerProbeName("outlook"); n != "outlook__" || !IsServerProbe(n) {
-		t.Fatalf("ServerProbeName = %q", n)
+// TestServerProbe_MarkedByFlagNotName: a probe resolves to its server's
+// server-wide tier even when a layer keys a tool entry, and a real tool
+// whose name happens to end in the separator is not a probe.
+func TestServerProbe_MarkedByFlagNotName(t *testing.T) {
+	pr := ServerProbe("outlook")
+	if !pr.Probe || pr.Server != "outlook" {
+		t.Fatalf("ServerProbe = %+v", pr)
 	}
-	if IsServerProbe("outlook__send") || IsServerProbe("__") {
-		t.Fatal("IsServerProbe matched a tool name")
+	deps := Deps{
+		Settings: &countingSettings{s: Settings{Exposure: Exposure{Servers: map[string]ServerExposure{
+			"outlook": {Tier: TierOff, Tools: map[string]Tier{"x": TierFull}},
+		}}}},
+		Sessions: stateSessions{},
+		Projects: mapProjects{},
+	}
+	odd := CatalogTool{Name: "weird__", Server: "weird", Running: true}
+	rc, err := Resolve(context.Background(), deps, "s1", []CatalogTool{pr, odd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := rc.Tool("outlook__"); !got.Probe || got.Tier != TierOff {
+		t.Fatalf("probe resolved to %+v, want the server-wide off tier", got)
+	}
+	if got, _ := rc.Tool("weird__"); got.Probe || got.Tier != TierSummary || !got.Running {
+		t.Fatalf("a tool named like a probe was treated as one: %+v", got)
 	}
 }

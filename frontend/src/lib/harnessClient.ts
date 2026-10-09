@@ -5830,6 +5830,7 @@ export function createFakeHarnessClient(
       setToolExposure: noop,
       loadTools: async (_id, servers, tools) => ({
         loaded: [],
+        loaded_by_server: {},
         not_loaded: [...servers, ...tools].map((name) => ({ name, reason: 'unknown' })),
         summary: 'loaded no tools',
       }),

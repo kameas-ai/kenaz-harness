@@ -67,6 +67,7 @@ describe('createHarnessClient() — tool exposure', () => {
   it('routes sessions.loadTools to Sessions_LoadTools and returns its result', async () => {
     const result = {
       loaded: ['outlook__list-messages', 'outlook__send-mail'],
+      loaded_by_server: { outlook: 2 },
       not_loaded: [{ name: 'github', reason: 'server github is not running (state: failed)' }],
       summary: 'loaded 2 tool(s); their definitions are sent on your next call; 1 could not be loaded (see not_loaded)',
     };

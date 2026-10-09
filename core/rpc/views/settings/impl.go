@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1562,7 +1563,19 @@ func (a *API) Get(_ context.Context) (Settings, error) {
 }
 
 // Set persists every field.
-func (a *API) Set(_ context.Context, s Settings) error {
+func (a *API) Set(ctx context.Context, s Settings) error {
+	// A whole-settings save is also a tool-exposure write: vet the user
+	// layer like SetToolExposure does, but only when it differs from the
+	// stored one, so an unrelated save is never refused over a layer the
+	// user did not touch.
+	if g := a.exposureGuard.Load(); g != nil && *g != nil {
+		next := s.toolExposureSettings().Exposure
+		if cur, err := a.store.LoadToolExposure(); err != nil || !reflect.DeepEqual(cur.Exposure, next) {
+			if err := (*g).CheckLayerWrite(ctx, toolexposure.LayerWrite{Level: toolexposure.LevelUser, Exposure: next}); err != nil {
+				return err
+			}
+		}
+	}
 	if err := a.store.SaveAll(s); err != nil {
 		return err
 	}

@@ -22,7 +22,7 @@ func (c ResolvedCatalog) Activated(name string) (Activation, bool) {
 // not, and a name the catalog does not hold is not sendable.
 func (c ResolvedCatalog) Sendable(name string) bool {
 	t, ok := c.Tool(name)
-	if !ok || !t.Running {
+	if !ok || !t.Running || t.Probe {
 		return false
 	}
 	switch t.Tier {
@@ -55,9 +55,8 @@ func (c ResolvedCatalog) Sendable(name string) bool {
 // tools Sendable reports true for.
 //
 // A catalog may carry, for a server that is installed but not running,
-// one entry named by the server prefix alone ("outlook__", Running
-// false): its bare name is empty, which no layer can key, so it resolves
-// to the server-wide tier and lands in Stopped unless that tier is off.
+// one ServerProbe entry: it resolves to the server-wide tier and lands
+// in Stopped unless that tier is off.
 type Partition struct {
 	Hot       []ResolvedTool
 	Pinned    []ResolvedTool
@@ -66,9 +65,9 @@ type Partition struct {
 	Stopped   []ResolvedTool
 }
 
-// Send returns the names of every tool the call carries, in order:
-// Hot, then Pinned, then Activated.
-func (p Partition) Send() []string {
+// SendNames returns the names of every tool the call carries, in
+// order: Hot, then Pinned, then Activated.
+func (p Partition) SendNames() []string {
 	out := make([]string, 0, len(p.Hot)+len(p.Pinned)+len(p.Activated))
 	for _, seg := range [][]ResolvedTool{p.Hot, p.Pinned, p.Activated} {
 		for _, t := range seg {
@@ -83,7 +82,7 @@ func (c ResolvedCatalog) Partition() Partition {
 	var p Partition
 	lastUsed := map[string]int{}
 	for _, t := range c.Tools {
-		if !t.Running {
+		if !t.Running || t.Probe {
 			if t.Tier != TierOff {
 				p.Stopped = append(p.Stopped, t)
 			}
@@ -240,11 +239,9 @@ func (o overrideSession) SessionToolExposure(ctx context.Context, id string) (Se
 	return st, nil
 }
 
-// ServerProbeName is the catalog entry name standing for a server that
-// is installed but not running (see Partition).
-func ServerProbeName(server string) string { return server + NameSeparator }
-
-// IsServerProbe reports whether name is a ServerProbeName.
-func IsServerProbe(name string) bool {
-	return len(name) > len(NameSeparator) && name[len(name)-len(NameSeparator):] == NameSeparator
+// ServerProbe is the catalog entry standing for server, installed but
+// not running. Its name is the server prefix alone ("outlook__"), which
+// no tool can have; the Probe flag, not the name, is what marks it.
+func ServerProbe(server string) CatalogTool {
+	return CatalogTool{Name: server + NameSeparator, Server: server, Probe: true}
 }

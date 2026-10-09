@@ -129,13 +129,46 @@ type NotLoaded struct {
 	Reason string `json:"reason"`
 }
 
-// Result reports every requested name: Loaded holds the tools whose
-// schemas the session is now sent (newly activated or already full),
-// NotLoaded every name that could not be loaded and why (FR-H2).
+// Result reports every requested name (FR-H2). LoadedByServer counts
+// the loaded tools (newly activated or already full) per server; Loaded
+// names them when there are at most MaxLoadedNames, and is empty
+// otherwise so a whole-server load stays short. NextTurn names loaded
+// tools the calling turn's next model call will not carry (the turn
+// started before their server did, or the turn withholds them); they are
+// sent from the session's next turn. NotLoaded is every name that could
+// not be loaded and why.
 type Result struct {
-	Loaded    []string    `json:"loaded"`
-	NotLoaded []NotLoaded `json:"not_loaded"`
-	Summary   string      `json:"summary"`
+	Loaded         []string       `json:"loaded"`
+	LoadedByServer map[string]int `json:"loaded_by_server"`
+	NextTurn       []string       `json:"next_turn,omitempty"`
+	NotLoaded      []NotLoaded    `json:"not_loaded"`
+	Summary        string         `json:"summary"`
+}
+
+// MaxLoadedNames is the most tool names Result.Loaded lists.
+const MaxLoadedNames = 10
+
+// ReasonInvalidGlob is the NotLoaded reason for a glob that is not
+// "<server>__<prefix>*" over a known server: a bare "*" or a prefix
+// spanning servers would load every schema at once.
+const ReasonInvalidGlob = "invalid glob: use <server>__<prefix>* for a server in the list"
+
+// TurnView reports whether the calling turn's next model call will carry
+// a tool's schema. The chat runner attaches its turn's view to a tool
+// call's context (WithTurnView) so Load can say when a loaded tool only
+// arrives on the next turn.
+type TurnView func(ctx context.Context, name string) bool
+
+type turnViewKey struct{}
+
+// WithTurnView attaches v to ctx.
+func WithTurnView(ctx context.Context, v TurnView) context.Context {
+	return context.WithValue(ctx, turnViewKey{}, v)
+}
+
+func turnViewFrom(ctx context.Context) TurnView {
+	v, _ := ctx.Value(turnViewKey{}).(TurnView)
+	return v
 }
 
 // ReasonUnknown is the NotLoaded reason for a name that matches no
@@ -157,6 +190,13 @@ func (s *Service) Load(ctx context.Context, sessionID string, req Request, by st
 // while it was summary tier and not activated. It reports whether the
 // tool is activated now; a tool that is full, off, already activated or
 // not in the catalog is left alone and reported false.
+//
+// Ruling 2026-10-09 (owner alec, WP03 review): the harness does not
+// retry the call itself. It activates the tool and answers the call with
+// a not_loaded error; the model re-calls with the schema in view. That
+// costs one model call and never runs a call the model built without the
+// schema. These rows audit as by "auto", an addition to the spec's
+// model|user enum.
 func (s *Service) AutoActivate(ctx context.Context, sessionID, name string) (bool, error) {
 	_, n, err := s.load(ctx, sessionID, Request{Tools: []string{name}}, audit.ToolsActivatedByAuto)
 	return n > 0, err
@@ -210,6 +250,30 @@ func (s *Service) load(ctx context.Context, sessionID string, req Request, by st
 		return anyLoaded, offReason
 	}
 
+	// takeAll takes every tool a server name or glob matched: when some
+	// are loadable, each off tool is refused by name; when none is, the
+	// requested name itself is refused with the off reason.
+	takeAll := func(name string, matched []toolexposure.ResolvedTool) bool {
+		someLoadable := false
+		for _, t := range matched {
+			if t.Tier != toolexposure.TierOff {
+				someLoadable = true
+				break
+			}
+		}
+		if _, off := take(matched, someLoadable); !someLoadable {
+			refuse(name, off)
+			return false
+		}
+		return true
+	}
+	catalogServers := map[string]bool{}
+	for _, t := range rc.Tools {
+		if t.Running && !t.Probe {
+			catalogServers[t.Server] = true
+		}
+	}
+
 	for _, raw := range req.Servers {
 		name := strings.TrimSpace(raw)
 		if name == "" {
@@ -220,16 +284,7 @@ func (s *Service) load(ctx context.Context, sessionID string, req Request, by st
 			refuse(name, notServedReason(name, servers))
 			continue
 		}
-		someLoadable := false
-		for _, t := range matched {
-			if t.Tier != toolexposure.TierOff {
-				someLoadable = true
-				break
-			}
-		}
-		if _, off := take(matched, someLoadable); !someLoadable {
-			refuse(name, off)
-		}
+		takeAll(name, matched)
 	}
 	for _, raw := range req.Tools {
 		name := strings.TrimSpace(raw)
@@ -237,18 +292,29 @@ func (s *Service) load(ctx context.Context, sessionID string, req Request, by st
 			continue
 		}
 		if prefix, ok := strings.CutSuffix(name, "*"); ok {
-			matched := toolsOf(rc, func(t toolexposure.ResolvedTool) bool { return strings.HasPrefix(t.Name, prefix) })
-			if len(matched) == 0 {
-				refuse(name, notServedReason(serverOf(prefix), servers))
+			server := serverOf(prefix)
+			if !strings.Contains(prefix, toolexposure.NameSeparator) || server == "" || strings.Contains(prefix, "*") {
+				refuse(name, ReasonInvalidGlob)
 				continue
 			}
-			if ok, off := take(matched, false); !ok {
-				refuse(name, off)
+			if !catalogServers[server] {
+				if si, known := servers[server]; known && !si.Running {
+					refuse(name, notServedReason(server, servers))
+				} else {
+					refuse(name, ReasonInvalidGlob)
+				}
+				continue
 			}
+			matched := toolsOf(rc, func(t toolexposure.ResolvedTool) bool { return strings.HasPrefix(t.Name, prefix) })
+			if len(matched) == 0 {
+				refuse(name, ReasonUnknown)
+				continue
+			}
+			takeAll(name, matched)
 			continue
 		}
 		t, found := rc.Tool(name)
-		if !found || !t.Running || toolexposure.IsServerProbe(name) {
+		if !found || !t.Running || t.Probe {
 			refuse(name, notServedReason(serverOf(name), servers))
 			continue
 		}
@@ -271,11 +337,26 @@ func (s *Service) load(ctx context.Context, sessionID string, req Request, by st
 		}, s.d.Now())
 	}
 
-	res := Result{Loaded: sortedKeys(loaded), NotLoaded: notLoaded}
+	names := sortedKeys(loaded)
+	res := Result{Loaded: []string{}, LoadedByServer: map[string]int{}, NotLoaded: notLoaded}
+	for _, n := range names {
+		t, _ := rc.Tool(n)
+		res.LoadedByServer[t.Server]++
+	}
+	if len(names) <= MaxLoadedNames {
+		res.Loaded = names
+	}
+	if view := turnViewFrom(ctx); view != nil {
+		for _, n := range names {
+			if !view(ctx, n) {
+				res.NextTurn = append(res.NextTurn, n)
+			}
+		}
+	}
 	if res.NotLoaded == nil {
 		res.NotLoaded = []NotLoaded{}
 	}
-	res.Summary = summarise(res, count)
+	res.Summary = summarise(res, len(names), count)
 	return res, count, nil
 }
 
@@ -284,6 +365,12 @@ func (s *Service) load(ctx context.Context, sessionID string, req Request, by st
 // resolve summary under it (spec FR-E3) — those tools would have no way
 // to be loaded. A layer a higher layer overrides to full is allowed: it
 // changes nothing.
+//
+// It checks the layer being written only (2026-10-09, owner alec): a
+// stored user-layer load_tools=off followed by a project write that
+// makes tools summary is not refused at the project write. The
+// resolver's invariant still forces load_tools full in that state, so
+// nothing becomes unreachable; only the write-time message is skipped.
 func (s *Service) CheckLayerWrite(ctx context.Context, w toolexposure.LayerWrite) error {
 	bare := strings.TrimPrefix(Name, toolexposure.BuiltinServer+toolexposure.NameSeparator)
 	tier := w.Exposure.TierFor(toolexposure.BuiltinServer, bare)
@@ -298,7 +385,7 @@ func (s *Service) CheckLayerWrite(ctx context.Context, w toolexposure.LayerWrite
 	if err != nil {
 		return err
 	}
-	rc, err := r.Resolve(ctx, w.SessionID, CatalogWithProbes(entries, s.servers(ctx)))
+	rc, err := ResolveCatalog(ctx, r, w.SessionID, entries, s.servers(ctx))
 	if err != nil {
 		return err
 	}
@@ -310,7 +397,7 @@ func (s *Service) CheckLayerWrite(ctx context.Context, w toolexposure.LayerWrite
 		if t.Tier != toolexposure.TierSummary || t.Name == Name {
 			continue
 		}
-		if toolexposure.IsServerProbe(t.Name) {
+		if t.Probe {
 			summary = append(summary, t.Server+" (stopped)")
 			continue
 		}
@@ -375,11 +462,18 @@ func (s *Service) resolve(ctx context.Context, sessionID string) (toolexposure.R
 		return toolexposure.ResolvedCatalog{}, nil, fmt.Errorf("loadtools: catalog: %w", err)
 	}
 	servers := s.servers(ctx)
-	rc, err := s.d.Resolver.Resolve(ctx, sessionID, CatalogWithProbes(entries, servers))
+	rc, err := ResolveCatalog(ctx, s.d.Resolver, sessionID, entries, servers)
 	if err != nil {
 		return toolexposure.ResolvedCatalog{}, nil, err
 	}
 	return rc, servers, nil
+}
+
+// ResolveCatalog resolves a session's catalog entries plus one probe per
+// installed server that is not running — the one resolution the load
+// core and the request builder share.
+func ResolveCatalog(ctx context.Context, r *toolexposure.Resolver, sessionID string, entries []CatalogEntry, servers map[string]ServerInfo) (toolexposure.ResolvedCatalog, error) {
+	return r.Resolve(ctx, sessionID, CatalogWithProbes(entries, servers))
 }
 
 // servers returns the directory keyed by server name.
@@ -401,7 +495,7 @@ func (s *Service) Servers(ctx context.Context) map[string]ServerInfo { return s.
 func (s *Service) Resolver() *toolexposure.Resolver { return s.d.Resolver }
 
 // CatalogWithProbes converts catalog entries to resolver input (every
-// entry running) and appends one toolexposure.ServerProbeName entry per
+// entry running) and appends one toolexposure.ServerProbe entry per
 // installed server that is not running and has no catalog entries.
 func CatalogWithProbes(entries []CatalogEntry, servers map[string]ServerInfo) []toolexposure.CatalogTool {
 	out := make([]toolexposure.CatalogTool, 0, len(entries)+len(servers))
@@ -417,7 +511,7 @@ func CatalogWithProbes(entries []CatalogEntry, servers map[string]ServerInfo) []
 	sort.Strings(names)
 	for _, n := range names {
 		if si := servers[n]; !si.Running && !present[n] {
-			out = append(out, toolexposure.CatalogTool{Name: toolexposure.ServerProbeName(n), Server: n})
+			out = append(out, toolexposure.ServerProbe(n))
 		}
 	}
 	return out
@@ -473,7 +567,7 @@ func serverOf(name string) string {
 func toolsOf(rc toolexposure.ResolvedCatalog, keep func(toolexposure.ResolvedTool) bool) []toolexposure.ResolvedTool {
 	var out []toolexposure.ResolvedTool
 	for _, t := range rc.Tools {
-		if t.Running && !toolexposure.IsServerProbe(t.Name) && keep(t) {
+		if t.Running && !t.Probe && keep(t) {
 			out = append(out, t)
 		}
 	}
@@ -499,15 +593,38 @@ func sortedKeys(m map[string]bool) []string {
 	return out
 }
 
-func summarise(r Result, activated int) string {
+func summarise(r Result, loaded, activated int) string {
 	var b strings.Builder
-	switch {
-	case len(r.Loaded) == 0:
+	if loaded == 0 {
 		b.WriteString("loaded no tools")
-	case activated == 0:
-		fmt.Fprintf(&b, "%d requested tool(s) already loaded", len(r.Loaded))
-	default:
-		fmt.Fprintf(&b, "loaded %d tool(s); their definitions are sent on your next call", len(r.Loaded))
+	} else {
+		servers := make([]string, 0, len(r.LoadedByServer))
+		for sv := range r.LoadedByServer {
+			servers = append(servers, sv)
+		}
+		sort.Strings(servers)
+		parts := make([]string, 0, len(servers))
+		for _, sv := range servers {
+			n := r.LoadedByServer[sv]
+			if n == 1 {
+				parts = append(parts, "1 tool from "+sv)
+			} else {
+				parts = append(parts, fmt.Sprintf("%d tools from %s", n, sv))
+			}
+		}
+		b.WriteString("loaded ")
+		b.WriteString(strings.Join(parts, ", "))
+		if activated == 0 {
+			b.WriteString(" (already loaded)")
+		}
+		switch n := len(r.NextTurn); {
+		case n == loaded:
+			b.WriteString("; available from your next turn")
+		case n > 0:
+			fmt.Fprintf(&b, "; definitions are sent on your next call, except %d available from your next turn (see next_turn)", n)
+		default:
+			b.WriteString("; definitions are sent on your next call")
+		}
 	}
 	if n := len(r.NotLoaded); n > 0 {
 		fmt.Fprintf(&b, "; %d could not be loaded (see not_loaded)", n)
@@ -526,10 +643,9 @@ func New(svc *Service) *Tool { return &Tool{svc: svc} }
 // Name implements toolloop.BuiltinTool.
 func (t *Tool) Name() string { return Name }
 
-// Description implements toolloop.BuiltinTool. It is the digest with no
-// servers listed; the request builder replaces it on every call with the
-// digest rendered from the session's resolved catalog.
-func (t *Tool) Description() string { return RenderDigest(nil) }
+// Description implements toolloop.BuiltinTool. It is static: the list
+// of unloaded capabilities is the digest, a per-call system section.
+func (t *Tool) Description() string { return staticDescription }
 
 var inputSchema = json.RawMessage(`{"type":"object","properties":{` +
 	`"servers":{"type":"array","items":{"type":"string"},"description":"Server names from the list in this tool's description; loads every tool of each."},` +

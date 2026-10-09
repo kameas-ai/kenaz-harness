@@ -262,6 +262,7 @@ func TestRequestBuilder_NeverSendsSummaryToolUnlessActivated(t *testing.T) {
 	reg := &recordingScriptedRegistry{}
 	reg.push(textTurn("one"))
 	reg.push(textTurn("two"))
+	reg.push(textTurn("three"))
 	adapter := NewLLMProviderAdapter(reg, "p", "m", specs, nil).
 		withToolExposure(newExposureTurn(ctx, svc, "s1", specs)).
 		WithSessionID("s1")
@@ -269,41 +270,159 @@ func TestRequestBuilder_NeverSendsSummaryToolUnlessActivated(t *testing.T) {
 
 	var logs string
 	logs = captureChatLog(t, func() {
-		if _, err := adapter.Generate(ctx, req); err != nil {
-			t.Fatalf("Generate 1: %v", err)
+		for i := 0; i < 2; i++ {
+			if _, err := adapter.Generate(ctx, req); err != nil {
+				t.Fatalf("Generate %d: %v", i+1, err)
+			}
 		}
 	})
-	r1 := reg.requests()[0]
+	r1, r2 := reg.requests()[0], reg.requests()[1]
 	if got := strings.Join(toolNamesOf(r1), ","); got != "kenaz__load_tools,kenaz__read_file" {
 		t.Fatalf("request 1 tools = %s, want the hot set only", got)
 	}
 	assertOnlySendable(t, svc, specs, r1)
-	desc := r1.Tools[0].Description
-	for _, want := range []string{"kenaz (1 tool) — e.g. monitor", "outlook (2 tools) — e.g. list-messages, send-mail"} {
-		if !strings.Contains(desc, want) {
-			t.Errorf("load_tools description lacks %q:\n%s", want, desc)
+
+	// The digest is the system prompt's last section, never a tool
+	// description: kenaz__load_tools is sent exactly as the catalog
+	// lists it.
+	if r1.Tools[0].Description != specs[0].Description {
+		t.Errorf("load_tools description changed per call: %q", r1.Tools[0].Description)
+	}
+	i := strings.Index(r1.System, "## "+loadtools.DigestHeading)
+	if i < 0 {
+		t.Fatalf("system prompt has no digest section:\n%s", r1.System)
+	}
+	digest := r1.System[i:]
+	for _, want := range []string{"- kenaz (1 tool) — e.g. monitor", "- outlook (2 tools) — e.g. list-messages, send-mail"} {
+		if !strings.Contains(digest, want) {
+			t.Errorf("digest lacks %q:\n%s", want, digest)
 		}
 	}
-	if strings.Contains(desc, "secret") {
-		t.Errorf("load_tools description lists an off server:\n%s", desc)
+	if strings.Contains(digest, "secret") {
+		t.Errorf("digest lists an off server:\n%s", digest)
 	}
-	if !strings.Contains(logs, `"tools_summary":3`) || !strings.Contains(logs, `"tools_full":2`) {
-		t.Errorf("composition log does not count 2 full / 3 summary:\n%s", logs)
+	if !strings.HasSuffix(r1.System, digest) {
+		t.Errorf("digest is not the last system section")
+	}
+	if !strings.Contains(logs, `"tools_summary":3`) || !strings.Contains(logs, `"tools_full":2`) || !strings.Contains(logs, `"tools_stable":2`) {
+		t.Errorf("composition log does not count 2 full (both stable) / 3 summary:\n%s", logs)
+	}
+
+	// Nothing changed between calls 1 and 2: tools and system are
+	// byte-identical.
+	b1, _ := json.Marshal(r1.Tools)
+	b2, _ := json.Marshal(r2.Tools)
+	if string(b1) != string(b2) || r1.System != r2.System {
+		t.Fatal("two calls with nothing changed differ in tools or system bytes")
 	}
 
 	// Activate one Outlook tool between calls: the next call carries it,
-	// and still nothing else.
+	// after the unchanged stable prefix, and still nothing else.
 	if _, err := svc.Load(ctx, "s1", loadtools.Request{Tools: []string{"outlook__send-mail"}}, audit.ToolsActivatedByUser); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := adapter.Generate(ctx, req); err != nil {
-		t.Fatalf("Generate 2: %v", err)
+		t.Fatalf("Generate 3: %v", err)
 	}
-	r2 := reg.requests()[1]
-	if got := strings.Join(toolNamesOf(r2), ","); got != "kenaz__load_tools,kenaz__read_file,outlook__send-mail" {
-		t.Fatalf("request 2 tools = %s", got)
+	r3 := reg.requests()[2]
+	if got := strings.Join(toolNamesOf(r3), ","); got != "kenaz__load_tools,kenaz__read_file,outlook__send-mail" {
+		t.Fatalf("request 3 tools = %s", got)
 	}
-	assertOnlySendable(t, svc, specs, r2)
+	b3, _ := json.Marshal(r3.Tools[:2])
+	b1p, _ := json.Marshal(r1.Tools[:2])
+	if string(b3) != string(b1p) {
+		t.Fatal("activation changed the stable prefix bytes")
+	}
+	assertOnlySendable(t, svc, specs, r3)
+}
+
+// TestRequestBuilder_FallbackListsDefaultsWithNote is defect 1 of the
+// WP03 review: when tool settings cannot be read, the call carries the
+// hot set only and the digest lists the default summary tools under a
+// note, instead of claiming everything is loaded.
+func TestRequestBuilder_FallbackListsDefaultsWithNote(t *testing.T) {
+	specs := exposureCatalog()
+	src := brokenSettingsExposure(t, specs)
+	sel := newExposureTurn(context.Background(), src, "s1", specs).selectTools(context.Background())
+	var names []string
+	for _, tl := range sel.tools {
+		names = append(names, tl.Name)
+	}
+	if strings.Join(names, ",") != "kenaz__load_tools,kenaz__read_file" || sel.stable != 2 {
+		t.Fatalf("fallback tools = %v (stable %d)", names, sel.stable)
+	}
+	for _, want := range []string{loadtools.NoteDefaultsApply, "- outlook (2 tools)", "- secret (1 tool)", "- kenaz (1 tool)"} {
+		if !strings.Contains(sel.digest, want) {
+			t.Errorf("fallback digest lacks %q:\n%s", want, sel.digest)
+		}
+	}
+	if sel.summary != 4 {
+		t.Errorf("fallback summary = %d, want 4", sel.summary)
+	}
+}
+
+type brokenSettingsSource struct{}
+
+func (brokenSettingsSource) GetToolExposure(context.Context) (toolexposure.Settings, error) {
+	return toolexposure.Settings{}, fmt.Errorf("settings.json unreadable")
+}
+
+func brokenSettingsExposure(t *testing.T, specs []corellm.ToolSpec) *loadtools.Service {
+	t.Helper()
+	resolver, err := toolexposure.NewResolver(toolexposure.Deps{
+		Settings: brokenSettingsSource{}, Sessions: &exposureSessions{}, Projects: exposureProjects{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := loadtools.NewService(loadtools.Deps{
+		Catalog: specCatalog{specs: specs}, Resolver: resolver, Servers: noServers{}, Activations: &exposureSessions{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc
+}
+
+// TestToolAdapter_BareNameCallFacesTheExposureGate is defect 3: a call
+// by bare name ("send-mail") that the adapter resolves to
+// outlook__send-mail is gated like the namespaced call.
+func TestToolAdapter_BareNameCallFacesTheExposureGate(t *testing.T) {
+	specs := exposureCatalog()
+	svc, _, _ := newExposureService(t, specs)
+	pool := &barePool{entries: []ToolEntry{{Server: "outlook", Name: "send-mail"}}}
+	ad := newKernelToolAdapter(pool, nil, "s1").withToolExposure(newExposureTurn(context.Background(), svc, "s1", specs))
+	res, err := ad.Call(context.Background(), coreag.ToolCall{Name: "send-mail", Args: map[string]any{"to": "bob"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "not_loaded") {
+		t.Fatalf("bare-name call result = %+v, want not_loaded", res)
+	}
+	if n := pool.callCount(); n != 0 {
+		t.Fatalf("bare-name call reached the pool %d time(s)", n)
+	}
+}
+
+type barePool struct {
+	entries []ToolEntry
+	mu      sync.Mutex
+	calls   int
+}
+
+func (p *barePool) Tools(context.Context) ([]ToolEntry, error) { return p.entries, nil }
+
+func (p *barePool) Call(context.Context, string, string, []byte) ([]byte, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	return []byte(`{"ok":true}`), nil
+}
+
+func (p *barePool) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
 }
 
 // TestAssembleRequestTools_SegmentOrderAndStablePrefix: hot, then
@@ -362,6 +481,13 @@ func (p *exposurePool) snapshot() []string {
 
 func runExposureTurn(t *testing.T, reg *recordingScriptedRegistry, svc *loadtools.Service, specs []corellm.ToolSpec) (*exposurePool, StreamClosedPayload, string) {
 	t.Helper()
+	return runExposureTurnPerms(t, reg, svc, specs, nil)
+}
+
+// runExposureTurnPerms is runExposureTurn with a permission resolver on
+// the tool path.
+func runExposureTurnPerms(t *testing.T, reg *recordingScriptedRegistry, svc *loadtools.Service, specs []corellm.ToolSpec, perms ToolPermissionResolver) (*exposurePool, StreamClosedPayload, string) {
+	t.Helper()
 	pool := &exposurePool{tool: loadtools.New(svc)}
 	broker := &recordingBroker{}
 	graph := loadProductionChatGraph(t)
@@ -376,6 +502,7 @@ func runExposureTurn(t *testing.T, reg *recordingScriptedRegistry, svc *loadtool
 		MaxTurns:       func() int { return 25 },
 		ToolDiscoverer: fakeToolDiscoverer{specs: specs},
 		ToolExposure:   svc,
+		Perms:          perms,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -486,5 +613,88 @@ func TestToolLoop_UnloadedToolCallAutoActivatesOnce(t *testing.T) {
 	sort.Ints(autoCounts)
 	if len(autoCounts) < 2 || autoCounts[0] != 0 || autoCounts[len(autoCounts)-1] != 1 {
 		t.Errorf("composition auto_activated across calls = %v, want 0 on call 1 then 1", autoCounts)
+	}
+}
+
+// recordingPerms allows every call and records what it was asked.
+type recordingPerms struct {
+	mu    sync.Mutex
+	asked []string
+}
+
+func (r *recordingPerms) Resolve(_ context.Context, _, server, tool string) (PermVerdict, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.asked = append(r.asked, server+"__"+tool)
+	return PermVerdict{Server: server, Tool: tool, Policy: "auto_allow"}, nil
+}
+
+func (r *recordingPerms) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.asked...)
+}
+
+// TestToolLoop_LoadThenCallWithinTwoModelCalls is acceptance criterion 2
+// end to end: call 1 is kenaz__load_tools(servers: outlook), call 2 is
+// outlook__send-mail, which carries its schema, passes the permission
+// resolver and dispatches; one tools.activated audit row.
+func TestToolLoop_LoadThenCallWithinTwoModelCalls(t *testing.T) {
+	specs := exposureCatalog()
+	svc, _, au := newExposureService(t, specs)
+	reg := &recordingScriptedRegistry{}
+	reg.push(toolTurn("loading outlook", "tu-1", loadtools.Name, `{"servers":["outlook"]}`))
+	reg.push(toolTurn("sending", "tu-2", "outlook__send-mail", `{"to":"bob"}`))
+	reg.push(textTurn("sent"))
+	perms := &recordingPerms{}
+
+	pool, _, _ := runExposureTurnPerms(t, reg, svc, specs, perms)
+
+	reqs := reg.requests()
+	if len(reqs) < 2 || !hasTool(reqs[1], "outlook__send-mail") {
+		t.Fatalf("call 2 does not carry outlook__send-mail")
+	}
+	if got := pool.snapshot(); len(got) != 1 || got[0] != "outlook__send-mail" {
+		t.Fatalf("dispatched = %v, want [outlook__send-mail]", got)
+	}
+	askedSend := false
+	for _, n := range perms.snapshot() {
+		if n == "outlook__send-mail" {
+			askedSend = true
+		}
+	}
+	if !askedSend {
+		t.Fatalf("permission resolver never saw outlook__send-mail: %v", perms.snapshot())
+	}
+	if au.count() != 1 {
+		t.Fatalf("tools.activated rows = %d, want 1", au.count())
+	}
+}
+
+// TestToolLoop_LoadOutsideTheTurnCatalogReportsNextTurn is defect 4: a
+// tool kenaz__load_tools loads but this turn's catalog does not hold
+// (its server started after the turn began) is reported as arriving on
+// the next turn, not on the next call.
+func TestToolLoop_LoadOutsideTheTurnCatalogReportsNextTurn(t *testing.T) {
+	turnSpecs := exposureCatalog()
+	all := append(append([]corellm.ToolSpec(nil), turnSpecs...), spec("fetch", "fetch"))
+	svc, _, _ := newExposureService(t, all)
+	reg := &recordingScriptedRegistry{}
+	reg.push(toolTurn("loading", "tu-1", loadtools.Name, `{"tools":["fetch__fetch","outlook__send-mail"]}`))
+	reg.push(textTurn("ok"))
+
+	runExposureTurn(t, reg, svc, turnSpecs)
+
+	reqs := reg.requests()
+	if len(reqs) < 2 {
+		t.Fatalf("model calls = %d", len(reqs))
+	}
+	raw, _ := json.Marshal(reqs[1].Messages)
+	msgs := string(raw)
+	if !strings.Contains(msgs, `"next_turn":["fetch__fetch"]`) || !strings.Contains(msgs, "available from your next turn") {
+		t.Fatalf("load result does not report fetch__fetch for the next turn: %s", msgs)
+	}
+	if hasTool(reqs[1], "fetch__fetch") || !hasTool(reqs[1], "outlook__send-mail") {
+		t.Fatalf("call 2 tools = %v", toolNamesOf(reqs[1]))
 	}
 }

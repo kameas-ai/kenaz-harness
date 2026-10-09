@@ -367,12 +367,40 @@ its consumer). Still not consumed:
   that call models with tools outside the chat runner still send their
   own tool lists unfiltered (spec §2.6).
 
+- Activations of tools whose server was later uninstalled stay in
+  `sessions.tool_activations` (never sent: the catalog no longer lists
+  them). Cleanup lands with WP04's expiry pass.
+- Subagent fork inheritance of the parent's activated set (spec §2.6,
+  Q-F) is not implemented; WP04 owns it.
+- The digest's "(stopped)" marker covers servers the dispatch pool
+  knows. An enabled recipe that never reached the pool (env resolution
+  failed at boot) is omitted, not marked (FR-E2 gap). WP08 reads
+  installed-but-never-started recipes from the recipe store.
+
+**Rulings recorded (2026-10-09, owner alec, WP03 review).**
+- Auto-activation does not retry on the harness side: it activates the
+  tool and returns `not_loaded`; the model re-calls with the schema in
+  view. Its audit rows carry `by: "auto"`, an addition to the spec's
+  model|user enum (spec amended).
+- `sticky` is an activation flag (`Activation.Sticky`), not a write to
+  the session override layer; equivalent for §2.1 step 2 (spec amended).
+- The FR-E3 write guard checks only the layer being written: a stored
+  user-layer `load_tools: off` followed by a project write that makes
+  tools summary is not refused. The resolver invariant forces
+  `load_tools` full in that state, so nothing becomes unreachable.
+- `Settings_Set` (whole-settings save) runs the same guard when the
+  exposure layer differs from the stored one.
+- The digest is a per-call system section after the cacheable prefix,
+  not `kenaz__load_tools`' description (which is static); spec §2.2
+  amended.
+
 **Disposition: dated-justified.** Each is the next WP's consumer of data
 this mission already resolves; deleting it would delete the mission.
 
 **Blocker / owner.** WP04 (budget eviction, TTL expiry, call-side
-`LastUsedTurn`), WP06 (UI), WP07 (org pins), WP08 (workflow-step
-coverage or a dated ruling). **Owner:** alec. WP08's ledger pass deletes
+`LastUsedTurn`, uninstalled-server cleanup, fork inheritance), WP06
+(UI), WP07 (org pins), WP08 (workflow-step coverage or a dated ruling;
+never-started recipes in the digest). **Owner:** alec. WP08's ledger pass deletes
 this item once each line has a consumer.
 
 ### 2026-10-08 (dogfood 2026-10-08 fix PR, fix/dogfood-2026-10-08) · audit actor filter has no emitter to match — input disabled, not deleted

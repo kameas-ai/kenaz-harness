@@ -747,6 +747,9 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		Messages: llmMsgs,
 		Tools:    sendTools,
 	}
+	// The digest of tools not loaded is per-call material: it goes after
+	// every other system layer, past the cacheable prefix.
+	gen.System = appendDigest(gen.System, sel.digest)
 
 	// Merge the session-level RequestKnobs default (model-settings-reach-
 	// the-model-01PMZ101 UNIT-6 / WP10) onto the wire request. Before this,

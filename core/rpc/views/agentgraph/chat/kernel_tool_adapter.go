@@ -15,6 +15,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
 )
 
@@ -400,9 +401,12 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 		}
 	}
 	if a.exposure != nil {
-		if res, stopped := a.exposure.gateCall(ctx, call.Name); stopped {
+		// The namespaced name, not call.Name: a bare-name call resolved
+		// to (server, tool) above must face the same exposure gate.
+		if res, stopped := a.exposure.gateCall(ctx, server+"__"+tool); stopped {
 			return res, nil
 		}
+		ctx = loadtools.WithTurnView(ctx, a.exposure.willSend)
 	}
 	if a.perms != nil {
 		v, err := a.perms.Resolve(ctx, a.sessionID, server, tool)

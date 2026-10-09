@@ -195,7 +195,9 @@ func TestToolExposureWiring_FirstTurnToolTokens(t *testing.T) {
 	first := bodies[0]
 	mu.Unlock()
 	var wire struct {
-		Tools []struct {
+		System   json.RawMessage   `json:"system"`
+		Messages []json.RawMessage `json:"messages"`
+		Tools    []struct {
 			Name        string          `json:"name"`
 			Description string          `json:"description"`
 			InputSchema json.RawMessage `json:"input_schema"`
@@ -205,26 +207,50 @@ func TestToolExposureWiring_FirstTurnToolTokens(t *testing.T) {
 		t.Fatalf("decode wire request: %v", err)
 	}
 	var sent []corellm.ToolSpec
-	var digest string
 	for _, tl := range wire.Tools {
 		sent = append(sent, corellm.ToolSpec{Name: tl.Name, Description: tl.Description, InputSchema: tl.InputSchema})
-		if tl.Name == loadtools.Name {
-			digest = tl.Description
-		}
 		if !toolexposure.InHotSet(tl.Name) {
 			t.Errorf("first turn sent %q, which is not in the hot set", tl.Name)
 		}
 	}
-	after := corellm.ToolsTokens(sent)
-	t.Logf("first-turn tool schemas: before %d tools ≈ %d tokens; after %d tools ≈ %d tokens (digest %d chars)",
-		len(catalog), before, len(sent), after, len(digest))
-	for _, want := range []string{"outlook (94 tools)", "filesystem (14 tools)", "harness-self (7 tools)", "fetch (1 tool)"} {
-		if !strings.Contains(digest, want) {
-			t.Errorf("kenaz__load_tools description lacks %q:\n%s", want, digest)
+	// The system field as sent (a string or text blocks); its text
+	// carries the digest as the last section.
+	var systemText string
+	if err := json.Unmarshal(wire.System, &systemText); err != nil {
+		var blocks []struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(wire.System, &blocks); err != nil {
+			t.Fatalf("decode system: %v (%s)", err, wire.System)
+		}
+		for _, bl := range blocks {
+			systemText += bl.Text
 		}
 	}
+	i := strings.Index(systemText, "## "+loadtools.DigestHeading)
+	if i < 0 {
+		t.Fatalf("first-turn system prompt has no digest section:\n%s", systemText)
+	}
+	digest := systemText[i:]
+	for _, want := range []string{"outlook (94 tools)", "filesystem (14 tools)", "harness-self (7 tools)", "fetch (1 tool)"} {
+		if !strings.Contains(digest, want) {
+			t.Errorf("digest lacks %q:\n%s", want, digest)
+		}
+	}
+	after := corellm.ToolsTokens(sent)
+	// The whole first-turn prompt — system (digest included), tools and
+	// the one user message — under the shared estimator (AC1).
+	whole := corellm.EstimateTokens(systemText) + after
+	for _, m := range wire.Messages {
+		whole += corellm.EstimateTokens(string(m))
+	}
+	t.Logf("first-turn tool schemas: before %d tools ≈ %d tokens; after %d tools ≈ %d tokens; digest %d chars; whole prompt ≈ %d tokens",
+		len(catalog), before, len(sent), after, len(digest), whole)
 	if after >= 15000 || before < 10*after {
 		t.Fatalf("tool tokens before %d, after %d: want after < 15000 and a >=10x cut", before, after)
+	}
+	if whole >= 15000 {
+		t.Fatalf("whole first-turn prompt ≈ %d tokens, want < 15000 (AC1)", whole)
 	}
 }
 

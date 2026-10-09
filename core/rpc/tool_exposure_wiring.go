@@ -8,7 +8,6 @@ package rpc
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -113,6 +112,11 @@ type recipeStatusPool interface {
 // state, and each one's purpose from its recipe's description. Server
 // state comes from the pool, never from the tool catalog: the catalog
 // omits servers that are not running.
+//
+// Only servers the pool knows are listed (2026-10-09, owner alec): an
+// enabled recipe that never reached the pool (its env failed to resolve
+// at boot) is omitted rather than marked stopped. WP08 of
+// tool-context-budget-01TCBUD01 adds those from the recipe store.
 type toolServerDirectory struct {
 	pool recipeStatusPool
 
@@ -179,8 +183,10 @@ func (d *toolServerDirectory) purpose(id string) string {
 var _ loadtools.ServerDirectory = (*toolServerDirectory)(nil)
 
 // toolsAuditEmitter forwards tool-exposure audit events into the audit
-// view's log under category TOOLS. The audit API is bound late: it is
-// built after the LLM stack.
+// view's log under category LLM — activation changes what the model is
+// shown, and LLM is a category the audit view renders and filters (the
+// audit view's categoryForKind maps "tools." kinds to it too). The audit
+// API is bound late: it is built after the LLM stack.
 type toolsAuditEmitter struct {
 	impl atomic.Pointer[audit.API]
 }
@@ -197,9 +203,9 @@ func (e *toolsAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) error
 		return nil
 	}
 	impl.Push(audit.Entry{
-		ID:        fmt.Sprintf("tools-%d", ev.TS.UnixNano()),
+		ID:        "tools-" + newBlockedRequestID(),
 		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
-		Category:  "TOOLS",
+		Category:  "LLM",
 		Subject:   string(ev.Kind),
 		Trailing:  string(ev.Payload),
 	})

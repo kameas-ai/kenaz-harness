@@ -14,12 +14,23 @@ const maxExamples = 5
 // maxPurposeRunes bounds a digest line's purpose text.
 const maxPurposeRunes = 140
 
-// baseDescription opens kenaz__load_tools' description on every call.
-const baseDescription = "Load the full definitions of tools you do not yet see. " +
-	"A loaded tool's definition is sent on your next calls; call it then."
+// DigestHeading titles the system-prompt section the digest renders as;
+// kenaz__load_tools' static description points at it.
+const DigestHeading = "Available but not loaded"
 
-// inputLine closes the description: the call shape, in one line.
-const inputLine = `Input: {"servers": [...], "tools": ["server__tool" or "server__prefix*"], "sticky": bool}`
+// staticDescription is kenaz__load_tools' description on every call. It
+// never changes, so the tool stays inside the cacheable prefix; the
+// changing list of unloaded capabilities is the digest, sent as a
+// per-call system section after the cache marker.
+const staticDescription = "Load the full definitions of tools you do not yet see. " +
+	"The current list of unloaded capabilities is in the system prompt section '" + DigestHeading + "'."
+
+// introLine follows the heading: how to use the list.
+const introLine = "Call " + Name + ` with {"servers": [...]} or {"tools": ["server__tool" or "server__prefix*"]} to load any of these; their definitions arrive on your next call.`
+
+// NoteDefaultsApply is the digest note for a call whose tool settings
+// could not be read: the list then reflects the harness defaults.
+const NoteDefaultsApply = "Tool settings could not be read; defaults apply."
 
 // DigestServer is one server line of the capability digest.
 type DigestServer struct {
@@ -69,23 +80,27 @@ func BuildDigest(p toolexposure.Partition, purposes map[string]string) []DigestS
 	return out
 }
 
-// RenderDigest renders kenaz__load_tools' description: what the tool
-// does, one line per server that has tools available but not loaded
-// (name, tool count, purpose, up to five example names) or that is
-// stopped, and the input shape. The output depends only on its input,
-// in a fixed order, so an unchanged catalog renders byte-identical text
-// call after call.
-func RenderDigest(servers []DigestServer) string {
-	var b strings.Builder
-	b.WriteString(baseDescription)
-	if len(servers) == 0 {
-		b.WriteString(" Every available tool is already loaded.\n")
-		b.WriteString(inputLine)
-		return b.String()
+// RenderDigest renders the digest: a system-prompt section listing one
+// line per server that has tools available but not loaded (name, tool
+// count, purpose, up to five example names) or that is stopped, plus an
+// optional note. It renders "" when there is nothing to list and no
+// note. The output depends only on its input, in a fixed order, so an
+// unchanged catalog renders byte-identical text call after call.
+func RenderDigest(servers []DigestServer, note string) string {
+	if len(servers) == 0 && note == "" {
+		return ""
 	}
-	b.WriteString(" Available but not loaded:\n")
+	var lines []string
+	lines = append(lines, "## "+DigestHeading)
+	if note != "" {
+		lines = append(lines, note)
+	}
+	if len(servers) > 0 {
+		lines = append(lines, introLine)
+	}
 	for _, s := range servers {
-		b.WriteString("  ")
+		var b strings.Builder
+		b.WriteString("- ")
 		b.WriteString(s.Name)
 		switch {
 		case s.Stopped:
@@ -109,10 +124,24 @@ func RenderDigest(servers []DigestServer) string {
 		if s.Stopped {
 			b.WriteString(" — not running; its tools cannot be loaded until it is started")
 		}
-		b.WriteString("\n")
+		lines = append(lines, b.String())
 	}
-	b.WriteString(inputLine)
-	return b.String()
+	return strings.Join(lines, "\n")
+}
+
+// DefaultDigest builds the digest servers for a catalog whose tiers
+// could not be resolved: every entry the harness default puts in the
+// summary tier (toolexposure.DefaultTier), grouped by server.
+func DefaultDigest(entries []CatalogEntry, purposes map[string]string) []DigestServer {
+	var p toolexposure.Partition
+	for _, e := range entries {
+		ct := toolexposure.CatalogTool{Name: e.Name, Server: e.Server, Running: true}
+		if toolexposure.DefaultTier(ct) == toolexposure.TierSummary {
+			p.Digest = append(p.Digest, toolexposure.ResolvedTool{Name: e.Name, Server: e.Server, Running: true, Tier: toolexposure.TierSummary})
+		}
+	}
+	sort.SliceStable(p.Digest, func(i, j int) bool { return p.Digest[i].Name < p.Digest[j].Name })
+	return BuildDigest(p, purposes)
 }
 
 // oneSentence trims a recipe description to its first sentence and a
