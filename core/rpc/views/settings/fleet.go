@@ -1979,17 +1979,22 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 
 	// Tool exposure (tool-context-budget-01TCBUD01 WP07). Runs on every
 	// bundle: an absent section clears the organisation's policy so tiers
-	// drop back to the user's settings. A refused entry is an apply error
-	// for the ACK; the section's other entries still apply.
+	// drop back to the user's settings. A refused entry is logged, never a
+	// bundle error (the mandated_items F1 posture): the valid entries apply,
+	// the id advances, and the poller's had_refusals re-applies the bundle
+	// once on the next start. Only a persistence failure is a bundle error.
 	{
 		a.state.mu.RLock()
 		pins := a.state.toolExposurePins
 		a.state.mu.RUnlock()
 		switch {
 		case pins != nil:
-			for _, te := range pins.Apply(b.BundleID, b.ToolExposure) {
-				logging.L().Warn("fleet.config.tool_exposure.apply_error", "err", te.Error())
-				errs = append(errs, fmt.Errorf("fleet/config: tool_exposure: %w", te))
+			refused, perr := pins.Apply(b.BundleID, b.ToolExposure)
+			for _, te := range refused {
+				logging.L().Warn("fleet.config.tool_exposure.entry_refused", "bundle_id", b.BundleID, "err", te.Error())
+			}
+			if perr != nil {
+				errs = append(errs, fmt.Errorf("fleet/config: tool_exposure: %w", perr))
 			}
 		case b.ToolExposure != nil:
 			errs = append(errs, fmt.Errorf("fleet/config: tool_exposure present but no policy store wired (SetFleetClient never ran with a live client)"))

@@ -3,7 +3,8 @@ package rpc
 // Org tool-exposure pins through the production wiring
 // (tool-context-budget-01TCBUD01 WP07): New() loads the applied policy
 // from <dataDir>/fleet at boot, hands it to the resolver (Deps.Pins) and
-// to the read surfaces, and every writer refuses a pinned entry.
+// to the read surfaces; every writer refuses a pinned entry and a load
+// reports it per name.
 
 import (
 	"context"
@@ -43,8 +44,12 @@ func TestToolExposureWiring_OrgPinsThroughNew(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.Sessions().LoadTools(ctx, rec.ID, nil, []string{"kenaz__sleep"}, true); !errors.Is(err, toolexposure.ErrPinnedByOrg) {
-		t.Fatalf("Sessions LoadTools(org-off tool) err = %v, want ErrPinnedByOrg", err)
+	res, err := api.Sessions().LoadTools(ctx, rec.ID, nil, []string{"kenaz__sleep"}, true)
+	if err != nil {
+		t.Fatalf("Sessions LoadTools: %v", err)
+	}
+	if len(res.Loaded) != 0 || len(res.NotLoaded) != 1 || res.NotLoaded[0].Reason != "off — set by your organisation" {
+		t.Fatalf("Sessions LoadTools(org-off tool) = %+v, want it refused with the org reason", res)
 	}
 
 	on := toolexposure.Exposure{Servers: map[string]toolexposure.ServerExposure{

@@ -113,16 +113,19 @@ func TestToolExposure_OrgPinsThroughApplierAndWriters(t *testing.T) {
 	}
 }
 
-// A refused entry is an apply error for the ACK; the rest of the section
-// still applies.
-func TestToolExposure_RefusedEntryIsApplyError(t *testing.T) {
+// A refused entry is never a bundle error (the mandated_items F1
+// posture): the apply is clean, so the id advances, and the rest of the
+// section is in force.
+func TestToolExposure_RefusedEntryIsNotABundleError(t *testing.T) {
 	ctx := context.Background()
 	api, applier, _ := newPinnedSettingsAPI(t)
 	b := pinnedBundle(1)
 	b.ToolExposure.Servers["github"] = fleet.BundleToolExposureServer{Tier: "readonly", Pinned: true}
-	errs, _ := applier.ApplyBundleItems(ctx, b)
-	if len(errs) != 1 || !errors.Is(errs[0], fleet.ErrToolExposureEntryRefused) || !strings.Contains(errs[0].Error(), `"github"`) {
-		t.Fatalf("errs = %v, want one refusal naming github", errs)
+	if errs, _ := applier.ApplyBundleItems(ctx, b); len(errs) != 0 {
+		t.Fatalf("errs = %v, want none: a refused entry must not hold the bundle id back", errs)
+	}
+	if r := fleet.ToolExposureRefusals(b); len(r) != 1 || !errors.Is(r[0], fleet.ErrToolExposureEntryRefused) || !strings.Contains(r[0].Error(), `"github"`) {
+		t.Fatalf("refusals = %v, want one naming github (the poller's had_refusals input)", r)
 	}
 	p, _ := api.ToolExposurePolicy(ctx)
 	if p.Pins.TierFor("outlook", "x") != toolexposure.TierOff {

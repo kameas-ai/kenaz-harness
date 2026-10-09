@@ -421,11 +421,13 @@ func (s *Service) CheckLayerWrite(ctx context.Context, w toolexposure.LayerWrite
 
 var _ toolexposure.WriteGuard = (*Service)(nil)
 
-// checkOrgPins compares the proposed layer with the stored one and
-// refuses a change to any entry the organisation pinned.
+// checkOrgPins compares the proposed project or session layer with the
+// stored one and refuses a change to any entry the organisation pinned.
+// The user layer is checked by settings.API.SetToolExposure itself,
+// together with the pinned budget, so it is skipped here.
 func (s *Service) checkOrgPins(ctx context.Context, w toolexposure.LayerWrite) error {
 	deps := s.d.Resolver.Deps()
-	if deps.Pins == nil {
+	if deps.Pins == nil || w.Level == toolexposure.LevelUser {
 		return nil
 	}
 	org, err := deps.Pins.ToolExposurePolicy(ctx)
@@ -437,12 +439,6 @@ func (s *Service) checkOrgPins(ctx context.Context, w toolexposure.LayerWrite) e
 	}
 	var stored toolexposure.Exposure
 	switch w.Level {
-	case toolexposure.LevelUser:
-		st, err := deps.Settings.GetToolExposure(ctx)
-		if err != nil {
-			return err
-		}
-		stored = st.Exposure
 	case toolexposure.LevelProject:
 		if stored, err = deps.Projects.ProjectToolExposure(ctx, w.ProjectID); err != nil {
 			return err
@@ -579,6 +575,8 @@ func OffReason(source toolexposure.Level) string {
 		return "off — turned off for this project"
 	case toolexposure.LevelUser:
 		return "off — turned off in Settings → Capabilities"
+	case toolexposure.LevelOrgDefault:
+		return "off — your organisation's default (you can change it in Settings → Capabilities)"
 	}
 	return "off"
 }

@@ -8,9 +8,12 @@
 // policy, so tiers drop back to the user's settings on the next poll that
 // no longer carries it. Entries this build cannot honour (an unknown tier,
 // an empty name, a malformed hot_set_extra name, a budget out of range)
-// are refused one by one and reported as apply errors for the ACK while
-// the rest of the section applies — the mandated_items posture: a named
-// refusal, never a silent drop, never the whole bundle refused.
+// are refused one by one while the rest of the section applies. A refusal
+// is never a bundle error — the mandated_items posture (review F1): it is
+// logged, the bundle id advances, and the poller records had_refusals so
+// the same bundle is re-applied once on the next start (a newer build may
+// honour the entry). Only a failure to persist the policy is a bundle
+// error.
 //
 // The applied section is persisted at <dataDir>/fleet/tool_exposure_applied.json
 // and reloaded at boot: a restart answers the next poll with a 304, so
@@ -85,6 +88,9 @@ func (s *BundleToolExposure) Policy(bundleID int64) (toolexposure.OrgPolicy, []e
 	refuse := func(format string, args ...any) {
 		errs = append(errs, fmt.Errorf("%w: "+format, append([]any{ErrToolExposureEntryRefused}, args...)...))
 	}
+	refuseErr := func(err error) {
+		errs = append(errs, fmt.Errorf("%w: %v", ErrToolExposureEntryRefused, err))
+	}
 	put := func(e *toolexposure.Exposure, server string, tier toolexposure.Tier, tool string) {
 		if e.Servers == nil {
 			e.Servers = map[string]toolexposure.ServerExposure{}
@@ -108,30 +114,25 @@ func (s *BundleToolExposure) Policy(bundleID int64) (toolexposure.OrgPolicy, []e
 	}
 	for _, server := range sortedKeysOf(s.Servers) {
 		se := s.Servers[server]
-		if server == "" {
-			refuse("empty server name")
+		if strings.TrimSpace(server) == "" {
+			refuseErr(toolexposure.ValidateServerEntry(server, ""))
 			continue
 		}
-		switch {
+		switch err := toolexposure.ValidateServerEntry(server, toolexposure.Tier(se.Tier)); {
+		case err != nil:
+			refuseErr(err)
 		case se.Tier == "" && se.Pinned:
 			refuse("server %q: pinned without a tier", server)
-		case se.Tier != "" && !toolexposure.Tier(se.Tier).Valid():
-			refuse("server %q: unknown tier %q", server, se.Tier)
 		case se.Tier != "":
 			put(layer(se.Pinned), server, toolexposure.Tier(se.Tier), "")
 		}
 		for _, tool := range sortedKeysOf(se.Tools) {
 			te := se.Tools[tool]
-			switch {
-			case tool == "":
-				refuse("server %q: empty tool name", server)
-			case strings.HasPrefix(tool, server+toolexposure.NameSeparator):
-				refuse("tool %q under server %q: use the bare tool name", tool, server)
-			case !toolexposure.Tier(te.Tier).Valid():
-				refuse("tool %s%s%s: unknown tier %q", server, toolexposure.NameSeparator, tool, te.Tier)
-			default:
-				put(layer(te.Pinned), server, toolexposure.Tier(te.Tier), tool)
+			if err := toolexposure.ValidateToolEntry(server, tool, toolexposure.Tier(te.Tier)); err != nil {
+				refuseErr(err)
+				continue
 			}
+			put(layer(te.Pinned), server, toolexposure.Tier(te.Tier), tool)
 		}
 	}
 	switch {
@@ -149,6 +150,15 @@ func (s *BundleToolExposure) Policy(bundleID int64) (toolexposure.OrgPolicy, []e
 		if !seen[n] {
 			seen[n] = true
 			p.HotSetExtra = append(p.HotSetExtra, n)
+		}
+	}
+	for _, n := range p.HotSetExtra {
+		server, tool, _ := toolexposure.SplitName(n)
+		pin := p.Pins.Servers[server]
+		if pin.Tools[tool] == toolexposure.TierOff || (pin.Tools[tool] == "" && pin.Tier == toolexposure.TierOff) {
+			logging.L().Warn("fleet.tool_exposure.hot_set_extra_overrides_pin",
+				"bundle_id", bundleID, "tool", n,
+				"detail", "hot_set_extra resolves the tool full; the pinned off entry does not apply to it")
 		}
 	}
 	return p, errs
@@ -206,28 +216,46 @@ func LoadToolExposurePins(dataDir string) *ToolExposurePins {
 }
 
 // Apply installs the section from a verified bundle; nil clears the
-// policy. It returns one error per refused entry and any persistence
-// failure.
-func (t *ToolExposurePins) Apply(bundleID int64, s *BundleToolExposure) []error {
-	p, errs := s.Policy(bundleID)
+// policy. refused holds one error per entry left out (not a bundle
+// error); err is a persistence failure (a bundle error).
+func (t *ToolExposurePins) Apply(bundleID int64, s *BundleToolExposure) (refused []error, err error) {
+	p, refused := s.Policy(bundleID)
 	if s == nil {
 		p = toolexposure.OrgPolicy{}
 	}
 	t.mu.Lock()
 	t.policy = p
 	t.mu.Unlock()
-	if err := t.persist(bundleID, s); err != nil {
-		errs = append(errs, err)
-	}
-	return errs
+	return refused, t.persist(bundleID, s)
 }
 
-// Clear drops the policy and its state file (explicit sign-out).
+// Clear drops the policy and its state file (explicit sign-out). It also
+// drops the bundle apply record, so the next poller start re-fetches and
+// re-applies the current bundle once instead of answering a 304 with no
+// policy in force.
 func (t *ToolExposurePins) Clear() error {
 	t.mu.Lock()
 	t.policy = toolexposure.OrgPolicy{}
 	t.mu.Unlock()
-	return t.persist(0, nil)
+	if err := t.persist(0, nil); err != nil {
+		return err
+	}
+	if t.dataDir != "" {
+		if err := os.Remove(bundleApplyMetaPath(t.dataDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("fleet: tool_exposure: remove apply record: %w", err)
+		}
+	}
+	return nil
+}
+
+// ToolExposureRefusals reports the entries of b's tool_exposure section
+// this build refuses; nil when there are none or no section.
+func ToolExposureRefusals(b *Bundle) []error {
+	if b == nil || b.ToolExposure == nil {
+		return nil
+	}
+	_, refused := b.ToolExposure.Policy(b.BundleID)
+	return refused
 }
 
 // Policy returns a copy of the current policy.

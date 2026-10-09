@@ -69,12 +69,12 @@ func TestOrg_HotSetExtra(t *testing.T) {
 func TestOrg_BudgetPin(t *testing.T) {
 	user := Settings{SchemaBudgetTokens: 9000}
 	rc := resolveWith(t, OrgPolicy{SchemaBudgetTokens: 5000, BundleID: 3}, user, Exposure{}, nil)
-	if rc.SchemaBudgetTokens != 5000 || !rc.SchemaBudgetPinned || rc.OrgBundleID != 3 {
-		t.Fatalf("budget = %d pinned=%v bundle=%d, want 5000 pinned from bundle 3", rc.SchemaBudgetTokens, rc.SchemaBudgetPinned, rc.OrgBundleID)
+	if rc.SchemaBudgetTokens != 5000 || rc.OrgBundleID != 3 {
+		t.Fatalf("budget = %d bundle=%d, want 5000 from bundle 3", rc.SchemaBudgetTokens, rc.OrgBundleID)
 	}
 	rc = resolveWith(t, OrgPolicy{}, user, Exposure{}, nil)
-	if rc.SchemaBudgetTokens != 9000 || rc.SchemaBudgetPinned {
-		t.Fatalf("budget = %d pinned=%v, want the user's 9000 when the org sets none", rc.SchemaBudgetTokens, rc.SchemaBudgetPinned)
+	if rc.SchemaBudgetTokens != 9000 {
+		t.Fatalf("budget = %d, want the user's 9000 when the org sets none", rc.SchemaBudgetTokens)
 	}
 }
 
@@ -174,6 +174,22 @@ func TestOrgPolicy_View(t *testing.T) {
 	}
 	if got := (OrgPolicy{}).View(); got.Settings == nil || len(got.Settings) != 0 {
 		t.Fatalf("zero View().Settings = %#v, want empty non-nil", got.Settings)
+	}
+}
+
+// A hot_set_extra tool under a pinned-off entry: the pin row for that tool
+// is dropped from the view (it does not apply); the hot row remains.
+func TestOrgPolicy_ViewDropsPinOverriddenByHotSet(t *testing.T) {
+	org := OrgPolicy{
+		Pins:        Exposure{Servers: map[string]ServerExposure{"outlook": {Tier: TierOff, Tools: map[string]Tier{"send-mail": TierOff}}}},
+		HotSetExtra: []string{"outlook__send-mail"},
+	}
+	want := []OrgSetting{
+		{Server: "outlook", Tier: TierOff, Pinned: true, PinnedBy: PinnedByOrg},
+		{Server: "outlook", Tool: "send-mail", Tier: TierFull, Pinned: true, PinnedBy: PinnedByOrg},
+	}
+	if got := org.View().Settings; !reflect.DeepEqual(got, want) {
+		t.Fatalf("View().Settings = %+v\nwant %+v", got, want)
 	}
 }
 

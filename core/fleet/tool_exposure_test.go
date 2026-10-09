@@ -1,15 +1,19 @@
 package fleet
 
 import (
+	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -209,8 +213,8 @@ func TestToolExposurePins_PersistReloadAndDisappear(t *testing.T) {
 		t.Fatal("fresh store not empty")
 	}
 	b := toolExposureVectorBundle()
-	if errs := pins.Apply(b.BundleID, b.ToolExposure); len(errs) != 0 {
-		t.Fatalf("apply: %v", errs)
+	if refused, err := pins.Apply(b.BundleID, b.ToolExposure); len(refused) != 0 || err != nil {
+		t.Fatalf("apply: %v %v", refused, err)
 	}
 	applied := pins.Policy()
 	if applied.SchemaBudgetTokens != 16000 || applied.BundleID != 5 || applied.Pins.TierFor("filesystem", "x") != toolexposure.TierFull {
@@ -223,8 +227,8 @@ func TestToolExposurePins_PersistReloadAndDisappear(t *testing.T) {
 	}
 
 	// The next verified bundle no longer carries the field.
-	if errs := pins.Apply(6, nil); len(errs) != 0 {
-		t.Fatalf("apply absent: %v", errs)
+	if refused, err := pins.Apply(6, nil); len(refused) != 0 || err != nil {
+		t.Fatalf("apply absent: %v %v", refused, err)
 	}
 	if !pins.Policy().IsZero() {
 		t.Fatalf("policy after the field disappeared = %+v, want zero", pins.Policy())
@@ -236,19 +240,25 @@ func TestToolExposurePins_PersistReloadAndDisappear(t *testing.T) {
 		t.Fatal("reload after disappearance not empty")
 	}
 
-	_ = pins.Apply(7, b.ToolExposure)
+	_, _ = pins.Apply(7, b.ToolExposure)
+	if err := saveBundleApplyMeta(dir, bundleApplyMeta{BuildVersion: "v1"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := pins.Clear(); err != nil {
 		t.Fatal(err)
 	}
 	if !pins.Policy().IsZero() || !LoadToolExposurePins(dir).Policy().IsZero() {
 		t.Fatal("Clear left a policy behind")
 	}
+	if m := loadBundleApplyMeta(dir); m.BuildVersion != "" {
+		t.Fatalf("Clear kept the apply record (%+v): the next start would 304 with no policy", m)
+	}
 }
 
 func TestToolExposurePins_PolicyIsACopy(t *testing.T) {
 	pins := LoadToolExposurePins("")
 	b := toolExposureVectorBundle()
-	pins.Apply(1, b.ToolExposure)
+	_, _ = pins.Apply(1, b.ToolExposure)
 	p := pins.Policy()
 	p.Pins.Servers["filesystem"] = toolexposure.ServerExposure{Tier: toolexposure.TierOff}
 	p.HotSetExtra[0] = "x__y"
@@ -272,5 +282,161 @@ func TestToolExposurePins_CorruptStateForcesReapply(t *testing.T) {
 	}
 	if m := loadBundleApplyMeta(dir); m.BuildVersion != "" {
 		t.Fatalf("apply meta survived (%+v): the poller would 304 a policy it lost", m)
+	}
+}
+
+// pinsApplier applies only the tool_exposure section through a real
+// store, the way compositeConfigApplier does: refusals are not bundle
+// errors.
+type pinsApplier struct {
+	pins *ToolExposurePins
+	mu   sync.Mutex
+	n    int
+}
+
+func (a *pinsApplier) ApplyBundle(_ context.Context, b *Bundle) []error {
+	a.mu.Lock()
+	a.n++
+	a.mu.Unlock()
+	if _, err := a.pins.Apply(b.BundleID, b.ToolExposure); err != nil {
+		return []error{err}
+	}
+	return nil
+}
+
+func (a *pinsApplier) count() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.n
+}
+
+// Review D1/D2 through the real ConfigPoller: a bundle with one refused
+// entry advances the id, applies the valid entries, and is re-applied
+// once on the next start (had_refusals) and again after a build change;
+// with no refusals it is a 304. Sign-out (Clear) also forces one
+// re-apply, so pins come back after the next sign-in without a new
+// bundle id.
+func TestConfigPoller_ToolExposureRefusalAdvancesAndReappliesOnce(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	setTestSigningKey(t, pub)
+	b := &Bundle{BundleID: 1, IssuedAt: time.Now(), ToolExposure: &BundleToolExposure{
+		Servers: map[string]BundleToolExposureServer{
+			"outlook": {Tier: "off", Pinned: true},
+			"github":  {Tier: "readonly", Pinned: true},
+		},
+	}}
+	signBundle(t, priv, b)
+	fake := &fakeFleetConfigServer{response: bundleToJSON(t, b)}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	dataDir := t.TempDir()
+
+	run := func(build string, want int) *ToolExposurePins {
+		t.Helper()
+		pins := LoadToolExposurePins(dataDir)
+		a := &pinsApplier{pins: pins}
+		p := newPollerForTest(t, srv, a, dataDir)
+		p.SetBuildVersion(build)
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		defer cancel()
+		p.Start(ctx)
+		time.Sleep(150 * time.Millisecond)
+		p.Stop()
+		if got := a.count(); got != want {
+			t.Fatalf("build %q: applied %d times, want %d", build, got, want)
+		}
+		st := p.Status()
+		if st.LastAppliedID != 1 || strings.Contains(st.LastError, "partial apply") {
+			t.Fatalf("build %q: status %+v, want id 1 and no error (a refusal is not a bundle error)", build, st)
+		}
+		if got := pins.Policy().Pins.TierFor("outlook", "x"); got != toolexposure.TierOff {
+			t.Fatalf("build %q: valid entry not in force (outlook = %q)", build, got)
+		}
+		return pins
+	}
+
+	run("v1", 1)
+	if !loadBundleApplyMeta(dataDir).HadRefusals {
+		t.Fatal("had_refusals not recorded for a bundle with a refused tool_exposure entry")
+	}
+	run("v1", 1) // re-applied once because of the refusal
+	run("v2", 1) // and once more after a build change
+
+	// Clean bundle: no refusals → 304 on the next start.
+	clean := &Bundle{BundleID: 2, IssuedAt: time.Now(), ToolExposure: &BundleToolExposure{
+		Servers: map[string]BundleToolExposureServer{"outlook": {Tier: "off", Pinned: true}},
+	}}
+	signBundle(t, priv, clean)
+	fake.setResponse(bundleToJSON(t, clean))
+	runClean := func(want int) *ToolExposurePins {
+		t.Helper()
+		pins := LoadToolExposurePins(dataDir)
+		a := &pinsApplier{pins: pins}
+		p := newPollerForTest(t, srv, a, dataDir)
+		p.SetBuildVersion("v2")
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		defer cancel()
+		p.Start(ctx)
+		time.Sleep(150 * time.Millisecond)
+		p.Stop()
+		if got := a.count(); got != want {
+			t.Fatalf("clean bundle: applied %d times, want %d", got, want)
+		}
+		return pins
+	}
+	runClean(1)
+	pins := runClean(0)
+
+	// Sign-out clears the pins and the apply record: the next start
+	// re-applies the same bundle once and the pin is back.
+	if err := pins.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	if got := runClean(1).Policy().Pins.TierFor("outlook", "x"); got != toolexposure.TierOff {
+		t.Fatalf("pin not restored after sign-out + start: %q", got)
+	}
+}
+
+// A corrupt state file makes the next poller start re-fetch and re-apply
+// the current bundle, so the policy comes back without a new bundle id.
+func TestConfigPoller_CorruptToolExposureStateRefetches(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	setTestSigningKey(t, pub)
+	b := &Bundle{BundleID: 1, IssuedAt: time.Now(), ToolExposure: &BundleToolExposure{
+		Servers: map[string]BundleToolExposureServer{"outlook": {Tier: "off", Pinned: true}},
+	}}
+	signBundle(t, priv, b)
+	srv := httptest.NewServer(&fakeFleetConfigServer{response: bundleToJSON(t, b)})
+	defer srv.Close()
+	dataDir := t.TempDir()
+
+	start := func() (*ToolExposurePins, int) {
+		t.Helper()
+		pins := LoadToolExposurePins(dataDir)
+		a := &pinsApplier{pins: pins}
+		p := newPollerForTest(t, srv, a, dataDir)
+		p.SetBuildVersion("v1")
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		defer cancel()
+		p.Start(ctx)
+		time.Sleep(150 * time.Millisecond)
+		p.Stop()
+		return pins, a.count()
+	}
+	if _, n := start(); n != 1 {
+		t.Fatalf("first start applied %d times, want 1", n)
+	}
+	if _, n := start(); n != 0 {
+		t.Fatalf("second start applied %d times, want 0 (304)", n)
+	}
+	if err := os.WriteFile(toolExposureStatePath(dataDir), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pins, n := start()
+	if n != 1 {
+		t.Fatalf("start after a corrupt state file applied %d times, want 1 (re-fetch)", n)
+	}
+	if got := pins.Policy().Pins.TierFor("outlook", "x"); got != toolexposure.TierOff {
+		t.Fatalf("policy not restored after the re-fetch: %q", got)
 	}
 }

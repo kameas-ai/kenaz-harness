@@ -142,24 +142,44 @@ func (e Exposure) IsZero() bool {
 // Validate.
 func (e Exposure) Validate() error {
 	for server, s := range e.Servers {
-		if strings.TrimSpace(server) == "" {
-			return fmt.Errorf("toolexposure: empty server name")
-		}
-		if s.Tier != "" && !s.Tier.Valid() {
-			return fmt.Errorf("toolexposure: server %q: unknown tier %q (want full, summary or off)", server, s.Tier)
+		if err := ValidateServerEntry(server, s.Tier); err != nil {
+			return err
 		}
 		for tool, t := range s.Tools {
-			if strings.TrimSpace(tool) == "" {
-				return fmt.Errorf("toolexposure: server %q: empty tool name", server)
-			}
-			if strings.HasPrefix(tool, server+NameSeparator) {
-				return fmt.Errorf("toolexposure: server %q: tool key %q must be the bare name %q",
-					server, tool, strings.TrimPrefix(tool, server+NameSeparator))
-			}
-			if !t.Valid() {
-				return fmt.Errorf("toolexposure: tool %s%s%s: unknown tier %q (want full, summary or off)", server, NameSeparator, tool, t)
+			if err := ValidateToolEntry(server, tool, t); err != nil {
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+// ValidateServerEntry checks one server-wide entry of a layer: a
+// non-blank server name and a tier that is empty (no server-wide
+// opinion) or one of the three. Every layer writer and the fleet bundle
+// decoder share it.
+func ValidateServerEntry(server string, tier Tier) error {
+	if strings.TrimSpace(server) == "" {
+		return fmt.Errorf("toolexposure: empty server name")
+	}
+	if tier != "" && !tier.Valid() {
+		return fmt.Errorf("toolexposure: server %q: unknown tier %q (want full, summary or off)", server, tier)
+	}
+	return nil
+}
+
+// ValidateToolEntry checks one tool entry under server: a non-blank bare
+// tool name (not "<server>__<tool>") and one of the three tiers.
+func ValidateToolEntry(server, tool string, tier Tier) error {
+	if strings.TrimSpace(tool) == "" {
+		return fmt.Errorf("toolexposure: server %q: empty tool name", server)
+	}
+	if strings.HasPrefix(tool, server+NameSeparator) {
+		return fmt.Errorf("toolexposure: server %q: tool key %q must be the bare name %q",
+			server, tool, strings.TrimPrefix(tool, server+NameSeparator))
+	}
+	if !tier.Valid() {
+		return fmt.Errorf("toolexposure: tool %s%s%s: unknown tier %q (want full, summary or off)", server, NameSeparator, tool, tier)
 	}
 	return nil
 }

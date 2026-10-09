@@ -88,6 +88,11 @@ func (p OrgPolicy) View() OrgExposure {
 				out.Settings = append(out.Settings, OrgSetting{Server: server, Tier: s.Tier, Pinned: pinned, PinnedBy: by})
 			}
 			for tool, t := range s.Tools {
+				// A hot_set_extra tool resolves full whatever this entry
+				// says; its own row below is the one that applies.
+				if p.inHotSetExtra(server + NameSeparator + tool) {
+					continue
+				}
 				if t.Valid() {
 					out.Settings = append(out.Settings, OrgSetting{Server: server, Tool: tool, Tier: t, Pinned: pinned, PinnedBy: by})
 				}

@@ -72,9 +72,6 @@ type ResolvedCatalog struct {
 	Activations        []Activation
 	SchemaBudgetTokens int
 	ActivationTTLTurns int
-	// SchemaBudgetPinned is set when SchemaBudgetTokens is the
-	// organisation's budget rather than the user's.
-	SchemaBudgetPinned bool
 	// OrgBundleID is the bundle the organisation layer came from (0 when
 	// there is none).
 	OrgBundleID int64
@@ -213,7 +210,6 @@ func Resolve(ctx context.Context, deps Deps, sessionID string, catalog []Catalog
 	}
 	if org.SchemaBudgetTokens > 0 {
 		out.SchemaBudgetTokens = org.SchemaBudgetTokens
-		out.SchemaBudgetPinned = true
 	}
 	anySummary := false
 	for _, c := range catalog {

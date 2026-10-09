@@ -71,53 +71,46 @@ func wantPinned(t *testing.T, err error, server, tool string) {
 	}
 }
 
-// Sessions_LoadTools (by user) on a server or tool the organisation
-// pinned off is refused with the pin and activates nothing; the model's
-// kenaz__load_tools call is told per name and does not error.
-func TestLoad_OrgOffRefusedForUser(t *testing.T) {
+// Loading is per name for a person and for the model alike: a server or
+// tool the organisation pinned off is reported in not_loaded with the org
+// reason, and every other requested name still loads.
+func TestLoad_OrgOffReportedPerName(t *testing.T) {
 	ctx := context.Background()
-	f := newOrgFixture(t, toolexposure.Exposure{}, &fakeSessions{}, fakeProjects{})
-
-	_, err := f.svc.Load(ctx, "s1", Request{Servers: []string{"secret", "outlook"}}, audit.ToolsActivatedByUser)
-	wantPinned(t, err, "secret", "")
-	if f.sessions.writes != 0 || len(f.audit.snapshot()) != 0 {
-		t.Fatalf("refused load still wrote %d activation set(s) / %d audit row(s)", f.sessions.writes, len(f.audit.snapshot()))
-	}
-
-	_, err = f.svc.Load(ctx, "s1", Request{Tools: []string{"mixed__drop"}}, audit.ToolsActivatedByUser)
-	wantPinned(t, err, "mixed", "drop")
-
-	_, err = f.svc.Load(ctx, "s1", Request{Tools: []string{"secret__*"}}, audit.ToolsActivatedByUser)
-	wantPinned(t, err, "secret", "")
-
-	// A server only partly pinned off loads the rest and names the pinned tool.
-	res, err := f.svc.Load(ctx, "s1", Request{Servers: []string{"mixed"}}, audit.ToolsActivatedByUser)
-	if err != nil {
-		t.Fatalf("partly pinned server: %v", err)
-	}
-	if len(res.Loaded) != 1 || res.Loaded[0] != "mixed__keep" || len(res.NotLoaded) != 1 || res.NotLoaded[0].Reason != "off — set by your organisation" {
-		t.Fatalf("partly pinned server result = %+v", res)
-	}
-
-	// An org default (pinned:false) off is not a pin: the user's own
-	// request is answered per name, no PinnedError.
-	res, err = f.svc.Load(ctx, "s1", Request{Servers: []string{"fetch"}}, audit.ToolsActivatedByUser)
-	if err != nil || len(res.NotLoaded) != 1 {
-		t.Fatalf("org-default off: res=%+v err=%v, want a per-name refusal and no error", res, err)
-	}
-
-	res, err = f.svc.Load(ctx, "s1", Request{Servers: []string{"secret"}}, audit.ToolsActivatedByModel)
-	if err != nil {
-		t.Fatalf("model load errored: %v", err)
-	}
-	if len(res.NotLoaded) != 1 || res.NotLoaded[0].Reason != "off — set by your organisation" {
-		t.Fatalf("model load result = %+v, want the org reason", res)
+	for _, by := range []string{audit.ToolsActivatedByUser, audit.ToolsActivatedByModel} {
+		t.Run(by, func(t *testing.T) {
+			f := newOrgFixture(t, toolexposure.Exposure{}, &fakeSessions{}, fakeProjects{})
+			res, err := f.svc.Load(ctx, "s1", Request{Servers: []string{"secret", "fetch"}, Tools: []string{"mixed__drop", "outlook__send-mail", "secret__*"}}, by)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if len(res.Loaded) != 1 || res.Loaded[0] != "outlook__send-mail" {
+				t.Fatalf("loaded = %v, want the unpinned tool", res.Loaded)
+			}
+			reasons := map[string]string{}
+			for _, nl := range res.NotLoaded {
+				reasons[nl.Name] = nl.Reason
+			}
+			const org = "off — set by your organisation"
+			for _, n := range []string{"secret", "mixed__drop", "secret__*"} {
+				if reasons[n] != org {
+					t.Errorf("%s: reason %q, want %q (all: %+v)", n, reasons[n], org, res.NotLoaded)
+				}
+			}
+			// An org default (pinned:false) off is not a pin.
+			if reasons["fetch"] == "" || reasons["fetch"] == org {
+				t.Errorf("fetch (org default off): reason %q, want a non-org off reason", reasons["fetch"])
+			}
+			if got := f.sessions.snapshot(); len(got) != 1 || got[0].Name != "outlook__send-mail" {
+				t.Fatalf("activations = %+v, want only the unpinned tool", got)
+			}
+		})
 	}
 }
 
-// Every writer's layer goes through CheckLayerWrite: a change to a pinned
-// entry is refused at the user, project and session level; writing the
-// stored value back, or touching an unpinned entry, is not.
+// Project and session layers go through CheckLayerWrite: a change to a
+// pinned entry is refused; writing the stored value back, or touching an
+// unpinned entry, is not. The user layer is checked by the settings
+// writer (covered in core/rpc/views/settings), so the guard passes it.
 func TestCheckLayerWrite_RefusesPinnedEntriesAtEveryLevel(t *testing.T) {
 	ctx := context.Background()
 	stored := toolexposure.Exposure{Servers: map[string]toolexposure.ServerExposure{"secret": {Tier: toolexposure.TierFull}}}
@@ -131,8 +124,10 @@ func TestCheckLayerWrite_RefusesPinnedEntriesAtEveryLevel(t *testing.T) {
 		"fetch":   {Tier: toolexposure.TierFull},
 		"outlook": {Tier: toolexposure.TierOff},
 	}}
+	if err := f.svc.CheckLayerWrite(ctx, toolexposure.LayerWrite{Level: toolexposure.LevelUser, Exposure: change}); err != nil {
+		t.Fatalf("user layer: %v, want the guard to leave it to the settings writer", err)
+	}
 	for _, w := range []toolexposure.LayerWrite{
-		{Level: toolexposure.LevelUser},
 		{Level: toolexposure.LevelProject, ProjectID: "p1"},
 		{Level: toolexposure.LevelSession, SessionID: "s1"},
 	} {
