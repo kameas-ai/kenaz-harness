@@ -1480,6 +1480,8 @@ export function useSession(id: Ref<string>): UseSessionResult {
   onBeforeUnmount(() => {
     clearStreamTimeout();
     clearAutoRetry();
+    // Persist a queued draft save rather than drop it with the timer.
+    flushPendingDraftSave();
     if (draftDebounceHandle) clearTimeout(draftDebounceHandle);
     void closeServedStream();
   });

@@ -180,44 +180,52 @@ describe('useSession — a draft typed just before a session switch', () => {
     for (let i = 0; i < 8; i++) await nextTick();
   }
 
+  function bootSwitchable() {
+    const idRef = ref<string>('s-1');
+    let api!: ReturnType<typeof useSession>;
+    const Host = defineComponent({
+      setup() {
+        api = useSession(idRef);
+        return () => h('div');
+      },
+    });
+    const w = mount(Host, {
+      global: {
+        plugins: [
+          {
+            install: (app) =>
+              provideFakeClient(app, {
+                sessions: {
+                  list: async () => [],
+                  get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+                  listMessages: async () => [],
+                  saveDraft: async (id: string, text: string) => {
+                    saved.push({ id, text });
+                  },
+                  loadDraft: async (id: string) => persisted[id] ?? '',
+                } as never,
+                llm: { listProviders: async () => [] } as never,
+              }),
+          },
+        ],
+      },
+    });
+    return { w, idRef, api: () => api };
+  }
+
+  async function typeInAWithinDebounce(api: () => ReturnType<typeof useSession>) {
+    await settle();
+    api().draft.value = 'half-written thought for A';
+    await settle();
+    vi.advanceTimersByTime(100); // inside the 400ms debounce
+  }
+
   for (const other of ['', 'B has a draft']) {
     it(`persists A's pending draft to A when switching to B (B draft=${JSON.stringify(other)})`, async () => {
       vi.useFakeTimers();
       persisted['s-2'] = other;
-      const idRef = ref<string>('s-1');
-      let api!: ReturnType<typeof useSession>;
-      const Host = defineComponent({
-        setup() {
-          api = useSession(idRef);
-          return () => h('div');
-        },
-      });
-      mount(Host, {
-        global: {
-          plugins: [
-            {
-              install: (app) =>
-                provideFakeClient(app, {
-                  sessions: {
-                    list: async () => [],
-                    get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-                    listMessages: async () => [],
-                    saveDraft: async (id: string, text: string) => {
-                      saved.push({ id, text });
-                    },
-                    loadDraft: async (id: string) => persisted[id] ?? '',
-                  } as never,
-                  llm: { listProviders: async () => [] } as never,
-                }),
-            },
-          ],
-        },
-      });
-      await settle();
-
-      api.draft.value = 'half-written thought for A';
-      await settle();
-      vi.advanceTimersByTime(100); // inside the 400ms debounce
+      const { idRef, api } = bootSwitchable();
+      await typeInAWithinDebounce(api);
       idRef.value = 's-2';
       await settle();
       vi.advanceTimersByTime(2000);
@@ -225,7 +233,32 @@ describe('useSession — a draft typed just before a session switch', () => {
 
       expect(saved).toContainEqual({ id: 's-1', text: 'half-written thought for A' });
       expect(saved.some((s) => s.id === 's-2')).toBe(false);
-      expect(api.draft.value).toBe(other);
+      expect(api().draft.value).toBe(other);
     });
   }
+
+  it("persists A's pending draft exactly once when the view leaves (id becomes \"\")", async () => {
+    vi.useFakeTimers();
+    const { idRef, api } = bootSwitchable();
+    await typeInAWithinDebounce(api);
+    idRef.value = '';
+    await settle();
+    vi.advanceTimersByTime(2000);
+    await settle();
+
+    const forA = saved.filter((s) => s.id === 's-1' && s.text === 'half-written thought for A');
+    expect(forA).toHaveLength(1);
+  });
+
+  it("persists A's pending draft exactly once on unmount", async () => {
+    vi.useFakeTimers();
+    const { w, api } = bootSwitchable();
+    await typeInAWithinDebounce(api);
+    w.unmount();
+    vi.advanceTimersByTime(2000);
+    await settle();
+
+    const forA = saved.filter((s) => s.id === 's-1' && s.text === 'half-written thought for A');
+    expect(forA).toHaveLength(1);
+  });
 });
