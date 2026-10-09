@@ -5405,12 +5405,41 @@ export interface ToolExposureSettings {
   activationTtlTurns: number;
   effectiveSchemaBudgetTokens: number;
   effectiveActivationTtlTurns: number;
+  /** Read-only: the organisation's entries; ignored on write. */
+  org: ToolExposureOrg;
 }
 
-/** A session's override layer and activated set. */
+/**
+ * One organisation entry (Go toolexposure.OrgSetting, WP07). `tool` is
+ * the bare tool name; absent means the server-wide tier. `pinned` entries
+ * are read-only ("set by your organisation", pinnedBy "org"); unpinned
+ * ones are org defaults the user may override.
+ */
+export interface ToolExposureOrgSetting {
+  server: string;
+  tool?: string;
+  tier: ToolExposureTier;
+  pinned: boolean;
+  pinnedBy?: 'org';
+}
+
+/**
+ * The organisation's tool-exposure entries from the last applied fleet
+ * config bundle (read-only). schemaBudgetTokens is 0 when the budget is
+ * not pinned; bundleId is 0 when no bundle carries the section.
+ */
+export interface ToolExposureOrg {
+  settings: ToolExposureOrgSetting[];
+  schemaBudgetTokens: number;
+  bundleId: number;
+}
+
+/** A session's override layer and activated set, plus the org's entries. */
 export interface SessionToolExposure {
   exposure: ToolExposure;
   activations: ToolActivation[];
+  /** Read-only: the organisation's entries. */
+  org: ToolExposureOrg;
 }
 
 /** One requested name Sessions_LoadTools could not load, and why. */

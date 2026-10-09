@@ -7524,6 +7524,7 @@ export namespace sessions {
 	export class SessionToolExposure {
 	    exposure: toolexposure.Exposure;
 	    activations: toolexposure.Activation[];
+	    org: toolexposure.OrgExposure;
 
 	    static createFrom(source: any = {}) {
 	        return new SessionToolExposure(source);
@@ -7533,6 +7534,7 @@ export namespace sessions {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.exposure = this.convertValues(source["exposure"], toolexposure.Exposure);
 	        this.activations = this.convertValues(source["activations"], toolexposure.Activation);
+	        this.org = this.convertValues(source["org"], toolexposure.OrgExposure);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -8939,12 +8941,67 @@ export namespace toolexposure {
 		    return a;
 		}
 	}
+	export class OrgSetting {
+	    server: string;
+	    tool?: string;
+	    tier: string;
+	    pinned: boolean;
+	    pinnedBy?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new OrgSetting(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.server = source["server"];
+	        this.tool = source["tool"];
+	        this.tier = source["tier"];
+	        this.pinned = source["pinned"];
+	        this.pinnedBy = source["pinnedBy"];
+	    }
+	}
+	export class OrgExposure {
+	    settings: OrgSetting[];
+	    schemaBudgetTokens: number;
+	    bundleId: number;
+
+	    static createFrom(source: any = {}) {
+	        return new OrgExposure(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.settings = this.convertValues(source["settings"], OrgSetting);
+	        this.schemaBudgetTokens = source["schemaBudgetTokens"];
+	        this.bundleId = source["bundleId"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Settings {
 	    exposure: Exposure;
 	    schemaBudgetTokens: number;
 	    activationTtlTurns: number;
 	    effectiveSchemaBudgetTokens: number;
 	    effectiveActivationTtlTurns: number;
+	    org: OrgExposure;
 
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8957,6 +9014,7 @@ export namespace toolexposure {
 	        this.activationTtlTurns = source["activationTtlTurns"];
 	        this.effectiveSchemaBudgetTokens = source["effectiveSchemaBudgetTokens"];
 	        this.effectiveActivationTtlTurns = source["effectiveActivationTtlTurns"];
+	        this.org = this.convertValues(source["org"], OrgExposure);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

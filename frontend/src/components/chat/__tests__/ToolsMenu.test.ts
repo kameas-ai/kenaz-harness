@@ -233,7 +233,7 @@ describe('ToolsMenu', () => {
 
   it('renders WP04 budget outcomes only when they are non-zero', async () => {
     const { w } = setup({
-      composition: { ...COMPOSITION, pinnedOverBudgetBy: 1200, toolsEvicted: 2, hotOverBy: 300 },
+      composition: { ...COMPOSITION, pinnedOverBudgetBy: 1200, toolsEvicted: 2, hotOverBudgetBy: 300 },
     });
     await flushPromises();
     expect(w.find('[data-testid="tools-menu-pinned-over"]').text()).toBe(
@@ -248,7 +248,7 @@ describe('ToolsMenu', () => {
     );
     w.unmount();
 
-    const quiet = setup({ composition: { ...COMPOSITION, pinnedOverBudgetBy: 0, toolsEvicted: 0, hotOverBy: 0 } });
+    const quiet = setup({ composition: { ...COMPOSITION, pinnedOverBudgetBy: 0, toolsEvicted: 0, hotOverBudgetBy: 0 } });
     await flushPromises();
     for (const id of ['tools-menu-pinned-over', 'tools-menu-evicted', 'tools-menu-hot-over']) {
       expect(quiet.w.find(`[data-testid="${id}"]`).exists()).toBe(false);

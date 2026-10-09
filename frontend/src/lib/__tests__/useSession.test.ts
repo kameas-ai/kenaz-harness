@@ -710,7 +710,7 @@ function makeSessionsStub(
     }),
     getKnobsDefault: async () => null,
     setKnobsDefault: async () => undefined,
-    getToolExposure: async () => ({ exposure: {}, activations: [] }),
+    getToolExposure: async () => ({ exposure: {}, activations: [], org: { settings: [], schemaBudgetTokens: 0, bundleId: 0 } }),
     setToolExposure: async () => undefined,
     loadTools: async () => ({ loaded: [], loaded_by_server: {}, not_loaded: [], summary: '' }),
     export: async () => ({ path: '', byteCount: 0 }),

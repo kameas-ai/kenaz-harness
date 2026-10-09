@@ -483,6 +483,10 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 			hadRefusals = true
 		}
 	}
+	// tool_exposure entries this build refused (WP07) re-apply the same way.
+	if len(ToolExposureRefusals(&b)) > 0 {
+		hadRefusals = true
+	}
 	buildVersion := p.buildVersion
 	if len(applyErrs) == 0 {
 		p.lastAppliedID = b.BundleID

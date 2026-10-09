@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createHarnessClient } from '@/lib/harnessClient';
-import type { ToolExposure, ToolExposureSettings } from '@/lib/types';
+import type { ToolExposure, ToolExposureOrg, ToolExposureSettings } from '@/lib/types';
 
 type WindowWithGo = { go: { rpc: { Bindings: unknown } } };
 
@@ -27,12 +27,22 @@ describe('createHarnessClient() — tool exposure', () => {
     const layer: ToolExposure = {
       servers: { outlook: { tier: 'summary', tools: { 'send-mail': 'full' } } },
     };
+    // WP07: the organisation's entries ride along read-only.
+    const org: ToolExposureOrg = {
+      settings: [
+        { server: 'fetch', tier: 'full', pinned: false },
+        { server: 'outlook', tier: 'off', pinned: true, pinnedBy: 'org' },
+      ],
+      schemaBudgetTokens: 8000,
+      bundleId: 42,
+    };
     const settings: ToolExposureSettings = {
       exposure: layer,
       schemaBudgetTokens: 12000,
       activationTtlTurns: 4,
-      effectiveSchemaBudgetTokens: 12000,
+      effectiveSchemaBudgetTokens: 8000,
       effectiveActivationTtlTurns: 4,
+      org,
     };
     const bindings = {
       Settings_GetToolExposure: vi.fn(async () => settings),
@@ -42,6 +52,7 @@ describe('createHarnessClient() — tool exposure', () => {
       Sessions_GetToolExposure: vi.fn(async () => ({
         exposure: layer,
         activations: [{ name: 'fetch__fetch', server: 'fetch', lastUsedTurn: 2, sticky: true }],
+        org,
       })),
       Sessions_SetToolExposure: vi.fn(async () => undefined),
     };
@@ -60,6 +71,7 @@ describe('createHarnessClient() — tool exposure', () => {
     const s = await client.sessions.getToolExposure('s1');
     expect(bindings.Sessions_GetToolExposure).toHaveBeenCalledWith('s1');
     expect(s.activations[0].name).toBe('fetch__fetch');
+    expect(s.org.settings[1]).toEqual({ server: 'outlook', tier: 'off', pinned: true, pinnedBy: 'org' });
     await client.sessions.setToolExposure('s1', layer);
     expect(bindings.Sessions_SetToolExposure).toHaveBeenCalledWith('s1', layer);
   });

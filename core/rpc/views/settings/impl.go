@@ -1613,21 +1613,52 @@ func (a *API) SetMCPAutoRestart(_ context.Context, enabled bool) error {
 // GetToolExposure returns the user's tool-exposure layer with budget
 // and TTL as stored (0 = default) and the read-only Effective* fields
 // filled. Reads settings.json in full on every call.
-func (a *API) GetToolExposure(_ context.Context) (toolexposure.Settings, error) {
+//
+// Org carries the organisation's entries (pinned ones read-only) and an
+// org-pinned budget replaces EffectiveSchemaBudgetTokens.
+func (a *API) GetToolExposure(ctx context.Context) (toolexposure.Settings, error) {
 	ts, err := a.store.LoadToolExposure()
 	if err != nil {
 		return toolexposure.Settings{}, err
 	}
-	return ts.WithEffective(), nil
+	ts = ts.WithEffective()
+	org, err := a.ToolExposurePolicy(ctx)
+	if err != nil {
+		return toolexposure.Settings{}, err
+	}
+	ts.Org = org.View()
+	if org.SchemaBudgetTokens > 0 {
+		ts.EffectiveSchemaBudgetTokens = org.SchemaBudgetTokens
+	}
+	return ts, nil
 }
 
 // SetToolExposure validates and persists the user's tool-exposure
 // layer, budget and TTL; the Effective* fields are ignored. A layer that
 // would turn kenaz__load_tools off while summary tools exist is refused
 // by the installed guard.
+//
+// An entry or budget the organisation pinned cannot be changed: the write
+// is refused with a *toolexposure.PinnedError naming it.
 func (a *API) SetToolExposure(ctx context.Context, ts toolexposure.Settings) error {
 	if err := ts.Validate(); err != nil {
 		return err
+	}
+	org, err := a.ToolExposurePolicy(ctx)
+	if err != nil {
+		return err
+	}
+	if !org.IsZero() {
+		stored, err := a.store.LoadToolExposure()
+		if err != nil {
+			return err
+		}
+		if err := toolexposure.CheckOrgBudget(org, stored.SchemaBudgetTokens, ts.SchemaBudgetTokens); err != nil {
+			return err
+		}
+		if err := toolexposure.CheckOrgPins(org, stored.Exposure, ts.Exposure); err != nil {
+			return err
+		}
 	}
 	if g := a.exposureGuard.Load(); g != nil && *g != nil {
 		if err := (*g).CheckLayerWrite(ctx, toolexposure.LayerWrite{

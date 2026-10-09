@@ -9,7 +9,9 @@ import (
 
 type fakePins struct{ e toolexposure.Exposure }
 
-func (f fakePins) ToolExposurePins(context.Context) (toolexposure.Exposure, error) { return f.e, nil }
+func (f fakePins) ToolExposurePolicy(context.Context) (toolexposure.OrgPolicy, error) {
+	return toolexposure.OrgPolicy{Pins: f.e}, nil
+}
 
 func costsFixture(t *testing.T, user toolexposure.Exposure, projects fakeProjects, sess *fakeSessions, pins toolexposure.PinSource) *Service {
 	t.Helper()

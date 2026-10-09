@@ -6395,6 +6395,51 @@ report them, so a derived fallback on OpenRouter now over-charges.
 providers). **Owner:** WP05 of tool-context-budget-01TCBUD01 — deletes
 this entry.
 
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP07) — org tool-exposure entries have no `.vue` reader yet
+
+WP07 puts the organisation's entries on the wire read-only
+(`toolexposure.Settings.org`, `sessions.SessionToolExposure.org`:
+`OrgExposure{settings[], schemaBudgetTokens, bundleId}`, each entry with
+`pinned` / `pinnedBy: "org"`), and every writer refuses a pinned entry
+with `*toolexposure.PinnedError`. No component reads them yet, so the UI
+still shows pinned rows as editable and lets a write fail at the backend.
+The WP06/WP07 integration task, exactly:
+
+- add `org_default` and `org_hot_set` to the TS `ToolExposureLevel` union;
+- `hot_set_extra` rows render read-only ("set by your organisation"), not editable;
+- the budget input is disabled when `org.schemaBudgetTokens > 0`;
+- `Settings.org` / `SessionToolExposure.org` get a `.vue` reader in `ToolExposurePanel` / `ToolsMenu`.
+
+**Blocker:** WP06 (the panels) is built in parallel off the WP03 tip.
+**Owner:** the coordinator, at release-branch integration time — deletes
+this entry.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP07) — owner-accepted extensions of FR-K4's `tool_exposure` shape
+
+FR-K4 names `{servers:{<name>:{tier, pinned}}, budget_tokens?,
+hot_set_extra?}`. WP07 ships two accepted extensions, recorded so the
+spec catches up (coordinator to write them into spec §2.1): `pinned:false`
+entries are **org defaults** that sit *below* the user layer (org pin →
+session → project → user → org default → harness default), and a per-server
+`tools{<bare>:{tier, pinned}}` sub-map. `hot_set_extra` beats a pinned
+`off` on the same tool (logged at decode; the overridden pin row is left
+out of the read-only view). Not a gap; this entry is deleted when spec
+§2.1 records them.
+
+### 2026-10-09 (found in tool-context-budget-01TCBUD01 WP07 review) — bundle apply state survives sign-out
+
+`FleetSignOut` / `handleNodeRemoved` stop the pollers but leave
+`<dataDir>/fleet/bundle_id.txt`, `bundle_checksum.txt` and
+`bundle_apply_meta.json`. A sign-in to a **different** org then starts the
+config poller with the previous org's `lastAppliedID`: that org's bundles
+are refused as non-monotonic until its ids pass the old one, and the old
+checksum is sent on the first poll. WP07's `ToolExposurePins.Clear` drops
+`bundle_apply_meta.json` (forcing one re-apply for the same org), which
+does not fix the cross-org id. Pre-existing, not introduced by WP07.
+**Blocker:** none technical; needs a decision on what sign-out resets
+(id + checksum + meta, per org). **Owner:** alec — a separate fix deletes
+this entry.
+
 ## Drained
 
 ### 2026-10-07 · CLOSED — project sync advertised an agent-memory class that shipped nothing (`memory-sync-01MEMSY01` WP01)

@@ -358,12 +358,12 @@ function toggle() {
             {{ composition.cached.toLocaleString() }} cached.
           </p>
           <p
-            v-if="(composition?.hotOverBy ?? 0) > 0"
+            v-if="(composition?.hotOverBudgetBy ?? 0) > 0"
             class="text-[11px] text-signal-danger"
             role="status"
             data-testid="tools-menu-hot-over"
           >
-            This model's window is too small for the core tools (over by {{ composition!.hotOverBy!.toLocaleString() }} tokens).
+            This model's window is too small for the core tools (over by {{ composition!.hotOverBudgetBy!.toLocaleString() }} tokens).
           </p>
           <p
             v-if="(composition?.pinnedOverBudgetBy ?? 0) > 0"

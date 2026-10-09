@@ -116,6 +116,9 @@ type managerAPI struct {
 	// checks nothing beyond validation.
 	toolLoader    ToolLoader
 	exposureGuard toolexposure.WriteGuard
+	// orgPins fills GetToolExposure's read-only Org projection; nil
+	// reports no organisation entries.
+	orgPins toolexposure.PinSource
 	// deleteHook is the optional per-session teardown hook wired by
 	// WithDeleteHookOpt; runs after a successful delete.
 	deleteHook func(sessionID string)

@@ -36,6 +36,7 @@ import (
 //	  "model_prefs":       {"default_model": "...", "provider_allowlist": [...]},
 //	  "kameas_ml_weight_urls": ["https://..."],
 //	  "mandated_items":    [{"catalog_id": "<uuid>", "kind": "skill", "version": "1.0.0", "payload": {...}}],
+//	  "tool_exposure":     {"servers": {"outlook": {"tier": "off", "pinned": true}}, "budget_tokens": 16000},
 //	  "provisioned_mcp":   [{"recipe_id": "slack", "primary_auth": "oauth", ...}],
 //	  "provider_setups":   [{"provider": "anthropic", "access_mode": "org_shared_key", ...}],
 //	  "signature":         "<base64 ed25519>"
@@ -109,6 +110,24 @@ type Bundle struct {
 	// minimal — and an absent section means "nothing is mandated", so the
 	// applier removes everything previously mandated.
 	MandatedItems []BundleMandatedItem `json:"mandated_items,omitempty"`
+
+	// ToolExposure is the organisation's tool-exposure policy
+	// (tool-context-budget-01TCBUD01 WP07, FR-K4): per-server / per-tool
+	// tiers, each pinned (wins over every user, project and session
+	// setting; writers refuse to change it) or an org default (the user may
+	// override), a schema budget, and extra hot-set tools. Applied by
+	// compositeConfigApplier.ApplyBundle -> ToolExposurePins.Apply
+	// (tool_exposure.go); read by the tool-exposure resolver.
+	//
+	// Slot: directly after mandated_items, the end of kenaz-fleet's bundle
+	// struct today, so fleet appends the field where the harness expects
+	// it (the signing payload is struct-ordered JSON). The brief
+	// kitty-specs/tool-context-budget-01TCBUD01/research/fleet-tool-exposure-brief-2026-10-09.md
+	// carries the byte vector both sides pin.
+	//
+	// omitempty: an absent section means "the organisation sets nothing";
+	// the applier then clears any previously applied policy.
+	ToolExposure *BundleToolExposure `json:"tool_exposure,omitempty"`
 
 	// ProvisionedMCP is the push-down section for org-provisioned MCP
 	// servers (fleet-org-config-inheritance-01NORGX01 §3.1). Each entry
@@ -295,6 +314,7 @@ type bundleSigningPayload struct {
 	ModelPrefs         *BundleModelPrefs          `json:"model_prefs,omitempty"`
 	KameasMLWeightURLs []string                   `json:"kameas_ml_weight_urls,omitempty"`
 	MandatedItems      []BundleMandatedItem       `json:"mandated_items,omitempty"` // slot: fleet PR #178
+	ToolExposure       *BundleToolExposure        `json:"tool_exposure,omitempty"`  // slot: directly after mandated_items
 	ProvisionedMCP     []ProvisionedMCP           `json:"provisioned_mcp,omitempty"`
 	ProviderSetups     []ProviderSetup            `json:"provider_setups,omitempty"`
 	OrgConfig          map[string]json.RawMessage `json:"org_config,omitempty"`
@@ -313,6 +333,7 @@ func (b *Bundle) signingPayload() ([]byte, error) {
 		ModelPrefs:         b.ModelPrefs,
 		KameasMLWeightURLs: b.KameasMLWeightURLs,
 		MandatedItems:      b.MandatedItems,
+		ToolExposure:       b.ToolExposure,
 		ProvisionedMCP:     b.ProvisionedMCP,
 		ProviderSetups:     b.ProviderSetups,
 		OrgConfig:          b.OrgConfig,
