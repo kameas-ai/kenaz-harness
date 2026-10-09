@@ -123,7 +123,7 @@ export interface TurnRun {
 /**
  * UsageComposition — one model call's prompt by part, in tokens.
  * Mirrors core/rpc/views/sessions.UsageComposition. Every part but
- * `cached` is the harness estimate (ceil(bytes / 3.5)); `cached` is the
+ * `cached` is the harness estimate (tool definitions at 2.5 bytes per token, text at ~4 characters per token); `cached` is the
  * provider-reported prompt-cache read.
  */
 export interface UsageComposition {

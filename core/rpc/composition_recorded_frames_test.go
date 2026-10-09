@@ -24,16 +24,14 @@ package rpc
 //   - history: the stored rows' content lengths under the per-message
 //     rule (≤ 0.2 % of each frame).
 //
-// RESULT (2026-10-09): the estimate is 63.2 % of prompt_tokens on all
-// three frames — off by 36.8 %, not within FR-H3's 10 %. The shared
-// estimator counts ceil(runes / 4); the ~566 KB of tool-definition text
-// on these requests came to ~224k provider tokens, ~2.5 characters per
-// token (JSON schemas are punctuation- and short-key-dense). The spec's
-// own ceil(bytes / 3.5) rule would reach ~72 % — also outside 10 %. Per the WP08 brief the estimator is NOT tuned to fit here:
-// the gap is recorded in docs/unwired-ledger.md and
-// docs/dogfood/2026-10-09-tool-context-acceptance.md (AC5), and this test
-// pins the measured band so a change to the estimator — or to the
-// built-in schemas — shows up as a failure that names this record.
+// RESULT (2026-10-09). Under the original per-rune / 4 rule the estimate
+// was 63.2 % of prompt_tokens on all three frames (off by 36.8 %, outside
+// FR-H3's 10 %). Owner ruling 2026-10-09: tool definitions now estimate
+// at the measured 2.5 bytes per token (tokenizer.CountToolSchema); prose
+// and messages keep the per-rune rule. The estimate is now 101.0 % on all
+// three frames. Caveat, stated plainly: 2.5 was derived from these same
+// frames, so this is an in-sample fit; the out-of-sample check is the
+// live re-measure on new sessions (acceptance doc, pending live checks).
 
 import (
 	"context"
@@ -83,7 +81,7 @@ var dogfoodFrames = []recordedFrame{
 
 const dogfoodSystemChars = 2292
 
-func TestComposition_RecordedDogfoodFrames_FRH3Gap(t *testing.T) {
+func TestComposition_RecordedDogfoodFrames_WithinFRH3(t *testing.T) {
 	// MCP schemas, as served.
 	raw, err := os.ReadFile(filepath.Join("testdata", "dogfood-2026-10-08", "mcp-tools.json"))
 	if err != nil {
@@ -170,13 +168,9 @@ func TestComposition_RecordedDogfoodFrames_FRH3Gap(t *testing.T) {
 		ratio := float64(est) / float64(f.promptTokens)
 		t.Logf("%s: estimate %d (system %d + MCP tools %d + built-ins %d + history %d) vs provider prompt_tokens %d → %.1f %% (off by %.1f %%)",
 			f.name, est, system, mcpEst, builtinTotal, history, f.promptTokens, 100*ratio, 100*(1-ratio))
-		// FR-H3 wants 0.90..1.10. The measured band is pinned instead
-		// (see the header): leaving it means the estimator or the schemas
-		// changed — update docs/dogfood/2026-10-09-tool-context-acceptance.md
-		// (AC5) and the ledger entry, and if the estimate is now within
-		// 10 %, make this test assert FR-H3.
-		if ratio < 0.60 || ratio > 0.72 {
-			t.Errorf("%s: estimate/provider = %.3f, outside the recorded 0.60..0.72 band — the FR-H3 record is stale", f.name, ratio)
+		// FR-H3 / acceptance criterion 5: within 10 % of the provider.
+		if ratio < 0.90 || ratio > 1.10 {
+			t.Errorf("%s: estimate/provider = %.3f, outside FR-H3's 0.90..1.10", f.name, ratio)
 		}
 	}
 	t.Logf("MCP schema text: %d bytes; estimator %d tokens (%.2f bytes per estimated token)",

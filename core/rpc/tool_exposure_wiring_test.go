@@ -40,17 +40,21 @@ import (
 // tokens per tool. Built-in schemas are the real ones.
 const syntheticMCPToolTokens = 1500
 
+// syntheticSchemaPadding is description text worth syntheticMCPToolTokens
+// under the tool-schema estimate (2.5 bytes per token,
+// tokenizer.CountToolSchema).
+func syntheticSchemaPadding() string { return strings.Repeat("x", syntheticMCPToolTokens*5/2) }
+
 // registerSyntheticServer attaches an in-process MCP server with n tools
-// whose schema carries syntheticMCPToolTokens tokens of description text
-// (4 runes per token under the shared estimator), so each tool estimates
-// to just over that.
+// whose schema carries syntheticMCPToolTokens tokens of description text,
+// so each tool estimates to just over that.
 func registerSyntheticServer(t *testing.T, stack llmStack, name string, n int) {
 	t.Helper()
 	srv := toolserver.NewServer(name, "1.0.0")
 	for i := 0; i < n; i++ {
 		tool := fmt.Sprintf("tool-%02d", i)
 		schema := fmt.Sprintf(`{"type":"object","properties":{"q":{"type":"string","description":%q}}}`,
-			strings.Repeat("x", syntheticMCPToolTokens*4))
+			syntheticSchemaPadding())
 		srv.Register(toolserver.ToolSpec{
 			Name:        tool,
 			Description: "Does " + tool + ".",

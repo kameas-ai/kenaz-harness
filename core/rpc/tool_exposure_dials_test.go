@@ -484,7 +484,7 @@ func TestToolExposureDial_OrgPinsReachTheRequest(t *testing.T) {
 	state := `{"bundle_id":5,"tool_exposure":{"servers":{` +
 		`"fetch":{"tier":"full","pinned":true},` +
 		`"filesystem":{"tier":"off","pinned":true}},` +
-		`"budget_tokens":8000}}`
+		`"budget_tokens":10000}}`
 	r := newExposureRig(t, rigOptions{orgState: state})
 	ctx := context.Background()
 	sid := r.session(t, "")
@@ -500,18 +500,18 @@ func TestToolExposureDial_OrgPinsReachTheRequest(t *testing.T) {
 		t.Errorf("org-off filesystem: Load = %+v, want every tool refused with a reason", res)
 	}
 
-	// The org budget (8000) beats the user's default (24000): a loaded
-	// outlook fits to 8000, not 24000.
+	// The org budget (10000) beats the user's default (24000): a loaded
+	// outlook fits to 10000, not 24000.
 	if err := r.c.SessionManager().SetToolActivations(ctx, sid, nil); err != nil {
 		t.Fatal(err)
 	}
 	r.load(t, sid, []string{"outlook"}, true)
 	next := r.turn(t, sid)
-	if got := next.toolsTokens(); got > 8000 {
-		t.Errorf("org budget 8000: next request's tools_tokens_est = %d", got)
+	if got := next.toolsTokens(); got > 10000 {
+		t.Errorf("org budget 10000: next request's tools_tokens_est = %d", got)
 	}
 	if next.countPrefix("outlook") == 0 {
-		t.Errorf("org budget 8000: no outlook tool fitted at all: %v", next.names())
+		t.Errorf("org budget 10000: no outlook tool fitted at all: %v", next.names())
 	}
 	if next.countPrefix("filesystem") != 0 {
 		t.Errorf("org filesystem pinned off: sent anyway: %v", next.names())

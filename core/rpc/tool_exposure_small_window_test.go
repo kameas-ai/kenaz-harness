@@ -7,8 +7,8 @@ package rpc
 // The 2026-10-08 dogfood failure, reproduced end to end and inverted: a
 // scheduled chat on OpenRouter `aion-labs/aion-2.0` (context_length
 // 131072) with Outlook 94 + Filesystem 14 + harness-self 7 + Fetch 1
-// installed. Before the mission every request carried ~180k estimated
-// (~225k provider) tokens of schemas and the provider refused it on an
+// installed. Before the mission every request carried ~225k provider
+// tokens of schemas and the provider refused it on an
 // empty session. Here the run goes through the production pieces:
 // ChatRunDispatcher → the llm view's StartStream → newLLMStack's chat
 // runner, exposure partition, OpenRouter adapter (whose live /models list
@@ -16,7 +16,7 @@ package rpc
 // httptest provider that REFUSES any request over 131,072 tokens counted
 // at 2.5 bytes per token — the density the dogfood's recorded frames
 // showed for tool-definition JSON (composition_recorded_frames_test.go),
-// harsher than the harness's own estimator. The model loads harness-self
+// which is also the estimator's schema rule. The model loads harness-self
 // from the digest, calls a harness-self tool, and answers.
 
 import (
@@ -180,7 +180,7 @@ func TestToolExposureAcceptance_131kWindowScheduledChatUsesHarnessSelf(t *testin
 			Name:        name,
 			Description: "Reads the harness: " + name + ".",
 			InputSchema: json.RawMessage(fmt.Sprintf(`{"type":"object","properties":{"q":{"type":"string","description":%q}}}`,
-				strings.Repeat("x", syntheticMCPToolTokens*4))),
+				syntheticSchemaPadding())),
 			Handler: func(context.Context, json.RawMessage) (any, error) {
 				if name == "harness_read_list_sessions" {
 					listMu.Lock()

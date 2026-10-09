@@ -17,11 +17,11 @@ built-in with its Settings dial on.
 
 | # | Criterion | Result | Evidence |
 |---|---|---|---|
-| AC1 | First-turn prompt ≤ 15,000 tokens | **PASS (estimator)** — whole first-turn prompt ≈ **3,889** estimated tokens (was 224,798 provider tokens). Tool schemas: 131 tools ≈ 180,509 → 13 hot-set tools ≈ 2,878; digest 891 chars. Corrected by AC5's measured under-count (×1/0.632) the provider would see ≈ 6.2k — still under 15k. Live manual run: **pending (owner alec)**. | `core/rpc` `TestToolExposureWiring_FirstTurnToolTokens` (anthropic adapter over `httptest`) |
+| AC1 | First-turn prompt ≤ 15,000 tokens | **PASS** — whole first-turn prompt ≈ **5,619** estimated tokens under the corrected estimator (tool definitions at 2.5 bytes/token, see AC5), was 224,798 provider tokens. Tool schemas: 131 tools ≈ 184,416 → 13 hot-set tools ≈ 4,608; digest 891 chars. (Under the old per-rune/4 rule the same request read 3,889.) Live manual run: **pending (owner alec)**. | `core/rpc` `TestToolExposureWiring_FirstTurnToolTokens` (anthropic adapter over `httptest`) |
 | AC2 | "Send an email" in two model calls | **PASS** — call 1 `kenaz__load_tools(servers:["outlook"])`, call 2 carries and calls `outlook__send-mail`, the permission resolver sees it, one `tools.activated` audit row. | `chat` `TestToolLoop_LoadThenCallWithinTwoModelCalls` |
-| AC3 | A 131k-window model completes a scheduled chat using harness-self | **PASS** — `ChatRunDispatcher` → llm view `StartStream` → chat runner → OpenRouter adapter (window 131,072 from its live `/models` list) → provider that refuses any request over 131,072 tokens counted at **2.5 bytes/token** (AC5's measured density, harsher than the estimator). Calls: 14,311 B (12 tools), 58,419 B (19 tools: harness-self loaded), 58,707 B → ≈ 5.7k / 23.4k / 23.5k provider tokens; 0 refused; every call's `llm.request.composition` budget = **19,660** (15 % of 131,072, from the live `/models` entry — not the 24k setting); `harness_read_list_sessions` ran once; run `completed`. The whole catalog (≈ 180,609 estimated tokens) cannot fit the window. | `core/rpc` `TestToolExposureAcceptance_131kWindowScheduledChatUsesHarnessSelf` (new in WP08) |
+| AC3 | A 131k-window model completes a scheduled chat using harness-self | **PASS** — `ChatRunDispatcher` → llm view `StartStream` → chat runner → OpenRouter adapter (window 131,072 from its live `/models` list) → provider that refuses any request over 131,072 tokens counted at **2.5 bytes/token** (AC5's measured density — the estimator's own schema rule). Calls: 14,311 B (12 tools), 42,669 B (19 tools: harness-self loaded), 42,957 B → ≈ 5.7k / 17.1k / 17.2k provider tokens; 0 refused; every call's `llm.request.composition` budget = **19,660** (15 % of 131,072, from the live `/models` entry — not the 24k setting); `harness_read_list_sessions` ran once; run `completed`. The whole catalog (≈ 184,582 estimated tokens) cannot fit the window. | `core/rpc` `TestToolExposureAcceptance_131kWindowScheduledChatUsesHarnessSelf` (new in WP08) |
 | AC4 | Byte-identical prefix; `cached_tokens ≥ 0.9 × prefix` live | **Hermetic half PASS** — two consecutive calls serialise byte-identical system + hot/pinned segments, through the chat request builder and both adapters. **Live half PENDING (owner alec)**: OpenRouter-Anthropic turn-2 `cached_tokens` ≥ 90 % of the prefix needs a live call; it also settles the ledger bullet "OpenRouter tool-object `cache_control` is unverified live". | `chat` `TestGenerate_CacheablePrefixStableAcrossCalls`; `TestAnthropicAdapter_PromptCache_GoldenPrefixStable`, `…_ThreeSegmentGolden`; `TestOpenRouterAdapter_PromptCache_GoldenPrefixStable` |
-| AC5 | Composition within ±10 % of provider `prompt_tokens` on three recorded sessions | **FAIL — recorded gap, not tuned.** On the dogfood's first three recorded calls (session `b0c22dc5…`, persisted `prompt_tokens` 224,798 / 225,104 / 225,296) the composition estimate is **142,097 / 142,312 / 142,442 = 63.2 %** of the provider's count (off by 36.8 %). Parts for frame 1: system 577 + MCP tools 134,958 + built-ins 6,545 + history 17. The MCP part uses the servers' **real** `tools/list` output (captured 2026-10-09 from the same installs: ms-365-mcp-server 0.159.1, server-filesystem 2026.8.31, mcp-server-fetch) — 540,051 bytes the estimator counts at 4.0 bytes/token while the provider tokenized the request's ~566 KB of tool text at ≈ 2.5. The spec's own `ceil(bytes/3.5)` rule would reach ≈ 72 %, also outside 10 %. Consequence: the 24k budget and the 15 %-of-window cap are in estimator tokens, ≈ 1.6× fewer than billed. Owner decision needed on the estimator (per-kind density for schema text, or a real tokenizer); open in `docs/unwired-ledger.md`. | `core/rpc` `TestComposition_RecordedDogfoodFrames_FRH3Gap` (new; pins the measured 0.60–0.72 band so any estimator change re-opens this record) |
+| AC5 | Composition within ±10 % of provider `prompt_tokens` on three recorded sessions | **PASS (in-sample)** — after the owner ruling (2026-10-09) tool definitions estimate at **2.5 bytes/token** (`tokenizer.CountToolSchema`); prose and messages keep the per-rune/4 rule. On the dogfood's first three recorded calls (session `b0c22dc5…`, persisted `prompt_tokens` 224,798 / 225,104 / 225,296) the estimate is **227,129 / 227,344 / 227,474 = 101.0 %** on each (frame 1: system 577 + MCP tools 216,058 + built-ins 10,477 + history 17). The MCP part uses the servers' **real** `tools/list` output (captured 2026-10-09: ms-365-mcp-server 0.159.1, server-filesystem 2026.8.31, mcp-server-fetch; 540,051 bytes). Before the fix the same frames read 142,097 / 142,312 / 142,442 = **63.2 %** (per-rune/4 counts JSON schema at 4.0 bytes/token; the provider tokenized it at ≈ 2.5). **Caveat:** 2.5 was derived from these same frames, so this is an in-sample fit — the out-of-sample check is the live re-measure below. | `core/rpc` `TestComposition_RecordedDogfoodFrames_WithinFRH3` (0.90–1.10 band) |
 | AC6 | Every FR-K1 control has a request-level test; the gate exists with a planted proof | **PASS** — see the two tables below. | |
 | AC7 | Unwired sweep | **PASS with dated opens** — see "Sweep". | `docs/unwired-ledger.md` |
 
@@ -34,17 +34,17 @@ chat runner + real sqlite, pass under `-race`.
 
 | Control | Binding | Test | Observed in the next request |
 |---|---|---|---|
-| Schema budget | `Settings_SetToolExposure` | `TestToolExposureDial_SchemaBudgetFitsTheNextRequest` | outlook loaded: default 24,000 → 13 outlook tools, `tools_tokens_est` 22,703; budget 8,000 → 3 outlook tools, 7,453; evicted tools back in the digest |
+| Schema budget | `Settings_SetToolExposure` | `TestToolExposureDial_SchemaBudgetFitsTheNextRequest` | outlook loaded: default 24,000 → 12 outlook tools, `tools_tokens_est` 23,088; budget 8,000 → 1 outlook tool, 6,148; evicted tools back in the digest |
 | Activation TTL | `Settings_SetToolExposure` | `TestToolExposureDial_ActivationTTLExpiresInTheNextTurn` | default TTL: fetch still sent on turn 2; TTL 1: gone on turn 2, "fetch (1 tool)" back in the digest |
 | Per-server tier (user) | `Settings_SetToolExposure` | `TestToolExposureDial_UserServerAndToolTiersReachTheRequest` | filesystem=full → 14 sent without a load; fetch=off → neither sent nor in the digest |
 | Per-tool override (user) | `Settings_SetToolExposure` | same | outlook `tool-03`=full → that one tool sent; digest "outlook (93 tools)" |
 | Project tier ("Pin for project") | `Projects_SetToolExposure` | `TestToolExposureDial_ProjectTierReachesItsSessionsOnly` | fetch=full in the project → sent in its session, not in a loose one |
 | Session Load / Unload | `Sessions_LoadTools` / `Sessions_SetToolExposure` | `TestToolExposureDial_SessionLoadThenUnload` | Load → 14 filesystem sent; Unload (session off) → 0 sent, not in the digest, activations kept for Undo |
-| Org pins (tier + budget) | signed bundle → `fleet/tool_exposure_applied.json` | `TestToolExposureDial_OrgPinsReachTheRequest` | pinned fetch=full sent with no load; pinned filesystem=off not in the digest and every load refused; pinned budget 8,000 caps the next request |
+| Org pins (tier + budget) | signed bundle → `fleet/tool_exposure_applied.json` | `TestToolExposureDial_OrgPinsReachTheRequest` | pinned fetch=full sent with no load; pinned filesystem=off not in the digest and every load refused; pinned budget 10,000 caps the next request |
 
 Observed while writing them (spec-conformant, worth knowing): a user
 setting a 14-tool server to **full** under the default 24k budget sees one
-of its tools evicted (hot ≈ 2.9k + 14 × ~1.5k > 24k) with the composer's
+of its tools evicted (hot ≈ 4.6k + 14 × ~1.5k > 24k) with the composer's
 "pinned tools exceed the schema budget" warning — §2.3's pinned-eviction
 rule, not a defect.
 
@@ -87,11 +87,11 @@ rule, not a defect.
 | | `toolexposure.HotSet` | **kept, dated** at its declaration — sole reader is the cross-package anchor test |
 | Frontend placeholders | `ContextCompositionPopover.vue` "no schema-budget line until WP04" | **wired** — renders `schemaBudget` / `toolsEvicted` (spec §2.5), with tests |
 | | `ScheduledChatFormModal.vue` custom servers TODO | open, dated (schedule tool-set follow-up) |
-| In-code deferrals | `llm_provider_adapter.go` "FR-H3 deferred to WP08"; `tool_exposure_wiring.go` "WP08 adds never-started recipes" | rewritten to the recorded state (FR-H3 gap; FR-E2 open with blocker) |
+| In-code deferrals | `llm_provider_adapter.go` "FR-H3 deferred to WP08"; `tool_exposure_wiring.go` "WP08 adds never-started recipes" | FR-H3 now asserted (AC5); FR-E2 open with blocker |
 
 Still open in `docs/unwired-ledger.md`, owner alec: workflow steps not
 tiered (gated), FR-E2 never-started recipes, schedule tool set, Tools-menu
-meter before budget, FR-H3 estimator gap, compaction's window lookup keyed
+meter before budget, compaction's window lookup keyed
 by profile id, bundle apply state surviving sign-out (cross-org), the WP05
 cache deviations (live OpenRouter tool marker → AC4 live).
 
@@ -103,7 +103,7 @@ cache deviations (live OpenRouter tool marker → AC4 live).
 | Q-B | TTL 6 turns; user loads from the Tools menu are sticky for the session | `DefaultActivationTTLTurns`; `ToolsMenu.vue` `loadTools(…, true)` |
 | Q-C | Org pins may set any tier, including full (cost-forcing) | `TestToolExposureDial_OrgPinsReachTheRequest` |
 | Q-D | harness-self kept, summary tier | harness default; AC3 loads it |
-| Q-E | 24,000 with the 15 % window cap | `DefaultSchemaBudgetTokens`, `EffectiveBudget` (AC3: 131k → 19,660) |
+| Q-E | 24,000 with the 15 % window cap — now **24k provider-measured tokens** (tool definitions estimated at the measured 2.5 bytes/token, AC5), no longer ~1.6× under-counted | `DefaultSchemaBudgetTokens`, `EffectiveBudget` (AC3: 131k → 19,660) |
 | Q-F | Activation survives fork (every `conversation.Manager` fork) | WP04 ruling, `InheritToolExposure` |
 
 ## Pending live checks (owner alec)
@@ -113,5 +113,6 @@ cache deviations (live OpenRouter tool marker → AC4 live).
 2. AC4 live: two consecutive calls on an OpenRouter Anthropic-family
    model — turn 2 `cached_tokens ≥ 0.9 × prefix`; also whether OpenRouter
    accepts `cache_control` on the tool object.
-3. Re-measure AC5 on three live sessions of the new build (expect the same
-   ~63 % until the estimator decision).
+3. Re-measure AC5 on three live sessions of the new build — the
+   out-of-sample check of the 2.5 bytes/token schema density (in-sample:
+   101.0 %).

@@ -11,7 +11,7 @@
  * the trigger, so the panel is a tooltip described by the button, not a
  * dialog.
  *
- * The parts are harness estimates (ceil(bytes / 3.5)); `cached` is the
+ * The parts are harness estimates (tool definitions at 2.5 bytes per token, text at ~4 characters per token); `cached` is the
  * provider's own count. Memory is listed only when non-zero: memory
  * snippets that arrive as messages are counted in history.
  *

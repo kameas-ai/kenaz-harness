@@ -1211,10 +1211,9 @@ func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) 
 // account for, and hot_over_budget_by how far the always-sent core tools
 // alone exceed it (the window is too small for them).
 // FR-H3 — the estimated parts reconciling with prompt_tokens_total
-// within 10 % — does NOT hold on tool-schema-heavy requests: on the
-// 2026-10-08 dogfood's recorded frames the estimate is 63 % of the
-// provider's count (core/rpc/composition_recorded_frames_test.go pins
-// the measured band; open in docs/unwired-ledger.md, owner alec).
+// within 10 % — is asserted on the 2026-10-08 dogfood's recorded frames
+// by core/rpc/composition_recorded_frames_test.go (tool definitions at
+// the measured 2.5 bytes per token: 101 % there).
 func logComposition(sessionID, providerKind string, comp corellm.PromptComposition, systemChars, toolsStable, autoActivated int, usage corellm.Usage, err error) {
 	outcome := "ok"
 	if err != nil {

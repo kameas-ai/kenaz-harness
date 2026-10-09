@@ -39,19 +39,24 @@ func TestEstimateToolSpecTokens_CountsNameDescriptionSchema(t *testing.T) {
 		InputSchema: json.RawMessage(`{"type":"object"}`),             // 17
 		Server:      "outlook-with-a-very-long-server-id-not-counted", // metadata, not sent
 	}
-	// 18 + 52 + 17 = 87 runes -> ceil(87 / 4) = 22
-	if got := EstimateToolSpecTokens(spec); got != 22 {
-		t.Fatalf("EstimateToolSpecTokens = %d, want 22", got)
+	// 18 + 52 + 17 = 87 bytes at the schema density (2.5 bytes per
+	// token) -> ceil(87 / 2.5) = 35. Server is not counted.
+	if got := EstimateToolSpecTokens(spec); got != 35 {
+		t.Fatalf("EstimateToolSpecTokens = %d, want 35", got)
 	}
-	if got := ToolSpecTokens(spec); got != 22 {
-		t.Fatalf("ToolSpecTokens without TokenEst = %d, want computed 22", got)
+	if got := ToolSpecTokens(spec); got != 35 {
+		t.Fatalf("ToolSpecTokens without TokenEst = %d, want computed 35", got)
+	}
+	// Prose keeps the per-rune rule: the same 87 characters as text.
+	if got := EstimateTokens(strings.Repeat("x", 87)); got != 22 {
+		t.Fatalf("EstimateTokens(87 runes) = %d, want 22 (prose rule unchanged)", got)
 	}
 	spec.TokenEst = 40
 	if got := ToolSpecTokens(spec); got != 40 {
 		t.Fatalf("ToolSpecTokens with TokenEst = %d, want the carried 40", got)
 	}
-	if got := ToolsTokens([]ToolSpec{spec, {Name: "abcdefg"}}); got != 42 {
-		t.Fatalf("ToolsTokens = %d, want 40 + 2", got)
+	if got := ToolsTokens([]ToolSpec{spec, {Name: "abcdefg"}}); got != 43 { // 7 bytes / 2.5 -> 3
+		t.Fatalf("ToolsTokens = %d, want 40 + 3", got)
 	}
 }
 

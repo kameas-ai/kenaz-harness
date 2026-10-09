@@ -20,9 +20,12 @@ func EstimateTokens(s string) int {
 }
 
 // EstimateToolSpecTokens estimates what one tool definition costs in the
-// prompt: the per-rune rule over name + description + input_schema.
+// prompt: name + description + input_schema at the measured JSON-schema
+// density (tokenizer.CountToolSchema, 2.5 bytes per token — see
+// docs/dogfood/2026-10-09-tool-context-acceptance.md, AC5). Prose and
+// messages keep the per-rune rule.
 func EstimateToolSpecTokens(t ToolSpec) int {
-	return tokenizer.CountText(t.Name + t.Description + string(t.InputSchema))
+	return tokenizer.CountToolSchema(t.Name + t.Description + string(t.InputSchema))
 }
 
 // ToolSpecTokens returns t.TokenEst when the producer computed it, else

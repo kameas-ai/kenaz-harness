@@ -112,7 +112,7 @@ type LastUsage struct {
 }
 
 // UsageComposition is one model call's prompt by part. Every part but
-// Cached is the harness estimate (ceil(bytes / 3.5)); Cached is the
+// Cached is the harness estimate (tool definitions at 2.5 bytes per token, text at ~4 characters per token); Cached is the
 // provider-reported prompt-cache read.
 type UsageComposition struct {
 	System      int `json:"system"`

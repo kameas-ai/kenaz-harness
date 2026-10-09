@@ -355,7 +355,7 @@ type SessionUsage struct {
 
 // UsageComposition is the wire mirror of session.UsageComposition: one
 // model call's prompt by part, in tokens. Every part but Cached is the
-// harness estimate (ceil(bytes / 3.5)); Cached is provider-reported.
+// harness estimate (tool definitions at 2.5 bytes per token, text at ~4 characters per token); Cached is provider-reported.
 type UsageComposition struct {
 	System      int `json:"system"`
 	Tools       int `json:"tools"`

@@ -403,19 +403,14 @@ since WP02–WP06 wrote this entry:
   meter says so); the composition popover shows the last call's real
   fitted figure. Blocker: a budget-aware cost read (fit the partition in
   `SchemaCosts`); deleted when the meter reads it.
-- **FR-H3 does not hold: the estimator under-counts tool schemas by
-  ~37 %.** On the dogfood's three recorded frames (session `b0c22dc5…`,
-  real outlook/filesystem/fetch `tools/list` captured into
-  `core/rpc/testdata/dogfood-2026-10-08/`), the composition estimate is
-  63.2 % of OpenRouter's `prompt_tokens` (142,097 vs 224,798) — ~2.5
-  characters per provider token on JSON schemas against the estimator's
-  4. Every budget figure (24k default, 15 % of window) is therefore in
-  estimator tokens, ~1.6× fewer than the provider bills. Not tuned in
-  WP08 (brief: record, do not fit). `composition_recorded_frames_test.go`
-  pins the measured 0.60–0.72 band. Blocker: an owner decision on the
-  estimator (per-kind density for schema text, or a real tokenizer —
-  `core/llm/tokenizer` TODO); deleting this bullet needs that test to
-  assert FR-H3's 0.90–1.10.
+- ~~**FR-H3 does not hold: the estimator under-counts tool schemas by
+  ~37 %.**~~ — **closed 2026-10-09 (owner ruling)**: tool definitions now
+  estimate at the measured 2.5 bytes/token (`tokenizer.CountToolSchema`,
+  via `llm.EstimateToolSpecTokens`); prose/messages keep per-rune/4. The
+  dogfood's three recorded frames read 101.0 % of `prompt_tokens` (were
+  63.2 %); `TestComposition_RecordedDogfoodFrames_WithinFRH3` asserts
+  FR-H3's 0.90–1.10. In-sample fit (2.5 came from these frames): the live
+  re-measure in the acceptance doc is the out-of-sample check.
 - Activations of tools whose server was later uninstalled stay in
   `sessions.tool_activations` (never sent: the catalog no longer lists
   them). Non-sticky ones leave with the TTL; sticky ones stay until the

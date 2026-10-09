@@ -72,6 +72,28 @@ func CountRequestTokens(systemPrompt string, messages []Message) int {
 	return total
 }
 
+// schemaBytesPerTokenX10 is ten times the bytes-per-token density of a
+// tool definition (name + description + input_schema JSON): 2.5. JSON
+// schemas are punctuation- and short-key-dense and tokenize far tighter
+// than prose. Measured on the 2026-10-08 dogfood's recorded OpenRouter
+// usage frames against the servers' real tools/list output
+// (docs/dogfood/2026-10-09-tool-context-acceptance.md, AC5): the
+// per-rune / 4 rule put those requests at 63 % of the provider's
+// prompt_tokens. Kept as an integer ratio so the estimate stays exact
+// integer arithmetic.
+const schemaBytesPerTokenX10 = 25
+
+// CountToolSchema estimates one tool definition's prompt cost from its
+// serialised bytes (name + description + input_schema JSON) at the
+// measured schema density, rounding up. Prose and messages keep the
+// per-rune rule (CountText / CountRequestTokens).
+func CountToolSchema(s string) int {
+	if s == "" {
+		return 0
+	}
+	return ceilDiv(len(s)*10, schemaBytesPerTokenX10)
+}
+
 // CountText returns the per-rune estimate for one piece of text with no
 // message framing — the same rule CountRequestTokens applies to each
 // message's content. For text that is not a chat message (a tool
