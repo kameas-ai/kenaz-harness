@@ -408,9 +408,14 @@ func (j *turnJournal) addUnbilled(resp corellm.Response) {
 }
 
 // sumUsage returns a's token and cost figures plus b's. Only the
-// accounting fields are summed; content is not carried. The cost source
-// is a's when set, else b's; an indeterminate price on either side makes
-// the sum indeterminate unless a provider-reported total exists.
+// accounting fields are summed; content is not carried.
+//
+// Cost source of the sum (sumCostSource): a side that contributed no cost
+// does not vote; two contributing sides with the same source keep it; a
+// provider-reported side mixed with a derived (or unlabelled) side is
+// "derived" — the total is no longer purely what the provider reported.
+// The sum is indeterminate when either side is, unless the resulting
+// source is "provider" (a provider-reported total needs no price table).
 func sumUsage(a, b corellm.Response) corellm.Response {
 	out := corellm.Response{FinishReason: a.FinishReason}
 	out.Usage = corellm.Usage{
@@ -429,16 +434,34 @@ func sumUsage(a, b corellm.Response) corellm.Response {
 		CachedCost:    a.Cost.CachedCost + b.Cost.CachedCost,
 		ReasoningCost: a.Cost.ReasoningCost + b.Cost.ReasoningCost,
 		ImageCost:     a.Cost.ImageCost + b.Cost.ImageCost,
-		Indeterminate: a.Cost.Indeterminate && b.Cost.Indeterminate,
-		Source:        a.Cost.Source,
+		Source:        sumCostSource(a.Cost, b.Cost),
 	}
+	out.Cost.Indeterminate = (a.Cost.Indeterminate || b.Cost.Indeterminate) && out.Cost.Source != "provider"
 	if out.Cost.Currency == "" {
 		out.Cost.Currency = b.Cost.Currency
 	}
-	if out.Cost.Source == "" {
-		out.Cost.Source = b.Cost.Source
-	}
 	return out
+}
+
+// sumCostSource resolves the cost source of a summed pair (see sumUsage).
+func sumCostSource(a, b corellm.Cost) string {
+	aVotes := a.Total != 0 || a.Indeterminate
+	bVotes := b.Total != 0 || b.Indeterminate
+	switch {
+	case !aVotes && !bVotes:
+		if a.Source != "" {
+			return a.Source
+		}
+		return b.Source
+	case !bVotes:
+		return a.Source
+	case !aVotes:
+		return b.Source
+	case a.Source == b.Source:
+		return a.Source
+	default:
+		return "derived"
+	}
 }
 
 // flushHeld writes the parked assistant text as an assistant_move.

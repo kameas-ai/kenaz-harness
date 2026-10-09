@@ -119,8 +119,8 @@ func (r *ChatRunner) classifyRequestTooLarge(ctx context.Context, sessionID, pro
 	return &ErrRequestTooLarge{Model: model, Window: window, HistoryTokens: historyTokens}
 }
 
-// resolveRunModel names the model a run used: the override when one was
-// given, else the profile's default model from the registry.
+// resolveRunModel names the model a run was dispatched with
+// (corellm.ProviderProfile.DispatchModel — the registry's own rule).
 func (r *ChatRunner) resolveRunModel(profileID, modelOverride string) string {
 	if modelOverride != "" {
 		return modelOverride
@@ -132,13 +132,7 @@ func (r *ChatRunner) resolveRunModel(profileID, modelOverride string) string {
 	if err != nil {
 		return ""
 	}
-	if prof.Model != "" {
-		return prof.Model
-	}
-	if len(prof.Models) > 0 {
-		return prof.Models[0]
-	}
-	return ""
+	return prof.DispatchModel("")
 }
 
 func countHistoryTokens(msgs []coreag.Message) int {

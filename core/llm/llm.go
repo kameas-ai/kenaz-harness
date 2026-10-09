@@ -163,6 +163,19 @@ func (p ProviderProfile) AvailableModels() []string {
 	return nil
 }
 
+// DispatchModel returns the model id a request on this profile is sent
+// with: override when non-empty, else Model. It mirrors the registry's
+// dispatch resolution exactly (registry.Stream sets the adapter's model
+// to req.Model, falling back to prof.Model) and deliberately does NOT
+// fall back to Models[0] — no adapter sends that, so reporting it would
+// name a model that never ran. Empty means the profile has no default.
+func (p ProviderProfile) DispatchModel(override string) string {
+	if override != "" {
+		return override
+	}
+	return p.Model
+}
+
 // Role enumerates the message roles in a multi-turn conversation (FR-005).
 type Role string
 

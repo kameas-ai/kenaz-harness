@@ -3897,7 +3897,7 @@ func New(c *core.Core, opts ...Option) *API {
 			if err != nil || len(profs) == 0 {
 				return "", ""
 			}
-			return profs[0].ID, profileDefaultModel(profs[0])
+			return profs[0].ID, profs[0].DispatchModel("")
 		}
 		if chatStore != nil && a.sessionsAPI != nil && a.llmAPI != nil {
 			capturedPersonalStore := personalForLLM
@@ -7782,6 +7782,21 @@ func buildAutoTitleDeps(
 	}
 }
 
+// usageCost classifies a response's cost the way token-cost-telemetry
+// records it: a provider-reported total, else a price-table derivation,
+// else unknown (nil).
+func usageCost(resp corellm.Response) (*float64, string) {
+	switch {
+	case resp.Cost.Source == "provider" && resp.Cost.Total > 0:
+		v := resp.Cost.Total
+		return &v, "provider"
+	case !resp.Cost.Indeterminate && resp.Cost.Total > 0:
+		v := resp.Cost.Total
+		return &v, "derived"
+	}
+	return nil, "unknown"
+}
+
 // buildChatRunner constructs the *chat.ChatRunner that replaces
 // core/toolloop as the chassis chat path. Returns nil when the graph
 // manager is unavailable (test path or boot failure) so the LLM view
@@ -8101,8 +8116,8 @@ func buildChatRunner(
 			// billed = resp + any earlier tool-only calls of the turn that
 			// had no row of their own: what the cumulative footer counts.
 			costUSD, source := usageCost(resp)
+			billedCost, billedSource := usageCost(billed)
 			if capturedUsageMgr != nil {
-				billedCost, billedSource := usageCost(billed)
 				turn := usage.UsageTurn{
 					SessionID:        sessionID,
 					MessageID:        messageID,
@@ -8130,8 +8145,8 @@ func buildChatRunner(
 			// Numbers only — the model id, the message id and the response
 			// text do not cross this call.
 			billedVal := 0.0
-			if bc, _ := usageCost(billed); bc != nil {
-				billedVal = *bc
+			if billedCost != nil {
+				billedVal = *billedCost
 			}
 			fleetUsage.LLMResponse(ctx, sessionID, billed.Usage.InputTokens, billed.Usage.OutputTokens, billedVal)
 			snap := session.LastUsage{
@@ -10554,33 +10569,6 @@ func (w *keychainWriter) Write(ctx context.Context, locator string, plaintext []
 // back to personal.DefaultPath() ($USER_CONFIG_DIR/kenaz-harness).
 // A construction failure returns nil; the rpc impl treats a nil store
 // as "personal store unavailable" and the chassis still boots.
-// usageCost classifies a response's cost the way token-cost-telemetry
-// records it: a provider-reported total, else a price-table derivation,
-// else unknown (nil).
-func usageCost(resp corellm.Response) (*float64, string) {
-	switch {
-	case resp.Cost.Source == "provider" && resp.Cost.Total > 0:
-		v := resp.Cost.Total
-		return &v, "provider"
-	case !resp.Cost.Indeterminate && resp.Cost.Total > 0:
-		v := resp.Cost.Total
-		return &v, "derived"
-	}
-	return nil, "unknown"
-}
-
-// profileDefaultModel is the model a profile dispatches when the caller
-// gives no override: Model, else the first of Models.
-func profileDefaultModel(p corellm.ProviderProfile) string {
-	if p.Model != "" {
-		return p.Model
-	}
-	if len(p.Models) > 0 {
-		return p.Models[0]
-	}
-	return ""
-}
-
 func newPersonalStore(c *core.Core) personal.Store {
 	var path string
 	if c != nil && c.DataDir() != "" {
