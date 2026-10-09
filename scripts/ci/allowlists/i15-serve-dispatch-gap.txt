@@ -1288,3 +1288,31 @@
 "Fleet_MemorySyncDisable"
 "Fleet_MemorySyncEnable"
 "Fleet_MemorySyncStatus"
+
+# CLASS: untriaged -- tool-context-budget-01TCBUD01 WP02, 2026-10-08.
+# 6 entries.
+#
+# The tool-exposure layers (spec §2.1): the user's per-server / per-tool
+# tiers, schema budget and activation TTL (Settings_*), the project
+# override (Projects_{Get,Set}ToolExposure) and the session override +
+# activated set (Sessions_*). WP02 lands the data model, the resolver
+# and the typed client methods (harnessClient.ts settings.*, projects.*
+# and sessions.{get,set}ToolExposure); no .vue surface mounts them yet.
+# Sessions_LoadTools (composer load / unload / pin) is not a binding yet:
+# it needs kenaz__load_tools' activation logic from WP03 and gets its own
+# entry or dispatch case then (dated 2026-10-09, owner: alec). Spec §2.6 rules the
+# composer Tools menu a served-mode boundary panel and Settings ->
+# Capabilities is desktop-only like the other Settings_* entries, so the
+# expected dispositions are boundary-panelled (Sessions_*) and
+# desktop-only-by-nature (Settings_*, Projects_*) — decided when the
+# surfaces exist, not here.
+#
+# Blocker: tool-context-budget-01TCBUD01 WP06 (Capabilities tier
+# controls + composer Tools menu), which mounts the surfaces and makes
+# the served disposition decidable. Dated 2026-10-08. Owner: alec.
+"Projects_GetToolExposure"
+"Projects_SetToolExposure"
+"Sessions_GetToolExposure"
+"Sessions_SetToolExposure"
+"Settings_GetToolExposure"
+"Settings_SetToolExposure"

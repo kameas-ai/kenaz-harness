@@ -60,6 +60,13 @@ func TestAuditRetention_DeleteAfterWindow_AgainstPopulatedUpgradedDatabase(t *te
 	if err != nil {
 		t.Fatalf("pre-Open snapshot: %v", err)
 	}
+	// sessions/0347-tool-exposure adds nullable columns to projects and
+	// sessions; whether this fixture predates it decides the digest skip
+	// in the comparison below.
+	predates0347 := map[string]bool{
+		"projects": !columnExists(t, raw, "projects", "tool_exposure"),
+		"sessions": !columnExists(t, raw, "sessions", "tool_exposure"),
+	}
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -257,6 +264,13 @@ func TestAuditRetention_DeleteAfterWindow_AgainstPopulatedUpgradedDatabase(t *te
 		if before.RowCount != after.RowCount {
 			t.Errorf("unrelated table %s row count changed: %d -> %d (retention sweep must not touch it)",
 				table, before.RowCount, after.RowCount)
+		}
+		// projects, sessions: sessions/0347-tool-exposure ADD COLUMNs
+		// (nullable) change every row's digest on a fixture that predates
+		// it — a schema side effect of Open, not of the sweep. Only the
+		// digest is skipped, and only then; the row count above stands.
+		if predates0347[table] {
+			continue
 		}
 		if before.Digest != after.Digest {
 			t.Errorf("unrelated table %s content digest changed (retention sweep must not touch it)", table)

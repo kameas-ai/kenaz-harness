@@ -8,6 +8,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // AutonomyKnobValues is the wire shape for a ResolvedKnobs payload.
@@ -488,6 +489,13 @@ type SessionsAPI interface {
 	// is the "reaches the model" half; without it the column round-trips
 	// but nothing downstream ever reads it.
 	SetKnobsDefault(ctx context.Context, id string, knobs *SessionKnobs) error
+
+	// GetToolExposure returns the session's tool-exposure override layer
+	// and activated set (migration sessions/0347-tool-exposure).
+	GetToolExposure(ctx context.Context, id string) (SessionToolExposure, error)
+	// SetToolExposure validates and persists the session's override
+	// layer; a zero Exposure clears it.
+	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
 
 	// Export serialises a session transcript to the local filesystem.
 	// format is "markdown" or "json". The file-picker dialog is opened

@@ -12,6 +12,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // Sentinel errors. Stable typed errors so callers can errors.Is.
@@ -236,6 +237,22 @@ type Store interface {
 	// best-effort observability, so a run whose RecordTurnRun failed has
 	// no row to annotate and the outcome is simply not kept.
 	RecordTurnRunOutcome(ctx context.Context, sessionID, runID string, o TurnRunOutcome) error
+
+	// SetToolExposure persists the session's tool-exposure override layer
+	// (sessions.tool_exposure, migration sessions/0347-tool-exposure). A
+	// zero Exposure clears it (NULL). Callers validate (Manager does).
+	// Returns ErrSessionNotFound when the session does not exist.
+	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
+	// SetToolActivations replaces the session's activated tool set
+	// (sessions.tool_activations). An empty set clears it (NULL).
+	// Callers validate (Manager does).
+	// Returns ErrSessionNotFound when the session does not exist.
+	SetToolActivations(ctx context.Context, id string, as []toolexposure.Activation) error
+	// ToolExposureState loads the session's project, override layer and
+	// activated set in one read; the zero layer and nil activations (not
+	// errors) when none are set.
+	// Returns ErrSessionNotFound when the session does not exist.
+	ToolExposureState(ctx context.Context, id string) (toolexposure.SessionState, error)
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
@@ -250,6 +267,8 @@ type memStore struct {
 	knobsDefault map[string]*llm.RequestKnobs // session_id -> knobs_default override
 	checkpoints  map[string]*StreamCheckpoint // "sessionID\x00subID" -> checkpoint
 	turnRuns     map[string]TurnRun           // run_id -> mapping
+	toolExposure map[string]toolexposure.Exposure
+	toolActs     map[string][]toolexposure.Activation
 }
 
 // NewMemoryStore returns an in-memory Store. Useful for tests and as
@@ -263,6 +282,8 @@ func NewMemoryStore() Store {
 		knobsDefault: map[string]*llm.RequestKnobs{},
 		checkpoints:  map[string]*StreamCheckpoint{},
 		turnRuns:     map[string]TurnRun{},
+		toolExposure: map[string]toolexposure.Exposure{},
+		toolActs:     map[string][]toolexposure.Activation{},
 	}
 }
 
@@ -460,6 +481,8 @@ func (s *memStore) Delete(_ context.Context, id string) error {
 	delete(s.records, id)
 	delete(s.messages, id)
 	delete(s.seqByID, id)
+	delete(s.toolExposure, id)
+	delete(s.toolActs, id)
 	// Mirror the SQL store's ON DELETE CASCADE on session_turn_runs
 	// (migration 0342): a deleted session's turn -> run links go with it.
 	for runID, tr := range s.turnRuns {
