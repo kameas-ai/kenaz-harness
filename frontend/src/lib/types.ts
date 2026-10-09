@@ -4784,6 +4784,54 @@ export interface MemorySyncStatus {
   pausedCategory?: string;
 }
 
+/**
+ * Mirrors settings.MLShippingStatusView — the ML producer's shipping health
+ * (ml-producer-01MLPRD01 spec §5). Filled by the WP03 shipper.
+ */
+export interface MLShippingStatus {
+  /** RFC 3339 time of the last accepted batch ("" = none yet). */
+  lastBatchAt: string;
+  accepted: number;
+  duplicates: number;
+  rejected: number;
+  /** Last stop code ("" = running / never stopped). */
+  stopReason: string;
+}
+
+/**
+ * Mirrors settings.MLStatusView — the Cloud ML consent panel
+ * (ml-producer-01MLPRD01 WP01, kenaz-fleet docs/contract-harness-ml.md).
+ * `effective` is effective AND a current notice ack. `noticeText` is the
+ * contract notice rendered server-side (org, retention, variant).
+ */
+export interface MLStatus {
+  signedIn: boolean;
+  /** hosted_inference capability; the panel hides without it. */
+  entitled: boolean;
+  orgPaused: boolean;
+  pausedCategory?: string;
+  /** /me/ml was read and decoded on this call. */
+  loaded: boolean;
+  orgOffloadEnabled: boolean;
+  /** "on" | "off" | "member_choice" ("" when not loaded). */
+  orgPolicy: string;
+  userWorkflowEventsOptedIn: boolean;
+  noticeAckRequired: boolean;
+  effective: boolean;
+  noticeVersion: number;
+  /** RFC 3339; "" while not acknowledged. */
+  noticeAckedAt: string;
+  retentionDays: number;
+  retainOnWithdrawal: boolean;
+  orgName: string;
+  noticeText: string;
+  /** Set on an ack Fleet refused with 409 policy_changed: show the notice again. */
+  noticeChanged?: boolean;
+  fleetError?: string;
+  /** Absent until the ML shipper is wired. */
+  shipping?: MLShippingStatus;
+}
+
 /** Mirrors settings.FleetSyncView. */
 export interface FleetSyncView {
   contextSync: FleetSyncLaneView;

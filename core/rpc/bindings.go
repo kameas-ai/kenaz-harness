@@ -3718,6 +3718,29 @@ func (b *Bindings) Fleet_MemorySyncDisable(deleteFromFleet bool, confirm string)
 	return b.api.Settings().FleetMemorySyncDisable(b.ctx(), deleteFromFleet, confirm)
 }
 
+// Fleet_MLStatus returns the Cloud ML consent panel state
+// (ml-producer-01MLPRD01 WP01): a fresh GET /me/ml read, the rendered
+// required notice, and the ML producer's shipping status.
+func (b *Bindings) Fleet_MLStatus() (settings.MLStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MLStatus")()
+	return b.api.Settings().FleetMLStatus(b.ctx())
+}
+
+// Fleet_MLAckNotice acknowledges the hosted-inference notice version the
+// panel displayed. On 409 policy_changed the fresh state comes back with
+// noticeChanged set so the panel shows the new notice again.
+func (b *Bindings) Fleet_MLAckNotice(noticeVersion int) (settings.MLStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MLAckNotice")()
+	return b.api.Settings().FleetMLAckNotice(b.ctx(), noticeVersion)
+}
+
+// Fleet_SetWorkflowEventsOptIn writes the member's own workflow_events
+// opt-in (org policy member_choice) and returns the re-read panel state.
+func (b *Bindings) Fleet_SetWorkflowEventsOptIn(optedIn bool) (settings.MLStatusView, error) {
+	defer sentry.WrapBinding("Fleet_SetWorkflowEventsOptIn")()
+	return b.api.Settings().FleetSetWorkflowEventsOptIn(b.ctx(), optedIn)
+}
+
 // ── Phase-3 unit collaboration bindings (unified-context-artifacts-01NCTXU01) ─
 
 // Unit_PromoteAsMergeRequest promotes a unit UP a classification level:
