@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -240,6 +241,19 @@ func (e *ErrCancelled) Error() string {
 		return "llm: cancelled"
 	}
 	return "llm: cancelled: " + e.Reason
+}
+
+// Is makes a provider-reported cancellation match context.Canceled.
+// Adapters translate "the caller's ctx was cancelled" / "Stream.Cancel
+// was called" into ErrCancelled WITHOUT wrapping the ctx error, so
+// errors.Is(err, context.Canceled) was false for exactly the error a
+// user Stop produces mid-stream. The chat runner then classified the
+// Stop as a backend failure: an error bar with the raw node chain
+// ("... llm: cancelled: context") and the partial persisted as a
+// connection drop with a Resume prompt (dogfood 2026-10-08 round 2).
+// A cancellation is a cancellation whichever layer reports it.
+func (e *ErrCancelled) Is(target error) bool {
+	return target == context.Canceled
 }
 
 // ErrProviderAuthFailed is the registry-level decoration of *ErrAuth with

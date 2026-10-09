@@ -44,6 +44,14 @@ export interface DeliveryFailure {
 export const STOPPED_CODE = 'stopped';
 
 /**
+ * The `llm:stream-closed` reason for a run the user stopped (the chat
+ * runner's explicit Stop arm). useSession commits a partial bubble with
+ * this as its streamingError; MessageBubble renders it as "Stopped by
+ * you", never as a connection loss.
+ */
+export const STOP_CALLED_REASON = 'stop-called';
+
+/**
  * session_full is NOT a delivery failure the surface reports here: the
  * conversation no longer fits the context window, a Retry cannot work,
  * and MessageList already has its own session-full banner with the way
@@ -129,7 +137,7 @@ export function failureFromClosed(p: WireClosedDelivery): DeliveryFailure | null
   if (p.delivered !== false || !p.turn_span_id) return null;
   if (p.reason === 'completed') return null;
   if (p.failure_code === SESSION_FULL_CODE) return null;
-  if (p.reason === 'stop-called') {
+  if (p.reason === STOP_CALLED_REASON) {
     return {
       turnSpanId: p.turn_span_id,
       failureClass: '',
