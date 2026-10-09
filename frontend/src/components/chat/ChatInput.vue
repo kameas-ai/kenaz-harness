@@ -875,14 +875,22 @@ onMounted(() => {
   // Best-effort fetch — when the harness boots without a wired
   // slashcmd registry (test harness path), the surface returns an
   // empty list. The composer renders nothing and stays usable.
-  void client.slash
-    .list()
-    .then((list) => {
-      slashCommands.value = list;
-    })
-    .catch(() => {
-      slashCommands.value = [];
-    });
+  //
+  // User-defined commands are listed too (dogfood 2026-10-08 round 2):
+  // the dropdown used to hold only the built-in registry, so "/" opened
+  // it but "/bug" filtered to nothing and it read as "didn't open" — the
+  // user's own /bughunt was never a candidate. Built-ins win a name
+  // clash, matching the order the composer's routing shows them in.
+  void Promise.all([
+    client.slash.list().catch(() => [] as readonly SlashCommandInfo[]),
+    client.slashcmd.list('').catch(() => []),
+  ]).then(([builtins, user]) => {
+    const names = new Set(builtins.map((c) => c.name));
+    const userInfos: SlashCommandInfo[] = (user ?? [])
+      .filter((u) => !u.hiddenFromPanel && !names.has(u.name))
+      .map((u) => ({ name: u.name, description: u.description, comingSoon: false, isUser: true }));
+    slashCommands.value = [...(builtins ?? []), ...userInfos];
+  });
 });
 
 /**
