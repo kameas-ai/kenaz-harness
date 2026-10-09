@@ -64,9 +64,8 @@ const tierLabel = computed(() => identity.value?.tier ?? '');
 const rolesLabel = computed(() => formatRoles(identity.value?.roles));
 /**
  * Primary name line: display name, else nothing (email has its own row).
- * Dogfood 2026-10-08 P3: fleet falls back to the email when the user set no
- * display name, so "Name" showed the email a second time. A display name
- * that is just the email is not a name — hide the row.
+ * Fleet falls back to the email when the user set no display name; a
+ * display name that is just the email is not a name, so the row hides.
  */
 const nameLabel = computed(() => {
   const name = identity.value?.displayName?.trim() ?? '';

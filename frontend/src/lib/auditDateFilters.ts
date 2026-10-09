@@ -35,15 +35,13 @@ export function defaultAuditUntil(): string {
   return '';
 }
 
-// ── Wire bounds (dogfood 2026-10-08 P1) ─────────────────────────────────
+// ── Wire bounds ──────────────────────────────────────────────────────────
 // The Since/Until inputs hold date-only `YYYY-MM-DD` strings, but the Go
 // side decodes `eventlog.FilterQuery.Since/Until` as `time.Time`, which
-// only accepts RFC3339. Sending the bare date made every Audit_Filter
-// call fail argument decoding ("cannot parse \"\" as \"T\"") — and a
-// half-typed date failed once per keystroke. These helpers are the ONE
-// place a date input becomes a wire bound; anything that is not a
-// complete, real calendar date yields `undefined` (no bound) rather than
-// a string the backend will reject.
+// only accepts RFC3339 — a bare or half-typed date fails argument
+// decoding. These helpers are the ONE place a date input becomes a wire
+// bound; anything that is not a complete, real calendar date yields
+// `undefined` (no bound) rather than a string the backend will reject.
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 

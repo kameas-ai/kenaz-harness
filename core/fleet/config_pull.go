@@ -395,10 +395,8 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	if resp.StatusCode == http.StatusNotModified {
 		// 304 → our current bundle is still current. The server just
 		// confirmed it, so a bundle restored from disk at Start ("cache")
-		// is now the live fleet config (dogfood 2026-10-08: without this a
-		// healthy device showed "stale-cache" after every relaunch, until
-		// the next NEW bundle). With nothing applied there is no bundle to
-		// confirm, so default-deny stays default-deny.
+		// is now the live fleet config. With nothing applied there is no
+		// bundle to confirm, so default-deny stays default-deny.
 		p.clearError()
 		p.mu.Lock()
 		if p.lastAppliedID > 0 {

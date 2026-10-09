@@ -120,7 +120,7 @@ type BundleSource interface {
 }
 
 // modelInfoMissSampleMax caps how many unresolved model ids the single
-// per-provider llm.model_info.miss line names (dogfood 2026-10-08 P2).
+// per-provider llm.model_info.miss line names.
 const modelInfoMissSampleMax = 5
 
 // CapCatalog is the capability-lookup seam used to populate ModelInfos
@@ -906,13 +906,10 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 				}
 			}
 			infos := make([]ModelInfo, 0, len(v.Models))
-			// Dogfood 2026-10-08 P2: this loop used to log one DEBUG line
-			// per model per resolution (408 llm.model_info.dynamic_hit rows
-			// per refresh — 20% of the in-app Logs ring each time, wiping
-			// it for its stated purpose). It now logs ONE summary line per
-			// provider (+ at most one miss line carrying a capped sample),
-			// so a refresh emits a handful of lines however many models a
-			// provider lists.
+			// Log one summary line per provider (plus at most one miss line
+			// with a capped sample), never one line per model: a provider
+			// can list hundreds of models, and per-model lines flood the
+			// in-app Logs ring on every refresh.
 			missCount := 0
 			dynamicHits := 0
 			catalogHits := 0
