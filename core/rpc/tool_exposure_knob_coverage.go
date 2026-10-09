@@ -1,11 +1,13 @@
 // tool_exposure_knob_coverage.go registers the three tool-exposure
 // fields of settings.Settings with core/wiring/knobcoverage
-// (tool-context-budget-01TCBUD01 WP02).
+// (tool-context-budget-01TCBUD01).
 //
-// toolexposure.Resolve reads all three (settings.API satisfies
-// toolexposure.SettingsSource), but nothing on the request path calls
-// Resolve yet, so no field reaches an observable behaviour: each is
-// RegisterDeferred, naming the WP that wires its consumer.
+// ToolExposure reaches the request: toolexposure.Resolve folds it into
+// each tool's tier (step 4, user layer) and the chat request builder
+// sends only full and activated tools. The schema budget and the
+// activation TTL are resolved onto ResolvedCatalog but nothing evicts or
+// expires against them yet: each is RegisterDeferred, naming the WP that
+// wires its consumer.
 package rpc
 
 import (
@@ -14,13 +16,10 @@ import (
 )
 
 func init() {
-	knobcoverage.RegisterDeferred[settings.Settings](
+	knobcoverage.Register[settings.Settings](
 		"ToolExposure",
-		"NOT yet consumed: folded into each tool's tier by "+
-			"toolexposure.Resolve (step 4, user layer), whose request-builder "+
-			"caller lands with tool-context-budget-01TCBUD01 WP03 (builder "+
-			"partitions the resolved catalog by tier). Dated 2026-10-08. "+
-			"Owner: alec.",
+		"chat.exposureTurn.selectTools (via toolexposure.Resolve's user layer): "+
+			"a summary or off tier keeps a tool's schema out of the request",
 	)
 	knobcoverage.RegisterDeferred[settings.Settings](
 		"ToolSchemaBudgetTokens",

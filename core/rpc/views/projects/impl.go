@@ -16,6 +16,8 @@ import (
 type API struct {
 	projects *coreprojects.Manager
 	sessions *session.Manager
+
+	exposureGuard exposureGuard
 }
 
 // New constructs the API. Both managers are required; callers should

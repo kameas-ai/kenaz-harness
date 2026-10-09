@@ -1,5 +1,5 @@
 /**
- * harnessClient.toolExposure.test.ts — tool-context-budget-01TCBUD01 WP02.
+ * harnessClient.toolExposure.test.ts — tool-context-budget-01TCBUD01 WP02/WP03.
  *
  * The typed client methods for the tool-exposure bindings route to the
  * right Settings_/Projects_/Sessions_ binding with their arguments
@@ -62,5 +62,28 @@ describe('createHarnessClient() — tool exposure', () => {
     expect(s.activations[0].name).toBe('fetch__fetch');
     await client.sessions.setToolExposure('s1', layer);
     expect(bindings.Sessions_SetToolExposure).toHaveBeenCalledWith('s1', layer);
+  });
+
+  it('routes sessions.loadTools to Sessions_LoadTools and returns its result', async () => {
+    const result = {
+      loaded: ['outlook__list-messages', 'outlook__send-mail'],
+      not_loaded: [{ name: 'github', reason: 'server github is not running (state: failed)' }],
+      summary: 'loaded 2 tool(s); their definitions are sent on your next call; 1 could not be loaded (see not_loaded)',
+    };
+    const bindings = {
+      Sessions_LoadTools: vi.fn(async () => result),
+    };
+    rawGo().go.rpc.Bindings = bindings;
+    const client = createHarnessClient();
+
+    const got = await client.sessions.loadTools('s1', ['outlook', 'github'], ['fetch__*'], true);
+    expect(bindings.Sessions_LoadTools).toHaveBeenCalledWith(
+      's1',
+      ['outlook', 'github'],
+      ['fetch__*'],
+      true,
+    );
+    expect(got).toEqual(result);
+    expect(got.not_loaded[0].reason).toContain('not running');
   });
 });

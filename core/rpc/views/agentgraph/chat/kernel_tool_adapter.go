@@ -81,6 +81,12 @@ type kernelToolAdapter struct {
 	// nil (or inert) leaves Call byte-identical to the pre-mission path.
 	moves *turnJournal
 
+	// exposure, when set, stops calls to catalog tools the session was
+	// not sent (summary tier and not activated, or off) before any
+	// permission check: see exposureTurn.gateCall. nil dispatches every
+	// call as before.
+	exposure *exposureTurn
+
 	// autonomy is the optional knobs provider for autonomy-dial WP04.
 	// When non-nil the adapter reads AutoApproveFamilies before each
 	// tool call to determine whether the permission-resolver prompt path
@@ -181,6 +187,12 @@ func newKernelToolAdapter(pool ToolPool, perms ToolPermissionResolver, sessionID
 // callers can chain at construction time.
 func (a *kernelToolAdapter) withMoves(j *turnJournal) *kernelToolAdapter {
 	a.moves = j
+	return a
+}
+
+// withToolExposure attaches the turn's tool-exposure view.
+func (a *kernelToolAdapter) withToolExposure(t *exposureTurn) *kernelToolAdapter {
+	a.exposure = t
 	return a
 }
 
@@ -385,6 +397,11 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 		}
 		if !ok {
 			return coreag.ToolResult{}, fmt.Errorf("chat: unknown tool %q", call.Name)
+		}
+	}
+	if a.exposure != nil {
+		if res, stopped := a.exposure.gateCall(ctx, call.Name); stopped {
+			return res, nil
 		}
 	}
 	if a.perms != nil {

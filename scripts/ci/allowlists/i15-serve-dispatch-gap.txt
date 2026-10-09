@@ -1298,9 +1298,7 @@
 # activated set (Sessions_*). WP02 lands the data model, the resolver
 # and the typed client methods (harnessClient.ts settings.*, projects.*
 # and sessions.{get,set}ToolExposure); no .vue surface mounts them yet.
-# Sessions_LoadTools (composer load / unload / pin) is not a binding yet:
-# it needs kenaz__load_tools' activation logic from WP03 and gets its own
-# entry or dispatch case then (dated 2026-10-09, owner: alec). Spec §2.6 rules the
+# Spec §2.6 rules the
 # composer Tools menu a served-mode boundary panel and Settings ->
 # Capabilities is desktop-only like the other Settings_* entries, so the
 # expected dispositions are boundary-panelled (Sessions_*) and
@@ -1316,3 +1314,17 @@
 "Sessions_SetToolExposure"
 "Settings_GetToolExposure"
 "Settings_SetToolExposure"
+
+# CLASS: untriaged -- tool-context-budget-01TCBUD01 WP03, 2026-10-09.
+# 1 entries.
+#
+# Sessions_LoadTools: the composer's load action (spec §2.2, FR-K2) over
+# the same activation core the model's kenaz__load_tools call uses. WP03
+# lands the binding and the typed client method
+# (harnessClient.ts sessions.loadTools); no .vue surface calls it yet.
+# Spec §2.6 rules the composer Tools menu a served-mode boundary panel,
+# so the expected disposition is boundary-panelled once the menu exists.
+#
+# Blocker: tool-context-budget-01TCBUD01 WP06 (composer Tools menu),
+# which mounts the caller. Dated 2026-10-09. Owner: alec.
+"Sessions_LoadTools"

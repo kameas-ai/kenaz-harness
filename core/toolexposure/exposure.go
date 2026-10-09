@@ -136,11 +136,10 @@ func (e Exposure) IsZero() bool {
 // keys in namespaced form ("outlook__send-mail" under "outlook"), so a
 // typo is refused at the write instead of silently ignored at resolve.
 //
-// It does not yet refuse turning LoadToolsName off while summary tools
-// exist (FR-E3): that needs the resolved catalog and lands with the
-// request builder in tool-context-budget-01TCBUD01 WP03; until then the
-// resolver's invariant forces it full regardless. Dated 2026-10-09,
-// owner: alec.
+// It checks the layer alone. Refusing a layer that would turn
+// LoadToolsName off while summary tools exist needs the resolved
+// catalog, so that check is a WriteGuard the writers consult after
+// Validate.
 func (e Exposure) Validate() error {
 	for server, s := range e.Servers {
 		if strings.TrimSpace(server) == "" {
@@ -183,6 +182,13 @@ func (e Exposure) Clone() Exposure {
 		out.Servers[name] = cs
 	}
 	return out
+}
+
+// TierFor returns this layer's own opinion for one tool, by its bare
+// name under server: the tool entry, else the server-wide tier, else ""
+// (no opinion).
+func (e Exposure) TierFor(server, tool string) Tier {
+	return e.lookup(server, tool)
 }
 
 // lookup returns this layer's tier for (server, tool): the tool entry

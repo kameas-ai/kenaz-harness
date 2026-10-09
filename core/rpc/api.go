@@ -93,6 +93,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/policy/blockedrequests"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
+	"github.com/kameas-ai/kenaz-harness/core/projects"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
@@ -160,6 +161,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
 	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
 	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
@@ -2626,6 +2628,17 @@ func New(c *core.Core, opts ...Option) *API {
 	// compaction pair above, for the chat runner's auto-title caller.
 	a.autotitleLLM = stack.autotitleLLM
 	a.chatRunner = stack.chatRunner
+	// tool-context-budget-01TCBUD01: bind the load core's late
+	// dependencies (the audit log and user-imported recipes, both built
+	// outside newLLMStack) and install it behind Sessions_LoadTools and
+	// the three exposure write paths' kenaz__load_tools guard (FR-E3).
+	if stack.loadTools != nil {
+		stack.toolsAudit.bind(a.auditImpl)
+		stack.toolServers.setUserRecipes(mcpUserRecipeSource(a.mcpUserStore))
+		a.sessionsAPI = sessions.WithToolLoading(a.sessionsAPI, stack.loadTools, stack.loadTools)
+		a.projectsAPI = projectsview.WithToolExposureGuard(a.projectsAPI, stack.loadTools)
+		settingsImpl.SetToolExposureGuard(stack.loadTools)
+	}
 	// CK-09 (chat-turn-integrity-01PMZ606 WP13): capture the sweep
 	// scheduler newLLMStack already started so Shutdown can Stop() it.
 	a.compactionScheduler = stack.compactionScheduler
@@ -5953,6 +5966,13 @@ func (f *keychainForgetter) Forget(ctx context.Context, locator string) error {
 // shared secrets backend is what InstallRecipe writes credentials
 // into so the resolver finds them on the next ResolveEnv).
 type llmStack struct {
+	// loadTools is the shared on-demand tool-exposure core; nil on the
+	// nil-core chassis. toolServers is its server directory and
+	// toolsAudit its late-bound audit sink (see New()).
+	loadTools   *loadtools.Service
+	toolServers *toolServerDirectory
+	toolsAudit  *toolsAuditEmitter
+
 	api     llm.LLMConnectorAPI
 	pool    *stdio.Pool
 	secrets *secrets.MemoryBackend
@@ -6558,6 +6578,24 @@ func newLLMStack(
 	// when those Settings toggles are ON.
 	toolDiscoverer := llm.NewMCPToolDiscovererWithBuiltins(dispatchPool, perms, builtinFilter)
 
+	// On-demand tool exposure (tool-context-budget-01TCBUD01): one load
+	// core shared by the chat runner's request builder (which sends hot,
+	// pinned and activated tools in full and summarises the rest in
+	// kenaz__load_tools' description), the kenaz__load_tools built-in,
+	// Sessions_LoadTools and the exposure write guard. nil on the
+	// nil-core chassis, which then sends the whole catalog.
+	var projectMgr *projects.Manager
+	if c != nil {
+		projectMgr = c.ProjectManager()
+	}
+	toolsAudit := &toolsAuditEmitter{}
+	loadToolsSvc, toolServers := buildLoadToolsService(settingsImpl, sessionMgr, projectMgr, toolDiscoverer, dispatchPool, toolsAudit)
+	var chatExposure chat.ToolExposure
+	if loadToolsSvc != nil {
+		chatExposure = loadToolsSvc
+		registerLoadToolsTool(builtinRegistry, loadToolsSvc)
+	}
+
 	// chat-migration cutover (this mission, WP-A): construct the kernel-
 	// driven ChatRunner and hand it to the LLM impl via Config.ChatRunner.
 	// When the runner is wired the LLM view's StartStream forwards every
@@ -7046,7 +7084,7 @@ func newLLMStack(
 			},
 		}
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatRiskRater, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner, chatAdvisor, adviceDeps)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatExposure, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatRiskRater, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner, chatAdvisor, adviceDeps)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -7102,6 +7140,9 @@ func newLLMStack(
 		historyAdapter:      historyAdapter,
 		wrappedPool:         wrappedPool,
 		toolDiscoverer:      toolDiscoverer,
+		loadTools:           loadToolsSvc,
+		toolServers:         toolServers,
+		toolsAudit:          toolsAudit,
 		dispatchPool:        dispatchPool,
 		perms:               perms,
 		sessionArm:          sessionArm,
@@ -7835,6 +7876,10 @@ func buildChatRunner(
 	settingsImpl *settings.API,
 	graphMgr *graphview.Manager,
 	tools corellm.ToolDiscoverer,
+	// toolExposure picks each model call's tools from the discovered
+	// catalog (tool-context-budget-01TCBUD01). nil sends the whole
+	// catalog — the nil-core chassis.
+	toolExposure chat.ToolExposure,
 	// attachments resolves session-scoped system attachments onto every
 	// LLMProviderAdapter (first-run-onboarding-01PMOB01 WP02) — the read
 	// half of SetSystemPrompt's attachments-aware write. nil (attMgr
@@ -8299,6 +8344,7 @@ func buildChatRunner(
 		CustomInstructions: customInstructions,
 		EnvDefaults:        envDefaults,
 		ToolDiscoverer:     chatToolDiscovererAdapter{inner: tools},
+		ToolExposure:       toolExposure,
 		Attachments:        attachments,
 		// model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10:
 		// *session.Manager satisfies chat.KnobsDefaultResolver directly

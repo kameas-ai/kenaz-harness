@@ -1262,6 +1262,10 @@ export function Sessions_LoadScrollPosition(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_LoadScrollPosition'](arg1);
 }
 
+export function Sessions_LoadTools(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Sessions_LoadTools'](arg1, arg2, arg3, arg4);
+}
+
 export function Sessions_MoveToProject(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_MoveToProject'](arg1, arg2);
 }

@@ -5396,3 +5396,20 @@ export interface SessionToolExposure {
   exposure: ToolExposure;
   activations: ToolActivation[];
 }
+
+/** One requested name Sessions_LoadTools could not load, and why. */
+export interface LoadToolsNotLoaded {
+  name: string;
+  reason: string;
+}
+
+/**
+ * Sessions_LoadTools result (Go loadtools.Result): the tools whose
+ * schemas the session is now sent, every name that was not loaded with
+ * its reason, and a one-line summary.
+ */
+export interface LoadToolsResult {
+  loaded: string[];
+  not_loaded: LoadToolsNotLoaded[];
+  summary: string;
+}

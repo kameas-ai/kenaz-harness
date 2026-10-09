@@ -19,6 +19,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 	"github.com/kameas-ai/kenaz-harness/core/sessions/export"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 	"github.com/kameas-ai/kenaz-harness/core/usage"
 )
 
@@ -109,6 +110,12 @@ type managerAPI struct {
 	// session-level + tier-default chain still resolves correctly.
 	// (autonomy-dial-01KR3M2A WP03)
 	autonomyCtx AutonomyContextProvider
+	// toolLoader and exposureGuard back LoadTools and SetToolExposure's
+	// write guard (tool-context-budget-01TCBUD01). nil toolLoader makes
+	// LoadTools return ErrToolLoadingNotConfigured; nil exposureGuard
+	// checks nothing beyond validation.
+	toolLoader    ToolLoader
+	exposureGuard toolexposure.WriteGuard
 	// deleteHook is the optional per-session teardown hook wired by
 	// WithDeleteHookOpt; runs after a successful delete.
 	deleteHook func(sessionID string)

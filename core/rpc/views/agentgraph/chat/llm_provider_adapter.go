@@ -77,6 +77,10 @@ type LLMProviderAdapter struct {
 	// discoverer; the kernel's LLMRequest.Tools slice is just a string
 	// allowlist, but the registry needs the full ToolSpec shape.
 	tools []corellm.ToolSpec
+	// exposure, when set, picks which of tools each call carries (hot,
+	// pinned and activated tools in full; the rest summarised in
+	// kenaz__load_tools' description). nil sends every tool.
+	exposure *exposureTurn
 	// lastRespMu protects lastResp.
 	lastRespMu sync.Mutex
 	// lastResp stores the most recent llm.Response produced by Generate —
@@ -262,6 +266,13 @@ func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string
 		tools:         tools,
 		capturer:      capturer,
 	}
+}
+
+// withToolExposure attaches the turn's tool-exposure view. nil sends the
+// whole catalog on every call.
+func (a *LLMProviderAdapter) withToolExposure(t *exposureTurn) *LLMProviderAdapter {
+	a.exposure = t
+	return a
 }
 
 // WithMoveJournal attaches the turn's move journal
@@ -706,6 +717,14 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		model = req.Model
 	}
 	attachmentsBlock := a.buildAttachmentsBlock(ctx)
+	// The tools this call carries are chosen per call, not per turn: a
+	// kenaz__load_tools call earlier in the turn must reach this request.
+	sendTools := a.tools
+	var sel toolSelection
+	if a.exposure != nil {
+		sel = a.exposure.selectTools(ctx)
+		sendTools = sel.tools
+	}
 	gen := corellm.GenerationRequest{
 		ProfileID: a.profileID,
 		Model:     model,
@@ -726,7 +745,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		// which keep the last word.
 		System:   composeSystemPrompt(nil, req.SystemPrompt, attachmentsBlock, a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), renderPendingContext(pending), a.buildUserInstructionsBlock()),
 		Messages: llmMsgs,
-		Tools:    a.tools,
+		Tools:    sendTools,
 	}
 
 	// Merge the session-level RequestKnobs default (model-settings-reach-
@@ -775,12 +794,13 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	// (with the provider's own counts on success) and carried on the
 	// response for the usage hook.
 	comp := measureComposition(gen, attachmentsBlock)
+	comp.ToolsSummary = sel.summary
 	var (
 		compUsage corellm.Usage
 		compErr   error
 	)
 	defer func() {
-		logComposition(a.sessionID, a.ProviderKind(), comp, len(gen.System), compUsage, compErr)
+		logComposition(a.sessionID, a.ProviderKind(), comp, len(gen.System), sel.autoActivated, compUsage, compErr)
 	}()
 
 	// Carry the per-node sampling knobs already threaded through the
@@ -1130,11 +1150,16 @@ func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) 
 // convention (llm.PromptTokensTotal), which is the figure the estimates
 // are comparable with.
 //
+// tools_summary is the number of catalog tools listed only in
+// kenaz__load_tools' digest on this call; auto_activated is how many
+// summary tools this turn has activated because the model called them by
+// name before loading them.
+//
 // budget and evicted are 0: no schema budget or eviction is applied to
 // the request yet (WP04). FR-H3 — the estimated parts reconciling with
 // prompt_tokens_total within 10 % — is not asserted anywhere yet
 // (2026-10-09; owner alec; deferred to WP08's recorded-frame test).
-func logComposition(sessionID, providerKind string, comp corellm.PromptComposition, systemChars int, usage corellm.Usage, err error) {
+func logComposition(sessionID, providerKind string, comp corellm.PromptComposition, systemChars, autoActivated int, usage corellm.Usage, err error) {
 	outcome := "ok"
 	if err != nil {
 		outcome = "error"
@@ -1154,6 +1179,7 @@ func logComposition(sessionID, providerKind string, comp corellm.PromptCompositi
 		"prompt_tokens_total", corellm.PromptTokensTotal(usage, providerKind),
 		"cached_tokens", usage.CachedInputRead,
 		"cache_write_tokens", usage.CachedInputWrite,
+		"auto_activated", autoActivated,
 		"budget", 0,
 		"evicted", 0,
 	)

@@ -118,6 +118,7 @@ function mountChip(resolved: ResolvedAutonomy) {
       setKnobsDefault: async () => undefined,
       getToolExposure: async () => ({ exposure: {}, activations: [] }),
       setToolExposure: async () => undefined,
+      loadTools: async () => ({ loaded: [], not_loaded: [], summary: '' }),
       export: async () => ({ path: '', byteCount: 0 }),
     },
   });

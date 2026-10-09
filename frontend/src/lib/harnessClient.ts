@@ -218,6 +218,7 @@ import type {
   ToolExposure,
   ToolExposureSettings,
   SessionToolExposure,
+  LoadToolsResult,
 } from './types';
 
 /**
@@ -390,6 +391,12 @@ interface WailsBindingsLike {
     sessionID: string,
     exposure: ToolExposure,
   ): Promise<void>;
+  Sessions_LoadTools(
+    sessionID: string,
+    servers: string[],
+    tools: string[],
+    sticky: boolean,
+  ): Promise<LoadToolsResult>;
 
   LLM_ListProviders(): Promise<Provider[]>;
   LLM_StartStream(
@@ -1716,6 +1723,17 @@ export interface SessionsClient {
   getToolExposure(id: string): Promise<SessionToolExposure>;
   /** Persist the session's tool-exposure override; an empty layer clears it. */
   setToolExposure(id: string, exposure: ToolExposure): Promise<void>;
+  /**
+   * Load tools into the session (server names, exact "server__tool"
+   * names or "server__prefix*" globs) — the activation the model's
+   * kenaz__load_tools performs. Reports every name not loaded and why.
+   */
+  loadTools(
+    id: string,
+    servers: string[],
+    tools: string[],
+    sticky: boolean,
+  ): Promise<LoadToolsResult>;
 
   // ── session-export-01NDFSEX05 WP03 ──────────────────────────────────
   /**
@@ -4402,6 +4420,8 @@ export function createHarnessClient(): HarnessClient {
       getToolExposure: (id) => b().Sessions_GetToolExposure(id),
       setToolExposure: (id, exposure) =>
         b().Sessions_SetToolExposure(id, exposure),
+      loadTools: (id, servers, tools, sticky) =>
+        b().Sessions_LoadTools(id, servers, tools, sticky),
       export: (sessionId, format) => b().Sessions_Export(sessionId, format),
     },
     artifacts: {
@@ -5808,6 +5828,11 @@ export function createFakeHarnessClient(
       setKnobsDefault: noop,
       getToolExposure: async () => ({ exposure: {}, activations: [] }),
       setToolExposure: noop,
+      loadTools: async (_id, servers, tools) => ({
+        loaded: [],
+        not_loaded: [...servers, ...tools].map((name) => ({ name, reason: 'unknown' })),
+        summary: 'loaded no tools',
+      }),
       export: async (_sessionId, _format) => ({ path: '/fake/export.md', byteCount: 0 }),
     },
     projects: {

@@ -65,6 +65,7 @@ var knownBuiltinTools = map[string]bool{
 	"kenaz__list_dir":                  true,
 	"kenaz__list_open_worklist":        true,
 	"kenaz__list_secrets":              true,
+	"kenaz__load_tools":                true,
 	"kenaz__monitor":                   true,
 	"kenaz__read_context_file":         true,
 	"kenaz__read_file":                 true,

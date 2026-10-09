@@ -548,6 +548,20 @@ const (
 	// so a silent write failure cannot masquerade as a grant.
 	KindToolConfirmGrantWritten Kind = "tool.confirm_grant_written"
 
+	// KindToolsActivated fires when tools are added to a session's
+	// activated set, so their full schemas are sent on the session's next
+	// model calls (kenaz__load_tools, the composer's load action, or the
+	// auto-activation of a summary tool the model called by exact name).
+	// Payload: ToolsActivatedPayload.
+	//
+	// Activation changes what the model is SHOWN, never what it is
+	// permitted to call: an activated tool still passes every permission
+	// gate at call time.
+	//
+	// Privacy invariant: ids, server names, a count, the sticky flag and
+	// who asked. No tool arguments, no tool names beyond their servers.
+	KindToolsActivated Kind = "tools.activated"
+
 	// ── Bundle install audit kinds
 	// (bundle-download-and-verify-01PMZ909 UNIT-7) ──────────────────
 
@@ -884,6 +898,34 @@ var AllToolConfirmPaths = []ToolConfirmPath{
 	ToolConfirmPathLayer3Timeout,
 	ToolConfirmPathLayer3OfflineFloor,
 }
+
+// ToolsActivatedPayload is the payload for KindToolsActivated.
+type ToolsActivatedPayload struct {
+	SessionID string `json:"session_id"`
+	// Servers are the distinct servers of the newly activated tools,
+	// sorted.
+	Servers []string `json:"servers"`
+	// ToolCount is how many tools were newly activated or newly made
+	// sticky.
+	ToolCount int `json:"tool_count"`
+	// Sticky reports whether the activations survive TTL expiry.
+	Sticky bool `json:"sticky"`
+	// By is one of ToolsActivatedByModel, ToolsActivatedByUser,
+	// ToolsActivatedByAuto.
+	By string `json:"by"`
+}
+
+// Values of ToolsActivatedPayload.By.
+const (
+	// ToolsActivatedByModel: the model called kenaz__load_tools.
+	ToolsActivatedByModel = "model"
+	// ToolsActivatedByUser: the user loaded tools from the composer.
+	ToolsActivatedByUser = "user"
+	// ToolsActivatedByAuto: the model called a summary tool by its exact
+	// name before loading it; the harness activated it and told the model
+	// to call again.
+	ToolsActivatedByAuto = "auto"
+)
 
 // ToolConfirmDecisionPayload is the KindToolConfirmDecision payload.
 //

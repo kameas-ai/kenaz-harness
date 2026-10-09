@@ -342,36 +342,38 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
-### 2026-10-09 (tool-context-budget-01TCBUD01 WP02, feat/tcbud-wp02) · tool-exposure data model lands before its consumers
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP02–WP03) · tool-exposure knobs and surfaces not yet consumed
 
-**Finding.** WP02 ships the exposure tiers, the project/session
-overrides (migration sessions/0347) and `toolexposure.Resolve`, but
-nothing on the request path calls `Resolve` yet, so no tier, budget or
-TTL changes what the model is sent. Specifically:
+**Finding.** WP02 shipped the exposure tiers, overrides and resolver;
+WP03 put them on the request path (the chat request builder sends only
+full and activated tools, `kenaz__load_tools` + `Sessions_LoadTools`
+write activations, the FR-E3 write guard is installed on all three
+exposure writers, `settings.Settings.ToolExposure` is `Register`ed with
+its consumer). Still not consumed:
 
-- `settings.Settings.ToolExposure` / `ToolSchemaBudgetTokens` /
-  `ToolActivationTTLTurns` — `knobcoverage.RegisterDeferred`
-  (`core/rpc/tool_exposure_knob_coverage.go`).
+- `settings.Settings.ToolSchemaBudgetTokens` / `ToolActivationTTLTurns` —
+  `knobcoverage.RegisterDeferred` (`core/rpc/tool_exposure_knob_coverage.go`):
+  resolved onto `ResolvedCatalog` but nothing evicts or expires against
+  them. Calling an activated tool does not yet refresh its
+  `LastUsedTurn` (only loading does); expiry needs that, so it lands
+  with the TTL.
 - `toolexposure.SettingsSource` / `PinSource` — `wiring:deferred` at
   their declarations.
-- `session.Manager.SetToolActivations` — no production writer.
-- `Sessions_LoadTools` (composer load / unload / pin) — not a binding
-  yet; the spec's WP02 task list names it, deferred because it needs
-  `kenaz__load_tools`' activation logic.
-- FR-E3 write-time refusal (turning `kenaz__load_tools` off while
-  summary tools exist) — not enforced at write; the resolver's
-  invariant forces it full meanwhile (note on `Exposure.Validate`).
-- The six `*_ToolExposure` bindings have typed client methods but no
-  `.vue` caller (i15 untriaged entries, blocker WP06).
+- The seven `*_ToolExposure` / `Sessions_LoadTools` bindings have typed
+  client methods but no `.vue` caller (i15 untriaged entries, blocker
+  WP06).
+- The exposure tiers apply where the chat runner builds the request
+  (interactive chat, scheduled chats, subagent runs). Workflow steps
+  that call models with tools outside the chat runner still send their
+  own tool lists unfiltered (spec §2.6).
 
-**Disposition: dated-justified.** Each is the data half of a feature the
-mission's next WPs consume; deleting it would delete the mission.
+**Disposition: dated-justified.** Each is the next WP's consumer of data
+this mission already resolves; deleting it would delete the mission.
 
-**Blocker / owner.** WP03 (request builder calls `Resolve`; adds
-`kenaz__load_tools`, `Sessions_LoadTools`, the activation writer and the
-FR-E3 refusal), WP04 (budget eviction, TTL expiry), WP06 (UI), WP07
-(org pins). **Owner:** alec. WP08's ledger pass deletes this item once
-each line has a consumer.
+**Blocker / owner.** WP04 (budget eviction, TTL expiry, call-side
+`LastUsedTurn`), WP06 (UI), WP07 (org pins), WP08 (workflow-step
+coverage or a dated ruling). **Owner:** alec. WP08's ledger pass deletes
+this item once each line has a consumer.
 
 ### 2026-10-08 (dogfood 2026-10-08 fix PR, fix/dogfood-2026-10-08) · audit actor filter has no emitter to match — input disabled, not deleted
 

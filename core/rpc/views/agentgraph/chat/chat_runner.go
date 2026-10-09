@@ -310,6 +310,13 @@ type Config struct {
 	// tool list. nil disables discovery — the chat path still works,
 	// but the model is never told about any tools.
 	ToolDiscoverer ToolCatalogDiscoverer
+	// ToolExposure decides, per model call, which discovered tools are
+	// sent in full and which are summarised in kenaz__load_tools'
+	// description (tool-context-budget-01TCBUD01 §2.1–2.3), and stops
+	// calls to tools the session was not sent. nil sends the whole
+	// discovered catalog on every call. Production wiring is
+	// *loadtools.Service.
+	ToolExposure ToolExposure
 	// Attachments resolves the session's system-kind attachments onto
 	// each LLMProviderAdapter (first-run-onboarding-01PMOB01 WP02). nil
 	// disables the layer — pre-existing behaviour for every session
@@ -1237,7 +1244,15 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if multimodalOutDisabledByEnv() {
 		imageCapturer = nil
 	}
+	// Tool exposure: one view per turn, shared by the LLM adapter (which
+	// picks each call's tools) and the tool adapter (which stops calls to
+	// tools the session was not sent). No catalog, no view.
+	var exposure *exposureTurn
+	if r.cfg.ToolExposure != nil && len(toolCatalog) > 0 {
+		exposure = newExposureTurn(ctx, r.cfg.ToolExposure, sessionID, toolCatalog)
+	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
+		withToolExposure(exposure).
 		WithSessionID(sessionID).
 		WithAttachments(r.cfg.Attachments).
 		withPendingContext(r.pendingContext).
@@ -1256,7 +1271,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// (see buildAskBarBlock), so FR-005 holds with no AutonomyKnobs
 		// provider wired.
 		WithAskOnAmbiguity(func() autonomy.AskMode { return resolvedKnobs.AskOnAmbiguity })
-	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
+	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID).withToolExposure(exposure)
 	if r.cfg.AutonomyKnobs != nil {
 		// fix F8: pin the already-resolved value rather than handing the
 		// adapter r.cfg.AutonomyKnobs directly — Call() invokes this once

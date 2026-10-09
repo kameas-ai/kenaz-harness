@@ -9,6 +9,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 )
 
 // AutonomyKnobValues is the wire shape for a ResolvedKnobs payload.
@@ -496,6 +497,11 @@ type SessionsAPI interface {
 	// SetToolExposure validates and persists the session's override
 	// layer; a zero Exposure clears it.
 	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
+	// LoadTools activates tools for the session — server names, exact
+	// tool names or "server__prefix*" globs — exactly as the model's
+	// kenaz__load_tools call does, and reports what was and was not
+	// loaded and why. sticky activations survive TTL expiry.
+	LoadTools(ctx context.Context, id string, servers, tools []string, sticky bool) (loadtools.Result, error)
 
 	// Export serialises a session transcript to the local filesystem.
 	// format is "markdown" or "json". The file-picker dialog is opened

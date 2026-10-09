@@ -1,0 +1,462 @@
+package chat
+
+// On-demand tool exposure through the REAL LLMProviderAdapter and
+// kernelToolAdapter (tool-context-budget-01TCBUD01 FR-E1, FR-E4, the
+// unloaded-tool auto-activation). The load core is the real
+// *loadtools.Service over in-memory sources; only the session store and
+// the catalog are fakes.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
+)
+
+// ── fakes ──────────────────────────────────────────────────────────────
+
+// syncBuffer is a log sink safe to read while the run goroutine is still
+// writing to it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureChatLogSync is captureChatLog for runs that log from their own
+// goroutine.
+func captureChatLogSync(t *testing.T, f func()) string {
+	t.Helper()
+	buf := &syncBuffer{}
+	logging.Replace(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	t.Cleanup(func() { logging.Replace(logging.FileHandler()) })
+	f()
+	return buf.String()
+}
+
+type exposureSettings struct{ s toolexposure.Settings }
+
+func (e exposureSettings) GetToolExposure(context.Context) (toolexposure.Settings, error) {
+	return e.s, nil
+}
+
+type exposureProjects struct{}
+
+func (exposureProjects) ProjectToolExposure(context.Context, string) (toolexposure.Exposure, error) {
+	return toolexposure.Exposure{}, nil
+}
+
+// exposureSessions is a race-safe session store: the resolver reads the
+// activated set through it on every call and the load core writes it.
+// In-memory on purpose: these tests assert what each request carries,
+// not persistence; the sqlite round trip is
+// core/rpc TestToolExposureWiring_LoadToolsAndGuardThroughNew.
+type exposureSessions struct {
+	mu   sync.Mutex
+	acts []toolexposure.Activation
+}
+
+func (s *exposureSessions) SessionToolExposure(context.Context, string) (toolexposure.SessionState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return toolexposure.SessionState{Activations: append([]toolexposure.Activation(nil), s.acts...)}, nil
+}
+
+func (s *exposureSessions) SetToolActivations(_ context.Context, _ string, as []toolexposure.Activation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acts = append([]toolexposure.Activation(nil), as...)
+	return nil
+}
+
+type specCatalog struct{ specs []corellm.ToolSpec }
+
+func (c specCatalog) Catalog(context.Context, string) ([]loadtools.CatalogEntry, error) {
+	out := make([]loadtools.CatalogEntry, 0, len(c.specs))
+	for _, s := range c.specs {
+		out = append(out, loadtools.CatalogEntry{Name: s.Name, Server: s.Server})
+	}
+	return out, nil
+}
+
+type noServers struct{}
+
+func (noServers) Servers(context.Context) []loadtools.ServerInfo { return nil }
+
+type countingAudit struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingAudit) Emit(context.Context, audit.Event) error {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *countingAudit) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+func spec(server, tool string) corellm.ToolSpec {
+	return corellm.ToolSpec{
+		Name:        server + "__" + tool,
+		Server:      server,
+		Description: tool + " does a thing",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"to":{"type":"string"}}}`),
+	}
+}
+
+// exposureCatalog: two hot built-ins (load_tools, read_file), one
+// non-hot built-in, two Outlook tools and one tool the user turned off.
+func exposureCatalog() []corellm.ToolSpec {
+	return []corellm.ToolSpec{
+		spec("kenaz", "load_tools"),
+		spec("kenaz", "read_file"),
+		spec("kenaz", "monitor"),
+		spec("outlook", "send-mail"),
+		spec("outlook", "list-messages"),
+		spec("secret", "dump"),
+	}
+}
+
+func newExposureService(t *testing.T, specs []corellm.ToolSpec) (*loadtools.Service, *exposureSessions, *countingAudit) {
+	t.Helper()
+	sess := &exposureSessions{}
+	resolver, err := toolexposure.NewResolver(toolexposure.Deps{
+		Settings: exposureSettings{s: toolexposure.Settings{Exposure: toolexposure.Exposure{
+			Servers: map[string]toolexposure.ServerExposure{"secret": {Tier: toolexposure.TierOff}},
+		}}},
+		Sessions: sess,
+		Projects: exposureProjects{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	au := &countingAudit{}
+	svc, err := loadtools.NewService(loadtools.Deps{
+		Catalog:     specCatalog{specs: specs},
+		Resolver:    resolver,
+		Servers:     noServers{},
+		Activations: sess,
+		Audit:       au,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc, sess, au
+}
+
+// recordingScriptedRegistry hands out one scriptedTurn per Stream call
+// and records every request's tools and messages.
+type recordingScriptedRegistry struct {
+	stubRegistry
+	mu    sync.Mutex
+	turns []scriptedTurn
+	reqs  []corellm.GenerationRequest
+}
+
+func (r *recordingScriptedRegistry) push(t scriptedTurn) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.turns = append(r.turns, t)
+}
+
+func (r *recordingScriptedRegistry) Stream(_ context.Context, req corellm.GenerationRequest) (corellm.Stream, error) {
+	r.mu.Lock()
+	r.reqs = append(r.reqs, req)
+	if len(r.turns) == 0 {
+		r.mu.Unlock()
+		return nil, fmt.Errorf("recordingScriptedRegistry: out of turns")
+	}
+	t := r.turns[0]
+	r.turns = r.turns[1:]
+	r.mu.Unlock()
+	ch := make(chan corellm.StreamEvent, len(t.deltas))
+	for _, d := range t.deltas {
+		ch <- d
+	}
+	close(ch)
+	return &scriptedStream{events: ch, resp: t.resp}, nil
+}
+
+func (r *recordingScriptedRegistry) requests() []corellm.GenerationRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]corellm.GenerationRequest(nil), r.reqs...)
+}
+
+func toolNamesOf(req corellm.GenerationRequest) []string {
+	out := make([]string, 0, len(req.Tools))
+	for _, t := range req.Tools {
+		out = append(out, t.Name)
+	}
+	return out
+}
+
+func hasTool(req corellm.GenerationRequest, name string) bool {
+	for _, t := range req.Tools {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// assertOnlySendable is the FR-E1 invariant, checked independently of
+// the builder: every tool a request carried is full tier or activated at
+// the time of the request.
+func assertOnlySendable(t *testing.T, svc *loadtools.Service, specs []corellm.ToolSpec, req corellm.GenerationRequest) {
+	t.Helper()
+	entries, _ := specCatalog{specs: specs}.Catalog(context.Background(), "s1")
+	rc, err := svc.Resolver().Resolve(context.Background(), "s1", loadtools.CatalogWithProbes(entries, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range toolNamesOf(req) {
+		if !rc.Sendable(n) {
+			rt, _ := rc.Tool(n)
+			t.Errorf("FR-E1 violated: request carried %q (tier %s, not activated)", n, rt.Tier)
+		}
+	}
+}
+
+// TestRequestBuilder_NeverSendsSummaryToolUnlessActivated is the FR-E1
+// gate seed: across calls, a request carries hot and activated tools
+// only — never a summary tool that is not activated, never an off tool —
+// and kenaz__load_tools' description is the digest of what was left out.
+//
+// Mutation: make selectTools return every catalog spec -> the first
+// request carries outlook__send-mail and kenaz__monitor and this fails.
+func TestRequestBuilder_NeverSendsSummaryToolUnlessActivated(t *testing.T) {
+	specs := exposureCatalog()
+	svc, _, _ := newExposureService(t, specs)
+	ctx := context.Background()
+
+	reg := &recordingScriptedRegistry{}
+	reg.push(textTurn("one"))
+	reg.push(textTurn("two"))
+	adapter := NewLLMProviderAdapter(reg, "p", "m", specs, nil).
+		withToolExposure(newExposureTurn(ctx, svc, "s1", specs)).
+		WithSessionID("s1")
+	req := coreag.LLMRequest{SystemPrompt: "base", Messages: []coreag.Message{{Role: "user", Content: "hi"}}}
+
+	var logs string
+	logs = captureChatLog(t, func() {
+		if _, err := adapter.Generate(ctx, req); err != nil {
+			t.Fatalf("Generate 1: %v", err)
+		}
+	})
+	r1 := reg.requests()[0]
+	if got := strings.Join(toolNamesOf(r1), ","); got != "kenaz__load_tools,kenaz__read_file" {
+		t.Fatalf("request 1 tools = %s, want the hot set only", got)
+	}
+	assertOnlySendable(t, svc, specs, r1)
+	desc := r1.Tools[0].Description
+	for _, want := range []string{"kenaz (1 tool) — e.g. monitor", "outlook (2 tools) — e.g. list-messages, send-mail"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("load_tools description lacks %q:\n%s", want, desc)
+		}
+	}
+	if strings.Contains(desc, "secret") {
+		t.Errorf("load_tools description lists an off server:\n%s", desc)
+	}
+	if !strings.Contains(logs, `"tools_summary":3`) || !strings.Contains(logs, `"tools_full":2`) {
+		t.Errorf("composition log does not count 2 full / 3 summary:\n%s", logs)
+	}
+
+	// Activate one Outlook tool between calls: the next call carries it,
+	// and still nothing else.
+	if _, err := svc.Load(ctx, "s1", loadtools.Request{Tools: []string{"outlook__send-mail"}}, audit.ToolsActivatedByUser); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Generate(ctx, req); err != nil {
+		t.Fatalf("Generate 2: %v", err)
+	}
+	r2 := reg.requests()[1]
+	if got := strings.Join(toolNamesOf(r2), ","); got != "kenaz__load_tools,kenaz__read_file,outlook__send-mail" {
+		t.Fatalf("request 2 tools = %s", got)
+	}
+	assertOnlySendable(t, svc, specs, r2)
+}
+
+// exposurePool dispatches kenaz__load_tools to the real tool and records
+// every other call.
+type exposurePool struct {
+	tool  *loadtools.Tool
+	mu    sync.Mutex
+	calls []string
+}
+
+func (p *exposurePool) Tools(context.Context) ([]ToolEntry, error) { return nil, nil }
+
+func (p *exposurePool) Call(ctx context.Context, server, tool string, args []byte) ([]byte, error) {
+	if server+"__"+tool == loadtools.Name {
+		return p.tool.Call(ctx, args)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls = append(p.calls, server+"__"+tool)
+	return []byte(`{"ok":true}`), nil
+}
+
+func (p *exposurePool) snapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.calls...)
+}
+
+func runExposureTurn(t *testing.T, reg *recordingScriptedRegistry, svc *loadtools.Service, specs []corellm.ToolSpec) (*exposurePool, StreamClosedPayload, string) {
+	t.Helper()
+	pool := &exposurePool{tool: loadtools.New(svc)}
+	broker := &recordingBroker{}
+	graph := loadProductionChatGraph(t)
+	runner, err := New(Config{
+		Kernel:         coreag.NewKernel(),
+		Registry:       reg,
+		Pool:           pool,
+		Broker:         broker,
+		HistoryWriter:  &recordingHistoryWriter{},
+		History:        staticHistoryReader{},
+		GraphLoader:    func() (coreag.Graph, error) { return graph, nil },
+		MaxTurns:       func() int { return 25 },
+		ToolDiscoverer: fakeToolDiscoverer{specs: specs},
+		ToolExposure:   svc,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var closed StreamClosedPayload
+	logs := captureChatLogSync(t, func() {
+		if _, err := runner.StartStream(context.Background(), "profile-1", "s1", "", testTurn("mail bob")); err != nil {
+			t.Fatalf("StartStream: %v", err)
+		}
+		closed = waitForClosed(t, broker)
+	})
+	if closed.Reason == "backend-error" {
+		t.Fatalf("run failed: %s", closed.Message)
+	}
+	return pool, closed, logs
+}
+
+// TestToolLoop_LoadToolsReachesTheNextCall is FR-E4: the model's
+// kenaz__load_tools call on call 1 puts the loaded schemas into call 2 of
+// the same turn — the loop re-reads the activated set between
+// iterations.
+//
+// Mutation: compute the selection once at StartStream (a.tools) instead
+// of per Generate -> call 2 lacks the Outlook tools and this fails.
+func TestToolLoop_LoadToolsReachesTheNextCall(t *testing.T) {
+	specs := exposureCatalog()
+	svc, sess, au := newExposureService(t, specs)
+	reg := &recordingScriptedRegistry{}
+	reg.push(toolTurn("loading outlook", "tu-1", loadtools.Name, `{"servers":["outlook"]}`))
+	reg.push(textTurn("ready"))
+
+	runExposureTurn(t, reg, svc, specs)
+
+	reqs := reg.requests()
+	if len(reqs) < 2 {
+		t.Fatalf("model calls = %d, want at least 2", len(reqs))
+	}
+	if hasTool(reqs[0], "outlook__send-mail") {
+		t.Fatalf("call 1 already carried outlook__send-mail: %v", toolNamesOf(reqs[0]))
+	}
+	for _, n := range []string{"outlook__send-mail", "outlook__list-messages"} {
+		if !hasTool(reqs[1], n) {
+			t.Errorf("call 2 lacks %s after kenaz__load_tools loaded outlook: %v", n, toolNamesOf(reqs[1]))
+		}
+	}
+	for _, r := range reqs {
+		assertOnlySendable(t, svc, specs, r)
+	}
+	sess.mu.Lock()
+	n := len(sess.acts)
+	sess.mu.Unlock()
+	if n != 2 || au.count() != 1 {
+		t.Fatalf("activations = %d, audit rows = %d; want 2 and 1", n, au.count())
+	}
+}
+
+// TestToolLoop_UnloadedToolCallAutoActivatesOnce: a call by exact name
+// to a summary tool that is not loaded does not run; it returns a
+// structured not_loaded error, the tool is activated, the next call
+// carries its schema, the model's retry runs, and the composition log
+// counts the auto-activation. An off tool is refused with its setting
+// and never activated.
+func TestToolLoop_UnloadedToolCallAutoActivatesOnce(t *testing.T) {
+	specs := exposureCatalog()
+	svc, _, _ := newExposureService(t, specs)
+	reg := &recordingScriptedRegistry{}
+	reg.push(toolTurn("sending", "tu-1", "outlook__send-mail", `{"to":"bob"}`))
+	reg.push(toolTurn("retrying", "tu-2", "outlook__send-mail", `{"to":"bob"}`))
+	reg.push(toolTurn("dumping", "tu-3", "secret__dump", `{"to":"x"}`))
+	reg.push(textTurn("sent"))
+
+	pool, _, logs := runExposureTurn(t, reg, svc, specs)
+
+	if got := pool.snapshot(); len(got) != 1 || got[0] != "outlook__send-mail" {
+		t.Fatalf("dispatched calls = %v, want exactly the retried outlook__send-mail (the first call must not run, secret__dump never)", got)
+	}
+	reqs := reg.requests()
+	if len(reqs) < 4 {
+		t.Fatalf("model calls = %d, want 4", len(reqs))
+	}
+	if hasTool(reqs[0], "outlook__send-mail") || !hasTool(reqs[1], "outlook__send-mail") {
+		t.Fatalf("send-mail carried on call 1 = %v, call 2 = %v; want false, true", hasTool(reqs[0], "outlook__send-mail"), hasTool(reqs[1], "outlook__send-mail"))
+	}
+	messagesOf := func(req corellm.GenerationRequest) string {
+		raw, _ := json.Marshal(req.Messages)
+		return string(raw)
+	}
+	if got := messagesOf(reqs[1]); !strings.Contains(got, `not_loaded`) || !strings.Contains(got, `"loaded_now":true`) {
+		t.Errorf("call 2 does not carry the structured not_loaded result for tu-1: %s", got)
+	}
+	if got := messagesOf(reqs[3]); !strings.Contains(got, `not_available`) || !strings.Contains(got, "Settings") {
+		t.Errorf("off tool result does not name the setting: %s", got)
+	}
+	for _, r := range reqs {
+		if hasTool(r, "secret__dump") {
+			t.Fatalf("an off tool reached a request: %v", toolNamesOf(r))
+		}
+	}
+	var autoCounts []int
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) == nil && rec["msg"] == "llm.request.composition" {
+			if v, ok := rec["auto_activated"].(float64); ok {
+				autoCounts = append(autoCounts, int(v))
+			}
+		}
+	}
+	sort.Ints(autoCounts)
+	if len(autoCounts) < 2 || autoCounts[0] != 0 || autoCounts[len(autoCounts)-1] != 1 {
+		t.Errorf("composition auto_activated across calls = %v, want 0 on call 1 then 1", autoCounts)
+	}
+}

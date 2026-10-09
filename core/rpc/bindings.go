@@ -77,6 +77,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/sentry"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 )
 
 // Bindings is the Wails-reflected JS-callable surface. Every method has a
@@ -319,10 +320,6 @@ func (b *Bindings) Sessions_SetKnobsDefault(id string, knobs *sessions.SessionKn
 
 // Sessions_GetToolExposure returns the session's tool-exposure override
 // layer and activated tool set.
-//
-// Sessions_LoadTools (load / unload / pin from the composer) is not a
-// binding yet: it needs kenaz__load_tools' activation logic, which lands
-// with tool-context-budget-01TCBUD01 WP03. Dated 2026-10-09. Owner: alec.
 func (b *Bindings) Sessions_GetToolExposure(id string) (sessions.SessionToolExposure, error) {
 	defer sentry.WrapBinding("Sessions_GetToolExposure")()
 	return b.api.Sessions().GetToolExposure(b.ctx(), id)
@@ -333,6 +330,17 @@ func (b *Bindings) Sessions_GetToolExposure(id string) (sessions.SessionToolExpo
 func (b *Bindings) Sessions_SetToolExposure(id string, exposure toolexposure.Exposure) error {
 	defer sentry.WrapBinding("Sessions_SetToolExposure")()
 	return b.api.Sessions().SetToolExposure(b.ctx(), id, exposure)
+}
+
+// Sessions_LoadTools activates tools for the session — server names,
+// exact tool names or "server__prefix*" globs — the same activation the
+// model's kenaz__load_tools call performs, so their schemas are sent on
+// the session's next model calls. Every name not loaded is reported
+// with why (off and the setting that did it, a stopped server and its
+// state, or unknown). sticky activations survive TTL expiry.
+func (b *Bindings) Sessions_LoadTools(id string, servers []string, tools []string, sticky bool) (loadtools.Result, error) {
+	defer sentry.WrapBinding("Sessions_LoadTools")()
+	return b.api.Sessions().LoadTools(b.ctx(), id, servers, tools, sticky)
 }
 
 // Sessions_SuggestTitle triggers a manual auto-title generation for the

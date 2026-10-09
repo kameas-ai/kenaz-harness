@@ -48,6 +48,7 @@ import {search} from '../models';
 import {secrets} from '../models';
 import {sentry} from '../models';
 import {sessions} from '../models';
+import {loadtools} from '../models';
 import {context} from '../models';
 import {risk} from '../models';
 import {sidecar} from '../models';
@@ -693,6 +694,8 @@ export function Sessions_ListMessagesAll(arg1:string):Promise<sessions.ListMessa
 export function Sessions_LoadDraft(arg1:string):Promise<string>;
 
 export function Sessions_LoadScrollPosition(arg1:string):Promise<number>;
+
+export function Sessions_LoadTools(arg1:string,arg2:Array<string>,arg3:Array<string>,arg4:boolean):Promise<loadtools.Result>;
 
 export function Sessions_MoveToProject(arg1:string,arg2:string):Promise<void>;
 

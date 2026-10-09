@@ -1466,6 +1466,11 @@ type API struct {
 	// lane is built. Atomic: boot installs it while the UI may read.
 	memorySync atomic.Pointer[fleet.MemorySync]
 
+	// exposureGuard vets SetToolExposure's user layer against the live
+	// catalog (spec FR-E3), installed by SetToolExposureGuard at boot.
+	// Atomic: boot installs it while the UI may write.
+	exposureGuard atomic.Pointer[toolexposure.WriteGuard]
+
 	// syncNotify is the optional fleet-sync mutation hook
 	// (harness-fleet-sync-activation-01NSYNC01 gap #1). When set via
 	// SetSyncNotifier, Set() calls it with the affected sync category so the
@@ -1604,9 +1609,31 @@ func (a *API) GetToolExposure(_ context.Context) (toolexposure.Settings, error) 
 }
 
 // SetToolExposure validates and persists the user's tool-exposure
-// layer, budget and TTL; the Effective* fields are ignored.
-func (a *API) SetToolExposure(_ context.Context, ts toolexposure.Settings) error {
+// layer, budget and TTL; the Effective* fields are ignored. A layer that
+// would turn kenaz__load_tools off while summary tools exist is refused
+// by the installed guard.
+func (a *API) SetToolExposure(ctx context.Context, ts toolexposure.Settings) error {
+	if err := ts.Validate(); err != nil {
+		return err
+	}
+	if g := a.exposureGuard.Load(); g != nil && *g != nil {
+		if err := (*g).CheckLayerWrite(ctx, toolexposure.LayerWrite{
+			Level: toolexposure.LevelUser, Exposure: ts.Exposure,
+		}); err != nil {
+			return err
+		}
+	}
 	return a.store.SaveToolExposure(ts)
+}
+
+// SetToolExposureGuard installs the guard SetToolExposure consults
+// after validation. nil removes it.
+func (a *API) SetToolExposureGuard(g toolexposure.WriteGuard) {
+	if g == nil {
+		a.exposureGuard.Store(nil)
+		return
+	}
+	a.exposureGuard.Store(&g)
 }
 
 var _ toolexposure.SettingsSource = (*API)(nil)
