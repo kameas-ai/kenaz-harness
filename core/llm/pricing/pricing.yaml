@@ -11,6 +11,29 @@ last_updated: "2026-10-09"
 entries:
 
   # ── Anthropic ────────────────────────────────────────────────────────
+  # Lookup is first match: the specific Opus 4.5/4.6 and Haiku 4.5 rows
+  # precede the claude-opus-4* glob (Opus 4 / 4.1 pricing).
+  - provider_kind: anthropic
+    model_pattern: "claude-opus-4-5*"
+    input_per_1m_usd: 5.00
+    output_per_1m_usd: 25.00
+    cached_input_per_1m_usd: 0.50
+    cached_input_write_per_1m_usd: 6.25
+
+  - provider_kind: anthropic
+    model_pattern: "claude-opus-4-6*"
+    input_per_1m_usd: 5.00
+    output_per_1m_usd: 25.00
+    cached_input_per_1m_usd: 0.50
+    cached_input_write_per_1m_usd: 6.25
+
+  - provider_kind: anthropic
+    model_pattern: "claude-haiku-4-5*"
+    input_per_1m_usd: 1.00
+    output_per_1m_usd: 5.00
+    cached_input_per_1m_usd: 0.10
+    cached_input_write_per_1m_usd: 1.25
+
   - provider_kind: anthropic
     model_pattern: "claude-opus-4*"
     input_per_1m_usd: 15.00

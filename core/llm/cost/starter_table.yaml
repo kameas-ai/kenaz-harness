@@ -2,6 +2,29 @@ schema_version: 1
 currency: USD
 best_effort: true
 entries:
+  # First match wins: the specific current-model rows precede the
+  # family globs below them.
+  - kind: anthropic
+    model: claude-opus-4-5*
+    per_million_tokens:
+      input: 5.00
+      output: 25.00
+      cached_input_read: 0.50
+      cached_input_write: 6.25
+  - kind: anthropic
+    model: claude-opus-4-6*
+    per_million_tokens:
+      input: 5.00
+      output: 25.00
+      cached_input_read: 0.50
+      cached_input_write: 6.25
+  - kind: anthropic
+    model: claude-haiku-4-5*
+    per_million_tokens:
+      input: 1.00
+      output: 5.00
+      cached_input_read: 0.10
+      cached_input_write: 1.25
   - kind: anthropic
     model: claude-sonnet-*
     per_million_tokens:
