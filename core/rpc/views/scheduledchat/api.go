@@ -50,9 +50,8 @@ type ChatRunEntry struct {
 	RunAt string `json:"runAt,omitempty"`
 	// LastRun is the newest persisted run outcome (time, status, error,
 	// session, model, cost), nil when the schedule has never run. Read
-	// from scheduled_chat_run_history on List/Get (dogfood 2026-10-08
-	// round 2) so the Schedules row shows how the last run went without
-	// a second call.
+	// from scheduled_chat_run_history on List/Get so the Schedules row
+	// shows how the last run went without a second call.
 	LastRun *RunSummary `json:"lastRun,omitempty"`
 }
 
@@ -204,6 +203,6 @@ type ScheduledChatAPI interface {
 	SetEnabled(ctx context.Context, id string, enabled bool) error
 
 	// DefaultModel reports what "active default" resolves to for a
-	// schedule with no model override (dogfood 2026-10-08 round 2).
+	// schedule with no model override.
 	DefaultModel(ctx context.Context) (DefaultModel, error)
 }

@@ -2887,7 +2887,7 @@ func (b *Bindings) ScheduledChat_SetEnabled(id string, enabled bool) error {
 
 // ScheduledChat_DefaultModel reports what "active default" resolves to
 // for a schedule with no model override — the same resolution the
-// dispatcher applies at fire time (dogfood 2026-10-08 round 2).
+// dispatcher applies at fire time.
 func (b *Bindings) ScheduledChat_DefaultModel() (scheduledchatview.DefaultModel, error) {
 	defer sentry.WrapBinding("ScheduledChat_DefaultModel")()
 	return b.api.ScheduledChat().DefaultModel(b.ctx())

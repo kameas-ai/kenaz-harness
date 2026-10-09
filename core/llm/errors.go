@@ -244,14 +244,10 @@ func (e *ErrCancelled) Error() string {
 }
 
 // Is makes a provider-reported cancellation match context.Canceled.
-// Adapters translate "the caller's ctx was cancelled" / "Stream.Cancel
-// was called" into ErrCancelled WITHOUT wrapping the ctx error, so
-// errors.Is(err, context.Canceled) was false for exactly the error a
-// user Stop produces mid-stream. The chat runner then classified the
-// Stop as a backend failure: an error bar with the raw node chain
-// ("... llm: cancelled: context") and the partial persisted as a
-// connection drop with a Resume prompt (dogfood 2026-10-08 round 2).
-// A cancellation is a cancellation whichever layer reports it.
+// Adapters report "the caller's ctx was cancelled" / "Stream.Cancel was
+// called" as ErrCancelled without wrapping the ctx error; callers that
+// branch on errors.Is(err, context.Canceled) — the chat runner's Stop
+// arm in particular — must see a cancellation however it was reported.
 func (e *ErrCancelled) Is(target error) bool {
 	return target == context.Canceled
 }

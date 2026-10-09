@@ -8,16 +8,13 @@ import (
 
 // migrationIDScheduledChatHistoryModelCost identifies migration 0345 —
 // the model and cost of each scheduled chat run, on its existing
-// scheduled_chat_run_history row (dogfood 2026-10-08 round 2).
+// scheduled_chat_run_history row.
 //
-// THE BUG. A scheduled chat failed four times on the profile's default
-// model and then succeeded on another; Workflows → Runs could say only
-// "completed" or "failed". Which model a run actually used (the row's
-// override, or whatever "active default" resolved to at fire time) and
-// what it cost were not recorded anywhere a run list could read: the run
-// session is one row among hundreds, and the model resolution happens at
-// dispatch, so reading the schedule row afterwards answers the wrong
-// question once the default changes.
+// The model is recorded at dispatch because that is where it is resolved
+// (the row's override, or what "active default" resolves to at fire
+// time); reading the schedule row afterwards answers the wrong question
+// once the default changes. The cost is the run session's, captured at
+// the terminal event.
 //
 // Columns (additive, defaulted — every pre-0345 row reads as "model
 // unknown, cost 0", which the surface renders as nothing):

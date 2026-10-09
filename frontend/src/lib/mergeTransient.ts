@@ -1,16 +1,13 @@
 /**
  * mergeTransientByTime — place transient (never-persisted) transcript
  * entries, e.g. a slash command's result bubble, among the persisted
- * messages by time (dogfood 2026-10-08 round 2).
+ * messages by time.
  *
- * The session view used to append every transient entry after ALL
- * persisted messages, so a slash result from earlier stayed pinned below
- * every newer real turn. Persisted order is authoritative and never
- * changed; each transient entry goes before the first persisted message
- * created strictly after it, keeping transient entries in their own
- * order. An entry or message whose createdAt does not parse is treated as
- * "now" — a transient entry with no usable time lands at the end, exactly
- * where the old behaviour put it.
+ * Persisted order is authoritative and never changed; each transient
+ * entry goes before the first persisted message created strictly after
+ * it, keeping transient entries in their own order. An entry or message
+ * whose createdAt does not parse is treated as "now", so a transient
+ * entry with no usable time lands at the end.
  */
 export interface Timed {
   createdAt: string;

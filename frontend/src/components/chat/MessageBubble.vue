@@ -432,9 +432,8 @@ const isPartialOutputBubble = computed(() => {
 // stoppedByUser: the stream closed because the user pressed Stop
 // (useSession commits the partial with the close reason "stop-called").
 // That is not a connection loss and there is nothing to resume — the
-// user asked for it to end (dogfood 2026-10-08 round 2: a Cancel read
-// "Connection lost — partial reply preserved. Resume"). A row the
-// backend persisted as a drop (streamingFailedAt) keeps the drop copy.
+// user asked for it to end. A row the backend persisted as a drop
+// (streamingFailedAt) keeps the drop copy.
 const stoppedByUser = computed(
   () =>
     isAssistant.value &&

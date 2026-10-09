@@ -69,11 +69,9 @@ type ChatRunDispatcherDeps struct {
 	// model_turn steps. Returns "" when no profile is configured.
 	DefaultProfile func() string
 	// DefaultModel resolves the model a run with no model override is
-	// dispatched with — the given profile's default model (dogfood
-	// 2026-10-08 round 2: "active default" resolved to a 131k model the
-	// user never chose, and nothing recorded which). Recorded on the
-	// history row so the run list can say which model ran. nil, or ""
-	// back, records the model as unknown.
+	// dispatched with on the given profile. It is recorded on the history
+	// row so the run list can say which model ran. nil, or "" back,
+	// records the model as unknown.
 	DefaultModel func(profileID string) string
 	// Origins records the (sessionID -> chat-run id) mapping for the
 	// duration of this dispatch (model-scheduled-jobs-01PMSJ01 WP06),
@@ -203,10 +201,10 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			"chat_run_id", id, "raw", rec.OutputSink, "error", sinkErr.Error())
 	}
 
-	// Resolve the profile (and so the model) BEFORE any session exists:
-	// a run that cannot start must not leave an empty "Scheduled: …"
-	// session behind (dogfood 2026-10-08 round 2 — seven such rows after
-	// seven runs). rec.Model is a model OVERRIDE, not a profile —
+	// Step 6 (spec.md §5.2), run ahead of steps 4-5: resolve the profile
+	// (and so the model) before any session exists, so a run that cannot
+	// start leaves no empty "Scheduled: …"
+	// session behind. rec.Model is a model OVERRIDE, not a profile —
 	// spec.md §8 D-1.
 	if d.deps.LLM == nil {
 		return failedRecord(now, "no LLM connector wired"), nil
@@ -269,9 +267,6 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		d.discardEmptyFailedSession(ctx, &r, prompt)
 		return r, nil
 	}
-
-	// Step 6 (profile + model resolution) runs above, before the session
-	// is created.
 
 	// Step 7: subscribe BEFORE starting the stream so a fast completion
 	// cannot race the subscription into existence. Topic-filtered to

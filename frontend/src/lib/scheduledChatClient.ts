@@ -33,8 +33,7 @@ export interface ScheduledChatEntry {
   runAt?: string;
   /**
    * The newest persisted run outcome; absent when the schedule has never
-   * run (dogfood 2026-10-08 round 2 — the row used to show no trace of a
-   * run that only surfaced as a 10-second toast).
+   * run.
    */
   lastRun?: ScheduledChatRunSummary;
 }

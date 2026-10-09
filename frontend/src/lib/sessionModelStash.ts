@@ -3,14 +3,15 @@
  * surface dispatches with, persisted under
  * `kenaz.session.config.<sessionId>`.
  *
- * NewSessionDialog has always written this key so a cross-family choice
- * the mid-conversation switcher would block survives a reload. The
- * switcher itself (and `/model`) never wrote it — so the next re-seed of
- * the session's selection (switching sessions, or a branch Merge that
- * navigates back) restored the dialog's original model and silently
- * undid the switch (dogfood 2026-10-08 round 2: after Merge the MODEL
- * label reverted from sonnet-latest to haiku-latest). Every switch now
- * writes the same key the seed reads.
+ * Written by NewSessionDialog (so a cross-family choice the
+ * mid-conversation switcher would block survives a reload) and by every
+ * model switch (switcher and /model); SessionsView re-seeds the session's
+ * selection from it whenever the routed session changes, so a switch
+ * survives leaving and returning (e.g. a branch Merge). These helpers
+ * are the only readers and writers of the key format.
+ *
+ * Local to this device: served mode and other devices do not see it (no
+ * backend binding stores a session's model).
  *
  * Storage can be unavailable (private window, blocked site data); both
  * helpers degrade to "no stash" rather than throwing.

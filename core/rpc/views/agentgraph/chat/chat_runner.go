@@ -692,10 +692,8 @@ type StreamCheckpointStore interface {
 // what the context-window bar measures (last_usage_json /
 // session.usage.updated). billed is what to ADD to the session's
 // cumulative usage for this row: resp plus every earlier call in the turn
-// that produced no row of its own (a fire that only requested tools —
-// dogfood 2026-10-08 round 2: a 3-call tool loop contributed one call to
-// the footer, ~30 % of tokens and cost missing). billed equals resp when
-// there were none.
+// that produced no row of its own (a fire that only requested tools).
+// billed equals resp when there were none.
 type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp, billed corellm.Response)
 
 // TurnUsageObserver receives the conversation-lifecycle facts of a chat turn.
@@ -2182,7 +2180,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// system prompt), not the conversation. Compaction cannot help —
 		// there is nothing to summarise — so skip overflow recovery and
 		// say what is actually wrong instead of ErrSessionFull's "your
-		// conversation is full" (dogfood 2026-10-08 round 2).
+		// conversation is full".
 		reason = "backend-error"
 		message = tooLarge.Error()
 		errorKind = StreamClosedErrorKindRequestTooLarge

@@ -48,8 +48,8 @@ func (f *fakeStdioPool) Close(_ context.Context) error {
 }
 func (f *fakeStdioPool) CloseOne(_ context.Context, id string) error {
 	// Faithful to *stdio.Pool.CloseOne: the server leaves the sub-pool.
-	// (The dispatch pool now adopts servers the sub-pool still holds, so
-	// a fake that kept a closed server would read as "still running".)
+	// The dispatch pool adopts servers its sub-pool still holds, so a
+	// fake that kept a closed server would read as "still running".
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	kept := f.opened[:0]

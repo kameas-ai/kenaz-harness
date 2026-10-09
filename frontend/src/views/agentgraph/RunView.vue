@@ -334,13 +334,10 @@ onMounted(async () => {
   schedulePoll();
 });
 
-// vue-router REUSES this component when only :runId changes — opening
-// the next turn's "Run details" while this view is showing the previous
-// one. Everything below was keyed to the id read at mount, and a
-// completed run stops polling, so the previous run's counters stayed on
-// screen under the new run's URL (dogfood 2026-10-08 round 2: turn 2's
-// details showed turn 1's 224802 tokens / $0.1124). Reset per-run state
-// and load the new run from scratch.
+// vue-router REUSES this component when only :runId changes (opening the
+// next turn's "Run details" from this one), and a completed run stops
+// polling — so per-run state is reset and the new run loaded from
+// scratch whenever the id changes.
 watch(runId, async (id, prev) => {
   if (id === prev || servedMode.value) return;
   if (pollHandle) {

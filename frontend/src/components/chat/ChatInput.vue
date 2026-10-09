@@ -876,11 +876,9 @@ onMounted(() => {
   // slashcmd registry (test harness path), the surface returns an
   // empty list. The composer renders nothing and stays usable.
   //
-  // User-defined commands are listed too (dogfood 2026-10-08 round 2):
-  // the dropdown used to hold only the built-in registry, so "/" opened
-  // it but "/bug" filtered to nothing and it read as "didn't open" — the
-  // user's own /bughunt was never a candidate. Built-ins win a name
-  // clash, matching the order the composer's routing shows them in.
+  // User-defined (global) commands are candidates too, so "/bug" finds
+  // the user's /bughunt. Built-ins win a name clash, matching the
+  // composer's routing precedence.
   void Promise.all([
     client.slash.list().catch(() => [] as readonly SlashCommandInfo[]),
     client.slashcmd.list('').catch(() => []),

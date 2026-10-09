@@ -130,10 +130,8 @@ type input struct {
 type output struct {
 	Output string `json:"output"`
 	Kind   string `json:"kind"`
-	// Instruction is set for a prompt-kind skill (dogfood 2026-10-08
-	// round 2: the model read a rendered triage prompt as "the skill
-	// returned a prompt rather than a result" and stopped). It tells the
-	// model that Output is a task to perform, not a finished answer.
+	// Instruction is set for a prompt-kind skill. It tells the model that
+	// Output is a task to perform, not a finished answer.
 	Instruction string `json:"instruction,omitempty"`
 }
 

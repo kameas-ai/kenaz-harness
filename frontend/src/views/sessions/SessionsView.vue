@@ -394,8 +394,7 @@ function pickModel(providerId: string, modelId: string) {
   activeModelId.value = modelId;
   switcherOpen.value = false;
   // Persist the switch where the session's selection is seeded from, so
-  // a later re-seed (session switch, branch Merge) does not restore the
-  // model the session was created with (dogfood 2026-10-08 round 2).
+  // a later re-seed (session switch, branch Merge) keeps it.
   writeSessionModel(sessionId.value ?? '', { providerId, modelId });
 }
 
@@ -793,12 +792,10 @@ async function onArgFillSubmit(args: Record<string, string>) {
 }
 
 /**
- * runUserSlashCommand runs a user-defined slash command (dogfood
- * 2026-10-08 round 2). A PROMPT-kind command's rendered body is an
- * instruction for the model, so it is sent as the user's turn — with any
- * text typed after the command appended — instead of being shown as a
- * system bubble nobody acts on. Text and tool commands render their
- * result as before.
+ * runUserSlashCommand runs a user-defined slash command. A PROMPT-kind
+ * command's rendered body is an instruction for the model, so it is sent
+ * as the user's turn, with any text typed after the command appended.
+ * Text and tool commands render their result as a slash bubble.
  */
 async function runUserSlashCommand(
   sid: string,
@@ -985,8 +982,7 @@ const visibleMessages = computed<readonly Message[]>(() => {
     content: t.content,
     createdAt: t.createdAt,
   }));
-  // Merged by time, not appended: a slash result from earlier used to
-  // stay pinned below every newer real turn (dogfood 2026-10-08 r2).
+  // Merged by time so a slash result sits where it happened.
   return mergeTransientByTime(persisted, synthetic);
 });
 

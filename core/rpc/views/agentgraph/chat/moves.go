@@ -174,12 +174,12 @@ type turnJournal struct {
 	// unbilled sums the usage of this turn's model calls that produced
 	// no transcript row of their own — a chat-bound fire whose only
 	// output was tool calls (RecordAssistantMove with empty text). Such
-	// a call has no row for usage.Add to UPDATE, so it used to vanish
-	// from the session's cumulative tokens/cost (dogfood 2026-10-08
-	// round 2: a 3-call tool loop billed one call). fireUsage folds it
-	// into the NEXT row this journal bills, then clears it, so every
-	// call is billed exactly once while last_usage still reports the
-	// row's own (latest) call.
+	// a call has no row for usage.Add to UPDATE, so fireUsage folds it
+	// into the NEXT row this journal bills, then clears it: every call
+	// is billed exactly once while last_usage still reports the row's
+	// own (latest) call. Known gap: a tool-only call followed by a turn
+	// end that persists no further billed row (a Stop or failure before
+	// the next assistant segment) is not billed.
 	unbilled      corellm.Response
 	unbilledCalls int
 	// turnContent is the content of every row this journal persisted

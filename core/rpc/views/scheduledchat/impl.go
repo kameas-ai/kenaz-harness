@@ -53,8 +53,8 @@ type Config struct {
 	// Cedar is the policy gate. nil short-circuits to allow (default-allow).
 	Cedar cedar.Gate
 	// DefaultModel resolves what a schedule with no model override runs
-	// on — the SAME resolution the dispatcher applies at fire time
-	// (dogfood 2026-10-08 round 2). nil reports an unresolved default.
+	// on — the SAME resolution the dispatcher applies at fire time. nil
+	// reports an unresolved default.
 	DefaultModel func() DefaultModel
 }
 
@@ -268,11 +268,9 @@ func (a *API) List(ctx context.Context) ([]ChatRunEntry, error) {
 	return out, nil
 }
 
-// withLastRun attaches the newest persisted history row as LastRun
-// (dogfood 2026-10-08 round 2: a schedule whose every run failed showed
-// no trace of it on its row — the outcome lived only in a 10-second
-// toast). A history read failure leaves LastRun nil rather than failing
-// the list: the schedule itself is still real.
+// withLastRun attaches the newest persisted history row as LastRun. A
+// history read failure leaves LastRun nil rather than failing the list:
+// the schedule itself is still real.
 func (a *API) withLastRun(ctx context.Context, e ChatRunEntry) ChatRunEntry {
 	if a.cfg.Store == nil {
 		return e

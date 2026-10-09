@@ -111,9 +111,8 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 		probeCtx := toolloop.WithVisibilityProbe(ctx)
 		listed := d.builtins.List()
 		var enabledBuiltins []string
-		// One summary line per discovery instead of a line per builtin
-		// per predicate read (dogfood 2026-10-08 round 2: the settings
-		// predicate logged 54 "rpc.builtins.predicate" lines per turn).
+		// One summary line per discovery; the enabled predicate itself
+		// does not log per tool.
 		defer func() {
 			logging.L().Info("llm.builtins.enabled",
 				"session_id", sessionID, "listed", len(listed),

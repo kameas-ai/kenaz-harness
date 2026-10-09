@@ -269,12 +269,10 @@ func (d *Pool) Open(ctx context.Context, specs []coremcp.ServerSpec) error {
 				mu.Unlock()
 			}
 			// A sub-pool's Open is partial-success: one bad spec does not
-			// stop the others from coming up. Ownership used to be
-			// recorded only when the WHOLE bucket succeeded, so a single
-			// failing recipe left every healthy server in its transport
-			// running, listed by Tools, and unreachable by Call ("server
-			// not in pool") — dogfood 2026-10-08 round 2. Record it for
-			// every server the sub-pool actually holds.
+			// stop the others from coming up. Ownership is recorded for
+			// every server the sub-pool actually holds, so one failing
+			// recipe cannot leave the healthy ones listed by Tools but
+			// unreachable by Call.
 			d.mu.Lock()
 			for _, s := range bucket {
 				if openErr == nil || d.subPoolHoldsLocked(tag, s.Name) {
@@ -309,12 +307,11 @@ func (d *Pool) Close(ctx context.Context) error {
 // Tools aggregates tool lists from all sub-pools. Per-pool errors are
 // swallowed so a pool with no servers yet doesn't fail the aggregate.
 //
-// Visibility matches reachability (dogfood 2026-10-08 round 2): a tool
-// is listed only when Call could route it AND its server is in a state
-// that can answer — not failed, not stopped. A sub-pool's cached tool
-// list outlives its process (a crashed stdio server keeps its last
-// tools/list), and the model was being handed tools whose every call
-// was guaranteed to fail.
+// Visibility matches reachability: a tool is listed only when Call could
+// route it AND its server is in a state that can answer — not failed,
+// not stopped. A sub-pool's cached tool list outlives its process (a
+// crashed stdio server keeps its last tools/list), so the cache alone
+// would advertise tools whose every call fails.
 func (d *Pool) Tools(ctx context.Context) ([]coremcp.Tool, error) {
 	var out []coremcp.Tool
 	serves := map[string]bool{}
@@ -453,10 +450,8 @@ func (d *Pool) Call(ctx context.Context, server, tool string, args json.RawMessa
 	return out, err
 }
 
-// logCallFailed records a failed MCP tool call (dogfood 2026-10-08 round
-// 2: "server not in pool" failures reached the model and the transcript
-// but left no line in the app log). Metadata and the error only — never
-// the call's arguments or result.
+// logCallFailed records a failed MCP tool call in the app log. Metadata
+// and the error only — never the call's arguments or result.
 func logCallFailed(server, tool, transportTag string, err error) {
 	logging.L().Warn("mcp.tool.call.failed",
 		"server", server, "tool", tool, "transport", transportTag, "err", err.Error())

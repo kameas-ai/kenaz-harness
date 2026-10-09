@@ -17,10 +17,7 @@ import (
 // provider context-length rejection that the CONVERSATION did not cause:
 // the session's history is empty or a small fraction of the model's
 // window, so the overflow is the request the harness built around it —
-// tool definitions plus the system prompt (dogfood 2026-10-08 round 2:
-// a brand-new scheduled-chat session with one short user message hit a
-// 131k model with ~220k tokens of tool schemas and was told "session has
-// hit its context window", blaming a conversation that did not exist).
+// tool definitions plus the system prompt.
 //
 // Compaction cannot fix this — there is nothing to summarise — so the
 // runner neither attempts overflow recovery nor reports

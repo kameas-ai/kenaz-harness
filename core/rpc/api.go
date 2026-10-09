@@ -3883,10 +3883,10 @@ func New(c *core.Core, opts ...Option) *API {
 		// fully wired by this point in New() (every With* wrap above has
 		// already run).
 		var chatDispatcher schedulerPkg.ChatRunDispatcher
-		// scheduledDefaultModel is THE resolution of a scheduled chat's
-		// "active default" (dogfood 2026-10-08 round 2): first personal
-		// profile, its default model. The dispatcher records it on each
-		// run; the New-schedule form displays it via
+		// scheduledDefaultModel is the one resolution of a scheduled
+		// chat's "active default": the first personal profile and the
+		// model a request on it is dispatched with. The dispatcher records
+		// it on each run and the New-schedule form displays it via
 		// ScheduledChat_DefaultModel, so the two cannot disagree.
 		capturedPersonalForSched := personalForLLM
 		scheduledDefaultModel := func() (string, string) {
