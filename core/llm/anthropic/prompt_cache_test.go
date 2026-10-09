@@ -23,7 +23,7 @@ func cacheReq(volatile string, tools []llm.ToolSpec) llm.GenerationRequest {
 	req := minReq()
 	req.System = "You are the chat node."
 	req.SystemVolatile = volatile
-	req.Tools = llm.OrderToolsFlat(tools)
+	req.Tools, _ = llm.OrderTools(tools, nil, nil)
 	req.CacheStableTools = 2
 	return req
 }

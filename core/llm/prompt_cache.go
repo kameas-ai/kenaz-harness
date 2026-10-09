@@ -52,16 +52,6 @@ func OrderTools(hot, pinned, activated []ToolSpec) (tools []ToolSpec, stable int
 	return tools, len(h) + len(p)
 }
 
-// OrderToolsFlat orders a single, wholly stable tool list by Name. A
-// request built from it leaves CacheStableTools at 0 (all stable).
-func OrderToolsFlat(specs []ToolSpec) []ToolSpec {
-	if len(specs) == 0 {
-		return specs
-	}
-	tools, _ := OrderTools(specs, nil, nil)
-	return tools
-}
-
 // SetTools sets the request's tools and the CacheStableTools value that
 // marks the first `stable` of them, from OrderTools' results.
 func (r *GenerationRequest) SetTools(tools []ToolSpec, stable int) {

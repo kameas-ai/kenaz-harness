@@ -114,8 +114,10 @@ type recipeStatusPool interface {
 //
 // Only servers the pool knows are listed (2026-10-09, owner alec): an
 // enabled recipe that never reached the pool (its env failed to resolve
-// at boot) is omitted rather than marked stopped. WP08 of
-// tool-context-budget-01TCBUD01 adds those from the recipe store.
+// at boot) is omitted rather than marked stopped (FR-E2 gap). Open in
+// docs/unwired-ledger.md; blocker: the directory has no recipe-store
+// reader for enabled-but-unstarted recipes and their reason — the
+// follow-up that adds one deletes this paragraph.
 type toolServerDirectory struct {
 	pool recipeStatusPool
 

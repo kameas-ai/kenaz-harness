@@ -90,6 +90,13 @@ var hotSet = map[string]struct{}{
 }
 
 // HotSet returns the default-full built-in names, sorted.
+//
+// Its only reader is core/rpc's TestToolExposureHotSet_* (2026-10-09
+// unwired sweep, owner alec): it anchors this list to the tool packages'
+// Name constants, which this package cannot import (core/tools/loadtools
+// imports it). Production branches on InHotSet. Kept exported for that
+// cross-package anchor; a UI that lists the hot set would be its first
+// production reader.
 func HotSet() []string {
 	out := make([]string, 0, len(hotSet))
 	for n := range hotSet {

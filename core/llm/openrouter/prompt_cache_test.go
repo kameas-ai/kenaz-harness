@@ -15,10 +15,10 @@ func cacheReqOR(volatile string) llm.GenerationRequest {
 	req := minReqOR()
 	req.System = "You are the chat node."
 	req.SystemVolatile = volatile
-	req.Tools = llm.OrderToolsFlat([]llm.ToolSpec{
+	req.Tools, _ = llm.OrderTools([]llm.ToolSpec{
 		{Name: "outlook__send-mail", Description: "Send mail", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		{Name: "kenaz__bash", Description: "Run a command", InputSchema: json.RawMessage(`{"type":"object"}`)},
-	})
+	}, nil, nil)
 	return req
 }
 

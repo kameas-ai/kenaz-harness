@@ -39,10 +39,16 @@ func TestOrderTools_ThreeSegments(t *testing.T) {
 	}
 }
 
-func TestOrderToolsFlat_SameSetSameOrder(t *testing.T) {
+// A single, wholly stable segment (the no-exposure path's
+// OrderTools(all, nil, nil)) is ordered by name whatever order it arrives in.
+func TestOrderTools_SingleSegmentSameSetSameOrder(t *testing.T) {
 	a := []ToolSpec{{Name: "kenaz__grep"}, {Name: "outlook__send-mail"}, {Name: "kenaz__bash"}}
 	b := []ToolSpec{{Name: "outlook__send-mail"}, {Name: "kenaz__bash"}, {Name: "kenaz__grep"}}
-	got1, got2 := OrderToolsFlat(a), OrderToolsFlat(b)
+	got1, stable := OrderTools(a, nil, nil)
+	got2, _ := OrderTools(b, nil, nil)
+	if stable != len(a) {
+		t.Errorf("stable = %d, want every tool (%d)", stable, len(a))
+	}
 	if !reflect.DeepEqual(got1, got2) {
 		t.Fatalf("same set, different order:\n%v\n%v", got1, got2)
 	}
@@ -53,10 +59,7 @@ func TestOrderToolsFlat_SameSetSameOrder(t *testing.T) {
 		}
 	}
 	if a[0].Name != "kenaz__grep" {
-		t.Errorf("OrderToolsFlat reordered its input in place: %v", a)
-	}
-	if OrderToolsFlat(nil) != nil {
-		t.Errorf("OrderToolsFlat(nil) should stay nil")
+		t.Errorf("OrderTools reordered its input in place: %v", a)
 	}
 }
 

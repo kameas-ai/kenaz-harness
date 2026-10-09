@@ -43,6 +43,7 @@ shipped product boundary, not unwired code. Read that doc before flagging
 | I15 | `check-cedar-engine-singleton.sh` | *(none — no allowlist by design)* | more than one Cedar engine construction (`buildCedarGate`/`buildCedarEngineOrNil` call, or a direct `cedar.NewEngine` call) reachable from `rpc.New` — **added 2026-08-18 (consent-surfaces-truth-01PMTR01 WP05)**. I13 checks the *argument* at a call site; it has no vocabulary for *instance count*, which is why thirteen independent engine constructions (nine `buildCedarGate` + four `buildCedarEngineOrNil`) all passed it clean before the WP05 hoist. Wired into `pr.yml`. |
 | G-1 | `check-transport-parity.sh` | *(none — no allowlist by design)* | a transport tag in `dispatch.Pool.closeOneByTag`'s switch whose case body has no real `.CloseOne(ctx, id)` call — comment-only, empty, or dispatching something else — **added 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-15)**. Hand-scoped to the one production switch this mission found broken (pre-UNIT-6, http/sse's cases were comment-only and fell through to the function's shared tail, then a bare `return nil`); the header states explicitly it is not a general arm-parity gate. Tag set is derived from the switch's own `case` lines, not hardcoded. Wired into `pr.yml`. |
 | G-2 | `check-recipe-token-substitution.sh` | `g2-recipe-substituted-paths.txt` | a `${...}` token in `registry.json`/`shipped.json` on a JSON path with no declared, still-matching production `Substitute*` call site — **added 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-15)**. Path set is derived from the catalogs each run (a path with no token today needs no manifest entry); a manifest entry whose grep pattern stops matching also fails, so the manifest cannot degrade into an opt-out list. Measured clean today over 7 discovered paths. Wired into `pr.yml`. |
+| TE-1 | `check-tool-exposure-gate.sh` | `tool-exposure-writers.txt` | a non-test writer of `llm.GenerationRequest.Tools` under `core/` (a `Tools:` key in a `GenerationRequest` literal, a `SetTools` call, or `x.Tools = …` on a visibly `GenerationRequest`-typed `x`; AST scan, `scripts/ci/cmd/checktoolexposure`) that is neither the exposure-partition path nor a dated gap; plus the FR-E1 seed test and the production-wiring first-turn test must run and pass — **added 2026-10-09 (tool-context-budget-01TCBUD01 WP08)**. Planted proofs: `TestToolExposureGate_*` in `gates_can_fail_test.go` (direct assignment, literal key, stale entry, cwd independence). One open entry: workflow `model_turn` steps. Wired into `pr.yml`. |
 
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
@@ -342,78 +343,86 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
-### 2026-10-09 (tool-context-budget-01TCBUD01 WP02–WP04) · tool-exposure knobs and surfaces not yet consumed
+### 2026-10-09 (tool-context-budget-01TCBUD01, re-swept by WP08) · tool-exposure gaps still open
 
-**Finding.** WP02 shipped the exposure tiers, overrides and resolver;
-WP03 put them on the request path (the chat request builder sends only
-full and activated tools, `kenaz__load_tools` + `Sessions_LoadTools`
-write activations, the FR-E3 write guard is installed on all three
-exposure writers, `settings.Settings.ToolExposure` is `Register`ed with
-its consumer). Still not consumed:
+**WP08 sweep (2026-10-09, scoped to `git diff v0.93.3..HEAD`).** Closed
+since WP02–WP06 wrote this entry:
 
-- (WP04, 2026-10-09) `ToolSchemaBudgetTokens` / `ToolActivationTTLTurns`
-  are now `Register`ed with their consumers (eviction in
-  `chat.exposureTurn.selectTools`, expiry in `beginTurn`); calling an
-  activated tool refreshes `LastUsedTurn`.
-- ~~(WP04, 2026-10-09; owner alec; blocker WP06) The composer budget
-  warning has a backend writer and no UI reader~~ — closed at release
-  integration (2026-10-09): `components/chat/ToolsMenu.vue` reads
-  `SessionUsage.composition.{schemaBudget, toolsEvicted,
-  pinnedOverBudgetBy, hotOverBudgetBy}` (Go
-  `sessions.UsageComposition.{SchemaBudget, ToolsEvicted,
-  PinnedOverBudgetBy, HotOverBudgetBy}`); WP06's `hotOverBy` was renamed
-  onto WP04's `hotOverBudgetBy` and the TS `UsageComposition` has one
-  definition.
-- `toolexposure.SettingsSource` / `PinSource` — `wiring:deferred` at
-  their declarations.
-- ~~The seven `*_ToolExposure` / `Sessions_LoadTools` bindings have typed
-  client methods but no `.vue` caller~~ — closed by WP06 (2026-10-09):
-  `views/tools/ToolExposurePanel.vue` and `components/chat/ToolsMenu.vue`
-  call all seven plus WP06's `Tools_SchemaCosts`; i15 moved them from
-  untriaged to gated (the Tools menu's callers) and boundary-panelled
-  (`Settings_SetToolExposure`).
-- WP06 (2026-10-09) — schedule tool set: the schedule form's "Custom
-  servers" option is disabled with its reason; the schedule record has no
-  tool-set field. The cost line is the user's default tiers (schedules
-  have no project); a schedule contained to a `ToolAllowlist` (every
-  model-created schedule) says "cost not shown" instead of a number that
-  ignores the containment. **Owner:** alec — follow-up mission "schedule
-  tool set" (not WP08).
-- ~~WP06 (2026-10-09) — "caches prompts" badge has no rpc writer~~ —
-  closed at release integration (2026-10-09): `views/llm.ModelInfo` carries
-  `SupportsPromptCache` (`supportsPromptCache`), set on both the
-  `LLM_ListProviders` `modelInfos` path and the `ListModels` path by
-  `modelCachesPrompts`, which mirrors the adapters' request-time decision
-  (the adapter's `llm.ModelInfo.SupportsPromptCache` when the model list
-  sets it; OpenRouter's unset flag on a listed model is its veto; otherwise
-  the curated `llm.SupportsPromptCache(kind, id)` — Anthropic direct).
-  Test: `core/rpc/views/llm/model_prompt_cache_test.go`.
-- WP06 (2026-10-09) — the Tools menu meter and the request_too_large
-  remedy use `Tools_SchemaCosts`' sendable set, which is **before budget**:
-  WP04's eviction and TTL expiry are not reflected (the meter is labelled
-  "before budget"). The meter's budget is `composition.schemaBudget` when a
-  call reports it, else min(effective setting, 15% of the active model's
-  window). Request-level tests for the budget and TTL controls (FR-K1:
-  "every control reaches an observable change in the next request") are
-  deferred to WP08 with WP04's eviction; WP06 tests the setting writes and
-  the resolver reads. **Owner:** alec — WP08 (dated 2026-10-09).
-- ~~WP06 (2026-10-09) — per-turn cost readout wording for cached tokens is
-  left to WP05~~ — closed at release integration (2026-10-09): WP05's
-  CostCell / TokenMeterChip rewrite is on the release branch; the Tools
-  menu shows the last request's cached tokens.
-- The exposure tiers apply where the chat runner builds the request
-  (interactive chat, scheduled chats, subagent runs). Workflow steps
-  that call models with tools outside the chat runner still send their
-  own tool lists unfiltered (spec §2.6).
+- Every FR-K1 control now has a request-level test — the setting is
+  written the way its binding writes it and the NEXT chat turn's wire
+  request is asserted, through newLLMStack's real chat runner over real
+  sqlite: `core/rpc/tool_exposure_dials_test.go` (schema budget → the
+  next request's `tools_tokens_est` ≤ budget; activation TTL → expiry in
+  the next turn; user per-server and per-tool tiers; project tier;
+  session Load / Unload; org pins incl. the pinned budget). The WP06
+  "request-level tests deferred to WP08" line is deleted.
+- The seven `*_ToolExposure` / `Sessions_LoadTools` bindings and
+  `Tools_SchemaCosts` each have a `harnessClient.ts` method and a `.vue`
+  caller (`ToolsMenu.vue`, `ToolExposurePanel.vue`, `SessionsView.vue`,
+  `ScheduledChatFormModal.vue`); both components are mounted.
+- `tools.activated` / `tools.evicted` have emit sites
+  (`core/tools/loadtools`) and a reader: the audit view's LLM category
+  (`views/audit.categoryForKind`, now pinned in
+  `TestObserveEvent_KindToCategory`).
+- `ContextCompositionPopover.vue` carried "no schema-budget line until
+  WP04 adds it": WP04 shipped `composition.schemaBudget` /
+  `toolsEvicted`; the popover now renders the budget line (spec §2.5).
+- Zero-non-test-reader exports in the new surface:
+  `llm.OrderToolsFlat` **deleted** (live substitute:
+  `llm.OrderTools(all, nil, nil)`, which the no-exposure path already
+  calls); `toolexposure.Partition.SendNames` **unexported** (package test
+  oracle only); `toolexposure.HotSet` **kept, dated** at its declaration
+  (sole reader is core/rpc's anchor test against the tool packages'
+  Name constants, which toolexposure cannot import).
+- New gate `check-tool-exposure-gate.sh` (see the gate inventory) makes
+  FR-E1 mechanical.
 
+**Still open** — each with its blocker; **owner: alec**:
+
+- **Workflow steps are not tiered (spec §2.6).** `model_turn` steps send
+  their own tool list (all discovered tools with `tools: all`) through
+  `wfLLMStreamerAdapter.Stream`. Gated: the only listed non-exposure
+  writer in `scripts/ci/allowlists/tool-exposure-writers.txt`.
+  Blocker: a step has no session to hold activations and no
+  `kenaz__load_tools` loop; the follow-up "workflow-step tool exposure"
+  deletes the allowlist line.
+- **FR-E2 — never-started recipes are missing from the digest.** The
+  "(stopped)" marker covers servers the dispatch pool knows; an enabled
+  recipe that never reached the pool (env resolution failed at boot) is
+  omitted, not marked (`toolServerDirectory`,
+  `core/rpc/tool_exposure_wiring.go`). Blocker: no recipe-store reader of
+  enabled-but-unstarted recipes and their failure reason in the
+  directory; that follow-up deletes this bullet.
+- **Schedule tool set.** The schedule form's "Custom servers" option is
+  disabled with its reason; the schedule record has no tool-set field;
+  the cost line is the user's default tiers, and a contained schedule
+  says "cost not shown". Blocker / owner: follow-up mission "schedule
+  tool set" (`ScheduledChatFormModal.vue` carries the dated TODO).
+- **Tools menu meter is "before budget".** It uses `Tools_SchemaCosts`'
+  sendable set, which does not apply WP04's eviction or TTL expiry (the
+  meter says so); the composition popover shows the last call's real
+  fitted figure. Blocker: a budget-aware cost read (fit the partition in
+  `SchemaCosts`); deleted when the meter reads it.
+- **FR-H3 does not hold: the estimator under-counts tool schemas by
+  ~37 %.** On the dogfood's three recorded frames (session `b0c22dc5…`,
+  real outlook/filesystem/fetch `tools/list` captured into
+  `core/rpc/testdata/dogfood-2026-10-08/`), the composition estimate is
+  63.2 % of OpenRouter's `prompt_tokens` (142,097 vs 224,798) — ~2.5
+  characters per provider token on JSON schemas against the estimator's
+  4. Every budget figure (24k default, 15 % of window) is therefore in
+  estimator tokens, ~1.6× fewer than the provider bills. Not tuned in
+  WP08 (brief: record, do not fit). `composition_recorded_frames_test.go`
+  pins the measured 0.60–0.72 band. Blocker: an owner decision on the
+  estimator (per-kind density for schema text, or a real tokenizer —
+  `core/llm/tokenizer` TODO); deleting this bullet needs that test to
+  assert FR-H3's 0.90–1.10.
 - Activations of tools whose server was later uninstalled stay in
   `sessions.tool_activations` (never sent: the catalog no longer lists
-  them). Non-sticky ones leave with WP04's TTL expiry; sticky ones stay
-  until the user unloads them (owner alec; WP06's Tools menu lists them).
-- The digest's "(stopped)" marker covers servers the dispatch pool
-  knows. An enabled recipe that never reached the pool (env resolution
-  failed at boot) is omitted, not marked (FR-E2 gap). WP08 reads
-  installed-but-never-started recipes from the recipe store.
+  them). Non-sticky ones leave with the TTL; sticky ones stay until the
+  user unloads them from the Tools menu. Accepted, not a defect.
+- `toolexposure.SettingsSource` — `wiring:deferred` at its declaration
+  (checkseams skips the settings package; the implementation is
+  compile-time asserted).
 
 **Rulings recorded (2026-10-09, owner alec, WP03 review).**
 - Auto-activation does not retry on the harness side: it activates the
@@ -450,13 +459,8 @@ its consumer). Still not consumed:
 - Failed turns count toward the activation TTL (the ordinal is the
   number of recorded turn runs).
 
-**Disposition: dated-justified.** Each is the next WP's consumer of data
-this mission already resolves; deleting it would delete the mission.
-
-**Blocker / owner.** WP06
-(UI), WP07 (org pins), WP08 (workflow-step coverage or a dated ruling;
-never-started recipes in the digest). **Owner:** alec. WP08's ledger pass deletes
-this item once each line has a consumer.
+**Disposition: dated-justified (2026-10-09, owner alec).** Every
+bullet above names the change that deletes it.
 
 ### 2026-10-09 (tool-context-budget-01TCBUD01 WP04 review) · compaction's context-window lookup is keyed by profile id
 
@@ -6403,9 +6407,10 @@ Each bullet is deleted by the change its owner names.
   rejection costs only the tool marker (the guard degrades to
   system-only for that profile + model), but acceptance criterion 4
   (`cached_tokens ≥ 0.9 × prefix` on OpenRouter-Anthropic) depends on
-  what OpenRouter does with it. **Blocker:** a live call. **Owner:** WP08
-  of tool-context-budget-01TCBUD01 — the live AC4 check records the
-  result and deletes this bullet.
+  what OpenRouter does with it. **Blocker:** a live call. **Owner:** alec —
+  the live AC4 dogfood run (pending in
+  `docs/dogfood/2026-10-09-tool-context-acceptance.md`; WP08 is hermetic
+  and cannot make it) records the result and deletes this bullet.
 - **Degrade scope and lifetime.** `llm.PromptCacheGuard` degrades per
   (profile id, model id) — a proxy or one routed model rejecting
   `cache_control` leaves other profiles and models marking — and the
@@ -6451,18 +6456,6 @@ The WP06/WP07 integration task, exactly:
 **Owner:** the coordinator, at release-branch integration time — deletes
 this entry.
 
-### 2026-10-09 (tool-context-budget-01TCBUD01 WP07) — owner-accepted extensions of FR-K4's `tool_exposure` shape
-
-FR-K4 names `{servers:{<name>:{tier, pinned}}, budget_tokens?,
-hot_set_extra?}`. WP07 ships two accepted extensions, recorded so the
-spec catches up (coordinator to write them into spec §2.1): `pinned:false`
-entries are **org defaults** that sit *below* the user layer (org pin →
-session → project → user → org default → harness default), and a per-server
-`tools{<bare>:{tier, pinned}}` sub-map. `hot_set_extra` beats a pinned
-`off` on the same tool (logged at decode; the overridden pin row is left
-out of the read-only view). Not a gap; this entry is deleted when spec
-§2.1 records them.
-
 ### 2026-10-09 (found in tool-context-budget-01TCBUD01 WP07 review) — bundle apply state survives sign-out
 
 `FleetSignOut` / `handleNodeRemoved` stop the pollers but leave
@@ -6478,6 +6471,26 @@ does not fix the cross-org id. Pre-existing, not introduced by WP07.
 this entry.
 
 ## Drained
+
+### 2026-10-09 · CLOSED — owner-accepted extensions of FR-K4's `tool_exposure` shape (tool-context-budget-01TCBUD01 WP07)
+
+**Closed by the WP08 sweep (2026-10-09):** spec §2.1 now records them
+(the "Ruling 2026-10-09 (WP07 review)" paragraph: `pinned:false` org
+defaults below the user layer, per-tool `tools{}` entries,
+`budget_tokens`, `hot_set_extra` beating a pinned `off`), and
+`TestToolExposureDial_OrgPinsReachTheRequest` drives a pinned tier and a
+pinned budget to the request. The original entry follows.
+
+FR-K4 names `{servers:{<name>:{tier, pinned}}, budget_tokens?,
+hot_set_extra?}`. WP07 ships two accepted extensions, recorded so the
+spec catches up (coordinator to write them into spec §2.1): `pinned:false`
+entries are **org defaults** that sit *below* the user layer (org pin →
+session → project → user → org default → harness default), and a per-server
+`tools{<bare>:{tier, pinned}}` sub-map. `hot_set_extra` beats a pinned
+`off` on the same tool (logged at decode; the overridden pin row is left
+out of the read-only view). Not a gap; this entry is deleted when spec
+§2.1 records them.
+
 
 ### 2026-10-09 · CLOSED — derived cost double-charged cached prompt tokens on inclusive providers (`tool-context-budget-01TCBUD01` WP01 → WP05)
 

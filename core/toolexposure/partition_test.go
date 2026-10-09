@@ -91,10 +91,10 @@ func TestPartition_SegmentsAndOrder(t *testing.T) {
 	check("Digest", p.Digest, "kenaz__monitor", "outlook__create-event")
 	check("Stopped", p.Stopped, "github__")
 
-	send := p.SendNames()
+	send := p.sendNames()
 	for _, n := range send {
 		if !rc.Sendable(n) {
-			t.Errorf("SendNames() includes %q but Sendable reports false", n)
+			t.Errorf("sendNames() includes %q but Sendable reports false", n)
 		}
 	}
 	for _, n := range []string{"secret__dump", "kenaz__monitor", "outlook__create-event", "github__", "nope__x"} {

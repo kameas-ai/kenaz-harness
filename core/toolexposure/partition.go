@@ -65,9 +65,11 @@ type Partition struct {
 	Stopped   []ResolvedTool
 }
 
-// SendNames returns the names of every tool the call carries, in
-// order: Hot, then Pinned, then Activated.
-func (p Partition) SendNames() []string {
+// sendNames returns the names of every tool the call carries, in
+// order: Hot, then Pinned, then Activated. Unexported: the request
+// builder reads the segments themselves; this is the package tests'
+// oracle (2026-10-09 unwired sweep — no non-test reader).
+func (p Partition) sendNames() []string {
 	out := make([]string, 0, len(p.Hot)+len(p.Pinned)+len(p.Activated))
 	for _, seg := range [][]ResolvedTool{p.Hot, p.Pinned, p.Activated} {
 		for _, t := range seg {

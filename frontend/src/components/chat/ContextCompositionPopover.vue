@@ -15,8 +15,10 @@
  * provider's own count. Memory is listed only when non-zero: memory
  * snippets that arrive as messages are counted in history.
  *
- * No schema-budget line yet (spec §2.5; 2026-10-09, owner alec): there is
- * no budget to show until WP04 applies one. WP04 adds it here.
+ * The schema-budget line (spec §2.5) shows the budget the call's tool
+ * definitions were fitted to (`composition.schemaBudget`, WP04) and how
+ * many loaded tools were left out to fit it; it is absent when no budget
+ * applied (tool exposure unavailable for the call).
  *
  * The default slot receives `{ open }` so the trigger content can drop its
  * own `title` while the panel is showing.
@@ -82,6 +84,9 @@ const rows = computed<Row[]>(() => {
 });
 
 const total = computed(() => rows.value.reduce((sum, r) => sum + r.tokens, 0));
+
+const budget = computed(() => props.composition?.schemaBudget ?? 0);
+const evicted = computed(() => props.composition?.toolsEvicted ?? 0);
 </script>
 
 <template>
@@ -124,6 +129,16 @@ const total = computed(() => rows.value.reduce((sum, r) => sum + r.tokens, 0));
           <li class="mt-1 flex justify-between gap-3 border-t border-hairline pt-1">
             <span class="text-ink-muted">Total (est.)</span>
             <span class="font-mono tabular-nums text-ink" data-testid="context-composition-total">{{ fmt(total) }}</span>
+          </li>
+          <li
+            v-if="budget > 0"
+            class="flex justify-between gap-3"
+            data-testid="context-composition-budget"
+          >
+            <span class="text-ink-muted">
+              Tool budget<template v-if="evicted > 0"> ({{ evicted }} left out)</template>
+            </span>
+            <span class="font-mono tabular-nums text-ink">{{ fmt(composition.tools) }} / {{ fmt(budget) }}</span>
           </li>
           <li
             class="flex justify-between gap-3"

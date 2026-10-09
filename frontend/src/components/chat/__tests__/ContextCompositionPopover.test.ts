@@ -91,6 +91,21 @@ describe('ContextCompositionPopover', () => {
     expect(w.find('[data-testid="slot-state"]').text()).toBe('true');
   });
 
+  it('shows the schema budget the tools were fitted to, and how many were left out', async () => {
+    const w = mountPopover({ ...composition, tools: 7_453, toolsFull: 16, schemaBudget: 8_000, toolsEvicted: 91 });
+    await w.trigger('mouseenter');
+    const line = w.find('[data-testid="context-composition-budget"]');
+    expect(line.exists()).toBe(true);
+    expect(line.text()).toContain('7.5k / 8k');
+    expect(line.text()).toContain('91 left out');
+  });
+
+  it('has no budget line when no budget applied to the call', async () => {
+    const w = mountPopover(composition);
+    await w.trigger('mouseenter');
+    expect(w.find('[data-testid="context-composition-budget"]').exists()).toBe(false);
+  });
+
   it('says there is no breakdown yet when no measured call has completed', async () => {
     const w = mountPopover(null);
     await w.find('[data-testid="context-composition-trigger"]').trigger('click');

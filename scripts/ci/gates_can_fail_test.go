@@ -5164,3 +5164,83 @@ func TestAdviceKindsGate_CleanOnUnmutatedTree(t *testing.T) {
 		t.Fatalf("check-advice-kinds.sh exited 0 but did not print \"clean\":\n%s", out)
 	}
 }
+
+// toolExposureStructuralOnly runs check-tool-exposure-gate.sh's
+// structural half only: the planted cases below exercise (a), and the
+// runtime half (two go test runs) would only slow them down.
+var toolExposureStructuralOnly = map[string]string{"TOOL_EXPOSURE_GATE_STRUCTURAL_ONLY": "1"}
+
+// TestToolExposureGate_PlantedDirectToolsWriteFires is the planted-
+// violation proof for check-tool-exposure-gate.sh (tool-context-budget-
+// 01TCBUD01 WP08, spec FR-E1 / acceptance criterion 6): a request builder
+// in the chat package that writes the discovered catalog straight into
+// GenerationRequest.Tools — the pre-mission shape, which sent ~220k
+// tokens of summary-tier schemas on every call — must fail the gate. Both
+// writer shapes are planted in turn: an assignment and a literal key.
+func TestToolExposureGate_PlantedDirectToolsWriteFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "rpc", "views", "agentgraph", "chat", "zz_gate_probe_tool_exposure.go")
+	for _, tc := range []struct {
+		name, body, wantKey string
+	}{
+		{
+			name: "assign",
+			body: "func zzGateProbeDirectTools(catalog []corellm.ToolSpec) corellm.GenerationRequest {\n" +
+				"\tgen := corellm.GenerationRequest{Model: \"m\"}\n" +
+				"\tgen.Tools = catalog\n" +
+				"\treturn gen\n}\n",
+			wantKey: "core/rpc/views/agentgraph/chat/zz_gate_probe_tool_exposure.go|zzGateProbeDirectTools|assign",
+		},
+		{
+			name: "literal",
+			body: "func zzGateProbeLiteralTools(catalog []corellm.ToolSpec) *corellm.GenerationRequest {\n" +
+				"\treturn &corellm.GenerationRequest{Model: \"m\", Tools: catalog}\n}\n",
+			wantKey: "core/rpc/views/agentgraph/chat/zz_gate_probe_tool_exposure.go|zzGateProbeLiteralTools|literal",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := "package chat\n\nimport corellm \"github.com/kameas-ai/kenaz-harness/core/llm\"\n\n" + tc.body
+			cleanup := plant(t, probe, content, "")
+			defer cleanup()
+			code, out := runGateEnv(t, "check-tool-exposure-gate.sh", root, toolExposureStructuralOnly)
+			if code == 0 {
+				t.Fatalf("check-tool-exposure-gate.sh exited 0 with a direct GenerationRequest.Tools write "+
+					"planted in the chat package — the gate cannot fail.\noutput:\n%s", out)
+			}
+			if !strings.Contains(out, "unlisted writer") || !strings.Contains(out, tc.wantKey) {
+				t.Fatalf("gate failed, but its output does not name the planted writer %q as unlisted:\n%s", tc.wantKey, out)
+			}
+		})
+	}
+}
+
+// TestToolExposureGate_PlantedStaleAllowlistEntryFires: an allowlist line
+// that names no writer fails the gate (allowlists shrink monotonically).
+func TestToolExposureGate_PlantedStaleAllowlistEntryFires(t *testing.T) {
+	root := repoRoot(t)
+	allow := filepath.Join(root, "scripts", "ci", "allowlists", "tool-exposure-writers.txt")
+	const stale = "core/rpc/zz_gone.go|zzGone|literal"
+	cleanup := plant(t, allow, "", "\n"+stale+"\n")
+	defer cleanup()
+	code, out := runGateEnv(t, "check-tool-exposure-gate.sh", root, toolExposureStructuralOnly)
+	if code == 0 || !strings.Contains(out, "STALE") || !strings.Contains(out, stale) {
+		t.Fatalf("check-tool-exposure-gate.sh did not fail on a stale allowlist entry (exit %d):\n%s", code, out)
+	}
+}
+
+// TestToolExposureGate_StructuralVerdictIsCWDIndependent: the clean tree
+// passes the structural half from the repo root and from a foreign cwd,
+// and the scan is non-vacuous (it lists the chat request builder).
+func TestToolExposureGate_StructuralVerdictIsCWDIndependent(t *testing.T) {
+	root := repoRoot(t)
+	for _, dir := range []string{root, t.TempDir()} {
+		code, out := runGateEnv(t, "check-tool-exposure-gate.sh", dir, toolExposureStructuralOnly)
+		if code != 0 {
+			t.Fatalf("check-tool-exposure-gate.sh from %s exited %d on the clean tree:\n%s", dir, code, out)
+		}
+		if !strings.Contains(out, "(*LLMProviderAdapter).generate|settools") {
+			t.Fatalf("check-tool-exposure-gate.sh from %s passed without listing the chat request builder — "+
+				"the scan looked at nothing:\n%s", dir, out)
+		}
+	}
+}

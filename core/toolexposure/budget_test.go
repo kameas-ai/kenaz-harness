@@ -73,7 +73,7 @@ func TestFitBudget_EvictionOrder(t *testing.T) {
 		if got := names(fit.Evicted); !reflect.DeepEqual(got, append([]string{}, c.evicted...)) {
 			t.Errorf("%s: evicted = %v, want %v", c.name, got, c.evicted)
 		}
-		if got := fit.Partition.SendNames(); !reflect.DeepEqual(got, c.send) {
+		if got := fit.Partition.sendNames(); !reflect.DeepEqual(got, c.send) {
 			t.Errorf("%s: send = %v, want %v", c.name, got, c.send)
 		}
 		if fit.OverBy != c.overBy || fit.PinnedOverBy != c.pinnedOverBy || fit.PinnedEvicted != c.pinnedEvicted || fit.Remaining != c.remaining || fit.HotOverBy != c.hotOverBy {
@@ -98,7 +98,7 @@ func TestFitBudget_EvictionOrder(t *testing.T) {
 			}
 		}
 		sent := 0
-		for _, n := range fit.Partition.SendNames() {
+		for _, n := range fit.Partition.sendNames() {
 			sent += size(ResolvedTool{Name: n})
 		}
 		if fit.Tokens != sent {
@@ -187,7 +187,7 @@ func TestPartitionOrder_StableAcrossResolves(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := rc.Partition().SendNames(); !reflect.DeepEqual(got, want) {
+		if got := rc.Partition().sendNames(); !reflect.DeepEqual(got, want) {
 			t.Fatalf("resolve %d: send = %v, want %v", i, got, want)
 		}
 	}

@@ -1,0 +1,36 @@
+# tool-exposure-writers — every non-test writer of
+# llm.GenerationRequest.Tools under core/, keyed
+# `<file>|<function>|<kind>` (kind: literal | settools | assign).
+#
+# Enforced by scripts/ci/check-tool-exposure-gate.sh
+# (scripts/ci/cmd/checktoolexposure), tool-context-budget-01TCBUD01 WP08,
+# spec FR-E1 / acceptance criterion 6. A writer is a place a tool schema
+# can reach a model. Each one either IS the exposure-partition path
+# (toolexposure.ResolvedCatalog → chat.exposureTurn.selectTools →
+# GenerationRequest.SetTools) or is a DATED gap naming its blocker and
+# owner. An unlisted writer fails; a line that is no longer a writer is
+# stale and fails. Lines shrink monotonically.
+#
+# ─────────────────────────────────────────────────────────────────────
+
+# THE exposure path. LLMProviderAdapter.generate calls
+# exposureTurn.selectTools per model call and hands its hot / pinned /
+# activated segments to SetTools. Its `a.exposure == nil` branch sends the
+# adapter's whole catalog: that is the degraded-boot posture of
+# rpc.buildLoadToolsService (settings, sessions, projects or discoverer
+# unavailable — the nil-core test chassis), not a production path. The
+# gate's runtime half runs TestToolExposureWiring_FirstTurnToolTokens,
+# which fails if newLLMStack over a real core wires no load core, and
+# TestRequestBuilder_NeverSendsSummaryToolUnlessActivated, the FR-E1 seed.
+core/rpc/views/agentgraph/chat/llm_provider_adapter.go|(*LLMProviderAdapter).generate|settools
+
+# 2026-10-09 — OPEN GAP, owner alec. Workflow `model_turn` steps
+# (core/workflows/runners.go discoverTools → wfLLMStreamerAdapter.Stream)
+# send the step's own tool list — every discovered tool when the step says
+# `tools: all` — without tiers (spec §2.6 names workflow steps; WP03 tiered
+# the chat runner only). Blocker: a workflow step has no session to hold
+# activations and no kenaz__load_tools loop; the follow-up "workflow-step
+# tool exposure" gives steps a resolved catalog (project tiers + the
+# step's explicit names as pins) and deletes this line. Recorded in
+# docs/unwired-ledger.md (tool-context-budget WP08 entry).
+core/rpc/wf_adapters.go|(*wfLLMStreamerAdapter).Stream|literal
