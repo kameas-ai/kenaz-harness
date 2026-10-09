@@ -9,6 +9,7 @@ import {
   failureFromClosed,
   isAutoRetryable,
   needsSettings,
+  offersToolsMenu,
   undeliveredFromRuns,
 } from '@/lib/delivery';
 import type { TurnRun } from '@/lib/types';
@@ -132,7 +133,21 @@ describe('copy', () => {
         turnSpanId: 'u', failureClass: 'user_actionable', code: 'request_too_large',
         summary: "The request is larger than the model's context window",
       }),
-    ).toBe("Not delivered — The request is larger than the model's context window. Pick a larger model or disable tools, then retry.");
+    ).toBe("Not delivered — The request is larger than the model's context window. Unload tools or pick a larger model, then retry.");
+  });
+
+  it('names the tool-definition share of the window when it is known', () => {
+    const f = {
+      turnSpanId: 'u', failureClass: 'user_actionable' as const, code: 'request_too_large',
+      summary: "The request is larger than the model's context window",
+    };
+    expect(deliveryCopy(f, { toolsTokens: 118_000, windowTokens: 131_072 })).toBe(
+      `Not delivered — The request is larger than the model's context window. Tool definitions use ${(118_000).toLocaleString()} of this model's ${(131_072).toLocaleString()} tokens — unload tools or pick a larger model, then retry.`,
+    );
+    // Either number unknown: the generic remedy, never "0 of M".
+    expect(deliveryCopy(f, { toolsTokens: 0, windowTokens: 131_072 })).toContain('Unload tools or pick a larger model');
+    expect(offersToolsMenu(f)).toBe(true);
+    expect(offersToolsMenu({ ...f, code: 'payment_required' })).toBe(false);
   });
 
   it('offers settings only for key/permission problems', () => {

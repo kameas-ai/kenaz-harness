@@ -1009,6 +1009,8 @@ export function Tools_RecipeStatus(arg1:string):Promise<transport.RecipeStatus>;
 
 export function Tools_RequestAdditionalAllowedDir(arg1:string,arg2:string,arg3:string):Promise<tools.FSAccessResult>;
 
+export function Tools_SchemaCosts(arg1:string,arg2:string):Promise<Array<loadtools.ServerCost>>;
+
 export function Tools_SignInRecipe(arg1:string):Promise<transport.RecipeStatus>;
 
 export function Tools_UninstallRecipe(arg1:string):Promise<void>;

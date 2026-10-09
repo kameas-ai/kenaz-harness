@@ -11,6 +11,9 @@ import {
   createFakeScheduledChatClient,
   type ScheduledChatEntry,
 } from '@/lib/scheduledChatClient';
+import { createFakeHarnessClient } from '@/lib/harnessClient';
+import { HarnessClientKey } from '@/lib/harnessClientContext';
+import type { ServerSchemaCost } from '@/lib/types';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -39,6 +42,7 @@ function mountCreate() {
   const client = createFakeScheduledChatClient();
   const wrapper = mount(ScheduledChatFormModal, {
     props: { client, editing: null },
+    global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },
     attachTo: document.body,
   });
   return { wrapper, client };
@@ -48,6 +52,7 @@ function mountEdit(entry: ScheduledChatEntry = STUB_ENTRY) {
   const client = createFakeScheduledChatClient();
   const wrapper = mount(ScheduledChatFormModal, {
     props: { client, editing: entry },
+    global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },
     attachTo: document.body,
   });
   return { wrapper, client };
@@ -128,7 +133,7 @@ describe('ScheduledChatFormModal', () => {
   it('calls client.create and emits saved in create mode', async () => {
     const createMock = vi.fn().mockResolvedValue({ ...STUB_ENTRY, id: 'new-id' });
     const client = createFakeScheduledChatClient({ create: createMock });
-    const wrapper = mount(ScheduledChatFormModal, {
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } }, 
       props: { client, editing: null },
       attachTo: document.body,
     });
@@ -145,7 +150,7 @@ describe('ScheduledChatFormModal', () => {
   it('calls client.update and emits saved in edit mode', async () => {
     const updateMock = vi.fn().mockResolvedValue({ ...STUB_ENTRY, name: 'Updated' });
     const client = createFakeScheduledChatClient({ update: updateMock });
-    const wrapper = mount(ScheduledChatFormModal, {
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } }, 
       props: { client, editing: STUB_ENTRY },
       attachTo: document.body,
     });
@@ -160,7 +165,7 @@ describe('ScheduledChatFormModal', () => {
     const client = createFakeScheduledChatClient({
       create: vi.fn().mockRejectedValue(new Error('server error')),
     });
-    const wrapper = mount(ScheduledChatFormModal, {
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } }, 
       props: { client, editing: null },
       attachTo: document.body,
     });
@@ -210,7 +215,7 @@ describe('ScheduledChatFormModal', () => {
   it('sends triggerKind=once and an empty cron on create for a one-shot schedule', async () => {
     const createMock = vi.fn().mockResolvedValue({ ...STUB_ENTRY, id: 'new-id', triggerKind: 'once' });
     const client = createFakeScheduledChatClient({ create: createMock });
-    const wrapper = mount(ScheduledChatFormModal, {
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } }, 
       props: { client, editing: null },
       attachTo: document.body,
     });
@@ -250,3 +255,65 @@ describe('ScheduledChatFormModal', () => {
 function wrapper_saveBtnText(wrapper: ReturnType<typeof mount>) {
   return wrapper.find('[data-testid="modal-save"]').text();
 }
+
+// ── tool set (tool-context-budget-01TCBUD01 WP06, FR-K3) ─────────────────────
+
+describe('ScheduledChatFormModal — tool set', () => {
+  it('shows the default tool set’s per-request cost; Custom servers is disabled with its reason', async () => {
+    const base = createFakeHarnessClient();
+    const schemaCosts = vi.fn(async (): Promise<ServerSchemaCost[]> => [
+      {
+        server: 'kenaz', state: 'running', running: true, toolCount: 3, tokenEst: 5000,
+        tier: 'mixed', source: '', pinned: false, sendableTokenEst: 4200,
+        tools: [
+          { name: 'read_file', tokenEst: 2000, tier: 'full', source: 'default', activated: false, sendable: true, hot: false },
+          { name: 'bash', tokenEst: 2200, tier: 'full', source: 'default', activated: false, sendable: true, hot: false },
+          { name: 'monitor', tokenEst: 800, tier: 'summary', source: 'default', activated: false, sendable: false, hot: false },
+        ],
+      },
+    ]);
+    const wrapper = mount(ScheduledChatFormModal, {
+      props: { client: createFakeScheduledChatClient(), editing: null },
+      global: { provide: { [HarnessClientKey as symbol]: { ...base, tools: { ...base.tools, schemaCosts } } } },
+    });
+    await flushPromises();
+    // Schedules have no project and no session: the user's default tiers.
+    expect(schemaCosts).toHaveBeenCalledWith('', '');
+    expect(wrapper.find('[data-testid="sc-tool-set-cost"]').text()).toBe(
+      'Each request sends 2 tool definitions (~4.2k tokens); the run can load more as it needs them.',
+    );
+    expect(wrapper.find('[data-testid="sc-tool-set-custom"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('#sc-tool-set-custom-reason').text()).toContain('not available yet');
+  });
+
+  it('renders no cost line when the read fails', async () => {
+    const base = createFakeHarnessClient();
+    const wrapper = mount(ScheduledChatFormModal, {
+      props: { client: createFakeScheduledChatClient(), editing: null },
+      global: {
+        provide: {
+          [HarnessClientKey as symbol]: {
+            ...base,
+            tools: { ...base.tools, schemaCosts: async () => { throw new Error('boom'); } },
+          },
+        },
+      },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="sc-tool-set-cost"]').exists()).toBe(false);
+  });
+
+  it('a contained schedule says its cost is not shown', async () => {
+    const { wrapper } = mountEdit({ ...STUB_ENTRY, toolAllowlist: ['fetch__fetch', 'kenaz__read_file'] });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="sc-tool-set-cost"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="sc-tool-set-contained"]').text()).toContain('Contained run');
+  });
+
+  it('the tool-set radios share a group name', () => {
+    const { wrapper } = mountCreate();
+    expect(wrapper.find('[data-testid="sc-tool-set-default"]').attributes('name')).toBe('sc-tool-set');
+    expect(wrapper.find('[data-testid="sc-tool-set-custom"]').attributes('name')).toBe('sc-tool-set');
+    expect(wrapper.find('fieldset[data-testid="sc-tool-set"] legend').text()).toBe('Tool set');
+  });
+});

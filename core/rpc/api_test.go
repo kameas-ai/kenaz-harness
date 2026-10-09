@@ -65,6 +65,7 @@ import (
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
 	coresecrets "github.com/kameas-ai/kenaz-harness/core/secrets"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 )
 
 // fakeHarnessAPI is a compile-time witness that the HarnessAPI interface
@@ -108,6 +109,9 @@ func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
 	return ShellStatus{}, nil
 }
 func (f *fakeHarnessAPI) AppInfo(_ context.Context) (AppInfo, error) { return AppInfo{}, nil }
+func (f *fakeHarnessAPI) ToolSchemaCosts(_ context.Context, _, _ string) ([]loadtools.ServerCost, error) {
+	return nil, ErrToolExposureNotConfigured
+}
 func (f *fakeHarnessAPI) CompactionOverhead(_ context.Context) (CompactionOverheadInfo, error) {
 	return CompactionOverheadInfo{}, nil
 }

@@ -85,7 +85,7 @@ func (d discovererCatalog) Catalog(ctx context.Context, sessionID string) ([]loa
 	}
 	out := make([]loadtools.CatalogEntry, 0, len(specs))
 	for _, s := range specs {
-		out = append(out, loadtools.CatalogEntry{Name: s.Name, Server: s.Server})
+		out = append(out, loadtools.CatalogEntry{Name: s.Name, Server: s.Server, TokenEst: corellm.ToolSpecTokens(s)})
 	}
 	return out, nil
 }

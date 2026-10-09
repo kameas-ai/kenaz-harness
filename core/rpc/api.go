@@ -191,6 +191,11 @@ type HarnessAPI interface {
 	// this reader has nothing to do with strategy config.
 	CompactionOverhead(ctx context.Context) (CompactionOverheadInfo, error)
 
+	// ToolSchemaCosts reports every tool server's schema cost and
+	// resolved exposure tier for a session, or (sessionID empty) for a
+	// project or the user's default (tool-context-budget-01TCBUD01 §2.5).
+	ToolSchemaCosts(ctx context.Context, sessionID, projectID string) ([]loadtools.ServerCost, error)
+
 	// Advice_Respond is laya-advisors-01LAYA001 WP07's chip response RPC:
 	// action is "accept" or "dismiss". Returns the newly created child
 	// session id for a branch_now accept (empty string otherwise). See
@@ -480,6 +485,10 @@ type WindowSize struct {
 // stable for the lifetime of API. Real wiring lands in feature missions.
 type API struct {
 	core *core.Core
+
+	// toolExposure is the on-demand tool-exposure core behind
+	// ToolSchemaCosts; nil on the nil-core chassis.
+	toolExposure *loadtools.Service
 
 	// builtins holds the in-binary tool registry so the chat-input
 	// `!cmd` shell-escape can dispatch directly to kenaz__bash without
@@ -2638,6 +2647,7 @@ func New(c *core.Core, opts ...Option) *API {
 		a.sessionsAPI = sessions.WithToolLoading(a.sessionsAPI, stack.loadTools, stack.loadTools)
 		a.projectsAPI = projectsview.WithToolExposureGuard(a.projectsAPI, stack.loadTools)
 		settingsImpl.SetToolExposureGuard(stack.loadTools)
+		a.toolExposure = stack.loadTools
 	}
 	// CK-09 (chat-turn-integrity-01PMZ606 WP13): capture the sweep
 	// scheduler newLLMStack already started so Shutdown can Stop() it.
@@ -10850,6 +10860,18 @@ type CompactionOverheadInfo struct {
 	AutoTitleIndeterminateCalls int     `json:"autoTitleIndeterminateCalls"`
 	AutoTitleInputTokens        int     `json:"autoTitleInputTokens"`
 	AutoTitleOutputTokens       int     `json:"autoTitleOutputTokens"`
+}
+
+// ErrToolExposureNotConfigured is returned by ToolSchemaCosts when the
+// chassis wired no tool-exposure core.
+var ErrToolExposureNotConfigured = errors.New("rpc: tool exposure not configured")
+
+// ToolSchemaCosts implements HarnessAPI.
+func (a *API) ToolSchemaCosts(ctx context.Context, sessionID, projectID string) ([]loadtools.ServerCost, error) {
+	if a.toolExposure == nil {
+		return nil, ErrToolExposureNotConfigured
+	}
+	return a.toolExposure.SchemaCosts(ctx, sessionID, projectID)
 }
 
 // CompactionOverhead implements HarnessAPI. Returns the zero value (not

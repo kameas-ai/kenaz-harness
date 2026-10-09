@@ -79,8 +79,26 @@ export function needsSettings(f: DeliveryFailure | null | undefined): boolean {
   return !!f && (f.code === 'auth_invalid' || f.code === 'forbidden');
 }
 
+/**
+ * What the surface knows about the request that was too large: the tool
+ * definitions' tokens (the last measured composition) and the model's
+ * window. Either may be unknown (0 / absent).
+ */
+export interface RequestSizeContext {
+  toolsTokens?: number;
+  windowTokens?: number;
+}
+
+/** request_too_large: the composer offers a button that opens the Tools menu. */
+export const REQUEST_TOO_LARGE_CODE = 'request_too_large';
+
+/** True when the failure's remedy is unloading tools. */
+export function offersToolsMenu(f: DeliveryFailure | null | undefined): boolean {
+  return !!f && f.code === REQUEST_TOO_LARGE_CODE;
+}
+
 /** The remedy sentence that follows the summary. */
-function remedy(code: string): string {
+function remedy(code: string, ctx?: RequestSizeContext): string {
   switch (code) {
     case 'payment_required':
       return 'Add credits, then retry.';
@@ -99,8 +117,14 @@ function remedy(code: string): string {
       return 'Retry once the provider recovers.';
     case 'session_full':
       return 'Start a new session or compact this one, then retry.';
-    case 'request_too_large':
-      return 'Pick a larger model or disable tools, then retry.';
+    case REQUEST_TOO_LARGE_CODE: {
+      const n = ctx?.toolsTokens ?? 0;
+      const m = ctx?.windowTokens ?? 0;
+      if (n > 0 && m > 0) {
+        return `Tool definitions use ${n.toLocaleString()} of this model's ${m.toLocaleString()} tokens — unload tools or pick a larger model, then retry.`;
+      }
+      return 'Unload tools or pick a larger model, then retry.';
+    }
     case STOPPED_CODE:
       return 'Retry to send it.';
     default:
@@ -112,9 +136,9 @@ function remedy(code: string): string {
  * The badge copy, e.g.
  *   "Not delivered — Out of credits with OpenRouter. Add credits, then retry."
  */
-export function deliveryCopy(f: DeliveryFailure): string {
+export function deliveryCopy(f: DeliveryFailure, ctx?: RequestSizeContext): string {
   const summary = f.summary || 'The model request failed';
-  return `Not delivered — ${summary}. ${remedy(f.code)}`;
+  return `Not delivered — ${summary}. ${remedy(f.code, ctx)}`;
 }
 
 /** Wire shape of the delivery fields on `llm:stream-closed`. */

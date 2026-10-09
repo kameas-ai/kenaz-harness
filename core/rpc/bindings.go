@@ -2172,6 +2172,16 @@ func (b *Bindings) Hooks_DryRun(hookID string, syntheticPayload string) (hooksvi
 
 // ── tools (MCP recipes) ────────────────────────────────────────────────
 
+// Tools_SchemaCosts reports every tool server's schema cost (token
+// estimate of its tool definitions) and resolved exposure tier, per tool
+// and per server. With sessionID set it resolves that session, its
+// override and activated set included; otherwise it resolves projectID
+// with no session, or the user's default when projectID is empty.
+func (b *Bindings) Tools_SchemaCosts(sessionID, projectID string) ([]loadtools.ServerCost, error) {
+	defer sentry.WrapBinding("Tools_SchemaCosts")()
+	return b.api.ToolSchemaCosts(b.ctx(), sessionID, projectID)
+}
+
 func (b *Bindings) Tools_ListRecipes() ([]tools.RecipeListing, error) {
 	defer sentry.WrapBinding("Tools_ListRecipes")()
 	return b.api.Tools().ListRecipes(b.ctx())

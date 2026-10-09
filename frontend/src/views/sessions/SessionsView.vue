@@ -30,7 +30,8 @@ import {
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ComposerError from '@/components/chat/ComposerError.vue';
 import DeliveryBanner from '@/components/chat/DeliveryBanner.vue';
-import { STOPPED_CODE, type DeliveryFailure } from '@/lib/delivery';
+import { STOPPED_CODE, offersToolsMenu, type DeliveryFailure } from '@/lib/delivery';
+import { sendableTokens } from '@/lib/toolExposure';
 import ReasoningControl from '@/components/chat/ReasoningControl.vue';
 import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
@@ -53,6 +54,8 @@ import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
 import ContextCompositionPopover from '@/components/chat/ContextCompositionPopover.vue';
+import ToolsMenu from '@/components/chat/ToolsMenu.vue';
+import type { RequestSizeContext } from '@/lib/delivery';
 import AdviceChip from '@/components/chat/AdviceChip.vue';
 import AdviceAutoActedBanner from '@/components/chat/AdviceAutoActedBanner.vue';
 import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
@@ -389,7 +392,31 @@ watch(
 const switcherOpen = ref(false);
 function toggleSwitcher() {
   switcherOpen.value = !switcherOpen.value;
+  if (switcherOpen.value) toolsMenuOpen.value = false;
 }
+
+// Composer Tools menu (tool-context-budget-01TCBUD01 WP06, FR-K2). Opened
+// from the status bar or from a request_too_large remedy.
+const toolsMenuOpen = ref(false);
+function openToolsMenu() {
+  switcherOpen.value = false;
+  toolsMenuOpen.value = true;
+}
+
+/**
+ * True when the model's catalog entry says requests carry prompt-cache
+ * markers (ModelInfo.supportsPromptCache). The rpc ModelInfo does not
+ * carry the field until WP05's flag is copied onto it (docs/unwired-ledger.md),
+ * so today it is always absent; absent reads as unknown and renders
+ * nothing.
+ */
+function modelCachesPrompts(providerId: string, modelId: string): boolean {
+  const p = providers.value.find((x) => x.id === providerId);
+  return p?.modelInfos?.find((m) => m.id === modelId)?.supportsPromptCache === true;
+}
+const activeModelCachesPrompts = computed(() =>
+  modelCachesPrompts(activeProvider.value?.id ?? '', activeModelId.value),
+);
 function pickModel(providerId: string, modelId: string) {
   activeProviderId.value = providerId;
   activeModelId.value = modelId;
@@ -523,6 +550,33 @@ const contextDenominator = computed((): number => {
 
 // hasContextWindow: true when the backend has supplied a non-zero cap.
 const hasContextWindow = computed(() => contextDenominator.value > 0);
+
+// The request_too_large remedy names the tool definitions the NEXT
+// request would send (Tools_SchemaCosts' sendable tokens for this session,
+// before budget) against the active model's window. A failed first turn
+// has no measured composition, so the last call's numbers cannot be used.
+// Either number 0 = unknown, and the remedy falls back to plain copy.
+const nextToolTokens = ref(0);
+const tooLargePending = computed(() =>
+  [...session.undelivered.value.values()].some((f) => offersToolsMenu(f)),
+);
+async function refreshNextToolTokens() {
+  const sid = sessionId.value;
+  if (!tooLargePending.value || servedMode || !sid) {
+    nextToolTokens.value = 0;
+    return;
+  }
+  try {
+    const costs = await client.tools.schemaCosts(sid, '');
+    if (sid === sessionId.value) nextToolTokens.value = sendableTokens(costs);
+  } catch {
+    if (sid === sessionId.value) nextToolTokens.value = 0;
+  }
+}
+const deliverySizeContext = computed<RequestSizeContext>(() => ({
+  toolsTokens: nextToolTokens.value,
+  windowTokens: contextDenominator.value,
+}));
 
 // contextNumerator: the cumulative input-token count for the session.
 // Reads from session.lastUsage which is updated in near-real-time via
@@ -1138,6 +1192,17 @@ const hasAnyProvider = computed(() => providers.value.length > 0);
  * cannot submit.
  */
 const servedMode = isServedMode();
+
+// Re-read the remedy's tool tokens when a request_too_large failure
+// appears, the session changes, or the Tools menu closes (its writes
+// change what the next request sends).
+watch(
+  [tooLargePending, sessionId, toolsMenuOpen],
+  ([, , menuOpen]) => {
+    if (!menuOpen) void refreshNextToolTokens();
+  },
+  { immediate: true },
+);
 
 const noProviderHelp = computed(() =>
   servedMode
@@ -2284,6 +2349,9 @@ async function onShared() {
                 :undelivered="undeliveredForList"
                 :retry-message-id="retryMessageId"
                 :auto-retry="session.autoRetry.value"
+                :delivery-size-context="deliverySizeContext"
+                :tools-menu-available="!servedMode"
+                @open-tools="openToolsMenu"
                 @retry-delivery="onRetryDelivery"
                 @cancel-retry="onCancelDeliveryRetry"
                 @new-session="onNudgeNewSession"
@@ -2317,6 +2385,9 @@ async function onShared() {
             :undelivered="undeliveredForList"
             :retry-message-id="retryMessageId"
             :auto-retry="session.autoRetry.value"
+            :delivery-size-context="deliverySizeContext"
+            :tools-menu-available="!servedMode"
+            @open-tools="openToolsMenu"
             @retry-delivery="onRetryDelivery"
             @cancel-retry="onCancelDeliveryRetry"
             @new-session="onNudgeNewSession"
@@ -2479,6 +2550,12 @@ async function onShared() {
             <span class="font-mono text-ink-muted">
               {{ activeModelId || '—' }}
             </span>
+            <span
+              v-if="activeModelCachesPrompts"
+              class="rounded-sm border border-border-muted px-1 text-[10px] text-ink-subtle"
+              title="Requests to this model mark the system prompt and loaded tools for the provider's prompt cache."
+              data-testid="session-model-caches-prompts"
+            >caches prompts</span>
             <span aria-hidden="true">▾</span>
           </button>
           <div
@@ -2508,7 +2585,7 @@ async function onShared() {
             >
               <div class="font-mono text-xs">{{ c.modelId }}</div>
               <div class="text-[10px] text-ink-dim">
-                {{ c.providerName }}
+                {{ c.providerName }}<template v-if="modelCachesPrompts(c.providerId, c.modelId)"> · caches prompts</template>
               </div>
             </button>
             <div
@@ -2532,6 +2609,15 @@ async function onShared() {
               </div>
             </div>
           </div>
+          <ToolsMenu
+            v-if="hasSession"
+            v-model:open="toolsMenuOpen"
+            :session-id="sessionId"
+            :project-id="session.session.value?.projectId ?? ''"
+            :composition="sessionUsage?.composition ?? null"
+            :window-tokens="contextDenominator"
+            :served-mode="servedMode"
+          />
           <!-- Cost pill (token-cost-telemetry-01KQ8TD7 WP04) -->
           <CostCell
             :usage="sessionUsage"
@@ -2638,7 +2724,10 @@ async function onShared() {
           :failure="deliveryBannerFailure"
           :auto-retry="session.autoRetry.value"
           :settings-available="!servedMode"
+          :size-context="deliverySizeContext"
+          :tools-available="!servedMode"
           class="mx-3 mb-2"
+          @open-tools="openToolsMenu"
           @retry="onRetryDelivery()"
           @cancel-retry="onCancelDeliveryRetry"
           @open-settings="onOpenProviderSettings"

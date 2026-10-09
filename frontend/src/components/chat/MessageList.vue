@@ -36,7 +36,7 @@ import TurnRunLinks from './TurnRunLinks.vue';
 import UndeliveredBadge from './UndeliveredBadge.vue';
 import { foldedTurnCounts, projectTranscript, runIdFromLiveSpan } from '@/lib/transcript';
 import type { Artifact, MemoryScopeKind, Message } from '@/lib/types';
-import type { DeliveryFailure } from '@/lib/delivery';
+import type { DeliveryFailure, RequestSizeContext } from '@/lib/delivery';
 import type { AutoRetryState } from '@/lib/useSession';
 
 const props = defineProps<{
@@ -158,6 +158,10 @@ const props = defineProps<{
   retryMessageId?: string;
   /** Pending automatic retry, shown on the retry target's badge. */
   autoRetry?: AutoRetryState | null;
+  /** Tool tokens and model window for a request_too_large badge's remedy. */
+  deliverySizeContext?: RequestSizeContext | null;
+  /** Whether a request_too_large badge offers "Open tools". */
+  toolsMenuAvailable?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -207,6 +211,8 @@ const emit = defineEmits<{
   (e: 'retry-delivery', messageId: string): void;
   /** Cancel the pending automatic retry. */
   (e: 'cancel-retry'): void;
+  /** "Open tools" on a request_too_large badge. */
+  (e: 'open-tools'): void;
 }>();
 
 /**
@@ -512,8 +518,11 @@ defineExpose({ scrollToBottom });
             :failure="f"
             :can-retry="retryMessageId === item.message.id"
             :auto-retry="retryMessageId === item.message.id ? autoRetry ?? null : null"
+            :size-context="deliverySizeContext ?? null"
+            :tools-available="toolsMenuAvailable ?? true"
             @retry="emit('retry-delivery', item.message.id)"
             @cancel-retry="emit('cancel-retry')"
+            @open-tools="emit('open-tools')"
           />
           <TurnRunLinks
             v-for="slot in runLinkSlots(item.message)"

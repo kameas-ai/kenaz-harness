@@ -366,9 +366,43 @@ its consumer). Still not consumed:
   reconciled onto these names at integration.
 - `toolexposure.SettingsSource` / `PinSource` — `wiring:deferred` at
   their declarations.
-- The seven `*_ToolExposure` / `Sessions_LoadTools` bindings have typed
-  client methods but no `.vue` caller (i15 untriaged entries, blocker
-  WP06).
+- ~~The seven `*_ToolExposure` / `Sessions_LoadTools` bindings have typed
+  client methods but no `.vue` caller~~ — closed by WP06 (2026-10-09):
+  `views/tools/ToolExposurePanel.vue` and `components/chat/ToolsMenu.vue`
+  call all seven plus WP06's `Tools_SchemaCosts`; i15 moved them from
+  untriaged to gated (the Tools menu's callers) and boundary-panelled
+  (`Settings_SetToolExposure`).
+- WP06 (2026-10-09) — schedule tool set: the schedule form's "Custom
+  servers" option is disabled with its reason; the schedule record has no
+  tool-set field. The cost line is the user's default tiers (schedules
+  have no project); a schedule contained to a `ToolAllowlist` (every
+  model-created schedule) says "cost not shown" instead of a number that
+  ignores the containment. **Owner:** alec — follow-up mission "schedule
+  tool set" (not WP08).
+- WP06 (2026-10-09) — "caches prompts" badge: reads
+  `ModelInfo.supportsPromptCache` from `Provider.modelInfos`, which the rpc
+  `views/llm.ModelInfo` (`core/rpc/views/llm/api.go:104-113`) does not
+  carry, so it never renders yet. **Integration task (release branch, after
+  WP05 merges):** add `SupportsPromptCache bool
+  json:"supportsPromptCache,omitempty"` to `views/llm.ModelInfo`; copy it
+  wherever `MaxOutputTokens` is copied (`core/rpc/views/llm/impl.go`
+  ListModels path) AND on the `LLM_ListProviders` `modelInfos` path; confirm
+  OpenRouter's lister fills WP05's `llm.ModelInfo.SupportsPromptCache`,
+  and fall back to `llm.SupportsPromptCache(kind, id)` for Anthropic-direct
+  profiles whose model list does not. Regenerate models.ts. **Owner:**
+  alec.
+- WP06 (2026-10-09) — the Tools menu meter and the request_too_large
+  remedy use `Tools_SchemaCosts`' sendable set, which is **before budget**:
+  WP04's eviction and TTL expiry are not reflected (the meter is labelled
+  "before budget"). The meter's budget is `composition.schemaBudget` when a
+  call reports it, else min(effective setting, 15% of the active model's
+  window). Request-level tests for the budget and TTL controls (FR-K1:
+  "every control reaches an observable change in the next request") are
+  deferred to WP08 with WP04's eviction; WP06 tests the setting writes and
+  the resolver reads. **Owner:** alec — WP08 (dated 2026-10-09).
+- WP06 (2026-10-09) — per-turn cost readout wording for cached tokens is
+  left to WP05 (it rewrites CostCell / TokenMeterChip); the Tools menu
+  shows the last request's cached tokens. **Owner:** WP05.
 - The exposure tiers apply where the chat runner builds the request
   (interactive chat, scheduled chats, subagent runs). Workflow steps
   that call models with tools outside the chat runner still send their

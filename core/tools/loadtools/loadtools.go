@@ -35,9 +35,12 @@ import (
 const Name = toolexposure.LoadToolsName
 
 // CatalogEntry is one servable tool: its namespaced name and server.
+// TokenEst is its schema's token estimate; 0 when the source does not
+// measure it.
 type CatalogEntry struct {
-	Name   string
-	Server string
+	Name     string
+	Server   string
+	TokenEst int
 }
 
 // CatalogSource lists the tools a session could be sent — every tool of

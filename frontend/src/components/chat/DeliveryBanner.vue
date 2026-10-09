@@ -7,11 +7,19 @@
  * exactly the duplicate-row workaround this replaces. Instead the banner
  * says why the last message did not reach the model and offers the two
  * moves that fix it — Retry (re-runs the same message) and, for a key or
- * permission problem, Open settings. While a transient failure waits for
- * its automatic retry it shows the countdown state and a Cancel.
+ * permission problem, Open settings; for a request too large for the
+ * model, Open tools (the composer Tools menu, where tools are unloaded).
+ * While a transient failure waits for its automatic retry it shows the
+ * countdown state and a Cancel.
  */
 import { computed } from 'vue';
-import { deliveryCopy, needsSettings, type DeliveryFailure } from '@/lib/delivery';
+import {
+  deliveryCopy,
+  needsSettings,
+  offersToolsMenu,
+  type DeliveryFailure,
+  type RequestSizeContext,
+} from '@/lib/delivery';
 import type { AutoRetryState } from '@/lib/useSession';
 
 const props = withDefaults(
@@ -20,17 +28,23 @@ const props = withDefaults(
     autoRetry?: AutoRetryState | null;
     /** Hide "Open settings" where the provider form cannot be used (served). */
     settingsAvailable?: boolean;
+    /** Tool tokens and model window for the request_too_large remedy. */
+    sizeContext?: RequestSizeContext | null;
+    /** Hide "Open tools" where the Tools menu cannot act (served). */
+    toolsAvailable?: boolean;
   }>(),
-  { autoRetry: null, settingsAvailable: true },
+  { autoRetry: null, settingsAvailable: true, sizeContext: null, toolsAvailable: true },
 );
 
 const emit = defineEmits<{
   (e: 'retry'): void;
   (e: 'cancel-retry'): void;
   (e: 'open-settings'): void;
+  (e: 'open-tools'): void;
 }>();
 
-const copy = computed(() => deliveryCopy(props.failure));
+const copy = computed(() => deliveryCopy(props.failure, props.sizeContext ?? undefined));
+const showTools = computed(() => props.toolsAvailable && offersToolsMenu(props.failure));
 const showSettings = computed(
   () => props.settingsAvailable && needsSettings(props.failure),
 );
@@ -73,6 +87,15 @@ const showSettings = computed(
         @click="emit('open-settings')"
       >
         Open settings
+      </button>
+      <button
+        v-if="showTools"
+        type="button"
+        class="shrink-0 px-2 py-0.5 rounded-md border border-border-muted text-ink hover:bg-surface-2"
+        data-testid="delivery-banner-tools"
+        @click="emit('open-tools')"
+      >
+        Open tools
       </button>
       <button
         type="button"
