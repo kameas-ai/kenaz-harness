@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import AuditView from '@/views/audit/AuditView.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { AuditEntry, SavedAuditQuery } from '@/lib/types';
+import type { AuditEntry, AuditFilterQuery, SavedAuditQuery } from '@/lib/types';
 
 // audit-that-tells-the-truth-01PMZA10 UNIT-6 (WP08): AuditView.vue:179-180
 // used to keep only element [0] of a saved query's `kinds` and
@@ -109,5 +109,50 @@ describe('AuditView saved-query round trip (WP08 truncation fix)', () => {
     expect(persisted.query.kinds).toHaveLength(2);
     expect(persisted.query.actor_ids).toEqual(expect.arrayContaining(['actor-a', 'actor-b']));
     expect(persisted.query.actor_ids).toHaveLength(2);
+  });
+
+  // Audit rows record no emitter, so an applied actor term would match
+  // nothing and empty the trail. A loaded saved query's actor_ids are
+  // ignored for the query (with a notice) but kept for re-saving.
+  it('loading a saved query with actor_ids queries without them, says so, and still lists rows', async () => {
+    const seed: AuditEntry[] = [
+      { id: 'r1', timestamp: '2026-10-08T00:50:00Z', category: 'LLM', subject: 'llm.request.started' },
+    ];
+    const filterSpy = vi.fn(async (_q: AuditFilterQuery) => seed);
+    const client = createFakeHarnessClient({
+      audit: {
+        listEntries: async () => seed,
+        verifyEntry: async () => true,
+        verifyChain: async () => ({ verified: true, rows_checked: 0 }),
+        filter: filterSpy,
+        listSavedQueries: async () => [{ ...twoTermQuery, query: { ...twoTermQuery.query, kinds: ['LLM'], free_text: undefined } }],
+        saveQuery: async () => undefined,
+        deleteQuery: async () => undefined,
+        export: async () => '/tmp/test.csv',
+        bulkPurge: async () => undefined,
+        startStream: async () => 'fake-audit-sub',
+        stopStream: async () => undefined,
+      },
+    });
+    const w = mount(AuditView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid="audit-actor-ignored"]').exists()).toBe(false);
+
+    const savedQuerySelect = w.findAll('select').find((s) =>
+      s.findAll('option').some((o) => o.text() === 'multi-term'),
+    );
+    await savedQuerySelect!.setValue('sq-multi');
+    await flushPromises();
+
+    const last = filterSpy.mock.calls.at(-1)![0];
+    expect(last.kinds).toEqual(['LLM']);
+    expect(last.actor_ids).toBeUndefined();
+    expect(w.get('[data-testid="audit-actor-ignored"]').text()).toContain(
+      "actor filter can't be applied yet — ignored",
+    );
+    expect(w.findAll('[data-testid="audit-row"]')).toHaveLength(1);
+    expect(w.text()).not.toContain('No audit entries match');
   });
 });

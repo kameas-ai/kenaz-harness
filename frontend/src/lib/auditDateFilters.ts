@@ -34,3 +34,44 @@ export function defaultAuditSince(now?: Date): string {
 export function defaultAuditUntil(): string {
   return '';
 }
+
+// ── Wire bounds ──────────────────────────────────────────────────────────
+// The Since/Until inputs hold date-only `YYYY-MM-DD` strings, but the Go
+// side decodes `eventlog.FilterQuery.Since/Until` as `time.Time`, which
+// only accepts RFC3339 — a bare or half-typed date fails argument
+// decoding. These helpers are the ONE place a date input becomes a wire
+// bound; anything that is not a complete, real calendar date yields
+// `undefined` (no bound) rather than a string the backend will reject.
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+function isRealDate(d: string): boolean {
+  if (!DATE_ONLY.test(d)) return false;
+  const parsed = new Date(`${d}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === d;
+}
+
+/** Inclusive lower bound: start of the given UTC day, RFC3339. */
+export function auditSinceBound(input: string): string | undefined {
+  const d = input.trim();
+  return isRealDate(d) ? `${d}T00:00:00Z` : undefined;
+}
+
+/** Inclusive upper bound: last nanosecond of the given UTC day, RFC3339. */
+export function auditUntilBound(input: string): string | undefined {
+  const d = input.trim();
+  return isRealDate(d) ? `${d}T23:59:59.999999999Z` : undefined;
+}
+
+/**
+ * Converts a persisted bound (a saved query's since/until, which may be an
+ * RFC3339 timestamp, a legacy date-only string, or Go's zero time
+ * `0001-01-01T00:00:00Z` for "no bound") back into the date input's
+ * `YYYY-MM-DD` form. Unknown shapes become '' (no bound).
+ */
+export function auditDateInputFromBound(bound: string | undefined | null): string {
+  if (!bound) return '';
+  const d = bound.slice(0, 10);
+  if (!isRealDate(d) || d.startsWith('0001-')) return '';
+  return d;
+}

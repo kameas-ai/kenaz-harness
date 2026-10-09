@@ -314,6 +314,74 @@ func TestConfigPoller_DiskStatePersists(t *testing.T) {
 	}
 }
 
+// Dogfood 2026-10-08: a bundle restored from disk starts as "cache"; the
+// first 304 (server confirms it is current) must make it "fleet". Before,
+// only a fresh 200 apply set "fleet", so a healthy device showed
+// stale-cache after every relaunch.
+func TestConfigPoller_304AfterRelaunch_SourceBecomesFleet(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	setTestSigningKey(t, pub)
+	b1 := buildAndSignBundle(t, priv, 1)
+	body := bundleToJSON(t, b1)
+	fake := &fakeFleetConfigServer{response: body}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	// A previous run applied bundle 1 with this exact checksum.
+	dataDir := t.TempDir()
+	sum := sha256.Sum256(body)
+	if err := saveBundleState(dataDir, 1, fmt.Sprintf("%x", sum[:])); err != nil {
+		t.Fatalf("saveBundleState: %v", err)
+	}
+	if err := saveBundleApplyMeta(dataDir, bundleApplyMeta{BuildVersion: "v1"}); err != nil {
+		t.Fatalf("saveBundleApplyMeta: %v", err)
+	}
+
+	// Before any revalidation: restored from disk → "cache".
+	applier := &fakeApplier{}
+	p := newPollerForTest(t, srv, applier, dataDir)
+	p.SetBuildVersion("v1")
+	p.client = nil // Start's first poll returns ErrFleetDisabled: no revalidation yet
+	ctx0, cancel0 := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	p.Start(ctx0)
+	if got := p.Status().Source; got != "cache" {
+		t.Errorf("source before revalidation = %q, want cache", got)
+	}
+	cancel0()
+	p.Stop()
+
+	// Relaunch with a reachable server: the 304 confirms the cached bundle.
+	p2 := newPollerForTest(t, srv, applier, dataDir)
+	p2.SetBuildVersion("v1")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	p2.Start(ctx)
+	defer p2.Stop()
+	if !waitUntil(t, 300*time.Millisecond, func() bool { return p2.Status().Source == "fleet" }) {
+		t.Fatalf("source after 304 = %q, want fleet", p2.Status().Source)
+	}
+	if n := len(applier.snapshot()); n != 0 {
+		t.Errorf("a 304 must not re-apply; applied %d times", n)
+	}
+	if st := p2.Status(); st.LastAppliedID != 1 || st.LastError != "" {
+		t.Errorf("status = %+v, want LastAppliedID 1 and no error", st)
+	}
+}
+
+// A 304 with nothing ever applied is not a confirmed bundle.
+func TestConfigPoller_304WithNoBundle_StaysDefaultDeny(t *testing.T) {
+	fake := &fakeFleetConfigServer{} // nil response → always 304
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	p := newPollerForTest(t, srv, &fakeApplier{}, t.TempDir())
+	if err := p.poll(context.Background()); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if got := p.Status().Source; got != "default-deny" {
+		t.Errorf("source = %q, want default-deny", got)
+	}
+}
+
 // waitUntil polls fn every 10ms until it returns true or timeout is reached.
 func waitUntil(t *testing.T, timeout time.Duration, fn func() bool) bool {
 	t.Helper()

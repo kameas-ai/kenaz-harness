@@ -7,36 +7,66 @@
  * configured in this build (configDistributionEnabled=false) so OSS users
  * don't see a fleet indicator that has no meaning for them.
  *
- * States displayed:
- *   fleet          — live config from fleet server (green)
- *   stale-cache    — cached bundle being used (yellow)
- *   default-deny   — no bundle ever applied (muted)
- *   no-key         — signing key not wired in this binary (muted/hidden)
+ * States displayed (configSource from Settings_FleetHealth):
+ *   fleet          — the server's latest signed bundle is applied, or it
+ *                    confirmed the cached one is current (green)
+ *   cache          — a bundle restored from disk this launch that the server
+ *                    has not yet revalidated (yellow)
+ *   default-deny   — no bundle ever applied, or the config poller is not
+ *                    running (muted)
  *   unknown-key    — latest bundle signed with a key this build never pinned;
  *                    the install must update (warn)
  *   paused         — a Kameas-staff "pause paid features" hold is on the org
  *                    (kenaz-fleet PR 206); the last applied bundle stays in
  *                    force. Overrides the config source (warn), never upsell.
+ * "no-key" never renders: the chip is hidden whenever distribution is off,
+ * which is exactly when FleetHealth reports it.
  *
  * (fleet-integrity-observability WP10 / FR-010)
+ *
+ * Freshness: fleetHealth is read once per fleet:session-changed snapshot
+ * (the fleetSession store also re-reads on window focus, which lands here
+ * through the same watch) and every 60s while mounted, for applies that
+ * change no session field.
  */
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { FleetHealthView } from '@/lib/types';
 import { useFleetSession } from '@/lib/fleetSession';
 import { ORG_PAUSED_TITLE, orgPausedCategoryLine } from '@/lib/orgPausedCopy';
 
 const client = useHarnessClient();
-const { orgPaused, pausedCategory } = useFleetSession(client);
+const { orgPaused, pausedCategory, session } = useFleetSession(client);
 
 const health = ref<FleetHealthView | null>(null);
 
-onMounted(async () => {
+/** Re-read interval while mounted (backstop for event-less applies). */
+const FLEET_HEALTH_REFRESH_MS = 60_000;
+
+let readSeq = 0;
+async function refreshHealth(): Promise<void> {
+  const mySeq = ++readSeq;
   try {
-    health.value = await client.settings.fleetHealth();
+    const v = await client.settings.fleetHealth();
+    if (mySeq === readSeq) health.value = v;
   } catch {
-    // Best-effort — chip simply stays hidden on error.
+    // Best-effort — keep the last answer (or stay hidden if there is none).
   }
+}
+
+// Every pushed fleet-session snapshot is a fleet transition worth a re-read.
+watch(session, () => void refreshHealth());
+
+let interval: ReturnType<typeof setInterval> | null = null;
+
+onMounted(() => {
+  void refreshHealth();
+  interval = setInterval(() => void refreshHealth(), FLEET_HEALTH_REFRESH_MS);
+});
+
+onBeforeUnmount(() => {
+  if (interval) clearInterval(interval);
+  interval = null;
 });
 
 // Chip is visible only when the binary has a signing key wired.
@@ -59,18 +89,32 @@ const label = computed(() => {
   if (orgPaused.value) return 'paused by org';
   const src = health.value?.configSource ?? '';
   if (src === 'fleet') return 'fleet';
-  if (src === 'stale-cache' || src === 'cache') return 'stale-cache';
+  if (src === 'stale-cache' || src === 'cache') return 'cached';
   if (src === 'default-deny' || src === 'default-deny-degraded') return 'default-deny';
   if (src === 'unknown-key') return 'unknown key — update';
   return src || 'fleet?';
+});
+
+// What each state means, in words.
+const stateDescription = computed(() => {
+  const src = health.value?.configSource ?? '';
+  if (src === 'fleet')
+    return "Fleet: live — your fleet server's latest signed config bundle is in force.";
+  if (src === 'stale-cache' || src === 'cache')
+    return 'Fleet: cached — the last verified bundle is in force; the fleet server has not confirmed it is current since this launch.';
+  if (src === 'default-deny' || src === 'default-deny-degraded')
+    return 'Fleet: default-deny — no fleet config bundle is in force on this device (none has been applied, or the config poller is not running), so fleet-gated features stay off.';
+  if (src === 'unknown-key')
+    return 'Fleet: the latest bundle was signed with a key this build does not trust — update the app.';
+  return `Fleet: ${label.value}`;
 });
 
 // Tooltip text.
 const tooltip = computed(() => {
   if (orgPaused.value) return `${ORG_PAUSED_TITLE}. ${orgPausedCategoryLine(pausedCategory.value)}`;
   const err = health.value?.configLastError;
-  if (err) return `Fleet: ${label.value} — ${err}`;
-  return `Fleet: ${label.value}`;
+  if (err) return `${stateDescription.value} Last error: ${err}`;
+  return stateDescription.value;
 });
 </script>
 

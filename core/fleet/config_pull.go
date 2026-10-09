@@ -74,7 +74,10 @@ type ConfigPollStatus struct {
 	// LastError is the most recent error string, or empty when the last fetch/apply
 	// succeeded.
 	LastError string `json:"lastError"`
-	// Source is "fleet", "cache", or "default-deny".
+	// Source is "fleet", "cache", or "default-deny". "cache" means a bundle
+	// restored from disk at startup that the server has not yet confirmed
+	// (no 200 or 304 since launch); the first successful revalidation
+	// flips it to "fleet".
 	Source string `json:"source"`
 	// BundleChecksum is the last-seen bundle checksum (SHA-256, hex), used for
 	// 304 Not-Modified gating on the next poll.
@@ -390,8 +393,16 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	}()
 
 	if resp.StatusCode == http.StatusNotModified {
-		// 304 → our current bundle is still current.
+		// 304 → our current bundle is still current. The server just
+		// confirmed it, so a bundle restored from disk at Start ("cache")
+		// is now the live fleet config. With nothing applied there is no
+		// bundle to confirm, so default-deny stays default-deny.
 		p.clearError()
+		p.mu.Lock()
+		if p.lastAppliedID > 0 {
+			p.source = "fleet"
+		}
+		p.mu.Unlock()
 		return nil
 	}
 

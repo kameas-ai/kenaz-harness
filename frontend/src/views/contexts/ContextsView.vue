@@ -54,20 +54,17 @@
  *     the decoded payload. Both are disabled-with-a-reason under the same
  *     fleet gate as promote, for the same reason.
  *
- * Finding #97 additions (2026-09-14, THROWAWAY — see impl.go):
- *   - Fleet's enroll response has no team_id for any org today (teams are
- *     mid-rollout server-side), so a "team"-layer publish was silently
- *     unreachable. The publish confirm dialog now offers an explicit
- *     "team" vs. "org" choice (`publishLayer`), and `confirmPublish` never
- *     sends a team_id — there is no team picker because there are no
- *     teams to pick. The backend may still resolve a "team" request to
- *     "org" when it has no team_id to use; `publishResult.effective_layer`
- *     is the ONLY source of truth for what actually happened, and
+ * Publish layer:
+ *   - The publish confirm dialog offers an explicit "team" vs. "org"
+ *     choice (`publishLayer`), and `confirmPublish` never sends a team_id —
+ *     there is no team picker. The backend resolves a "team" request to
+ *     the enrolled fleet identity's team_id (Context_Publish in
+ *     core/rpc/views/contexts/impl.go); only a teamless identity widens
+ *     to "org". `publishResult.effective_layer` is the ONLY
+ *     source of truth for what actually happened, and
  *     `publishFellBackToOrg` drives an explicit "published org-wide
  *     instead" notice rather than letting a team request quietly become
- *     org-wide visibility. Delete this UI layer-choice/fallback messaging
- *     once fleet always returns a real team_id (see impl.go for the
- *     exact deletion trigger).
+ *     org-wide visibility.
  *
  * knowledge-home-01DOGF0E FR-7 (owner ruled D4 "build", 2026-10-05):
  *   - With a folder selected, Share… / Promote become "Share folder…" /
@@ -288,8 +285,8 @@ function onPromoteButton() {
 
 /**
  * publishFellBackToOrg is true when the most recent publish was requested
- * as "team" but actually landed at "org" — the finding #97 fallback for
- * when fleet has no team_id to give this org yet. Drives the honest
+ * as "team" but actually landed at "org" — the finding #97 fallback,
+ * now reached only when the enrolled identity has no team_id. Drives the honest
  * "published org-wide instead" note; never say "shared with your team"
  * when this is true.
  */
@@ -331,9 +328,9 @@ function openPublishConfirm() {
  * confirmPublish — the user clicked "Yes, share" in the confirm dialog.
  * Calls client.contexts.publish with the selected file's metadata and the
  * user's chosen layer. The nodeID is derived from the path (stable
- * cross-session). No team_id is ever sent — there is no team picker
- * (finding #97): fleet teams don't exist yet, so a "team" request may
- * silently resolve to "org" server-side. `result.effective_layer` is
+ * cross-session). No team_id is ever sent — there is no team picker;
+ * the backend uses the enrolled identity's team, and resolves a "team"
+ * request to "org" only for a teamless identity. `result.effective_layer` is
  * always what actually happened and is what gets shown to the user, not
  * the requested layer.
  */
@@ -955,8 +952,7 @@ onBeforeUnmount(() => {
     >
       <template v-if="publishFellBackToOrg">
         Published org-wide ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
-        — team sync isn't available yet, so this went to everyone in your organisation instead
-        of just your team.
+        — you're not in a team yet, so this went to everyone in your organisation.
       </template>
       <template v-else>
         Published to {{ publishResult.effective_layer === 'org' ? 'your organisation' : 'your team' }}

@@ -273,6 +273,24 @@ const visibleUnavailable = computed(() =>
   ),
 );
 
+// An empty list behind a FAILED listing is not an empty catalog. Keyed on
+// what is rendered above (the load-error banner, or a visible error reason
+// row — a Catalog_List failure arrives as one) so "see above" always
+// points at something.
+const listingFailed = computed(
+  () => !!loadError.value || visibleUnavailable.value.some((u) => u.reason === 'error'),
+);
+
+const emptyText = computed(() => {
+  const q = query.value.trim();
+  if (listingFailed.value) {
+    return q
+      ? `Nothing matches “${q}” — a listing failed to load, so this may be incomplete.`
+      : 'A listing failed to load (see above) — this list may be incomplete.';
+  }
+  return q ? `Nothing matches “${q}”.` : 'Nothing to show for these filters.';
+});
+
 function browseAutomation() {
   query.value = '';
   kindFilter.value = 'mcp_recipe';
@@ -583,7 +601,7 @@ defineExpose({ focusBrowse });
           class="py-4 font-ui text-[12px] text-ink-muted"
           data-testid="capability-empty"
         >
-          {{ query.trim() ? `Nothing matches “${query.trim()}”.` : 'Nothing to show for these filters.' }}
+          {{ emptyText }}
         </div>
 
         <ul v-else class="divide-y divide-border-muted rounded-sm border border-border-muted bg-surface-1" data-testid="capability-list">

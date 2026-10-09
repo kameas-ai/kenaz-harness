@@ -322,6 +322,22 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
     expect(wrapper.find('[data-testid="identity-name"]').text()).toBe('Alice Cooper');
   });
 
+  // Dogfood 2026-10-08 P3: "Name" showed the email (fleet's display-name
+  // fallback). A display name equal to the email is not rendered as a name.
+  it('hides the Name row when the display name is just the email', async () => {
+    const client = buildClient(
+      session('signed_in', prodProfile, {
+        identity: { ...mockIdentity, displayName: 'Alice@Example.com' },
+      }),
+    );
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="identity-name"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="identity-email"]').text()).toBe('alice@example.com');
+  });
+
   // device-keys-handoff-01DEVKH01 review fix #4.
   it("shows this device's own handoff-key fingerprint when registered", async () => {
     const fp = 'sha256:' + 'ab'.repeat(32);

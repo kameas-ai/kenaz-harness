@@ -8,10 +8,10 @@ package contexts_test
 //   - Context_Publish reports EffectiveLayer honestly: "org" on fallback,
 //     "team" when a real team_id carries the request through unchanged.
 //
-// THROWAWAY: once fleet always returns a real team_id (see the deletion
-// trigger documented on Context_Publish in impl.go), the first of these
-// two cases stops being reachable and this test (or at least its first
-// half) should be deleted alongside the fallback it pins.
+// Dogfood 2026-10-08: fleet enroll now returns a team_id, and
+// Context_Publish resolves a team-layer publish to the enrolled identity's
+// team (WithSelfTeamID). The fallback pinned here is now reached only for
+// a teamless identity (or an API with no identity source wired).
 
 import (
 	"context"
@@ -197,5 +197,125 @@ func TestContextPublish_OrgLayer_NeverFallsBack(t *testing.T) {
 	sent := fake.snapshot()
 	if len(sent.Nodes) != 1 || sent.Nodes[0].Classification != "org_shared" {
 		t.Errorf("sent = %+v, want a single org_shared node", sent.Nodes)
+	}
+}
+
+// Dogfood 2026-10-08: fleet enroll now returns a team_id (the org's
+// default "Everyone" team), but the UI never sends one — so every "Share
+// to team" fell back to org. A team-layer publish with no req.TeamID must
+// use the enrolled identity's team.
+func TestContextPublish_TeamWithNoRequestTeamID_UsesIdentityTeam(t *testing.T) {
+	api, fake := setupPublishTest(t)
+	api.WithSelfTeamID(func() string { return "1147eb64-everyone" })
+
+	result, err := api.Context_Publish(context.Background(), contextsview.ContextPublishRequest{
+		NodeID:  "node-4",
+		Layer:   "team",
+		Kind:    "guidance",
+		Title:   "House style",
+		Body:    "Prefer table-driven tests.",
+		Version: 1,
+		// TeamID intentionally empty: the UI has no team picker.
+	})
+	if err != nil {
+		t.Fatalf("Context_Publish: %v", err)
+	}
+	if result.EffectiveLayer != "team" {
+		t.Errorf("EffectiveLayer = %q, want team", result.EffectiveLayer)
+	}
+	sent := fake.snapshot()
+	if len(sent.Nodes) != 1 {
+		t.Fatalf("server saw %d nodes, want 1", len(sent.Nodes))
+	}
+	if sent.Nodes[0].Classification != "team_shared" {
+		t.Errorf("classification sent = %q, want team_shared", sent.Nodes[0].Classification)
+	}
+	if sent.Nodes[0].TeamID == nil || *sent.Nodes[0].TeamID != "1147eb64-everyone" {
+		t.Errorf("team_id sent = %v, want the identity's team", sent.Nodes[0].TeamID)
+	}
+}
+
+// A teamless identity keeps the honest finding #97 fallback.
+func TestContextPublish_TeamWithTeamlessIdentity_FallsBackToOrg(t *testing.T) {
+	api, fake := setupPublishTest(t)
+	api.WithSelfTeamID(func() string { return "" })
+
+	result, err := api.Context_Publish(context.Background(), contextsview.ContextPublishRequest{
+		NodeID:  "node-5",
+		Layer:   "team",
+		Kind:    "guidance",
+		Title:   "House style",
+		Body:    "Prefer table-driven tests.",
+		Version: 1,
+	})
+	if err != nil {
+		t.Fatalf("Context_Publish: %v", err)
+	}
+	if result.EffectiveLayer != "org" {
+		t.Errorf("EffectiveLayer = %q, want org", result.EffectiveLayer)
+	}
+	sent := fake.snapshot()
+	if len(sent.Nodes) != 1 || sent.Nodes[0].Classification != "org_shared" || sent.Nodes[0].TeamID != nil {
+		t.Errorf("sent = %+v, want a single org_shared node with no team_id", sent.Nodes)
+	}
+}
+
+// An explicit request team id still wins over the identity's.
+func TestContextPublish_RequestTeamID_WinsOverIdentity(t *testing.T) {
+	api, fake := setupPublishTest(t)
+	api.WithSelfTeamID(func() string { return "identity-team" })
+
+	if _, err := api.Context_Publish(context.Background(), contextsview.ContextPublishRequest{
+		NodeID: "node-6", Layer: "team", Kind: "guidance", Title: "t", Body: "b", Version: 1,
+		TeamID: "request-team",
+	}); err != nil {
+		t.Fatalf("Context_Publish: %v", err)
+	}
+	sent := fake.snapshot()
+	if len(sent.Nodes) != 1 || sent.Nodes[0].TeamID == nil || *sent.Nodes[0].TeamID != "request-team" {
+		t.Errorf("sent = %+v, want team_id request-team", sent.Nodes)
+	}
+}
+
+// The production wiring (core/rpc/api.go calls WithSelfIdentityFromDataDir
+// with the fleet data dir): an identity.json written at enroll with a
+// team_id makes a team publish carry that team; removing the team (a
+// re-enroll into a teamless org) is seen on the next publish without
+// rewiring.
+func TestContextPublish_IdentityFileOnDisk_DrivesTeam(t *testing.T) {
+	api, fake := setupPublishTest(t)
+	dataDir := t.TempDir()
+	if err := corefleet.SaveIdentity(dataDir, corefleet.Identity{
+		UserID: "u-1", OrgID: "o-1", TeamID: "1147eb64-everyone", TeamName: "Everyone",
+	}); err != nil {
+		t.Fatalf("SaveIdentity: %v", err)
+	}
+	api.WithSelfIdentityFromDataDir(dataDir)
+
+	publish := func(node string) contextsview.ContextPublishResult {
+		t.Helper()
+		res, err := api.Context_Publish(context.Background(), contextsview.ContextPublishRequest{
+			NodeID: node, Layer: "team", Kind: "guidance", Title: "t", Body: "b", Version: 1,
+		})
+		if err != nil {
+			t.Fatalf("Context_Publish: %v", err)
+		}
+		return res
+	}
+
+	if res := publish("node-7"); res.EffectiveLayer != "team" {
+		t.Errorf("EffectiveLayer = %q, want team", res.EffectiveLayer)
+	}
+	sent := fake.snapshot()
+	if len(sent.Nodes) != 1 || sent.Nodes[0].Classification != "team_shared" ||
+		sent.Nodes[0].TeamID == nil || *sent.Nodes[0].TeamID != "1147eb64-everyone" {
+		t.Fatalf("sent = %+v, want team_shared with the identity file's team_id", sent.Nodes)
+	}
+
+	if err := corefleet.SaveIdentity(dataDir, corefleet.Identity{UserID: "u-1", OrgID: "o-1"}); err != nil {
+		t.Fatalf("SaveIdentity (teamless): %v", err)
+	}
+	if res := publish("node-8"); res.EffectiveLayer != "org" {
+		t.Errorf("teamless identity: EffectiveLayer = %q, want org", res.EffectiveLayer)
 	}
 }

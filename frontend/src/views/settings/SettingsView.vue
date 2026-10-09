@@ -230,7 +230,9 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   account: { title: 'Account', subtitle: 'Sign in to access fleet features like shared team context, org-level settings, and role-based capabilities.' },
   updates: { title: 'Updates', subtitle: 'Check for and install harness updates.' },
   flags: { title: 'Feature flags', subtitle: 'Toggle experimental and environment-gated features.' },
-  health: { title: 'Health', subtitle: 'Migration drift and MCP server health.' },
+  // The pane renders MigrationDriftPanel only; MCP server health lives in
+  // Capabilities.
+  health: { title: 'Health', subtitle: 'Database migration drift on this install.' },
   compaction: { title: 'Compaction', subtitle: 'Authoring strategy for context compaction.' },
   slashcmds: { title: 'Slash commands', subtitle: 'Author and manage user slash commands.' },
   hooks: { title: 'Hooks', subtitle: 'Lifecycle hooks that fire on chat-pipeline events.' },

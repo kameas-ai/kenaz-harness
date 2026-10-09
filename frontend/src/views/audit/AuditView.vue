@@ -20,7 +20,13 @@ import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import { CATEGORIES, type Category } from '@/lib/categories';
 import type { AuditEntry, AuditFilter, AuditFilterQuery, SavedAuditQuery, AuditExportOptions } from '@/lib/types';
-import { defaultAuditSince, defaultAuditUntil } from '@/lib/auditDateFilters';
+import {
+  auditDateInputFromBound,
+  auditSinceBound,
+  auditUntilBound,
+  defaultAuditSince,
+  defaultAuditUntil,
+} from '@/lib/auditDateFilters';
 
 const client = useHarnessClient();
 
@@ -62,6 +68,13 @@ const actorIds = computed<string[]>(() =>
     .map((s) => s.trim())
     .filter((s) => s.length > 0),
 );
+// Audit rows do not record an emitter yet (Entry has no emitter field and
+// Push persists an empty emitter_id), so an actor filter can only ever
+// match nothing. The input stays visible — and still round-trips a saved
+// query's actor_ids — but is disabled. docs/unwired-ledger.md
+// "audit actor filter has no emitter to match".
+const ACTOR_FILTER_UNAVAILABLE =
+  'Actor filtering is unavailable: audit entries do not record which emitter produced them yet.';
 const freeText = ref<string>('');
 const verboseToggle = ref<boolean>(false);
 const selectedSavedQuery = ref<string>('');
@@ -83,14 +96,17 @@ const saveQueryError = ref<string>('');
 // persists.
 const filter = computed<AuditFilter>(() => ({
   categories: selectedCategories.value.length > 0 ? [selectedCategories.value[0]] : undefined,
-  since: sinceInput.value || undefined,
-  until: untilInput.value || undefined,
+  since: auditSinceBound(sinceInput.value),
+  until: auditUntilBound(untilInput.value),
   limit: 500,
 }));
 
+// since/until go over the wire as RFC3339 bounds (start / end of the UTC
+// day): the Go side decodes them into time.Time and rejects a date-only
+// string. A partial or invalid date sends no bound.
 const richFilter = computed<AuditFilterQuery>(() => ({
-  since: sinceInput.value || undefined,
-  until: untilInput.value || undefined,
+  since: auditSinceBound(sinceInput.value),
+  until: auditUntilBound(untilInput.value),
   kinds: selectedCategories.value.length > 0 ? selectedCategories.value : undefined,
   actor_ids: actorIds.value.length > 0 ? actorIds.value : undefined,
   free_text: freeText.value || undefined,
@@ -98,10 +114,29 @@ const richFilter = computed<AuditFilterQuery>(() => ({
   limit: 500,
 }));
 
+// The query actually run (audit.filter, export): richFilter minus
+// actor_ids. Audit rows record no emitter, so an actor term would match
+// nothing — it is ignored (and says so) rather than emptying the trail.
+// richFilter keeps it so a saved query round-trips its actor_ids.
+const appliedFilter = computed<AuditFilterQuery>(() => {
+  const { actor_ids: _ignored, ...rest } = richFilter.value;
+  return rest;
+});
+const actorFilterIgnored = computed(() => actorIds.value.length > 0);
+
 // ── Entry state ─────────────────────────────────────────────────────────
 const seeded = ref<readonly AuditEntry[]>([]);
 const verifyResult = ref<null | { ok: boolean; checked: number; brokenAt?: string }>(null);
 const loading = ref(false);
+// Non-empty when the last audit.filter() call rejected. Rendered as a
+// visible error with Retry; the empty-state copy is suppressed while it
+// is set so a failed query cannot read as "nothing happened".
+const loadError = ref<string>('');
+// The filter that produced `seeded` — rows are only ever shown as the
+// answer to the query that returned them.
+let seededKey: string | null = null;
+// Last-request-wins: a slow earlier response never overwrites a later one.
+let refreshSeq = 0;
 
 // Selection state (for WP08 bulk-purge; pre-wired here).
 const selectedIDs = ref<Set<string>>(new Set());
@@ -119,24 +154,39 @@ const exportToast = ref<string>('');
 // instead of the narrow audit.listEntries(), which is single-category
 // only. Before this change audit.filter() had no caller anywhere in
 // the frontend despite being a fully-implemented RPC method.
-async function refresh() {
+async function refresh(opts: { invalidate?: boolean } = {}) {
   // Served mode: the whole view renders NotAvailableInServedMode instead.
   // Audit_Filter has no serve dispatch case — calling it would only ever
   // reject, and a bare catch turning that rejection into an empty array is
   // exactly the fabrication this WP exists to stop (see the module-level
   // comment above).
   if (servedMode.value) return;
+  const query = appliedFilter.value;
+  const key = JSON.stringify(query);
+  const mySeq = ++refreshSeq;
   loading.value = true;
   try {
-    seeded.value = await client.audit.filter(richFilter.value);
-  } catch {
-    seeded.value = [];
+    const rows = await client.audit.filter(query);
+    if (mySeq !== refreshSeq) return;
+    seeded.value = rows;
+    seededKey = key;
+    loadError.value = '';
+  } catch (e) {
+    if (mySeq !== refreshSeq) return;
+    // A rejected query is an error, never an empty trail. Rows stay only
+    // while they still answer this exact query (a retry of it); rows from
+    // another filter — or that a purge may have removed — are cleared.
+    loadError.value = e instanceof Error ? e.message : String(e);
+    if (opts.invalidate || seededKey !== key) {
+      seeded.value = [];
+      seededKey = null;
+    }
   } finally {
-    loading.value = false;
+    if (mySeq === refreshSeq) loading.value = false;
   }
 }
 
-watch(richFilter, () => {
+watch(appliedFilter, () => {
   void refresh();
 }, { immediate: true });
 
@@ -204,7 +254,7 @@ async function verifyVisible() {
 async function exportAudit() {
   exportToast.value = 'Exporting…';
   const opts: AuditExportOptions = {
-    filter: richFilter.value,
+    filter: appliedFilter.value,
     format: exportFormat.value,
   };
   try {
@@ -239,8 +289,8 @@ async function loadSavedQueries() {
 async function applySavedQuery(id: string) {
   const sq = savedQueries.value.find((q) => q.id === id);
   if (!sq) return;
-  sinceInput.value = sq.query.since ?? '';
-  untilInput.value = sq.query.until ?? '';
+  sinceInput.value = auditDateInputFromBound(sq.query.since);
+  untilInput.value = auditDateInputFromBound(sq.query.until);
   // audit-that-tells-the-truth-01PMZA10 UNIT-6 (WP08): full arrays, not
   // ?.[0] — this was the truncation. kinds/actor_ids used to keep only
   // the first element on load, then saveCurrentQuery persisted that
@@ -329,8 +379,9 @@ async function confirmPurge() {
     // Remove purged entries from local state.
     selectedIDs.value = new Set();
     showPurgeModal.value = false;
-    // Refresh to reflect the deletion.
-    await refresh();
+    // Refresh to reflect the deletion. The purged rows must not survive a
+    // failed refetch.
+    await refresh({ invalidate: true });
   } catch (e) {
     purgeError.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -383,7 +434,7 @@ onBeforeUnmount(() => {
 
         <!-- Time range -->
         <label class="flex items-center gap-2">
-          <span>Since</span>
+          <span>Since (UTC day)</span>
           <input
             v-model="sinceInput"
             type="text"
@@ -392,7 +443,7 @@ onBeforeUnmount(() => {
           />
         </label>
         <label class="flex items-center gap-2">
-          <span>Until</span>
+          <span>Until (UTC day)</span>
           <input
             v-model="untilInput"
             type="text"
@@ -410,6 +461,9 @@ onBeforeUnmount(() => {
           <input
             v-model="actorInput"
             type="text"
+            disabled
+            :title="ACTOR_FILTER_UNAVAILABLE"
+            data-testid="audit-actor-input"
             placeholder="emitter-id, emitter-id2"
             class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] w-36"
           />
@@ -551,6 +605,17 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <div
+      v-if="actorFilterIgnored"
+      role="note"
+      class="mx-6 mt-3 rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+      data-testid="audit-actor-ignored"
+    >
+      This saved query's actor filter can't be applied yet — ignored. Audit
+      entries do not record which emitter produced them
+      (docs/unwired-ledger.md, "audit actor filter has no emitter to match").
+    </div>
+
     <!-- Entry list -->
     <div
       class="flex-1 overflow-y-auto"
@@ -560,7 +625,23 @@ onBeforeUnmount(() => {
       data-testid="audit-stream"
     >
       <div
-        v-if="!loading && entries.length === 0"
+        v-if="loadError"
+        role="alert"
+        class="mx-6 my-3 flex items-center gap-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        data-testid="audit-load-error"
+      >
+        <span class="flex-1 min-w-0 break-words">Audit query failed: {{ loadError }}</span>
+        <button
+          type="button"
+          class="shrink-0 px-2 py-1 text-[11px] rounded-sm border border-signal-danger hover:bg-surface-2"
+          data-testid="audit-load-retry"
+          @click="refresh()"
+        >
+          Retry
+        </button>
+      </div>
+      <div
+        v-if="!loading && !loadError && entries.length === 0"
         class="px-6 py-4 font-ui text-sm text-ink-muted"
       >
         No audit entries match the current filter.

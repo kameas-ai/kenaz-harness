@@ -342,6 +342,57 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-08 (dogfood 2026-10-08 fix PR, fix/dogfood-2026-10-08) · audit actor filter has no emitter to match — input disabled, not deleted
+
+**Finding.** `eventlog.FilterQuery.ActorIDs` filters on `emitter_id`, and
+`Filter()` now honours it (the store path matches `Row.EmitterID`). But
+every production audit row reaches the store through `audit.API.Push` →
+`rowFromEntry`, which never sets `EmitterID`: `audit.Entry` carries no
+emitter/actor field, and none of the Push bridges in `core/rpc/api.go`
+has one to give (`NewSQLBackend`'s sole non-test caller is
+`core/rpc/api.go` ~l.1995, fed only by Push). So any Actor value matches
+nothing — the control is dead.
+
+**Disposition: dated-justified, not deleted.** `AuditView.vue` keeps the
+Actor input visible and round-tripping a saved query's `actor_ids`, but
+disables it with a title saying entries do not record an emitter yet.
+Deleting it would drop actor_ids from saved queries; enabling it would
+empty the list for any value.
+
+**Blocker.** `audit.Entry` needs an emitter field and each Push bridge must
+supply one; `Entry` is a Wails-returned type, so this is a bindings
+regeneration (`wails generate module` under an overridden HOME) plus the
+bridge changes. **Owner:** alec — the next audit mission that touches the
+Push bridges adds `Entry.EmitterID`, sets it in `rowFromEntry`, re-enables
+the input, and deletes this item.
+
+### 2026-10-08 (dogfood 2026-10-08 fix PR, fix/dogfood-2026-10-08) · `views/mcp.WithRegistry` has no non-test caller — `MCP_ListServers` is always empty
+
+**Finding.** `core/rpc/views/mcp.WithRegistry` is never called outside
+tests (also held in `scripts/ci/allowlists/i16-config-nil-coverage.txt`).
+Both production constructions of the MCP view — `core/rpc/api.go` ~l.2043
+(`mcp.NewAPI(mcp.WithSubscriber(a.broker))`) and ~l.2078–2100
+(`mcpOpts` → `mcp.NewAPI(mcpOpts...)`) — pass no registry, so
+`API.ListServers` returns `[]` for every user. The Capabilities page's
+"MCP servers" table, and the per-server tool-policy writer it hosts
+(trust-surfaces-that-fire-01PMZ202 WP24 — the ONLY writer of
+`<DataDir>/mcp_servers.json`), are structurally unreachable: the dogfood
+walk saw "No MCP servers configured" while Fetch / Filesystem / Outlook
+were installed and serving 143 tools.
+
+**Disposition: only surface for a real capability → finish, not delete.**
+Per-server tool policy (confirm-each-use / deny for a whole server) has no
+other UI. Interim (this PR): `ToolsView.vue` no longer claims "none
+configured" when the capability listing reports installed MCP servers, and
+says tool policy can't be set from the table yet.
+
+**Blocker.** No adapter exists from the MCP supervisor's live server set to
+the view's `Registry` interface, and the two `mcp.NewAPI` call sites above
+do not pass one. **Owner:** alec — the next MCP wiring mission builds the
+supervisor→`Registry` adapter, passes `mcp.WithRegistry` at
+`core/rpc/api.go` ~l.2078, drops the i16 allowlist line, and deletes this
+item.
+
 ### 2026-10-08 (fleet contract: org_paused, kenaz-fleet PR #206, fix/org-paused-transient) · new org state; harness treats it as transient everywhere
 
 **Contract (confirmed by fleet 2026-10-08).** A Kameas-staff "pause paid

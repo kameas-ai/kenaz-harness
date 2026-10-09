@@ -48,11 +48,30 @@ const policies = ref<readonly MCPToolPolicyRule[]>([]);
 const policyError = ref<string | null>(null);
 const policySaving = ref<string | null>(null); // server name currently saving, or null
 
+// MCP_ListServers reads a registry production does not wire yet
+// (docs/unwired-ledger.md "views/mcp.WithRegistry has no non-test
+// caller"), so an empty table does not mean nothing is installed. The
+// installed count comes from the capability listing the runtime consumer
+// reports; null = that listing failed, so the count is unknown.
+const installedMcpCount = ref<number | null>(0);
+
+async function refreshInstalledMcpCount() {
+  try {
+    const l = await client.capabilities.list({ kind: 'mcp_recipe' });
+    installedMcpCount.value = (l.items ?? []).filter(
+      (it) => it.kind === 'mcp_recipe' && it.state?.installed,
+    ).length;
+  } catch {
+    installedMcpCount.value = null;
+  }
+}
+
 async function refresh() {
   loading.value = true;
   error.value = null;
   try {
     servers.value = await client.mcp.listServers();
+    if (servers.value.length === 0) await refreshInstalledMcpCount();
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load MCP servers.';
     servers.value = [];
@@ -143,7 +162,7 @@ onMounted(() => {
       number="02"
       section="CAPABILITIES"
       title="Capabilities"
-      subtitle="Built-in tools, MCP servers, skills and workflows in one list, with your org's fleet catalog when you are signed in. Below it, every MCP server registered with the harness and its tool policy. Every MCP tool call goes through the harness's MCP client and its policy layer; a call to a remote MCP server leaves this device."
+      subtitle="Built-in tools, MCP servers, skills and workflows in one list, with your org's fleet catalog when you are signed in. Below it, per-server MCP tool policy. Every MCP tool call goes through the harness's MCP client and its policy layer; a call to a remote MCP server leaves this device."
     >
       <template #trailing>
         <button
@@ -185,8 +204,33 @@ onMounted(() => {
     >
       {{ policyError }}
     </div>
+    <!-- Not chained to policyError: that banner can co-render with the table. -->
     <div
-      v-else-if="servers.length === 0"
+      v-if="!loading && !error && servers.length === 0 && installedMcpCount === null"
+      class="px-6 py-6 font-ui text-sm text-ink-muted"
+      data-testid="tools-empty-unknown"
+    >
+      <div class="text-ink">Could not determine installed MCP servers</div>
+      <p class="mt-2 max-w-prose text-ink-muted">
+        The capability listing failed to load, so this table cannot say
+        whether any are installed. Tool policy for MCP servers can't be set
+        from this table yet.
+      </p>
+    </div>
+    <div
+      v-else-if="!loading && !error && servers.length === 0 && installedMcpCount !== null && installedMcpCount > 0"
+      class="px-6 py-6 font-ui text-sm text-ink-muted"
+      data-testid="tools-empty-installed"
+    >
+      <div class="text-ink">
+        {{ installedMcpCount }} installed MCP server{{ installedMcpCount === 1 ? ' is' : 's are' }} listed above
+      </div>
+      <p class="mt-2 max-w-prose text-ink-muted">
+        Tool policy for these servers can't be set from this table yet.
+      </p>
+    </div>
+    <div
+      v-else-if="!loading && !error && servers.length === 0"
       class="px-6 py-6 font-ui text-sm text-ink-muted"
       data-testid="tools-empty"
     >
@@ -204,7 +248,7 @@ onMounted(() => {
         rel="noopener"
       >Read the MCP docs →</a>
     </div>
-    <table v-else class="w-full font-ui text-[12px] text-ink" data-testid="tools-table">
+    <table v-else-if="!loading && !error" class="w-full font-ui text-[12px] text-ink" data-testid="tools-table">
       <thead class="bg-surface-1 text-ink-muted">
         <tr>
           <th class="text-left px-4 py-2 font-medium">Name</th>

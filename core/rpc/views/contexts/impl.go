@@ -59,12 +59,45 @@ type API struct {
 	// selfUserID returns the signed-in fleet user id ("" when unknown) —
 	// used to hide pulled copies of the user's OWN entries (review F3).
 	selfUserID func() string
+	// selfTeamID returns the enrolled fleet identity's team id ("" when
+	// unknown / teamless) — the team a "team"-layer publish lands in when
+	// the request names none.
+	selfTeamID func() string
 }
 
 // WithSelfUserID wires the signed-in fleet user id source (review F3).
 func (a *API) WithSelfUserID(f func() string) *API {
 	a.selfUserID = f
 	return a
+}
+
+// WithSelfTeamID wires the enrolled fleet identity's team id source. When
+// set, a "team"-layer Context_Publish with no req.TeamID publishes to this
+// team instead of falling back to the org layer.
+func (a *API) WithSelfTeamID(f func() string) *API {
+	a.selfTeamID = f
+	return a
+}
+
+// WithSelfIdentityFromDataDir wires both identity sources (user id and
+// team id) from the fleet identity cached under dataDir (identity.json,
+// written at enroll). Read on every call, so a re-enroll or sign-out is
+// seen without rewiring. An empty dataDir or unreadable identity yields
+// "" for both.
+func (a *API) WithSelfIdentityFromDataDir(dataDir string) *API {
+	load := func() fleet.Identity {
+		if dataDir == "" {
+			return fleet.Identity{}
+		}
+		id, err := fleet.LoadIdentity(dataDir)
+		if err != nil {
+			return fleet.Identity{}
+		}
+		return id
+	}
+	return a.
+		WithSelfUserID(func() string { return load().UserID }).
+		WithSelfTeamID(func() string { return load().TeamID })
 }
 
 // ErrInvalidModule is returned by AttachModule when the directory exists
@@ -333,21 +366,11 @@ func toWire(in corecontexts.Node) Node {
 // rejected with ErrPersonalLayerNotSyncable.
 // Requires a wired ContextGraphSyncer; returns ErrFleetDisabled otherwise.
 //
-// THROWAWAY team→org fallback (finding #97, 2026-09-14):
-//
-// The fleet enroll handler (kenaz-fleet service/handlers_v2.go:156)
-// deliberately returns an empty team_id for every client — "teams land
-// in v0.5.0" — so every org is teamless today and a "team" layer publish
-// can never carry a team_id. Rather than let publish fail for 100% of
-// users, an owner ruling says to widen to the "org" layer instead, and to
-// say so out loud rather than silently: the response's EffectiveLayer
-// always reflects what actually happened, and the frontend must surface
-// it (see ContextsView.vue).
-//
-// DELETE THIS BLOCK once the fleet server ships a default "everyone" team
-// per org — at that point req.TeamID is never empty for a team-layer
-// publish and this fallback is dead code. Until then it is the only path
-// that makes "Share to team" do anything at all.
+// Team resolution for a "team"-layer request, in order: req.TeamID; else
+// the enrolled fleet identity's team_id (selfTeamID — the UI has no team
+// picker); else no team, and the publish widens to the "org" layer.
+// EffectiveLayer always reports the layer actually published, and the
+// frontend surfaces a team→org widening (ContextsView.vue).
 func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (ContextPublishResult, error) {
 	if a == nil || a.syncer == nil {
 		return ContextPublishResult{}, fleet.ErrFleetDisabled
@@ -355,6 +378,16 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 
 	layer := contextpack.Layer(req.Layer)
 	teamID := req.TeamID
+	teamIDSource := ""
+	if teamID != "" {
+		teamIDSource = "request"
+	}
+	if layer == contextpack.LayerTeam && teamID == "" && a.selfTeamID != nil {
+		if t := a.selfTeamID(); t != "" {
+			teamID = t
+			teamIDSource = "identity"
+		}
+	}
 	fellBackToOrg := false
 	if layer == contextpack.LayerTeam && teamID == "" {
 		layer = contextpack.LayerOrg
@@ -369,6 +402,7 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		"effective_layer", string(layer),
 		"team_fallback_to_org", fellBackToOrg,
 		"team_id_present", teamID != "",
+		"team_id_source", teamIDSource,
 	)
 
 	entry := fleet.ContextNodeEntry{
