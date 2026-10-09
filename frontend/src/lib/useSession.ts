@@ -46,6 +46,7 @@ import {
   AUTO_RETRY_DELAYS_MS,
   failureFromClosed,
   isAutoRetryable,
+  STOP_CALLED_REASON,
   undeliveredFromRuns,
   type DeliveryFailure,
   type WireClosedDelivery,
@@ -981,6 +982,29 @@ export function useSession(id: Ref<string>): UseSessionResult {
         : payload.reason || "closed-without-finish",
     );
     streamSubscriptionId.value = null;
+
+    // A user Stop is not a failure. If an error chunk (the provider
+    // reporting the cancellation) arrived before this close, it already
+    // set error.value and stamped the partial bubble with the error text;
+    // the close is authoritative, so restate both as a Stop.
+    if (payload.reason === STOP_CALLED_REASON) {
+      error.value = null;
+      errorKind.value = null;
+      const msgs = messages.value;
+      const last = msgs[msgs.length - 1];
+      if (
+        last &&
+        last.role === "assistant" &&
+        last.streamingError &&
+        last.streamingError !== STOP_CALLED_REASON &&
+        !last.streamingFailedAt
+      ) {
+        messages.value = [
+          ...msgs.slice(0, -1),
+          { ...last, streamingError: STOP_CALLED_REASON },
+        ];
+      }
+    }
 
     // undelivered-message-retry: did this turn reach the model?
     const failure = failureFromClosed(payload);

@@ -134,6 +134,12 @@ type StreamBridge struct {
 
 	mu     sync.Mutex
 	closed bool
+	// stopped is set when the user stopped the run. From then on error
+	// chunks are dropped: a provider reports the cancellation it was
+	// asked for as a stream error ("context canceled"), and forwarding it
+	// would paint an error bar over a Stop the close will report as
+	// stop-called.
+	stopped bool
 
 	// partialText accumulates every text-delta the bridge sees so the
 	// chat-runner driveRun terminal path can persist a partial assistant
@@ -201,6 +207,10 @@ func (b *StreamBridge) Emit(ev coreag.StreamEvent) {
 	// that guards the closed flag so a concurrent close doesn't race
 	// with a final batch of deltas.
 	b.mu.Lock()
+	if b.stopped && ev.Kind == coreag.StreamEventError {
+		b.mu.Unlock()
+		return
+	}
 	switch ev.Kind {
 	case coreag.StreamEventText, coreag.StreamEventReasoning, coreag.StreamEventTool,
 		coreag.StreamEventUsage, coreag.StreamEventFinish:
@@ -235,6 +245,17 @@ func (b *StreamBridge) Emit(ev coreag.StreamEvent) {
 		SessionID: b.sessionID,
 		Chunk:     chunk,
 	})
+}
+
+// MarkStopped records a user Stop: subsequent error chunks are dropped
+// (see the stopped field). Safe on a nil bridge.
+func (b *StreamBridge) MarkStopped() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.stopped = true
+	b.mu.Unlock()
 }
 
 // ModelResponded reports whether any model-produced event has streamed

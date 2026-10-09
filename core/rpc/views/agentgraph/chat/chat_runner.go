@@ -1753,6 +1753,9 @@ func (r *ChatRunner) StopStream(_ context.Context, subID string) error {
 		return fmt.Errorf("chat: subscription %q not found", subID)
 	}
 	sub.cancelCause.Store("stop-called")
+	// Before cancelling: the provider's own "context canceled" error
+	// chunk must not reach the surface as a failure.
+	sub.bridge.MarkStopped()
 	logging.L().Info("chat.run.stop_called",
 		"sub_id", subID, "session_id", sub.sessionID)
 	sub.cancel()

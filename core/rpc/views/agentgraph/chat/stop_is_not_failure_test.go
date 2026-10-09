@@ -34,6 +34,11 @@ func (f *streamingUntilCancelledLLM) Generate(ctx context.Context, _ coreag.LLMR
 	}
 	f.once.Do(func() { close(f.streaming) })
 	<-ctx.Done()
+	// What the OpenRouter adapter does on a cancelled stream: forward a
+	// StreamError chunk before Final returns.
+	if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+		sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventError, ErrMsg: "context canceled"})
+	}
 	return coreag.LLMResponse{}, fmt.Errorf("chat: stream final: %w", &corellm.ErrCancelled{Reason: "context"})
 }
 
@@ -71,6 +76,11 @@ func TestChatRunner_StopMidStream_IsStopNotFailure(t *testing.T) {
 			}
 			if closed.PartialMessageID != "" {
 				t.Errorf("a Stop persisted a resumable partial %q — that is the connection-drop path", closed.PartialMessageID)
+			}
+			for _, ev := range broker.snapshot() {
+				if chunk, ok := ev.payload.(StreamChunkPayload); ok && chunk.Chunk.Err != "" {
+					t.Errorf("an error chunk %q reached the surface after a Stop", chunk.Chunk.Err)
+				}
 			}
 			return
 		}
