@@ -374,6 +374,10 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	_, hasSchedHistory := preOpen["scheduled_chat_run_history"]
 	schedHistoryPredates0345 := hasSchedHistory &&
 		!columnExists(t, raw, "scheduled_chat_run_history", "model")
+	// sessions/0347 adds projects.tool_exposure; same question for the
+	// projects digest waiver below.
+	_, hasProjects := preOpen["projects"]
+	projectsPredate0347 := hasProjects && !columnExists(t, raw, "projects", "tool_exposure")
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -582,6 +586,19 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 			t.Errorf("table scheduled_chat_run_history present before Open, missing after")
 		} else if before.RowCount != after.RowCount {
 			t.Errorf("table scheduled_chat_run_history row count changed: %d -> %d (0345 only adds columns)", before.RowCount, after.RowCount)
+		}
+	}
+	// sessions/0347-tool-exposure ADDs projects.tool_exposure (nullable,
+	// no default), which changes every seeded project row's digest on a
+	// snapshot that predates it. Waived for those snapshots only; the row
+	// count is still asserted exactly. TestMigration0347_* proves the old
+	// rows read back intact with no override.
+	if before, ok := preOpen["projects"]; ok && projectsPredate0347 {
+		changed["projects"] = true
+		if after, ok := postOpen["projects"]; !ok {
+			t.Errorf("table projects present before Open, missing after")
+		} else if before.RowCount != after.RowCount {
+			t.Errorf("table projects row count changed: %d -> %d (0347 only adds columns)", before.RowCount, after.RowCount)
 		}
 	}
 	for table, before := range preOpen {
