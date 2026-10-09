@@ -48,14 +48,12 @@ const policies = ref<readonly MCPToolPolicyRule[]>([]);
 const policyError = ref<string | null>(null);
 const policySaving = ref<string | null>(null); // server name currently saving, or null
 
-// Dogfood 2026-10-08 P3: this table said "No MCP servers configured" while
-// Fetch / Filesystem / Outlook were installed and running (and listed in
-// the surface above). MCP_ListServers reads a registry the production
-// chassis does not wire yet (core/rpc/views/mcp WithRegistry has no
-// non-test caller — see docs/dogfood/2026-10-08.md), so an empty answer
-// here does not mean nothing is installed. Count the installed MCP
-// capabilities the runtime consumer reports and say which case it is.
-const installedMcpCount = ref(0);
+// MCP_ListServers reads a registry production does not wire yet
+// (docs/unwired-ledger.md "views/mcp.WithRegistry has no non-test
+// caller"), so an empty table does not mean nothing is installed. The
+// installed count comes from the capability listing the runtime consumer
+// reports; null = that listing failed, so the count is unknown.
+const installedMcpCount = ref<number | null>(0);
 
 async function refreshInstalledMcpCount() {
   try {
@@ -64,7 +62,7 @@ async function refreshInstalledMcpCount() {
       (it) => it.kind === 'mcp_recipe' && it.state?.installed,
     ).length;
   } catch {
-    installedMcpCount.value = 0;
+    installedMcpCount.value = null;
   }
 }
 
@@ -164,7 +162,7 @@ onMounted(() => {
       number="02"
       section="CAPABILITIES"
       title="Capabilities"
-      subtitle="Built-in tools, MCP servers, skills and workflows in one list, with your org's fleet catalog when you are signed in. Below it, every MCP server registered with the harness and its tool policy. Every MCP tool call goes through the harness's MCP client and its policy layer; a call to a remote MCP server leaves this device."
+      subtitle="Built-in tools, MCP servers, skills and workflows in one list, with your org's fleet catalog when you are signed in. Below it, per-server MCP tool policy. Every MCP tool call goes through the harness's MCP client and its policy layer; a call to a remote MCP server leaves this device."
     >
       <template #trailing>
         <button
@@ -206,11 +204,21 @@ onMounted(() => {
     >
       {{ policyError }}
     </div>
-    <!-- v-if, not v-else-if: chained to policyError above, the empty
-         state used to render alongside "Loading servers…" and the load
-         error. -->
+    <!-- Not chained to policyError: that banner can co-render with the table. -->
     <div
-      v-if="!loading && !error && servers.length === 0 && installedMcpCount > 0"
+      v-if="!loading && !error && servers.length === 0 && installedMcpCount === null"
+      class="px-6 py-6 font-ui text-sm text-ink-muted"
+      data-testid="tools-empty-unknown"
+    >
+      <div class="text-ink">Could not determine installed MCP servers</div>
+      <p class="mt-2 max-w-prose text-ink-muted">
+        The capability listing failed to load, so this table cannot say
+        whether any are installed. Tool policy for MCP servers can't be set
+        from this table yet.
+      </p>
+    </div>
+    <div
+      v-else-if="!loading && !error && servers.length === 0 && installedMcpCount !== null && installedMcpCount > 0"
       class="px-6 py-6 font-ui text-sm text-ink-muted"
       data-testid="tools-empty-installed"
     >
@@ -218,8 +226,7 @@ onMounted(() => {
         {{ installedMcpCount }} installed MCP server{{ installedMcpCount === 1 ? ' is' : 's are' }} listed above
       </div>
       <p class="mt-2 max-w-prose text-ink-muted">
-        Per-server tool policy cannot see them from this table yet, so
-        none are shown here.
+        Tool policy for these servers can't be set from this table yet.
       </p>
     </div>
     <div

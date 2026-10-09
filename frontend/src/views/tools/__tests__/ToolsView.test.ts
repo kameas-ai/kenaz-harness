@@ -139,6 +139,28 @@ describe('ToolsView (FR-001b numbered-section header)', () => {
     expect(w.text()).not.toContain('No MCP servers configured');
   });
 
+  it('a failed capability listing makes the count unknown — never "No MCP servers configured"', async () => {
+    const base = provide([]).client;
+    const client = createFakeHarnessClient({
+      mcp: base.mcp,
+      capabilities: {
+        ...base.capabilities,
+        list: async () => {
+          throw new Error('capability listing offline');
+        },
+      } as any,
+    });
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid=tools-empty]').exists()).toBe(false);
+    expect(w.get('[data-testid=tools-empty-unknown]').text()).toContain(
+      'Could not determine installed MCP servers',
+    );
+    expect(w.text()).not.toContain('No MCP servers configured');
+  });
+
   it('a failed server load shows the error, not the empty-state copy', async () => {
     const { client } = provide([], [], {
       listServers: async () => {

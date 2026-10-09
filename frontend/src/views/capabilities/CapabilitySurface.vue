@@ -273,12 +273,10 @@ const visibleUnavailable = computed(() =>
   ),
 );
 
-// Dogfood 2026-10-08 P3: an empty list after a FAILED listing read
-// "Nothing to show for these filters." — indistinguishable from an org
-// catalog that is genuinely empty. When any listing behind these filters
-// failed, the empty state says so instead. Keyed on what is rendered above
-// (the load-error banner, or a visible error reason row — a Catalog_List
-// failure arrives as one) so "see above" always points at something.
+// An empty list behind a FAILED listing is not an empty catalog. Keyed on
+// what is rendered above (the load-error banner, or a visible error reason
+// row — a Catalog_List failure arrives as one) so "see above" always
+// points at something.
 const listingFailed = computed(
   () => !!loadError.value || visibleUnavailable.value.some((u) => u.reason === 'error'),
 );
@@ -287,8 +285,8 @@ const emptyText = computed(() => {
   const q = query.value.trim();
   if (listingFailed.value) {
     return q
-      ? `Nothing matches “${q}” — but a listing failed to load (see above), so this is not a complete answer.`
-      : 'A listing failed to load (see above), so this is not an empty catalog — it could not be read.';
+      ? `Nothing matches “${q}” — a listing failed to load, so this may be incomplete.`
+      : 'A listing failed to load (see above) — this list may be incomplete.';
   }
   return q ? `Nothing matches “${q}”.` : 'Nothing to show for these filters.';
 });
