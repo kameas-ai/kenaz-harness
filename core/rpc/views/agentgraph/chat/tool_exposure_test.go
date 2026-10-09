@@ -306,6 +306,34 @@ func TestRequestBuilder_NeverSendsSummaryToolUnlessActivated(t *testing.T) {
 	assertOnlySendable(t, svc, specs, r2)
 }
 
+// TestAssembleRequestTools_SegmentOrderAndStablePrefix: hot, then
+// pinned, then activated in the order given (most recently used first);
+// stable counts the hot + pinned prefix. A sticky activation joins the
+// stable prefix; a non-sticky one follows it.
+func TestAssembleRequestTools_SegmentOrderAndStablePrefix(t *testing.T) {
+	specs := exposureCatalog()
+	specs = append(specs, spec("fetch", "fetch"))
+	svc, _, _ := newExposureService(t, specs)
+	ctx := context.Background()
+	for _, ld := range []loadtools.Request{
+		{Tools: []string{"outlook__send-mail"}},
+		{Tools: []string{"fetch__fetch"}, Sticky: true},
+	} {
+		if _, err := svc.Load(ctx, "s1", ld, audit.ToolsActivatedByUser); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sel := newExposureTurn(ctx, svc, "s1", specs).selectTools(ctx)
+	var got []string
+	for _, tl := range sel.tools {
+		got = append(got, tl.Name)
+	}
+	want := "kenaz__load_tools,kenaz__read_file,fetch__fetch,outlook__send-mail"
+	if strings.Join(got, ",") != want || sel.stable != 3 {
+		t.Fatalf("tools = %v (stable %d), want %s with stable 3", got, sel.stable, want)
+	}
+}
+
 // exposurePool dispatches kenaz__load_tools to the real tool and records
 // every other call.
 type exposurePool struct {

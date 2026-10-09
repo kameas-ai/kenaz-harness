@@ -800,7 +800,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 		compErr   error
 	)
 	defer func() {
-		logComposition(a.sessionID, a.ProviderKind(), comp, len(gen.System), sel.autoActivated, compUsage, compErr)
+		logComposition(a.sessionID, a.ProviderKind(), comp, len(gen.System), sel.stable, sel.autoActivated, compUsage, compErr)
 	}()
 
 	// Carry the per-node sampling knobs already threaded through the
@@ -1151,7 +1151,9 @@ func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) 
 // are comparable with.
 //
 // tools_summary is the number of catalog tools listed only in
-// kenaz__load_tools' digest on this call; auto_activated is how many
+// kenaz__load_tools' digest on this call; tools_stable is how many
+// leading tools are the hot + pinned prefix that stays identical from
+// call to call; auto_activated is how many
 // summary tools this turn has activated because the model called them by
 // name before loading them.
 //
@@ -1159,7 +1161,7 @@ func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) 
 // the request yet (WP04). FR-H3 — the estimated parts reconciling with
 // prompt_tokens_total within 10 % — is not asserted anywhere yet
 // (2026-10-09; owner alec; deferred to WP08's recorded-frame test).
-func logComposition(sessionID, providerKind string, comp corellm.PromptComposition, systemChars, autoActivated int, usage corellm.Usage, err error) {
+func logComposition(sessionID, providerKind string, comp corellm.PromptComposition, systemChars, toolsStable, autoActivated int, usage corellm.Usage, err error) {
 	outcome := "ok"
 	if err != nil {
 		outcome = "error"
@@ -1179,6 +1181,7 @@ func logComposition(sessionID, providerKind string, comp corellm.PromptCompositi
 		"prompt_tokens_total", corellm.PromptTokensTotal(usage, providerKind),
 		"cached_tokens", usage.CachedInputRead,
 		"cache_write_tokens", usage.CachedInputWrite,
+		"tools_stable", toolsStable,
 		"auto_activated", autoActivated,
 		"budget", 0,
 		"evicted", 0,

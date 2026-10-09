@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
@@ -75,6 +76,9 @@ func newExposureTurn(ctx context.Context, src ToolExposure, sessionID string, ca
 // toolSelection is what one model call carries.
 type toolSelection struct {
 	tools []corellm.ToolSpec
+	// stable is how many leading tools form the call-to-call stable
+	// prefix (hot + pinned); see assembleRequestTools.
+	stable int
 	// summary is the number of catalog tools listed only in the digest.
 	summary int
 	// autoActivated is the turn's auto-activation count so far.
@@ -109,33 +113,53 @@ func (t *exposureTurn) selectTools(ctx context.Context) toolSelection {
 	if err != nil {
 		logging.L().Warn("chat.tool_exposure.resolve_failed",
 			"session_id", t.sessionID, "err", err.Error())
-		var out []corellm.ToolSpec
+		var hot []corellm.ToolSpec
 		summary := 0
 		for _, e := range t.entries {
 			if toolexposure.DefaultTier(toolexposure.CatalogTool{Name: e.Name, Server: e.Server}) != toolexposure.TierFull {
 				summary++
 				continue
 			}
-			out = append(out, t.byName[e.Name])
+			hot = append(hot, t.byName[e.Name])
 		}
-		return toolSelection{tools: out, summary: summary, autoActivated: auto}
+		sort.SliceStable(hot, func(i, j int) bool { return hot[i].Name < hot[j].Name })
+		tools, stable := assembleRequestTools(hot, nil, nil)
+		return toolSelection{tools: tools, stable: stable, summary: summary, autoActivated: auto}
 	}
 
 	p := rc.Partition()
-	names := p.Send()
-	out := make([]corellm.ToolSpec, 0, len(names))
-	for _, name := range names {
-		spec, ok := t.byName[name]
-		if !ok {
-			continue
+	digest := loadtools.RenderDigest(loadtools.BuildDigest(p, loadtools.Purposes(servers)))
+	specs := func(seg []toolexposure.ResolvedTool) []corellm.ToolSpec {
+		out := make([]corellm.ToolSpec, 0, len(seg))
+		for _, rt := range seg {
+			spec, ok := t.byName[rt.Name]
+			if !ok {
+				continue
+			}
+			if rt.Name == loadtools.Name {
+				spec.Description = digest
+				spec.TokenEst = corellm.EstimateToolSpecTokens(spec)
+			}
+			out = append(out, spec)
 		}
-		if name == loadtools.Name {
-			spec.Description = loadtools.RenderDigest(loadtools.BuildDigest(p, loadtools.Purposes(servers)))
-			spec.TokenEst = corellm.EstimateToolSpecTokens(spec)
-		}
-		out = append(out, spec)
+		return out
 	}
-	return toolSelection{tools: out, summary: len(p.Digest), autoActivated: auto}
+	tools, stable := assembleRequestTools(specs(p.Hot), specs(p.Pinned), specs(p.Activated))
+	return toolSelection{tools: tools, stable: stable, summary: len(p.Digest), autoActivated: auto}
+}
+
+// assembleRequestTools lays out one call's tools array from its three
+// segments (spec §2.3): hot then pinned, each sorted by name, then
+// activated in the order given (most recently used first). stable is the
+// count of leading tools that stay byte-identical from call to call
+// (hot + pinned) — the cacheable prefix; activated tools follow it.
+// Callers pass hot and pinned already sorted by name.
+func assembleRequestTools(hot, pinned, activated []corellm.ToolSpec) (tools []corellm.ToolSpec, stable int) {
+	tools = make([]corellm.ToolSpec, 0, len(hot)+len(pinned)+len(activated))
+	tools = append(tools, hot...)
+	tools = append(tools, pinned...)
+	tools = append(tools, activated...)
+	return tools, len(hot) + len(pinned)
 }
 
 // notLoadedResult is the structured tool result for a call to a tool
