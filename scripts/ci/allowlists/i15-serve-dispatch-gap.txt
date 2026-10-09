@@ -1289,42 +1289,31 @@
 "Fleet_MemorySyncEnable"
 "Fleet_MemorySyncStatus"
 
-# CLASS: untriaged -- tool-context-budget-01TCBUD01 WP02, 2026-10-08.
-# 6 entries.
+# CLASS: boundary-panelled -- tool-context-budget-01TCBUD01 WP06, 2026-10-09.
+# 8 entries.
 #
-# The tool-exposure layers (spec §2.1): the user's per-server / per-tool
-# tiers, schema budget and activation TTL (Settings_*), the project
-# override (Projects_{Get,Set}ToolExposure) and the session override +
-# activated set (Sessions_*). WP02 lands the data model, the resolver
-# and the typed client methods (harnessClient.ts settings.*, projects.*
-# and sessions.{get,set}ToolExposure); no .vue surface mounts them yet.
-# Spec §2.6 rules the
-# composer Tools menu a served-mode boundary panel and Settings ->
-# Capabilities is desktop-only like the other Settings_* entries, so the
-# expected dispositions are boundary-panelled (Sessions_*) and
-# desktop-only-by-nature (Settings_*, Projects_*) — decided when the
-# surfaces exist, not here.
-#
-# Blocker: tool-context-budget-01TCBUD01 WP06 (Capabilities tier
-# controls + composer Tools menu), which mounts the surfaces and makes
-# the served disposition decidable. Dated 2026-10-08. Owner: alec.
+# The tool-exposure bindings (spec §2.1-§2.6). WP02/WP03 landed seven as
+# untriaged pending the surfaces; WP06 mounts the callers, and every one
+# of them sits behind a served-mode boundary panel:
+#   - views/tools/ToolExposurePanel.vue (Settings_*, Projects_*,
+#     Tools_SchemaCosts) mounts only in ToolsView.vue, which renders
+#     NotAvailableInServedMode.
+#   - components/chat/ToolsMenu.vue (Sessions_*, Projects_*,
+#     Settings_GetToolExposure, Tools_SchemaCosts) renders
+#     NotAvailableInServedMode in place of its panel when servedMode is
+#     set and fetches nothing (refresh() returns first); spec §2.6 rules
+#     the composer Tools menu a boundary panel.
+#   - views/workflows/scheduledchat/ScheduledChatFormModal.vue
+#     (Tools_SchemaCosts) is reached only from the boundary-panelled
+#     WorkflowsView.
+# Tools_SchemaCosts is WP06's one new read binding (per-server schema
+# cost and resolved tier). Ports together if the exposure family is ever
+# served.
 "Projects_GetToolExposure"
 "Projects_SetToolExposure"
 "Sessions_GetToolExposure"
+"Sessions_LoadTools"
 "Sessions_SetToolExposure"
 "Settings_GetToolExposure"
 "Settings_SetToolExposure"
-
-# CLASS: untriaged -- tool-context-budget-01TCBUD01 WP03, 2026-10-09.
-# 1 entries.
-#
-# Sessions_LoadTools: the composer's load action (spec §2.2, FR-K2) over
-# the same activation core the model's kenaz__load_tools call uses. WP03
-# lands the binding and the typed client method
-# (harnessClient.ts sessions.loadTools); no .vue surface calls it yet.
-# Spec §2.6 rules the composer Tools menu a served-mode boundary panel,
-# so the expected disposition is boundary-panelled once the menu exists.
-#
-# Blocker: tool-context-budget-01TCBUD01 WP06 (composer Tools menu),
-# which mounts the caller. Dated 2026-10-09. Owner: alec.
-"Sessions_LoadTools"
+"Tools_SchemaCosts"

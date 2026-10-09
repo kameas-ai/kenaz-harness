@@ -6,8 +6,18 @@
  *
  * Emits "saved" with the new/updated ChatRunEntry on success.
  * Emits "cancel" when the user dismisses without saving.
+ *
+ * Tool set (tool-context-budget-01TCBUD01 WP06, FR-K3): a schedule has no
+ * project, so its runs resolve the user's default tiers; the form shows
+ * that set's per-request cost (Tools_SchemaCosts with no session and no
+ * project) next to the model. "Custom servers" is rendered disabled with
+ * its reason: the schedule record has no tool-set field.
+ * TODO(tool-context-budget-01TCBUD01 WP08, dated 2026-10-09, owner alec):
+ * wire "Custom servers" once the schedule record carries a tool set.
  */
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, inject } from 'vue';
+import { HarnessClientKey } from '@/lib/harnessClientContext';
+import { formatTokens, sendableTokens } from '@/lib/toolExposure';
 import type {
   ScheduledChatClient,
   ScheduledChatEntry,
@@ -51,6 +61,25 @@ onMounted(async () => {
     defaultModel.value = dm.model || '';
   } catch {
     defaultModel.value = null;
+  }
+});
+
+// The default tool set's per-request cost. null = not known (no harness
+// client in this mount, or the read failed): the line is not rendered.
+const harness = inject(HarnessClientKey, null);
+const toolSetTokens = ref<number | null>(null);
+const toolSetFull = ref(0);
+onMounted(async () => {
+  if (!harness) return;
+  try {
+    const costs = await harness.tools.schemaCosts('', '');
+    toolSetTokens.value = sendableTokens(costs);
+    toolSetFull.value = costs.reduce(
+      (n, c) => n + (c.tools ?? []).filter((t) => t.sendable).length,
+      0,
+    );
+  } catch {
+    toolSetTokens.value = null;
   }
 });
 // Populate form when editing entry changes.
@@ -334,6 +363,38 @@ async function handleSubmit() {
             <template v-else>
               No default model is configured — add a provider, or name a model here.
             </template>
+          </p>
+        </div>
+
+        <!-- Tool set (tool-context-budget-01TCBUD01 WP06, FR-K3) -->
+        <div data-testid="sc-tool-set">
+          <label class="block font-ui text-xs text-ink-muted mb-1">Tool set</label>
+          <div class="flex items-center gap-4">
+            <label class="flex items-center gap-1.5 font-ui text-sm text-ink cursor-pointer">
+              <input type="radio" checked data-testid="sc-tool-set-default" />
+              Your default tiers
+            </label>
+            <label class="flex items-center gap-1.5 font-ui text-sm text-ink-muted cursor-not-allowed">
+              <input
+                type="radio"
+                disabled
+                aria-describedby="sc-tool-set-custom-reason"
+                data-testid="sc-tool-set-custom"
+              />
+              Custom servers
+            </label>
+          </div>
+          <p
+            v-if="toolSetTokens !== null"
+            class="mt-1 font-ui text-xs text-ink-muted"
+            data-testid="sc-tool-set-cost"
+          >
+            Each request sends {{ toolSetFull }} tool definition{{ toolSetFull === 1 ? '' : 's' }}
+            ({{ formatTokens(toolSetTokens) }} tokens); the run can load more as it needs them.
+          </p>
+          <p id="sc-tool-set-custom-reason" class="mt-1 font-ui text-xs text-ink-subtle">
+            Choosing servers per schedule is not available yet. Change the default tiers in
+            Capabilities.
           </p>
         </div>
 

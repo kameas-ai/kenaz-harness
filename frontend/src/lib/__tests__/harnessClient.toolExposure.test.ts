@@ -87,4 +87,17 @@ describe('createHarnessClient() — tool exposure', () => {
     expect(got).toEqual(result);
     expect(got.not_loaded[0].reason).toContain('not running');
   });
+
+  it('routes tools.schemaCosts to Tools_SchemaCosts; a null list reads as empty', async () => {
+    const bindings = {
+      Tools_SchemaCosts: vi.fn(async () => null),
+    };
+    rawGo().go.rpc.Bindings = bindings;
+    const client = createHarnessClient();
+
+    expect(await client.tools.schemaCosts('s1', '')).toEqual([]);
+    expect(bindings.Tools_SchemaCosts).toHaveBeenCalledWith('s1', '');
+    await client.tools.schemaCosts('', 'p1');
+    expect(bindings.Tools_SchemaCosts).toHaveBeenLastCalledWith('', 'p1');
+  });
 });

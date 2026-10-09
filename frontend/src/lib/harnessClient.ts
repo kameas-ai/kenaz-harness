@@ -219,6 +219,7 @@ import type {
   ToolExposureSettings,
   SessionToolExposure,
   LoadToolsResult,
+  ServerSchemaCost,
 } from './types';
 
 /**
@@ -714,6 +715,11 @@ interface WailsBindingsLike {
     path: string,
     reason: string,
   ): Promise<{ granted: boolean; expanded: string; message: string }>;
+  // ── tool-context-budget-01TCBUD01 WP06 ──────────────────────────────
+  Tools_SchemaCosts(
+    sessionID: string,
+    projectID: string,
+  ): Promise<ServerSchemaCost[]>;
 
   Bash_Exec(sessionID: string, command: string): Promise<BashExecResult>;
 
@@ -2922,6 +2928,13 @@ export interface ToolsClient {
     reason: string,
     recipeID?: string,
   ): Promise<FSAccessResult>;
+  /**
+   * Every tool server's schema cost and resolved exposure tier
+   * (tool-context-budget-01TCBUD01 §2.5). With sessionId set the tiers
+   * are that session's (override and activated set included); otherwise
+   * projectId's, or the user's default when projectId is empty.
+   */
+  schemaCosts(sessionId: string, projectId: string): Promise<ServerSchemaCost[]>;
 }
 
 /**
@@ -4800,6 +4813,8 @@ export function createHarnessClient(): HarnessClient {
         b().Tools_PickDirectory(title ?? '', defaultDir ?? ''),
       requestAdditionalAllowedDir: (path, reason, recipeID = 'filesystem') =>
         b().Tools_RequestAdditionalAllowedDir(recipeID, path, reason),
+      schemaCosts: async (sessionId, projectId) =>
+        (await b().Tools_SchemaCosts(sessionId, projectId)) ?? [],
     },
     shell: {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
@@ -6485,6 +6500,7 @@ export function createFakeHarnessClient(
         expanded: '',
         message: 'stub',
       }),
+      schemaCosts: async () => [],
     },
     shell: {
       openInOSBrowser: noop,

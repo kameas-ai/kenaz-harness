@@ -140,6 +140,13 @@ export interface UsageComposition {
    * and fakes type-check; absent reads as 0.
    */
   toolsSummary?: number;
+  /**
+   * The schema-budget warning for this call ("Pinned tools exceed the
+   * schema budget by N tokens", spec §2.3). Written by WP04's eviction;
+   * absent when nothing pinned was over budget or on a backend without
+   * it.
+   */
+  budgetWarning?: string;
 }
 
 export interface SessionUsage {
@@ -405,6 +412,12 @@ export interface ModelInfo {
   description?: string;
   /** Max context length in tokens; 0 / undefined = unknown. */
   contextWindow?: number;
+  /**
+   * True when requests for this model carry prompt-cache markers
+   * (tool-context-budget-01TCBUD01 WP05). Absent on a backend that does
+   * not report it; the UI treats absent as unknown, not false.
+   */
+  supportsPromptCache?: boolean;
   /**
    * Provider's hard cap on output tokens per turn.
    * 0 / undefined = unknown — the UI should not render an explicit cap.
@@ -5415,4 +5428,48 @@ export interface LoadToolsResult {
   next_turn?: string[];
   not_loaded: LoadToolsNotLoaded[];
   summary: string;
+}
+
+// ── tool-context-budget-01TCBUD01 WP06 ────────────────────────────────
+// Tools_SchemaCosts wire shapes (Go loadtools.ServerCost / ToolCost).
+
+/** The layer that decided a tool's tier (Go toolexposure.Level). */
+export type ToolExposureLevel =
+  | 'org_pin'
+  | 'session'
+  | 'project'
+  | 'user'
+  | 'default'
+  | 'invariant'
+  | '';
+
+/** One tool's schema cost and resolved tier; `name` is the bare tool name. */
+export interface ToolSchemaCost {
+  name: string;
+  tokenEst: number;
+  tier: ToolExposureTier;
+  source: ToolExposureLevel;
+  activated: boolean;
+  /** True when a call in this scope sends this tool's schema. */
+  sendable: boolean;
+}
+
+/**
+ * One server's schema cost and resolved tier in one scope. `tier` is
+ * 'mixed' when its tools differ; `source` is '' when they came from
+ * different layers. A server that is not running reports no tools.
+ */
+export interface ServerSchemaCost {
+  server: string;
+  state: string;
+  running: boolean;
+  toolCount: number;
+  tokenEst: number;
+  tier: ToolExposureTier | 'mixed';
+  source: ToolExposureLevel;
+  /** An organisation pin decided at least one tool's tier. */
+  pinned: boolean;
+  /** Tokens of the tools a call in this scope sends. */
+  sendableTokenEst: number;
+  tools: ToolSchemaCost[];
 }

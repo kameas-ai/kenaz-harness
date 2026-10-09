@@ -359,9 +359,20 @@ its consumer). Still not consumed:
   with the TTL.
 - `toolexposure.SettingsSource` / `PinSource` — `wiring:deferred` at
   their declarations.
-- The seven `*_ToolExposure` / `Sessions_LoadTools` bindings have typed
-  client methods but no `.vue` caller (i15 untriaged entries, blocker
-  WP06).
+- ~~The seven `*_ToolExposure` / `Sessions_LoadTools` bindings have typed
+  client methods but no `.vue` caller~~ — closed by WP06 (2026-10-09):
+  `views/tools/ToolExposurePanel.vue` and `components/chat/ToolsMenu.vue`
+  call all seven plus WP06's `Tools_SchemaCosts`; the i15 entries moved
+  from untriaged to boundary-panelled.
+- WP06 (2026-10-09): the schedule form's tool-set selector renders
+  "Custom servers" disabled with its reason — the schedule record has no
+  tool-set field. Blocker: WP08 (or a schedule-record field). The
+  "caches prompts" badge reads `ModelInfo.supportsPromptCache`, which the
+  rpc `views/llm.ModelInfo` wire struct does not carry until WP05's
+  `llm.ModelInfo.SupportsPromptCache` is merged and copied across at
+  `core/rpc/views/llm/impl.go` (the `MaxOutputTokens: m.MaxOutputTokens`
+  site); until then the badge never renders. Owner: alec — the release
+  integration that merges WP05 adds the copy.
 - The exposure tiers apply where the chat runner builds the request
   (interactive chat, scheduled chats, subagent runs). Workflow steps
   that call models with tools outside the chat runner still send their

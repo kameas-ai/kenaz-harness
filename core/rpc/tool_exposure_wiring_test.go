@@ -330,6 +330,80 @@ func TestToolExposureWiring_LoadToolsAndGuardThroughNew(t *testing.T) {
 	}
 }
 
+// TestToolSchemaCosts_ThroughNew drives Tools_SchemaCosts' API method on
+// New()'s real chassis over real sqlite: a session's sticky load shows up
+// as sendable in session scope only, and a project layer write changes the
+// project scope's resolved tier — the reads the Capabilities rows and the
+// composer Tools menu render.
+func TestToolSchemaCosts_ThroughNew(t *testing.T) {
+	sandboxUserConfigDir(t)
+	c, err := core.New(core.Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	api := New(c)
+	t.Cleanup(func() {
+		api.Shutdown()
+		_ = c.Shutdown(context.Background())
+	})
+	assertSettingsStoreIsSandboxed(t, api)
+	ctx := context.Background()
+
+	sleepTool := func(costs []loadtools.ServerCost) (loadtools.ToolCost, bool) {
+		for _, sc := range costs {
+			if sc.Server != toolexposure.BuiltinServer {
+				continue
+			}
+			for _, tc := range sc.Tools {
+				if tc.Name == "sleep" {
+					return tc, true
+				}
+			}
+		}
+		return loadtools.ToolCost{}, false
+	}
+
+	rec, err := c.SessionManager().Create(ctx, "zz-costs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Sessions().LoadTools(ctx, rec.ID, nil, []string{"kenaz__sleep"}, true); err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	sess, err := api.ToolSchemaCosts(ctx, rec.ID, "")
+	if err != nil {
+		t.Fatalf("ToolSchemaCosts(session): %v", err)
+	}
+	if tc, ok := sleepTool(sess); !ok || !tc.Activated || !tc.Sendable || tc.TokenEst <= 0 {
+		t.Fatalf("session scope kenaz sleep = %+v (found %v), want activated, sendable, measured", tc, ok)
+	}
+	user, err := api.ToolSchemaCosts(ctx, "", "")
+	if err != nil {
+		t.Fatalf("ToolSchemaCosts(user): %v", err)
+	}
+	if tc, ok := sleepTool(user); !ok || tc.Activated || tc.Sendable || tc.Tier != toolexposure.TierSummary {
+		t.Fatalf("user scope kenaz sleep = %+v (found %v), want summary, not sendable", tc, ok)
+	}
+
+	proj, err := c.ProjectManager().Create(ctx, "zz-costs-proj", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := toolexposure.Exposure{Servers: map[string]toolexposure.ServerExposure{
+		toolexposure.BuiltinServer: {Tools: map[string]toolexposure.Tier{"sleep": toolexposure.TierFull}},
+	}}
+	if err := api.Projects().SetToolExposure(ctx, proj.ID, full); err != nil {
+		t.Fatalf("Projects SetToolExposure: %v", err)
+	}
+	inProj, err := api.ToolSchemaCosts(ctx, "", proj.ID)
+	if err != nil {
+		t.Fatalf("ToolSchemaCosts(project): %v", err)
+	}
+	if tc, ok := sleepTool(inProj); !ok || tc.Tier != toolexposure.TierFull || tc.Source != toolexposure.LevelProject || !tc.Sendable {
+		t.Fatalf("project scope kenaz sleep = %+v (found %v), want full from project, sendable", tc, ok)
+	}
+}
+
 // TestScheduledRunContainment_LoadToolsIsNotContained: a contained run
 // may call kenaz__load_tools (it only loads tools the contained catalog
 // already lists); every other off-list tool is still refused.

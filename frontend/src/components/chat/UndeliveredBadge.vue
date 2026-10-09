@@ -15,7 +15,12 @@
  * Rendered by MessageList as a sibling of the user's MessageBubble.
  */
 import { computed } from 'vue';
-import { deliveryCopy, type DeliveryFailure } from '@/lib/delivery';
+import {
+  deliveryCopy,
+  offersToolsMenu,
+  type DeliveryFailure,
+  type RequestSizeContext,
+} from '@/lib/delivery';
 import type { AutoRetryState } from '@/lib/useSession';
 
 const props = defineProps<{
@@ -28,14 +33,20 @@ const props = defineProps<{
   canRetry: boolean;
   /** Non-null while a transient failure waits for its automatic retry. */
   autoRetry?: AutoRetryState | null;
+  /** Tool tokens and model window for the request_too_large remedy. */
+  sizeContext?: RequestSizeContext | null;
+  /** Show "Open tools" for request_too_large (false where the menu cannot act). */
+  toolsAvailable?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'retry'): void;
   (e: 'cancel-retry'): void;
+  (e: 'open-tools'): void;
 }>();
 
-const copy = computed(() => deliveryCopy(props.failure));
+const copy = computed(() => deliveryCopy(props.failure, props.sizeContext ?? undefined));
+const showTools = computed(() => !!props.toolsAvailable && props.canRetry && offersToolsMenu(props.failure));
 const retryingCopy = computed(() => {
   const r = props.autoRetry;
   if (!r) return '';
@@ -66,6 +77,15 @@ const retryingCopy = computed(() => {
       {{ failure.provider ? `${failure.provider}: ` : '' }}{{ failure.message }}
     </p>
     <div v-if="canRetry" class="flex items-center gap-2">
+      <button
+        v-if="showTools"
+        type="button"
+        class="px-2 py-0.5 rounded-md border border-border-muted text-ink hover:bg-surface-2"
+        data-testid="undelivered-open-tools"
+        @click="emit('open-tools')"
+      >
+        Open tools
+      </button>
       <template v-if="autoRetry">
         <span class="text-ink-muted" data-testid="undelivered-auto-retry">{{ retryingCopy }}</span>
         <button

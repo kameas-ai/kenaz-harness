@@ -1890,6 +1890,10 @@ export function Tools_RequestAdditionalAllowedDir(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Tools_RequestAdditionalAllowedDir'](arg1, arg2, arg3);
 }
 
+export function Tools_SchemaCosts(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Tools_SchemaCosts'](arg1, arg2);
+}
+
 export function Tools_SignInRecipe(arg1) {
   return window['go']['rpc']['Bindings']['Tools_SignInRecipe'](arg1);
 }

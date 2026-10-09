@@ -11,6 +11,9 @@ import {
   createFakeScheduledChatClient,
   type ScheduledChatEntry,
 } from '@/lib/scheduledChatClient';
+import { createFakeHarnessClient } from '@/lib/harnessClient';
+import { HarnessClientKey } from '@/lib/harnessClientContext';
+import type { ServerSchemaCost } from '@/lib/types';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -250,3 +253,40 @@ describe('ScheduledChatFormModal', () => {
 function wrapper_saveBtnText(wrapper: ReturnType<typeof mount>) {
   return wrapper.find('[data-testid="modal-save"]').text();
 }
+
+// ── tool set (tool-context-budget-01TCBUD01 WP06, FR-K3) ─────────────────────
+
+describe('ScheduledChatFormModal — tool set', () => {
+  it('shows the default tool set’s per-request cost; Custom servers is disabled with its reason', async () => {
+    const base = createFakeHarnessClient();
+    const schemaCosts = vi.fn(async (): Promise<ServerSchemaCost[]> => [
+      {
+        server: 'kenaz', state: 'running', running: true, toolCount: 3, tokenEst: 5000,
+        tier: 'mixed', source: '', pinned: false, sendableTokenEst: 4200,
+        tools: [
+          { name: 'read_file', tokenEst: 2000, tier: 'full', source: 'default', activated: false, sendable: true },
+          { name: 'bash', tokenEst: 2200, tier: 'full', source: 'default', activated: false, sendable: true },
+          { name: 'monitor', tokenEst: 800, tier: 'summary', source: 'default', activated: false, sendable: false },
+        ],
+      },
+    ]);
+    const wrapper = mount(ScheduledChatFormModal, {
+      props: { client: createFakeScheduledChatClient(), editing: null },
+      global: { provide: { [HarnessClientKey as symbol]: { ...base, tools: { ...base.tools, schemaCosts } } } },
+    });
+    await flushPromises();
+    // Schedules have no project and no session: the user's default tiers.
+    expect(schemaCosts).toHaveBeenCalledWith('', '');
+    expect(wrapper.find('[data-testid="sc-tool-set-cost"]').text()).toBe(
+      'Each request sends 2 tool definitions (~4.2k tokens); the run can load more as it needs them.',
+    );
+    expect(wrapper.find('[data-testid="sc-tool-set-custom"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('#sc-tool-set-custom-reason').text()).toContain('not available yet');
+  });
+
+  it('renders no cost line without a harness client', async () => {
+    const { wrapper } = mountCreate();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="sc-tool-set-cost"]').exists()).toBe(false);
+  });
+});
