@@ -25,14 +25,14 @@ const COSTS: ServerSchemaCost[] = [
     server: 'outlook', state: 'running', running: true, toolCount: 2, tokenEst: 6400,
     tier: 'summary', source: 'default', pinned: false, sendableTokenEst: 0,
     tools: [
-      { name: 'list-messages', tokenEst: 3000, tier: 'summary', source: 'default', activated: false, sendable: false },
-      { name: 'send-mail', tokenEst: 3400, tier: 'summary', source: 'default', activated: false, sendable: false },
+      { name: 'list-messages', tokenEst: 3000, tier: 'summary', source: 'default', activated: false, sendable: false, hot: false },
+      { name: 'send-mail', tokenEst: 3400, tier: 'summary', source: 'default', activated: false, sendable: false, hot: false },
     ],
   },
   {
     server: 'fetch', state: 'running', running: true, toolCount: 1, tokenEst: 300,
     tier: 'full', source: 'org_pin', pinned: true, sendableTokenEst: 300,
-    tools: [{ name: 'fetch', tokenEst: 300, tier: 'full', source: 'org_pin', activated: false, sendable: true }],
+    tools: [{ name: 'fetch', tokenEst: 300, tier: 'full', source: 'org_pin', activated: false, sendable: true, hot: false }],
   },
   {
     server: 'github', state: 'failed', running: false, toolCount: 0, tokenEst: 0,
@@ -40,9 +40,9 @@ const COSTS: ServerSchemaCost[] = [
   },
 ];
 
-function setup(opts: { setSettings?: () => Promise<void>; projectLayer?: ToolExposure } = {}) {
+function setup(opts: { setSettings?: () => Promise<void>; projectLayer?: ToolExposure; costs?: ServerSchemaCost[] } = {}) {
   const base = createFakeHarnessClient();
-  const schemaCosts = vi.fn(async () => COSTS);
+  const schemaCosts = vi.fn(async () => opts.costs ?? COSTS);
   let stored = { ...SETTINGS };
   const getSettings = vi.fn(async () => stored);
   const setSettings = vi.fn(opts.setSettings ?? (async (s: ToolExposureSettings) => {
@@ -64,7 +64,10 @@ function setup(opts: { setSettings?: () => Promise<void>; projectLayer?: ToolExp
   const w = mount(ToolExposurePanel, {
     global: { provide: { [HarnessClientKey as symbol]: client } },
   });
-  return { w, schemaCosts, setSettings, getProject, setProject };
+  const replaceStored = (s: ToolExposureSettings) => {
+    stored = { ...s };
+  };
+  return { w, schemaCosts, setSettings, getProject, setProject, replaceStored };
 }
 
 async function choose(w: ReturnType<typeof setup>['w'], testid: string, value: string) {
@@ -79,7 +82,7 @@ describe('ToolExposurePanel', () => {
     await flushPromises();
     expect(schemaCosts).toHaveBeenCalledWith('', '');
     expect(w.find('[data-testid="tool-exposure-cost-outlook"]').text()).toBe('Schema cost ~6.4k tokens when loaded');
-    expect(w.find('[data-testid="tool-exposure-cost-github"]').text()).toBe('Schema cost unknown — server failed');
+    expect(w.find('[data-testid="tool-exposure-cost-github"]').text()).toBe('Schema cost unknown — server not running (failed to start)');
     expect(w.find('[data-testid="tool-exposure-resolved-outlook"]').text()).toBe('Summary · harness default');
     // The select shows the user layer's own value; outlook has none.
     expect((w.find('[data-testid="tool-exposure-tier-outlook"]').element as HTMLSelectElement).value).toBe('');
@@ -148,6 +151,9 @@ describe('ToolExposurePanel', () => {
     await flushPromises();
     await choose(w, 'tool-exposure-budget', '12000');
     expect(setSettings.mock.calls[0][0].schemaBudgetTokens).toBe(12_000);
+    // The tier layer and the other number ride along unchanged.
+    expect(setSettings.mock.calls[0][0].exposure).toEqual(SETTINGS.exposure);
+    expect(setSettings.mock.calls[0][0].activationTtlTurns).toBe(9);
     await choose(w, 'tool-exposure-budget', '');
     expect(setSettings.mock.calls[1][0].schemaBudgetTokens).toBe(0);
   });
@@ -157,6 +163,54 @@ describe('ToolExposurePanel', () => {
     await flushPromises();
     await choose(w, 'tool-exposure-ttl', '3');
     expect(setSettings.mock.calls[0][0].activationTtlTurns).toBe(3);
+    expect(setSettings.mock.calls[0][0].exposure).toEqual(SETTINGS.exposure);
+  });
+
+  it('a server with only some tools pinned keeps its tier select; the pinned tool rows are locked', async () => {
+    const mixed: ServerSchemaCost = {
+      server: 'outlook', state: 'running', running: true, toolCount: 2, tokenEst: 600,
+      tier: 'mixed', source: '', pinned: true, sendableTokenEst: 300,
+      tools: [
+        { name: 'send-mail', tokenEst: 300, tier: 'off', source: 'org_pin', activated: false, sendable: false, hot: false },
+        { name: 'list-messages', tokenEst: 300, tier: 'full', source: 'user', activated: false, sendable: true, hot: false },
+      ],
+    };
+    const { w } = setup({ costs: [mixed] });
+    await flushPromises();
+    expect(w.find('[data-testid="tool-exposure-tier-outlook"]').attributes('disabled')).toBeUndefined();
+    expect(w.find('[data-testid="tool-exposure-pinned-outlook"]').text()).toContain('Some tools are set by your organisation');
+    await w.find('[data-testid="tool-exposure-drawer-toggle-outlook"]').trigger('click');
+    expect(w.find('[data-testid="tool-exposure-tool-tier-outlook-send-mail"]').attributes('disabled')).toBeDefined();
+    expect(w.find('[data-testid="tool-exposure-tool-tier-outlook-list-messages"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('a built-in server tier keeps the hot set explicitly full', async () => {
+    const kenaz: ServerSchemaCost = {
+      server: 'kenaz', state: 'running', running: true, toolCount: 3, tokenEst: 900,
+      tier: 'mixed', source: '', pinned: false, sendableTokenEst: 600,
+      tools: [
+        { name: 'load_tools', tokenEst: 300, tier: 'full', source: 'default', activated: false, sendable: true, hot: true },
+        { name: 'read_file', tokenEst: 300, tier: 'full', source: 'default', activated: false, sendable: true, hot: true },
+        { name: 'monitor', tokenEst: 300, tier: 'summary', source: 'default', activated: false, sendable: false, hot: false },
+      ],
+    };
+    const { w, setSettings } = setup({ costs: [kenaz] });
+    await flushPromises();
+    await choose(w, 'tool-exposure-tier-kenaz', 'off');
+    expect(setSettings.mock.calls[0][0].exposure.servers?.kenaz).toEqual({
+      tier: 'off',
+      tools: { load_tools: 'full', read_file: 'full' },
+    });
+  });
+
+  it('writes onto the layer as stored now, not the snapshot from mount', async () => {
+    const { w, setSettings, replaceStored } = setup();
+    await flushPromises();
+    replaceStored({ ...SETTINGS, exposure: { servers: { github: { tier: 'off' } } } });
+    await choose(w, 'tool-exposure-tier-outlook', 'full');
+    expect(setSettings.mock.calls[0][0].exposure).toEqual({
+      servers: { github: { tier: 'off' }, outlook: { tier: 'full' } },
+    });
   });
 
   it('a refused write shows the reason', async () => {
@@ -167,6 +221,8 @@ describe('ToolExposurePanel', () => {
     });
     await flushPromises();
     await choose(w, 'tool-exposure-tier-outlook', 'off');
-    expect(w.find('[data-testid="tool-exposure-save-error"]').text()).toContain('kenaz__load_tools is required');
+    const msg = w.find('[data-testid="tool-exposure-save-error"]').text();
+    expect(msg).toMatch(/^Keep kenaz__load_tools full/);
+    expect(msg).toContain('kenaz__load_tools is required');
   });
 });

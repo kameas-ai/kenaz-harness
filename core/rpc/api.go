@@ -10855,13 +10855,6 @@ type CompactionOverheadInfo struct {
 	AutoTitleOutputTokens       int     `json:"autoTitleOutputTokens"`
 }
 
-// CompactionOverhead implements HarnessAPI. Returns the zero value (not
-// an error) when both compaction and auto-title were disabled at boot —
-// matching buildCompactionWiring's own degrade contract, not a fault
-// condition this RPC should surface as one. The compaction half and the
-// auto-title half (model-settings-reach-the-model-01PMZ101 WP07) are
-// populated independently — one being disabled must not suppress the
-// other's totals.
 // ErrToolExposureNotConfigured is returned by ToolSchemaCosts when the
 // chassis wired no tool-exposure core.
 var ErrToolExposureNotConfigured = errors.New("rpc: tool exposure not configured")
@@ -10874,6 +10867,13 @@ func (a *API) ToolSchemaCosts(ctx context.Context, sessionID, projectID string) 
 	return a.toolExposure.SchemaCosts(ctx, sessionID, projectID)
 }
 
+// CompactionOverhead implements HarnessAPI. Returns the zero value (not
+// an error) when both compaction and auto-title were disabled at boot —
+// matching buildCompactionWiring's own degrade contract, not a fault
+// condition this RPC should surface as one. The compaction half and the
+// auto-title half (model-settings-reach-the-model-01PMZ101 WP07) are
+// populated independently — one being disabled must not suppress the
+// other's totals.
 func (a *API) CompactionOverhead(_ context.Context) (CompactionOverheadInfo, error) {
 	var out CompactionOverheadInfo
 	if a == nil {

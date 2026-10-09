@@ -4387,6 +4387,7 @@ export namespace loadtools {
 	    source: string;
 	    activated: boolean;
 	    sendable: boolean;
+	    hot: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ToolCost(source);
@@ -4400,6 +4401,7 @@ export namespace loadtools {
 	        this.source = source["source"];
 	        this.activated = source["activated"];
 	        this.sendable = source["sendable"];
+	        this.hot = source["hot"];
 	    }
 	}
 	export class ServerCost {

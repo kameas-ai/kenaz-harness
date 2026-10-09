@@ -46,7 +46,9 @@ const emit = defineEmits<{
 }>();
 
 const copy = computed(() => deliveryCopy(props.failure, props.sizeContext ?? undefined));
-const showTools = computed(() => !!props.toolsAvailable && props.canRetry && offersToolsMenu(props.failure));
+const showTools = computed(
+  () => props.toolsAvailable !== false && props.canRetry && offersToolsMenu(props.failure),
+);
 const retryingCopy = computed(() => {
   const r = props.autoRetry;
   if (!r) return '';

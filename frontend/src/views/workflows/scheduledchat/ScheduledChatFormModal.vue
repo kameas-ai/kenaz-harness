@@ -10,13 +10,15 @@
  * Tool set (tool-context-budget-01TCBUD01 WP06, FR-K3): a schedule has no
  * project, so its runs resolve the user's default tiers; the form shows
  * that set's per-request cost (Tools_SchemaCosts with no session and no
- * project) next to the model. "Custom servers" is rendered disabled with
- * its reason: the schedule record has no tool-set field.
- * TODO(tool-context-budget-01TCBUD01 WP08, dated 2026-10-09, owner alec):
- * wire "Custom servers" once the schedule record carries a tool set.
+ * project) next to the model. A schedule contained to a tool allowlist
+ * runs a narrower catalog than that, so its cost is not shown. "Custom
+ * servers" is rendered disabled with its reason: the schedule record has
+ * no tool-set field.
+ * TODO(dated 2026-10-09, owner alec — follow-up mission "schedule tool
+ * set"): wire "Custom servers" once the schedule record carries a tool set.
  */
-import { ref, computed, watch, onMounted, inject } from 'vue';
-import { HarnessClientKey } from '@/lib/harnessClientContext';
+import { ref, computed, watch, onMounted } from 'vue';
+import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { formatTokens, sendableTokens } from '@/lib/toolExposure';
 import type {
   ScheduledChatClient,
@@ -64,13 +66,13 @@ onMounted(async () => {
   }
 });
 
-// The default tool set's per-request cost. null = not known (no harness
-// client in this mount, or the read failed): the line is not rendered.
-const harness = inject(HarnessClientKey, null);
+// The default tool set's per-request cost. null = not known (the read
+// failed): the line is not rendered.
+const harness = useHarnessClient();
 const toolSetTokens = ref<number | null>(null);
 const toolSetFull = ref(0);
+const contained = computed(() => (props.editing?.toolAllowlist?.length ?? 0) > 0);
 onMounted(async () => {
-  if (!harness) return;
   try {
     const costs = await harness.tools.schemaCosts('', '');
     toolSetTokens.value = sendableTokens(costs);
@@ -367,16 +369,17 @@ async function handleSubmit() {
         </div>
 
         <!-- Tool set (tool-context-budget-01TCBUD01 WP06, FR-K3) -->
-        <div data-testid="sc-tool-set">
-          <label class="block font-ui text-xs text-ink-muted mb-1">Tool set</label>
+        <fieldset data-testid="sc-tool-set">
+          <legend class="block font-ui text-xs text-ink-muted mb-1">Tool set</legend>
           <div class="flex items-center gap-4">
             <label class="flex items-center gap-1.5 font-ui text-sm text-ink cursor-pointer">
-              <input type="radio" checked data-testid="sc-tool-set-default" />
+              <input type="radio" name="sc-tool-set" checked data-testid="sc-tool-set-default" />
               Your default tiers
             </label>
             <label class="flex items-center gap-1.5 font-ui text-sm text-ink-muted cursor-not-allowed">
               <input
                 type="radio"
+                name="sc-tool-set"
                 disabled
                 aria-describedby="sc-tool-set-custom-reason"
                 data-testid="sc-tool-set-custom"
@@ -385,7 +388,15 @@ async function handleSubmit() {
             </label>
           </div>
           <p
-            v-if="toolSetTokens !== null"
+            v-if="contained"
+            class="mt-1 font-ui text-xs text-ink-muted"
+            data-testid="sc-tool-set-contained"
+          >
+            Contained run — limited to {{ editing?.toolAllowlist?.length }} allowed
+            tool{{ editing?.toolAllowlist?.length === 1 ? '' : 's' }}; cost not shown.
+          </p>
+          <p
+            v-else-if="toolSetTokens !== null"
             class="mt-1 font-ui text-xs text-ink-muted"
             data-testid="sc-tool-set-cost"
           >
@@ -396,7 +407,7 @@ async function handleSubmit() {
             Choosing servers per schedule is not available yet. Change the default tiers in
             Capabilities.
           </p>
-        </div>
+        </fieldset>
 
         <!-- Output sink -->
         <div>

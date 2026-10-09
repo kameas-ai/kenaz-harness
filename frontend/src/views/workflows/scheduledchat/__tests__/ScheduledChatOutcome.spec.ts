@@ -13,6 +13,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import ScheduledChatsPanel from '@/views/workflows/scheduledchat/ScheduledChatsPanel.vue';
+import { createFakeHarnessClient } from '@/lib/harnessClient';
+import { HarnessClientKey } from '@/lib/harnessClientContext';
 import ScheduledChatFormModal from '@/views/workflows/scheduledchat/ScheduledChatFormModal.vue';
 import ScheduledInbox from '@/views/workflows/ScheduledInbox.vue';
 import {
@@ -120,7 +122,7 @@ describe('New scheduled chat form — active default model', () => {
     const client = createFakeScheduledChatClient({
       defaultModel: vi.fn().mockResolvedValue({ profileId: 'p1', model: 'aion-labs/aion-2.0' }),
     });
-    const wrapper = mount(ScheduledChatFormModal, { props: { client, editing: null } });
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },  props: { client, editing: null } });
     await flushPromises();
     expect(wrapper.find('[data-testid="sc-model-default-hint"]').text()).toContain('aion-labs/aion-2.0');
   });
@@ -129,14 +131,14 @@ describe('New scheduled chat form — active default model', () => {
     const client = createFakeScheduledChatClient({
       defaultModel: vi.fn().mockResolvedValue({ profileId: 'p1', model: 'aion-labs/aion-2.0' }),
     });
-    const wrapper = mount(ScheduledChatFormModal, { props: { client, editing: null } });
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },  props: { client, editing: null } });
     await flushPromises();
     await wrapper.find('[data-testid="sc-model-input"]').setValue('~anthropic/claude-sonnet-latest');
     expect(wrapper.find('[data-testid="sc-model-default-hint"]').exists()).toBe(false);
   });
 
   it('says no default is configured when none resolves', async () => {
-    const wrapper = mount(ScheduledChatFormModal, {
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } }, 
       props: { client: createFakeScheduledChatClient(), editing: null },
     });
     await flushPromises();

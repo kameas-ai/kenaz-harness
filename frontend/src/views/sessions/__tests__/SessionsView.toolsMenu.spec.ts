@@ -13,7 +13,7 @@ import SessionsView from '@/views/sessions/SessionsView.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { setConnectionState } from '@/lib/useConnectionState';
-import type { Message, Provider, SessionUsage, TurnRun } from '@/lib/types';
+import type { Message, Provider, ServerSchemaCost, SessionUsage, TurnRun } from '@/lib/types';
 
 const SID = 'sess-too-large';
 const MODEL = 'moonshotai/kimi-k3';
@@ -40,12 +40,24 @@ function provider(supportsPromptCache?: boolean): Provider {
 const USAGE: SessionUsage = {
   promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown',
   messageCount: 1, pricingDataDate: '',
-  composition: { system: 900, tools: 118_000, history: 200, attachments: 0, memory: 0, cached: 0, toolsFull: 120 },
 };
+
+// What the next request would send for this session: 118,000 tokens of
+// tool definitions. The failed first turn left no measured composition.
+const NEXT_COSTS: ServerSchemaCost[] = [
+  {
+    server: 'outlook', state: 'running', running: true, toolCount: 94, tokenEst: 100_000,
+    tier: 'full', source: 'project', pinned: false, sendableTokenEst: 100_000, tools: [],
+  },
+  {
+    server: 'kenaz', state: 'running', running: true, toolCount: 15, tokenEst: 18_000,
+    tier: 'full', source: 'default', pinned: false, sendableTokenEst: 18_000, tools: [],
+  },
+];
 
 async function mountView(opts: { runs?: TurnRun[]; supportsPromptCache?: boolean } = {}) {
   const base = createFakeHarnessClient();
-  const schemaCosts = vi.fn(async () => []);
+  const schemaCosts = vi.fn(async () => NEXT_COSTS);
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -88,7 +100,7 @@ async function mountView(opts: { runs?: TurnRun[]; supportsPromptCache?: boolean
 }
 
 describe('SessionsView — Tools menu, request-too-large remedy, cache badge', () => {
-  it('the request_too_large remedy names N of M and opens the Tools menu', async () => {
+  it('the request_too_large remedy names the next request’s N of M (no composition yet) and opens the Tools menu', async () => {
     setConnectionState('ready');
     const { w, schemaCosts } = await mountView();
     const banner = w.find('[data-testid="delivery-banner"]');
@@ -100,7 +112,9 @@ describe('SessionsView — Tools menu, request-too-large remedy, cache badge', (
 
     await w.find('[data-testid="delivery-banner-tools"]').trigger('click');
     await flushPromises();
-    expect(w.find('[data-testid="tools-menu-panel"]').exists()).toBe(true);
+    const panel = w.find('[data-testid="tools-menu-panel"]');
+    expect(panel.exists()).toBe(true);
+    expect(panel.element.contains(document.activeElement)).toBe(true);
     expect(schemaCosts).toHaveBeenCalledWith(SID, '');
     w.unmount();
   });

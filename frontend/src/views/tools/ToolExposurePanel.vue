@@ -22,10 +22,13 @@ import { useHarnessClient } from '@/lib/useHarnessAPI';
 import {
   BUILTIN_SERVER,
   TIER_LABELS,
+  explainExposureError,
   formatTokens,
   layerServerTier,
   layerToolTier,
+  serverStateLabel,
   sourceLabel,
+  sourceSentence,
   withServerTier,
   withToolTier,
 } from '@/lib/toolExposure';
@@ -88,34 +91,48 @@ async function onScopeChange(event: Event) {
   await load();
 }
 
-async function writeLayer(next: ToolExposure) {
+// The edit is applied to the layer as stored at write time (re-read
+// first), so a change made elsewhere since mount is not overwritten.
+async function writeLayer(edit: (current: ToolExposure) => ToolExposure) {
   saving.value = true;
   saveError.value = null;
   try {
     if (scope.value) {
-      await client.projects.setToolExposure(scope.value, next);
+      const pid = scope.value;
+      const next = edit(await client.projects.getToolExposure(pid));
+      await client.projects.setToolExposure(pid, next);
       projectLayer.value = next;
-    } else if (settings.value) {
-      const s: ToolExposureSettings = { ...settings.value, exposure: next };
+    } else {
+      const current = await client.settings.getToolExposure();
+      const s: ToolExposureSettings = { ...current, exposure: edit(current.exposure ?? {}) };
       await client.settings.setToolExposure(s);
       settings.value = s;
     }
     await loadCosts();
   } catch (e) {
-    saveError.value = e instanceof Error ? e.message : String(e);
+    saveError.value = explainExposureError(e instanceof Error ? e.message : String(e));
   } finally {
     saving.value = false;
   }
 }
 
+/** The built-in hot set's bare names, which a server-wide built-in tier must not take below full. */
+function hotNames(server: string): string[] {
+  if (server !== BUILTIN_SERVER) return [];
+  return (costs.value.find((c) => c.server === server)?.tools ?? [])
+    .filter((t) => t.hot)
+    .map((t) => t.name);
+}
+
 function onServerTier(server: string, event: Event) {
   const v = (event.target as HTMLSelectElement).value as ToolExposureTier | '';
-  void writeLayer(withServerTier(layer.value, server, v));
+  const keep = hotNames(server);
+  void writeLayer((current) => withServerTier(current, server, v, keep));
 }
 
 function onToolTier(server: string, tool: string, event: Event) {
   const v = (event.target as HTMLSelectElement).value as ToolExposureTier | '';
-  void writeLayer(withToolTier(layer.value, server, tool, v));
+  void writeLayer((current) => withToolTier(current, server, tool, v));
 }
 
 // Budget and TTL live on the user's settings only; 0 = harness default.
@@ -130,18 +147,24 @@ async function onNumber(field: 'schemaBudgetTokens' | 'activationTtlTurns', even
   saving.value = true;
   saveError.value = null;
   try {
-    await client.settings.setToolExposure({ ...settings.value, [field]: n });
+    const current = await client.settings.getToolExposure();
+    await client.settings.setToolExposure({ ...current, [field]: n });
     settings.value = await client.settings.getToolExposure();
   } catch (e) {
-    saveError.value = e instanceof Error ? e.message : String(e);
+    saveError.value = explainExposureError(e instanceof Error ? e.message : String(e));
   } finally {
     saving.value = false;
   }
 }
 
 function costText(c: ServerSchemaCost): string {
-  if (!c.running) return `Schema cost unknown — server ${c.state || 'not running'}`;
+  if (!c.running) return `Schema cost unknown — server not running (${serverStateLabel(c.state)})`;
   return `Schema cost ${formatTokens(c.tokenEst)} tokens when loaded`;
+}
+
+/** The org pin decided the server-wide tier (every tool), not only some tools. */
+function serverPinned(c: ServerSchemaCost): boolean {
+  return c.source === 'org_pin';
 }
 
 function toggle(server: string) {
@@ -206,7 +229,7 @@ onMounted(() => void load());
       </template>
     </div>
     <p v-if="!scope && settings" class="font-ui text-[11px] text-ink-subtle" data-testid="tool-exposure-effective">
-      Applies today: {{ settings.effectiveSchemaBudgetTokens.toLocaleString() }} tokens of tool
+      In effect: {{ settings.effectiveSchemaBudgetTokens.toLocaleString() }} tokens of tool
       definitions per request at most (capped at 15% of the model's window); loaded tools unload
       after {{ settings.effectiveActivationTtlTurns }} turns unused.
     </p>
@@ -265,14 +288,15 @@ onMounted(() => void load());
               class="mt-1 font-ui text-[11px] text-ink-subtle"
               :data-testid="`tool-exposure-pinned-${c.server}`"
             >
-              Set by your organisation — it can't be changed here.
+              <template v-if="serverPinned(c)">{{ sourceSentence('org_pin') }} — it can't be changed here.</template>
+              <template v-else>Some tools are {{ sourceLabel('org_pin') }}; those can't be changed here.</template>
             </p>
           </div>
           <div class="flex items-center gap-2">
             <select
               class="rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[11px] text-ink disabled:opacity-50"
               :value="layerServerTier(layer, c.server)"
-              :disabled="saving || c.pinned"
+              :disabled="saving || serverPinned(c)"
               :aria-label="`Tier for ${c.server}`"
               :data-testid="`tool-exposure-tier-${c.server}`"
               @change="onServerTier(c.server, $event)"
@@ -296,7 +320,8 @@ onMounted(() => void load());
           v-if="c.server === BUILTIN_SERVER"
           class="mt-1 font-ui text-[11px] text-ink-subtle"
         >
-          The basics (files, shell, web, load_tools) stay full unless you change them per tool.
+          Setting this server to Summary or Off keeps the core tools (files, shell, web,
+          load_tools) full; change them one by one under Per tool.
         </p>
         <ul
           v-if="expanded === c.server"

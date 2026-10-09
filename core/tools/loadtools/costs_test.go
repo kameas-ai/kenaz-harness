@@ -81,8 +81,11 @@ func TestSchemaCosts_UserScope(t *testing.T) {
 		t.Errorf("kenaz tier = %q, want mixed (hot set full, monitor summary)", kenaz.Tier)
 	}
 	for _, tc := range kenaz.Tools {
-		if tc.Name == "read_file" && (!tc.Sendable || tc.Tier != toolexposure.TierFull) {
-			t.Errorf("kenaz read_file = %+v, want full and sendable", tc)
+		if tc.Name == "read_file" && (!tc.Sendable || tc.Tier != toolexposure.TierFull || !tc.Hot) {
+			t.Errorf("kenaz read_file = %+v, want full, sendable, hot", tc)
+		}
+		if tc.Name == "monitor" && tc.Hot {
+			t.Errorf("kenaz monitor = %+v, want not hot", tc)
 		}
 	}
 }

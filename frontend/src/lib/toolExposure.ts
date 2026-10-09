@@ -47,12 +47,37 @@ export function sourceLabel(source: ToolExposureLevel): string {
   }
 }
 
+/** "1.2k", "14k", "640" — a compact token count. */
+export function compactTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n < 1_000) return `${Math.round(n)}`;
+  if (n < 10_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  return `${Math.round(n / 1_000)}k`;
+}
+
 /** "~1.2k", "~14k", "~640" — a token estimate, never exact. */
 export function formatTokens(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return '0';
-  if (n < 1_000) return `~${Math.round(n)}`;
-  if (n < 10_000) return `~${(n / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
-  return `~${Math.round(n / 1_000)}k`;
+  const c = compactTokens(n);
+  return c === '0' ? c : `~${c}`;
+}
+
+/** A server's pool state in words ("failed" -> "failed to start"). */
+export function serverStateLabel(state: string): string {
+  switch (state) {
+    case 'failed':
+      return 'failed to start';
+    case 'stopped':
+    case '':
+      return 'stopped';
+    default:
+      return state;
+  }
+}
+
+/** sourceLabel with its first letter upper-cased, for the start of a line. */
+export function sourceSentence(source: ToolExposureLevel): string {
+  const l = sourceLabel(source);
+  return l.charAt(0).toUpperCase() + l.slice(1);
 }
 
 function cloneServers(e: ToolExposure | null | undefined): Record<string, ToolServerExposure> {
@@ -87,16 +112,38 @@ export function layerToolTier(
   return e?.servers?.[server]?.tools?.[tool] ?? '';
 }
 
-/** Set (or, with '' / null, clear) a server's tier in a layer. */
+/**
+ * Set (or, with '' / null, clear) a server's tier in a layer. A
+ * server-wide tier applies to every tool without its own entry, so
+ * `keepFull` names tools (bare names) that stay full under a Summary or
+ * Off server tier: the built-in hot set, which the model needs to work
+ * and to load anything else. A tool that already has an entry keeps it.
+ */
 export function withServerTier(
   e: ToolExposure | null | undefined,
   server: string,
   tier: ToolExposureTier | '' | null,
+  keepFull: readonly string[] = [],
 ): ToolExposure {
   const servers = cloneServers(e);
   const se = servers[server] ?? {};
-  servers[server] = { ...se, tier: tier || undefined };
+  const tools = { ...(se.tools ?? {}) };
+  if (tier === 'summary' || tier === 'off') {
+    for (const name of keepFull) if (!tools[name]) tools[name] = 'full';
+  }
+  servers[server] = { ...se, tier: tier || undefined, tools };
   return prune(servers);
+}
+
+/**
+ * The FR-E3 write guard's refusal (Go toolexposure.ErrLoadToolsRequired)
+ * restated as the fix; any other error is returned unchanged.
+ */
+export function explainExposureError(message: string): string {
+  if (message.includes('kenaz__load_tools is required')) {
+    return `Keep kenaz__load_tools full: tools in the summary tier can only be loaded through it. ${message}`;
+  }
+  return message;
 }
 
 /** Set (or clear) one tool's tier in a layer. */

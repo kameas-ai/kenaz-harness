@@ -22,6 +22,10 @@ type ToolCost struct {
 	Source    toolexposure.Level `json:"source"`
 	Activated bool               `json:"activated"`
 	Sendable  bool               `json:"sendable"`
+	// Hot is true for the built-in hot set (full by harness default); a
+	// server-wide built-in tier applies to these too unless a per-tool
+	// entry keeps them full.
+	Hot bool `json:"hot"`
 }
 
 // ServerCost is one server's schema cost and resolved tier in one scope
@@ -148,6 +152,7 @@ func serverCosts(rc toolexposure.ResolvedCatalog, servers map[string]ServerInfo,
 			Source:    t.Source,
 			Activated: activated,
 			Sendable:  sendable,
+			Hot:       t.Server == toolexposure.BuiltinServer && toolexposure.InHotSet(t.Name),
 		})
 	}
 	out := make([]ServerCost, 0, len(order))

@@ -519,7 +519,7 @@ defineExpose({ scrollToBottom });
             :can-retry="retryMessageId === item.message.id"
             :auto-retry="retryMessageId === item.message.id ? autoRetry ?? null : null"
             :size-context="deliverySizeContext ?? null"
-            :tools-available="toolsMenuAvailable ?? false"
+            :tools-available="toolsMenuAvailable ?? true"
             @retry="emit('retry-delivery', item.message.id)"
             @cancel-retry="emit('cancel-retry')"
             @open-tools="emit('open-tools')"

@@ -9,7 +9,6 @@ import (
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logstore"
-	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
@@ -66,6 +65,7 @@ import (
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
 	coresecrets "github.com/kameas-ai/kenaz-harness/core/secrets"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 )
 
 // fakeHarnessAPI is a compile-time witness that the HarnessAPI interface

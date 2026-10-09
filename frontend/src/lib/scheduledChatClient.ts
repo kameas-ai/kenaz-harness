@@ -32,6 +32,11 @@ export interface ScheduledChatEntry {
   /** Fire time for a triggerKind "once" row (ISO 8601, UTC). Absent for "cron". */
   runAt?: string;
   /**
+   * Tool-name allowlist the schedule's runs are contained to (Go
+   * ChatRunEntry.ToolAllowlist); absent or empty = not contained.
+   */
+  toolAllowlist?: string[];
+  /**
    * The newest persisted run outcome; absent when the schedule has never
    * run.
    */

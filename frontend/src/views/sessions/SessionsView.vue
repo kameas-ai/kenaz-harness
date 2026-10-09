@@ -30,7 +30,8 @@ import {
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ComposerError from '@/components/chat/ComposerError.vue';
 import DeliveryBanner from '@/components/chat/DeliveryBanner.vue';
-import { STOPPED_CODE, type DeliveryFailure } from '@/lib/delivery';
+import { STOPPED_CODE, offersToolsMenu, type DeliveryFailure } from '@/lib/delivery';
+import { sendableTokens } from '@/lib/toolExposure';
 import ReasoningControl from '@/components/chat/ReasoningControl.vue';
 import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
@@ -404,8 +405,10 @@ function openToolsMenu() {
 
 /**
  * True when the model's catalog entry says requests carry prompt-cache
- * markers (ModelInfo.supportsPromptCache, written by WP05). Absent reads
- * as unknown and renders nothing.
+ * markers (ModelInfo.supportsPromptCache). The rpc ModelInfo does not
+ * carry the field until WP05's flag is copied onto it (docs/unwired-ledger.md),
+ * so today it is always absent; absent reads as unknown and renders
+ * nothing.
  */
 function modelCachesPrompts(providerId: string, modelId: string): boolean {
   const p = providers.value.find((x) => x.id === providerId);
@@ -548,11 +551,30 @@ const contextDenominator = computed((): number => {
 // hasContextWindow: true when the backend has supplied a non-zero cap.
 const hasContextWindow = computed(() => contextDenominator.value > 0);
 
-// The request_too_large remedy names the tool definitions' share of the
-// window: the last measured composition's tool tokens over the model's
-// window (either 0 = unknown, and the remedy falls back to plain copy).
+// The request_too_large remedy names the tool definitions the NEXT
+// request would send (Tools_SchemaCosts' sendable tokens for this session,
+// before budget) against the active model's window. A failed first turn
+// has no measured composition, so the last call's numbers cannot be used.
+// Either number 0 = unknown, and the remedy falls back to plain copy.
+const nextToolTokens = ref(0);
+const tooLargePending = computed(() =>
+  [...session.undelivered.value.values()].some((f) => offersToolsMenu(f)),
+);
+async function refreshNextToolTokens() {
+  const sid = sessionId.value;
+  if (!tooLargePending.value || servedMode || !sid) {
+    nextToolTokens.value = 0;
+    return;
+  }
+  try {
+    const costs = await client.tools.schemaCosts(sid, '');
+    if (sid === sessionId.value) nextToolTokens.value = sendableTokens(costs);
+  } catch {
+    if (sid === sessionId.value) nextToolTokens.value = 0;
+  }
+}
 const deliverySizeContext = computed<RequestSizeContext>(() => ({
-  toolsTokens: sessionUsage.value?.composition?.tools ?? 0,
+  toolsTokens: nextToolTokens.value,
   windowTokens: contextDenominator.value,
 }));
 
@@ -1170,6 +1192,17 @@ const hasAnyProvider = computed(() => providers.value.length > 0);
  * cannot submit.
  */
 const servedMode = isServedMode();
+
+// Re-read the remedy's tool tokens when a request_too_large failure
+// appears, the session changes, or the Tools menu closes (its writes
+// change what the next request sends).
+watch(
+  [tooLargePending, sessionId, toolsMenuOpen],
+  ([, , menuOpen]) => {
+    if (!menuOpen) void refreshNextToolTokens();
+  },
+  { immediate: true },
+);
 
 const noProviderHelp = computed(() =>
   servedMode
@@ -2582,6 +2615,7 @@ async function onShared() {
             :session-id="sessionId"
             :project-id="session.session.value?.projectId ?? ''"
             :composition="sessionUsage?.composition ?? null"
+            :window-tokens="contextDenominator"
             :served-mode="servedMode"
           />
           <!-- Cost pill (token-cost-telemetry-01KQ8TD7 WP04) -->

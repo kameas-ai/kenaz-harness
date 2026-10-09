@@ -385,6 +385,37 @@ func TestToolSchemaCosts_ThroughNew(t *testing.T) {
 		t.Fatalf("user scope kenaz sleep = %+v (found %v), want summary, not sendable", tc, ok)
 	}
 
+	// Unload: an off entry in the session layer beats the sticky
+	// activation — the tool is still activated but no longer sent.
+	sleepOff := toolexposure.Exposure{Servers: map[string]toolexposure.ServerExposure{
+		toolexposure.BuiltinServer: {Tools: map[string]toolexposure.Tier{"sleep": toolexposure.TierOff}},
+	}}
+	if err := api.Sessions().SetToolExposure(ctx, rec.ID, sleepOff); err != nil {
+		t.Fatalf("Sessions SetToolExposure(sleep off): %v", err)
+	}
+	unloaded, err := api.ToolSchemaCosts(ctx, rec.ID, "")
+	if err != nil {
+		t.Fatalf("ToolSchemaCosts(session, unloaded): %v", err)
+	}
+	if tc, ok := sleepTool(unloaded); !ok || !tc.Activated || tc.Sendable || tc.Source != toolexposure.LevelSession {
+		t.Fatalf("unloaded kenaz sleep = %+v (found %v), want activated, not sendable, decided by the session", tc, ok)
+	}
+
+	// The user layer, written the way Settings_SetToolExposure writes it.
+	userFull := toolexposure.Settings{Exposure: toolexposure.Exposure{Servers: map[string]toolexposure.ServerExposure{
+		toolexposure.BuiltinServer: {Tools: map[string]toolexposure.Tier{"sleep": toolexposure.TierFull}},
+	}}}
+	if err := api.Settings().SetToolExposure(ctx, userFull); err != nil {
+		t.Fatalf("Settings SetToolExposure: %v", err)
+	}
+	afterUser, err := api.ToolSchemaCosts(ctx, "", "")
+	if err != nil {
+		t.Fatalf("ToolSchemaCosts(user, after write): %v", err)
+	}
+	if tc, ok := sleepTool(afterUser); !ok || tc.Tier != toolexposure.TierFull || tc.Source != toolexposure.LevelUser || !tc.Sendable {
+		t.Fatalf("user scope kenaz sleep after write = %+v (found %v), want full from user, sendable", tc, ok)
+	}
+
 	proj, err := c.ProjectManager().Create(ctx, "zz-costs-proj", "")
 	if err != nil {
 		t.Fatal(err)

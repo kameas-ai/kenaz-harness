@@ -141,12 +141,16 @@ export interface UsageComposition {
    */
   toolsSummary?: number;
   /**
-   * The schema-budget warning for this call ("Pinned tools exceed the
-   * schema budget by N tokens", spec §2.3). Written by WP04's eviction;
-   * absent when nothing pinned was over budget or on a backend without
-   * it.
+   * The schema budget this call was held to, as WP04's eviction reports
+   * it. Absent until WP04 writes it.
    */
-  budgetWarning?: string;
+  schemaBudget?: number;
+  /** Loaded tools evicted from this call to fit the budget (WP04). */
+  toolsEvicted?: number;
+  /** Tokens by which pinned tools still exceeded the budget (WP04). */
+  pinnedOverBudgetBy?: number;
+  /** Tokens by which the hot set alone exceeded the budget (WP04). */
+  hotOverBy?: number;
 }
 
 export interface SessionUsage {
@@ -414,8 +418,9 @@ export interface ModelInfo {
   contextWindow?: number;
   /**
    * True when requests for this model carry prompt-cache markers
-   * (tool-context-budget-01TCBUD01 WP05). Absent on a backend that does
-   * not report it; the UI treats absent as unknown, not false.
+   * (tool-context-budget-01TCBUD01 WP05's llm.ModelInfo flag). Not yet
+   * on the rpc wire (views/llm.ModelInfo; see docs/unwired-ledger.md);
+   * absent reads as unknown, not false.
    */
   supportsPromptCache?: boolean;
   /**
@@ -5452,6 +5457,8 @@ export interface ToolSchemaCost {
   activated: boolean;
   /** True when a call in this scope sends this tool's schema. */
   sendable: boolean;
+  /** One of the built-in hot set (full by harness default). */
+  hot: boolean;
 }
 
 /**

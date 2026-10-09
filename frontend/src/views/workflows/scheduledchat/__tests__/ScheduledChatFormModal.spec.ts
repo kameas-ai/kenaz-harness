@@ -42,6 +42,7 @@ function mountCreate() {
   const client = createFakeScheduledChatClient();
   const wrapper = mount(ScheduledChatFormModal, {
     props: { client, editing: null },
+    global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },
     attachTo: document.body,
   });
   return { wrapper, client };
@@ -51,6 +52,7 @@ function mountEdit(entry: ScheduledChatEntry = STUB_ENTRY) {
   const client = createFakeScheduledChatClient();
   const wrapper = mount(ScheduledChatFormModal, {
     props: { client, editing: entry },
+    global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },
     attachTo: document.body,
   });
   return { wrapper, client };
@@ -131,7 +133,7 @@ describe('ScheduledChatFormModal', () => {
   it('calls client.create and emits saved in create mode', async () => {
     const createMock = vi.fn().mockResolvedValue({ ...STUB_ENTRY, id: 'new-id' });
     const client = createFakeScheduledChatClient({ create: createMock });
-    const wrapper = mount(ScheduledChatFormModal, {
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } }, 
       props: { client, editing: null },
       attachTo: document.body,
     });
@@ -148,7 +150,7 @@ describe('ScheduledChatFormModal', () => {
   it('calls client.update and emits saved in edit mode', async () => {
     const updateMock = vi.fn().mockResolvedValue({ ...STUB_ENTRY, name: 'Updated' });
     const client = createFakeScheduledChatClient({ update: updateMock });
-    const wrapper = mount(ScheduledChatFormModal, {
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } }, 
       props: { client, editing: STUB_ENTRY },
       attachTo: document.body,
     });
@@ -163,7 +165,7 @@ describe('ScheduledChatFormModal', () => {
     const client = createFakeScheduledChatClient({
       create: vi.fn().mockRejectedValue(new Error('server error')),
     });
-    const wrapper = mount(ScheduledChatFormModal, {
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } }, 
       props: { client, editing: null },
       attachTo: document.body,
     });
@@ -213,7 +215,7 @@ describe('ScheduledChatFormModal', () => {
   it('sends triggerKind=once and an empty cron on create for a one-shot schedule', async () => {
     const createMock = vi.fn().mockResolvedValue({ ...STUB_ENTRY, id: 'new-id', triggerKind: 'once' });
     const client = createFakeScheduledChatClient({ create: createMock });
-    const wrapper = mount(ScheduledChatFormModal, {
+    const wrapper = mount(ScheduledChatFormModal, { global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } }, 
       props: { client, editing: null },
       attachTo: document.body,
     });
@@ -264,9 +266,9 @@ describe('ScheduledChatFormModal — tool set', () => {
         server: 'kenaz', state: 'running', running: true, toolCount: 3, tokenEst: 5000,
         tier: 'mixed', source: '', pinned: false, sendableTokenEst: 4200,
         tools: [
-          { name: 'read_file', tokenEst: 2000, tier: 'full', source: 'default', activated: false, sendable: true },
-          { name: 'bash', tokenEst: 2200, tier: 'full', source: 'default', activated: false, sendable: true },
-          { name: 'monitor', tokenEst: 800, tier: 'summary', source: 'default', activated: false, sendable: false },
+          { name: 'read_file', tokenEst: 2000, tier: 'full', source: 'default', activated: false, sendable: true, hot: false },
+          { name: 'bash', tokenEst: 2200, tier: 'full', source: 'default', activated: false, sendable: true, hot: false },
+          { name: 'monitor', tokenEst: 800, tier: 'summary', source: 'default', activated: false, sendable: false, hot: false },
         ],
       },
     ]);
@@ -284,9 +286,34 @@ describe('ScheduledChatFormModal — tool set', () => {
     expect(wrapper.find('#sc-tool-set-custom-reason').text()).toContain('not available yet');
   });
 
-  it('renders no cost line without a harness client', async () => {
-    const { wrapper } = mountCreate();
+  it('renders no cost line when the read fails', async () => {
+    const base = createFakeHarnessClient();
+    const wrapper = mount(ScheduledChatFormModal, {
+      props: { client: createFakeScheduledChatClient(), editing: null },
+      global: {
+        provide: {
+          [HarnessClientKey as symbol]: {
+            ...base,
+            tools: { ...base.tools, schemaCosts: async () => { throw new Error('boom'); } },
+          },
+        },
+      },
+    });
     await flushPromises();
     expect(wrapper.find('[data-testid="sc-tool-set-cost"]').exists()).toBe(false);
+  });
+
+  it('a contained schedule says its cost is not shown', async () => {
+    const { wrapper } = mountEdit({ ...STUB_ENTRY, toolAllowlist: ['fetch__fetch', 'kenaz__read_file'] });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="sc-tool-set-cost"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="sc-tool-set-contained"]').text()).toContain('Contained run');
+  });
+
+  it('the tool-set radios share a group name', () => {
+    const { wrapper } = mountCreate();
+    expect(wrapper.find('[data-testid="sc-tool-set-default"]').attributes('name')).toBe('sc-tool-set');
+    expect(wrapper.find('[data-testid="sc-tool-set-custom"]').attributes('name')).toBe('sc-tool-set');
+    expect(wrapper.find('fieldset[data-testid="sc-tool-set"] legend').text()).toBe('Tool set');
   });
 });
