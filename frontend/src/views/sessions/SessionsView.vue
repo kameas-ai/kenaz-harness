@@ -85,6 +85,7 @@ import type {
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 import { parseUnsupportedFeatureError } from '@/lib/errors';
+import { mergeTransientByTime } from '@/lib/mergeTransient';
 
 const route = useRoute();
 const router = useRouter();
@@ -985,9 +986,9 @@ const visibleMessages = computed<readonly Message[]>(() => {
     content: t.content,
     createdAt: t.createdAt,
   }));
-  // Append after persisted; v1 doesn't reorder by createdAt — the
-  // user just submitted the slash command, so it's freshest.
-  return [...persisted, ...synthetic];
+  // Merged by time, not appended: a slash result from earlier used to
+  // stay pinned below every newer real turn (dogfood 2026-10-08 r2).
+  return mergeTransientByTime(persisted, synthetic);
 });
 
 function gotoProviders() {
