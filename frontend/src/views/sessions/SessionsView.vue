@@ -86,6 +86,7 @@ import type {
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 import { parseUnsupportedFeatureError } from '@/lib/errors';
 import { mergeTransientByTime } from '@/lib/mergeTransient';
+import { readSessionModel, writeSessionModel } from '@/lib/sessionModelStash';
 
 const route = useRoute();
 const router = useRouter();
@@ -335,23 +336,7 @@ function readSessionConfig(sessionID: string): {
   providerId: string;
   modelId: string;
 } | null {
-  if (!sessionID) return null;
-  try {
-    const raw = window.localStorage.getItem(
-      `kenaz.session.config.${sessionID}`,
-    );
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as {
-      providerId?: string;
-      modelId?: string;
-    };
-    if (parsed.providerId && parsed.modelId) {
-      return { providerId: parsed.providerId, modelId: parsed.modelId };
-    }
-  } catch {
-    /* malformed stash — ignore */
-  }
-  return null;
+  return readSessionModel(sessionID);
 }
 
 // On session id or provider list change, seed the active selection.
@@ -416,6 +401,10 @@ function pickModel(providerId: string, modelId: string) {
   activeProviderId.value = providerId;
   activeModelId.value = modelId;
   switcherOpen.value = false;
+  // Persist the switch where the session's selection is seeded from, so
+  // a later re-seed (session switch, branch Merge) does not restore the
+  // model the session was created with (dogfood 2026-10-08 round 2).
+  writeSessionModel(sessionId.value ?? '', { providerId, modelId });
 }
 
 const sessionTitle = computed(() => {
