@@ -1353,27 +1353,45 @@ export function useSession(id: Ref<string>): UseSessionResult {
     }
   }
 
-  // Debounced draft persistence.
+  // Debounced draft persistence. The pending save is keyed to the session
+  // that queued it: one useSession instance serves every session the view
+  // switches between.
+  let pendingDraftSid: string | null = null;
+  let pendingDraftText = "";
+
+  function cancelPendingDraftSave(): void {
+    if (draftDebounceHandle) clearTimeout(draftDebounceHandle);
+    draftDebounceHandle = null;
+    pendingDraftSid = null;
+    pendingDraftText = "";
+  }
+
+  /** Persist a queued save now (session switch) instead of dropping it. */
+  function flushPendingDraftSave(): void {
+    const sid = pendingDraftSid;
+    const text = pendingDraftText;
+    if (!draftDebounceHandle || !sid) return;
+    cancelPendingDraftSave();
+    void client.sessions.saveDraft(sid, text).catch(() => {
+      // Soft-fail: drafts are best-effort.
+    });
+  }
+
   watch(draft, (next) => {
-    // Cancel any pending save FIRST (dogfood 2026-10-08): type-then-Enter
-    // inside the debounce window leaves lastSavedDraft at "" while a save
-    // of the typed text is still queued. The send clears draft to "",
-    // which equals lastSavedDraft — returning before the cancel let the
-    // queued save persist the just-sent text 400ms later, and the next
-    // session load resurrected it as the composer draft.
-    const hadPendingSave = draftDebounceHandle !== null;
-    if (draftDebounceHandle) {
-      clearTimeout(draftDebounceHandle);
-      draftDebounceHandle = null;
-    }
-    // A clear that cancelled a queued save still flushes "": what the
-    // backend holds may not be what lastSavedDraft says.
-    if (next === lastSavedDraft && !(next === "" && hadPendingSave)) return;
     const sid = id.value;
+    // The queued save for THIS session is superseded by every edit,
+    // including a clear back to lastSavedDraft: type-then-send inside the
+    // debounce window leaves lastSavedDraft at "" while the typed text is
+    // still queued, and that save must not land after the send.
+    const hadPendingSave = draftDebounceHandle !== null && pendingDraftSid === sid;
+    if (hadPendingSave) cancelPendingDraftSave();
+    // A clear that cancelled a queued save still flushes "": the backend
+    // may hold an older save, not what lastSavedDraft says.
+    if (next === lastSavedDraft && !(next === "" && hadPendingSave)) return;
     if (!sid) return;
-    // A clear (the send path) flushes IMMEDIATELY: the debounce window is
-    // exactly where a post-send load() used to resurrect the stale
-    // persisted draft (dogfood 2026-10-05). Typing keeps the debounce.
+    // A clear (the send path) flushes IMMEDIATELY: a post-send load() inside
+    // the debounce window would otherwise read the stale persisted draft.
+    // Typing keeps the debounce.
     if (next === "") {
       lastSavedDraft = next;
       void client.sessions.saveDraft(sid, next).catch(() => {
@@ -1381,8 +1399,12 @@ export function useSession(id: Ref<string>): UseSessionResult {
       });
       return;
     }
+    pendingDraftSid = sid;
+    pendingDraftText = next;
     draftDebounceHandle = setTimeout(() => {
       draftDebounceHandle = null;
+      pendingDraftSid = null;
+      pendingDraftText = "";
       lastSavedDraft = next;
       void client.sessions.saveDraft(sid, next).catch(() => {
         // Soft-fail: drafts are best-effort.
@@ -1398,6 +1420,9 @@ export function useSession(id: Ref<string>): UseSessionResult {
   watch(
     id,
     (next) => {
+      // The previous session's queued draft save belongs to it: persist it
+      // now rather than let the switch drop or cancel it.
+      flushPendingDraftSave();
       streamingMoves.value = [];
       openMoveSlot = -1;
       draftAdopted = false;

@@ -153,3 +153,79 @@ describe('useSession — the persisted draft cannot resurrect sent text', () => 
     expect(api().draft.value).toBe('draft for session two');
   });
 });
+
+// One useSession serves every session the view switches between. Text typed
+// in session A within the debounce window before switching to B must still
+// be persisted to A — and never to B, and never overwrite B's draft.
+describe('useSession — a draft typed just before a session switch', () => {
+  const saved: Array<{ id: string; text: string }> = [];
+  const persisted: Record<string, string> = {};
+
+  beforeEach(() => {
+    installFakeRuntime();
+    setConnectionState('ready');
+    saved.length = 0;
+    persisted['s-1'] = '';
+    persisted['s-2'] = '';
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { runtime?: unknown }).runtime;
+    vi.useRealTimers();
+  });
+
+  async function settle() {
+    for (let i = 0; i < 8; i++) await nextTick();
+    await Promise.resolve();
+    for (let i = 0; i < 8; i++) await nextTick();
+  }
+
+  for (const other of ['', 'B has a draft']) {
+    it(`persists A's pending draft to A when switching to B (B draft=${JSON.stringify(other)})`, async () => {
+      vi.useFakeTimers();
+      persisted['s-2'] = other;
+      const idRef = ref<string>('s-1');
+      let api!: ReturnType<typeof useSession>;
+      const Host = defineComponent({
+        setup() {
+          api = useSession(idRef);
+          return () => h('div');
+        },
+      });
+      mount(Host, {
+        global: {
+          plugins: [
+            {
+              install: (app) =>
+                provideFakeClient(app, {
+                  sessions: {
+                    list: async () => [],
+                    get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+                    listMessages: async () => [],
+                    saveDraft: async (id: string, text: string) => {
+                      saved.push({ id, text });
+                    },
+                    loadDraft: async (id: string) => persisted[id] ?? '',
+                  } as never,
+                  llm: { listProviders: async () => [] } as never,
+                }),
+            },
+          ],
+        },
+      });
+      await settle();
+
+      api.draft.value = 'half-written thought for A';
+      await settle();
+      vi.advanceTimersByTime(100); // inside the 400ms debounce
+      idRef.value = 's-2';
+      await settle();
+      vi.advanceTimersByTime(2000);
+      await settle();
+
+      expect(saved).toContainEqual({ id: 's-1', text: 'half-written thought for A' });
+      expect(saved.some((s) => s.id === 's-2')).toBe(false);
+      expect(api.draft.value).toBe(other);
+    });
+  }
+});
