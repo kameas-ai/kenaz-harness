@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -117,6 +118,10 @@ type KeychainWriter interface {
 type BundleSource interface {
 	BundleProfiles() []corellm.ProviderProfile
 }
+
+// modelInfoMissSampleMax caps how many unresolved model ids the single
+// per-provider llm.model_info.miss line names (dogfood 2026-10-08 P2).
+const modelInfoMissSampleMax = 5
 
 // CapCatalog is the capability-lookup seam used to populate ModelInfos
 // (contextWindow, maxOutputTokens) on Provider at ListProviders time and
@@ -901,7 +906,17 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 				}
 			}
 			infos := make([]ModelInfo, 0, len(v.Models))
+			// Dogfood 2026-10-08 P2: this loop used to log one DEBUG line
+			// per model per resolution (408 llm.model_info.dynamic_hit rows
+			// per refresh — 20% of the in-app Logs ring each time, wiping
+			// it for its stated purpose). It now logs ONE summary line per
+			// provider (+ at most one miss line carrying a capped sample),
+			// so a refresh emits a handful of lines however many models a
+			// provider lists.
 			missCount := 0
+			dynamicHits := 0
+			catalogHits := 0
+			var missSample []string
 			for _, modelID := range v.Models {
 				info := ModelInfo{ID: modelID, DisplayName: modelID}
 				resolved := false
@@ -914,12 +929,7 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 						}
 						info.Description = mi.Description
 						resolved = true
-						logging.L().Debug("llm.model_info.dynamic_hit",
-							"provider_id", v.ID,
-							"kind", v.Kind,
-							"model_id", modelID,
-							"context_window", mi.ContextWindow,
-							"max_output_tokens", mi.MaxOutputTokens)
+						dynamicHits++
 					}
 				}
 				if !resolved && a.capCatalog != nil {
@@ -929,23 +939,31 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 					info.MaxOutputTokens = mot
 					if cw > 0 {
 						resolved = true
-						logging.L().Debug("llm.model_info.catalog_hit",
-							"provider_id", v.ID,
-							"kind", v.Kind,
-							"model_id", modelID,
-							"context_window", cw,
-							"max_output_tokens", mot)
+						catalogHits++
 					}
 				}
 				if !resolved {
 					missCount++
-					logging.L().Info("llm.model_info.miss",
-						"provider_id", v.ID,
-						"kind", v.Kind,
-						"model_id", modelID,
-						"reason", "no dynamic lookup hit and no catalog entry; frontend will use MODEL_CONTEXT_FALLBACK")
+					if len(missSample) < modelInfoMissSampleMax {
+						missSample = append(missSample, modelID)
+					}
 				}
 				infos = append(infos, info)
+			}
+			logging.L().Debug("llm.model_info.resolved",
+				"provider_id", v.ID,
+				"kind", v.Kind,
+				"models", len(v.Models),
+				"dynamic_hits", dynamicHits,
+				"catalog_hits", catalogHits,
+				"misses", missCount)
+			if missCount > 0 {
+				logging.L().Info("llm.model_info.miss",
+					"provider_id", v.ID,
+					"kind", v.Kind,
+					"miss_count", missCount,
+					"model_ids_sample", strings.Join(missSample, ","),
+					"reason", "no dynamic lookup hit and no catalog entry; frontend will use MODEL_CONTEXT_FALLBACK")
 			}
 			v.ModelInfos = infos
 			// On a miss with a refresher available, kick a background
