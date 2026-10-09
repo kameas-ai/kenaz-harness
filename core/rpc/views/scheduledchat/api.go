@@ -48,6 +48,19 @@ type ChatRunEntry struct {
 	// RunAt is the one-shot fire time (ISO 8601, UTC), populated only
 	// when TriggerKind == "once". Never set for a "cron" row.
 	RunAt string `json:"runAt,omitempty"`
+	// LastRun is the newest persisted run outcome (time, status, error,
+	// session, model, cost), nil when the schedule has never run. Read
+	// from scheduled_chat_run_history on List/Get so the Schedules row
+	// shows how the last run went without a second call.
+	LastRun *RunSummary `json:"lastRun,omitempty"`
+}
+
+// DefaultModel is what a schedule with no model override runs on — the
+// resolution the dispatcher applies at fire time. Empty fields mean no
+// profile is configured.
+type DefaultModel struct {
+	ProfileID string `json:"profileId"`
+	Model     string `json:"model"`
 }
 
 // RunSummary is one row in the History result.
@@ -60,6 +73,10 @@ type RunSummary struct {
 	EndedAt       *time.Time `json:"endedAt,omitempty"`
 	OutputSnippet string     `json:"outputSnippet,omitempty"`
 	Error         string     `json:"error,omitempty"`
+	// Model is the model the run was dispatched with; empty when unknown.
+	Model string `json:"model,omitempty"`
+	// CostUSD is the run's cost; 0 when unknown or free.
+	CostUSD float64 `json:"costUsd,omitempty"`
 }
 
 // CreateInput is the wire shape for Create.
@@ -184,4 +201,8 @@ type ScheduledChatAPI interface {
 	// SetEnabled flips the enabled flag for id.
 	// Returns ErrNotFound when no run with id exists.
 	SetEnabled(ctx context.Context, id string, enabled bool) error
+
+	// DefaultModel reports what "active default" resolves to for a
+	// schedule with no model override.
+	DefaultModel(ctx context.Context) (DefaultModel, error)
 }

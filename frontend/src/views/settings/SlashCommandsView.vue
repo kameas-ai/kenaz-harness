@@ -386,6 +386,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
           data-testid="slash-editor-panel"
         >
           <SlashCommandEditor
+            :key="editorCommand ? `${editorCommand.scope}:${editorCommand.projectId ?? ''}:${editorCommand.name}` : 'new'"
             :command="editorCommand"
             :saving="saving"
             @save="handleSave"

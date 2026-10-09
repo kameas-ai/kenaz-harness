@@ -3883,6 +3883,22 @@ func New(c *core.Core, opts ...Option) *API {
 		// fully wired by this point in New() (every With* wrap above has
 		// already run).
 		var chatDispatcher schedulerPkg.ChatRunDispatcher
+		// scheduledDefaultModel is the one resolution of a scheduled
+		// chat's "active default": the first personal profile and the
+		// model a request on it is dispatched with. The dispatcher records
+		// it on each run and the New-schedule form displays it via
+		// ScheduledChat_DefaultModel, so the two cannot disagree.
+		capturedPersonalForSched := personalForLLM
+		scheduledDefaultModel := func() (string, string) {
+			if capturedPersonalForSched == nil {
+				return "", ""
+			}
+			profs, err := capturedPersonalForSched.List()
+			if err != nil || len(profs) == 0 {
+				return "", ""
+			}
+			return profs[0].ID, profs[0].DispatchModel("")
+		}
 		if chatStore != nil && a.sessionsAPI != nil && a.llmAPI != nil {
 			capturedPersonalStore := personalForLLM
 			live := NewChatRunDispatcher(ChatRunDispatcherDeps{
@@ -3903,6 +3919,13 @@ func New(c *core.Core, opts ...Option) *API {
 						return ""
 					}
 					return profs[0].ID
+				},
+				DefaultModel: func(profileID string) string {
+					id, model := scheduledDefaultModel()
+					if id != profileID {
+						return ""
+					}
+					return model
 				},
 				// model-scheduled-jobs-01PMSJ01 WP06: the SAME registry
 				// registerFSBuiltinTools's RecordingPrompter reads from
@@ -3936,6 +3959,10 @@ func New(c *core.Core, opts ...Option) *API {
 			Engine:     chatEngine,
 			Dispatcher: chatDispatcher,
 			Cedar:      a.cedarGate(),
+			DefaultModel: func() scheduledchatview.DefaultModel {
+				id, model := scheduledDefaultModel()
+				return scheduledchatview.DefaultModel{ProfileID: id, Model: model}
+			},
 		})
 	}
 
@@ -7755,6 +7782,21 @@ func buildAutoTitleDeps(
 	}
 }
 
+// usageCost classifies a response's cost the way token-cost-telemetry
+// records it: a provider-reported total, else a price-table derivation,
+// else unknown (nil).
+func usageCost(resp corellm.Response) (*float64, string) {
+	switch {
+	case resp.Cost.Source == "provider" && resp.Cost.Total > 0:
+		v := resp.Cost.Total
+		return &v, "provider"
+	case !resp.Cost.Indeterminate && resp.Cost.Total > 0:
+		v := resp.Cost.Total
+		return &v, "derived"
+	}
+	return nil, "unknown"
+}
+
 // buildChatRunner constructs the *chat.ChatRunner that replaces
 // core/toolloop as the chassis chat path. Returns nil when the graph
 // manager is unavailable (test path or boot failure) so the LLM view
@@ -8069,29 +8111,22 @@ func buildChatRunner(
 		capturedUsageMgr := usageMgr
 		capturedSessionMgr := sessionMgr
 		capturedBroker := broker
-		usageHookFn = func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp corellm.Response) {
-			var costUSD *float64
-			source := "unknown"
-			switch {
-			case resp.Cost.Source == "provider" && resp.Cost.Total > 0:
-				v := resp.Cost.Total
-				costUSD = &v
-				source = "provider"
-			case !resp.Cost.Indeterminate && resp.Cost.Total > 0:
-				v := resp.Cost.Total
-				costUSD = &v
-				source = "derived"
-			}
+		usageHookFn = func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp, billed corellm.Response) {
+			// resp = this row's own (latest) call: drives the context bar.
+			// billed = resp + any earlier tool-only calls of the turn that
+			// had no row of their own: what the cumulative footer counts.
+			costUSD, source := usageCost(resp)
+			billedCost, billedSource := usageCost(billed)
 			if capturedUsageMgr != nil {
 				turn := usage.UsageTurn{
 					SessionID:        sessionID,
 					MessageID:        messageID,
 					ProviderKind:     providerKind,
 					ModelID:          modelID,
-					PromptTokens:     resp.Usage.InputTokens,
-					CompletionTokens: resp.Usage.OutputTokens,
-					CostUSD:          costUSD,
-					CostSource:       source,
+					PromptTokens:     billed.Usage.InputTokens,
+					CompletionTokens: billed.Usage.OutputTokens,
+					CostUSD:          billedCost,
+					CostSource:       billedSource,
 				}
 				if err := capturedUsageMgr.Add(ctx, turn); err != nil {
 					logging.L().Warn("usage.add.failed",
@@ -8105,9 +8140,15 @@ func buildChatRunner(
 				costVal = *costUSD
 			}
 			// Fleet usage lifecycle: token + cost totals for the session's
-			// open conversation segment. Numbers only — the model id, the
-			// message id and the response text do not cross this call.
-			fleetUsage.LLMResponse(ctx, sessionID, resp.Usage.InputTokens, resp.Usage.OutputTokens, costVal)
+			// open conversation segment — a running total, so it takes the
+			// billed figures (every call), not just the row's own call.
+			// Numbers only — the model id, the message id and the response
+			// text do not cross this call.
+			billedVal := 0.0
+			if billedCost != nil {
+				billedVal = *billedCost
+			}
+			fleetUsage.LLMResponse(ctx, sessionID, billed.Usage.InputTokens, billed.Usage.OutputTokens, billedVal)
 			snap := session.LastUsage{
 				PromptTokens:     resp.Usage.InputTokens,
 				CompletionTokens: resp.Usage.OutputTokens,

@@ -22,6 +22,7 @@ import BaseDialog from '@/components/ui/BaseDialog.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { flattenChoices, type ModelChoice } from '@/lib/modelFamily';
 import type { Project, Provider } from '@/lib/types';
+import { writeSessionModel } from '@/lib/sessionModelStash';
 
 const props = defineProps<{
   open: boolean;
@@ -209,18 +210,11 @@ async function onSubmit() {
     }
     // Stash the (provider, model) so SessionsView can seed the
     // active selection on first render — backend Record doesn't
-    // carry these fields yet.
-    try {
-      window.localStorage.setItem(
-        `kenaz.session.config.${session.id}`,
-        JSON.stringify({
-          providerId: selected.value.providerId,
-          modelId: selected.value.modelId,
-        }),
-      );
-    } catch {
-      /* localStorage unavailable — soft-fail */
-    }
+    // carry these fields yet. One writer of the key format.
+    writeSessionModel(session.id, {
+      providerId: selected.value.providerId,
+      modelId: selected.value.modelId,
+    });
     // Apply the starting context if one was attached. system => store
     // as the invisible system prompt; user_seed => append as the
     // visible first user turn AND persist the kind so the rail UI can

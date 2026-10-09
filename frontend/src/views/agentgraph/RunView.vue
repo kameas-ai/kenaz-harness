@@ -37,7 +37,7 @@
  * executing node on a live one. `materializationStatuses(…, {live})`
  * owns that mapping.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import GraphCanvas from '@/components/canvas/GraphCanvas.vue';
@@ -88,9 +88,13 @@ async function pollOnce() {
   if (!id) return;
   try {
     const st = await client.graph.getRunStatus(id);
+    // The view switched runs while this call was in flight: its answer
+    // belongs to the previous run and must not paint over the new one.
+    if (id !== runId.value) return;
     status.value = st;
     const since = events.value.length > 0 ? events.value[events.value.length - 1].seq : 0;
     const tail = await client.graph.getRunTrace(id, since);
+    if (id !== runId.value) return;
     if (tail.length > 0) {
       events.value = [...events.value, ...tail];
       // New events ⇒ the projection can have changed. No new events ⇒
@@ -111,6 +115,7 @@ async function pollOnce() {
       await refreshGraph();
     }
   } catch (err) {
+    if (id !== runId.value) return;
     error.value = err instanceof Error ? err.message : String(err);
     if (/not found/i.test(error.value)) runNotFound = true;
   }
@@ -151,6 +156,7 @@ async function refreshGraph() {
   if (!id) return;
   try {
     const spec = await client.graph.materializeRun(id);
+    if (id !== runId.value) return; // switched runs mid-call
     const parsed = parseGraphText(spec.yaml);
     if (parsed.graph) {
       runGraph.value = parsed.graph;
@@ -325,6 +331,34 @@ onMounted(async () => {
   // no events at all still has a topology worth drawing.
   await refreshGraph();
   if (pollIsDone()) return;
+  schedulePoll();
+});
+
+// vue-router REUSES this component when only :runId changes (opening the
+// next turn's "Run details" from this one), and a completed run stops
+// polling — so per-run state is reset and the new run loaded from
+// scratch whenever the id changes.
+watch(runId, async (id, prev) => {
+  if (id === prev || servedMode.value) return;
+  if (pollHandle) {
+    clearTimeout(pollHandle);
+    pollHandle = null;
+  }
+  status.value = null;
+  events.value = [];
+  error.value = null;
+  runNotFound = false;
+  runGraph.value = null;
+  graphError.value = null;
+  selectedNodeId.value = '';
+  focusedSeq.value = null;
+  askResponse.value = '';
+  approvalReason.value = '';
+  if (!id) return;
+  await pollOnce();
+  if (id !== runId.value) return;
+  await refreshGraph();
+  if (id !== runId.value || pollIsDone()) return;
   schedulePoll();
 });
 

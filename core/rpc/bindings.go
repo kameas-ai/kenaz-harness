@@ -2885,6 +2885,14 @@ func (b *Bindings) ScheduledChat_SetEnabled(id string, enabled bool) error {
 	return b.api.ScheduledChat().SetEnabled(b.ctx(), id, enabled)
 }
 
+// ScheduledChat_DefaultModel reports what "active default" resolves to
+// for a schedule with no model override — the same resolution the
+// dispatcher applies at fire time.
+func (b *Bindings) ScheduledChat_DefaultModel() (scheduledchatview.DefaultModel, error) {
+	defer sentry.WrapBinding("ScheduledChat_DefaultModel")()
+	return b.api.ScheduledChat().DefaultModel(b.ctx())
+}
+
 // ── blocked permission requests (model-scheduled-jobs-01PMSJ01 WP07) ─
 
 func (b *Bindings) BlockedRequests_ListPending() ([]blockedrequestsview.PendingRequest, error) {

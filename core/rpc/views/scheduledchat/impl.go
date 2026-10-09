@@ -52,6 +52,10 @@ type Config struct {
 	Engine Registrar
 	// Cedar is the policy gate. nil short-circuits to allow (default-allow).
 	Cedar cedar.Gate
+	// DefaultModel resolves what a schedule with no model override runs
+	// on — the SAME resolution the dispatcher applies at fire time. nil
+	// reports an unresolved default.
+	DefaultModel func() DefaultModel
 }
 
 // API is the concrete ScheduledChatAPI.
@@ -259,9 +263,33 @@ func (a *API) List(ctx context.Context) ([]ChatRunEntry, error) {
 	}
 	out := make([]ChatRunEntry, 0, len(recs))
 	for _, r := range recs {
-		out = append(out, chatRunEntryFromRecord(r))
+		out = append(out, a.withLastRun(ctx, chatRunEntryFromRecord(r)))
 	}
 	return out, nil
+}
+
+// withLastRun attaches the newest persisted history row as LastRun. A
+// history read failure leaves LastRun nil rather than failing the list:
+// the schedule itself is still real.
+func (a *API) withLastRun(ctx context.Context, e ChatRunEntry) ChatRunEntry {
+	if a.cfg.Store == nil {
+		return e
+	}
+	recs, err := a.cfg.Store.History(ctx, e.ID, 1)
+	if err != nil || len(recs) == 0 {
+		return e
+	}
+	last := runSummaryFromRecord(recs[0])
+	e.LastRun = &last
+	return e
+}
+
+// DefaultModel implements ScheduledChatAPI.
+func (a *API) DefaultModel(_ context.Context) (DefaultModel, error) {
+	if a.cfg.DefaultModel == nil {
+		return DefaultModel{}, nil
+	}
+	return a.cfg.DefaultModel(), nil
 }
 
 // Get implements ScheduledChatAPI.
@@ -276,7 +304,7 @@ func (a *API) Get(ctx context.Context, id string) (ChatRunEntry, error) {
 		}
 		return ChatRunEntry{}, fmt.Errorf("scheduledchat: get: %w", err)
 	}
-	return chatRunEntryFromRecord(rec), nil
+	return a.withLastRun(ctx, chatRunEntryFromRecord(rec)), nil
 }
 
 // RunNow implements ScheduledChatAPI.
@@ -438,6 +466,8 @@ func runSummaryFromRecord(r scheduler.ChatRunHistoryRecord) RunSummary {
 		StartedAt:     r.StartedAt,
 		OutputSnippet: r.OutputSnippet,
 		Error:         r.Error,
+		Model:         r.Model,
+		CostUSD:       r.CostUSD,
 	}
 	if r.EndedAt != nil {
 		t := *r.EndedAt

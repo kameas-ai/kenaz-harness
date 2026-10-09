@@ -85,6 +85,8 @@ import type {
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 import { parseUnsupportedFeatureError } from '@/lib/errors';
+import { mergeTransientByTime } from '@/lib/mergeTransient';
+import { readSessionModel, writeSessionModel } from '@/lib/sessionModelStash';
 
 const route = useRoute();
 const router = useRouter();
@@ -325,34 +327,6 @@ const otherFamilyChoices = computed(() =>
   allChoices.value.filter((c) => c.family !== activeFamily.value),
 );
 
-// Read the new-session-dialog's localStorage stash for this session,
-// if present. NewSessionDialog writes the user's chosen
-// (providerId, modelId) under "kenaz.session.config.<id>" so we
-// can honour cross-family choices that the mid-conversation switcher
-// would otherwise block.
-function readSessionConfig(sessionID: string): {
-  providerId: string;
-  modelId: string;
-} | null {
-  if (!sessionID) return null;
-  try {
-    const raw = window.localStorage.getItem(
-      `kenaz.session.config.${sessionID}`,
-    );
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as {
-      providerId?: string;
-      modelId?: string;
-    };
-    if (parsed.providerId && parsed.modelId) {
-      return { providerId: parsed.providerId, modelId: parsed.modelId };
-    }
-  } catch {
-    /* malformed stash — ignore */
-  }
-  return null;
-}
-
 // On session id or provider list change, seed the active selection.
 // Priority: stashed dialog config > previously-set value > provider
 // primary model.
@@ -361,7 +335,11 @@ watch(
   ([newSid]) => {
     // Reset prior selection when switching sessions.
     if (newSid) {
-      const stashed = readSessionConfig(newSid);
+      // The session's stashed (provider, model): written by
+      // NewSessionDialog and by every switch (pickModel), so a
+      // cross-family choice the switcher would block, and the latest
+      // switch, both survive a re-seed.
+      const stashed = readSessionModel(newSid);
       if (stashed) {
         activeProviderId.value = stashed.providerId;
         activeModelId.value = stashed.modelId;
@@ -415,6 +393,9 @@ function pickModel(providerId: string, modelId: string) {
   activeProviderId.value = providerId;
   activeModelId.value = modelId;
   switcherOpen.value = false;
+  // Persist the switch where the session's selection is seeded from, so
+  // a later re-seed (session switch, branch Merge) keeps it.
+  writeSessionModel(sessionId.value ?? '', { providerId, modelId });
 }
 
 const sessionTitle = computed(() => {
@@ -807,14 +788,61 @@ async function onArgFillSubmit(args: Record<string, string>) {
   if (!fill) return;
   const sid = sessionId.value;
   if (!sid) return;
+  await runUserSlashCommand(sid, fill.command, args, '');
+}
+
+/**
+ * runUserSlashCommand runs a user-defined slash command. A PROMPT-kind
+ * command's rendered body is an instruction for the model, so it is sent
+ * as the user's turn, with any text typed after the command appended.
+ * Text and tool commands render their result as a slash bubble.
+ */
+async function runUserSlashCommand(
+  sid: string,
+  cmd: UserCommand,
+  args: Record<string, string>,
+  rest: string,
+) {
   let result;
   try {
-    result = await client.slashcmd.run(fill.command.name, args, sid, fill.command.projectId ?? '', '', '');
+    result = await client.slashcmd.run(cmd.name, args, sid, cmd.projectId ?? '', '', '');
   } catch (err) {
     appendSlashResult(sid, 'error', err instanceof Error ? err.message : String(err));
     return;
   }
+  if (result.kind !== 'error' && result.metadata?.['prompt_rendered'] === true) {
+    const prompt = rest ? `${result.text}\n\n${rest}` : result.text;
+    await onSend(prompt);
+    return;
+  }
   appendSlashResult(sid, result.kind, result.text);
+}
+
+// Built-in slash command names (fleet skills excluded — they rank below
+// user commands), fetched once per view. A failed fetch reads as "no
+// built-ins" for this command only and is retried next time.
+let builtinSlashNames: Promise<Set<string>> | null = null;
+async function isBuiltinSlash(token: string): Promise<boolean> {
+  if (!builtinSlashNames) {
+    builtinSlashNames = client.slash
+      .list()
+      .then((list) => new Set(list.filter((c) => !c.isUser && !c.isSkill).map((c) => c.name)));
+  }
+  try {
+    return (await builtinSlashNames).has(token);
+  } catch {
+    builtinSlashNames = null;
+    return false;
+  }
+}
+
+/**
+ * Copy for a slash token that matches neither registry. Keyed on the
+ * registry's "unknown command" text: Slash_Execute exposes no typed code
+ * for it, only the message.
+ */
+function unknownSlashMessage(token: string): string {
+  return `No user or built-in command named "/${token}". Type /help to list commands.`;
 }
 
 async function onSlashCommand(raw: string) {
@@ -828,12 +856,19 @@ async function onSlashCommand(raw: string) {
   // If it resolves to a user-defined command with declared inputs, open
   // the SlashArgFill panel rather than dispatching immediately.
   const trimmedRaw = raw.trim();
+  let slashToken = '';
   if (trimmedRaw.startsWith('/')) {
     const token = trimmedRaw.slice(1).split(/\s+/)[0] ?? '';
-    if (token) {
+    slashToken = token;
+    // Built-ins take precedence over a user command of the same name
+    // (/model, /clear, /help … keep their meaning whatever the user
+    // saves), so a built-in token never consults the user store.
+    if (token && !(await isBuiltinSlash(token))) {
       let userCmd: UserCommand | null = null;
       try {
-        userCmd = await client.slashcmd.get(token, '');
+        // The session's project, so a project-scoped command resolves
+        // too; LoadUserOne still finds global commands under any id.
+        userCmd = await client.slashcmd.get(token, session.session.value?.projectId ?? '');
       } catch {
         // not a user command — fall through to built-in dispatch
       }
@@ -841,20 +876,33 @@ async function onSlashCommand(raw: string) {
         pendingArgFill.value = { command: userCmd, raw };
         return;
       }
+      if (userCmd) {
+        // A user command without declared inputs runs as a user command;
+        // the built-in registry below knows only built-ins.
+        const rest = trimmedRaw.slice(1 + token.length).trim();
+        await runUserSlashCommand(sid, userCmd, {}, rest);
+        return;
+      }
     }
   }
 
-  // ── Built-in / no-input dispatch ─────────────────────────────────────
+  // ── Built-in dispatch ─────────────────────────────────────────────────
   let result: SlashExecuteResult;
   try {
     result = await client.slash.execute(sid, raw);
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     appendSlashResult(
       sid,
       'error',
-      err instanceof Error ? err.message : String(err),
+      // The registry's own text ("slashcmd: unknown command: …") reads
+      // as if user commands were never consulted. They were.
+      /unknown command/i.test(msg) && slashToken ? unknownSlashMessage(slashToken) : msg,
     );
     return;
+  }
+  if (result.kind === 'error' && /^unknown command/i.test(result.text) && slashToken) {
+    result = { ...result, text: unknownSlashMessage(slashToken) };
   }
   appendSlashResult(sid, result.kind, result.text);
 
@@ -938,9 +986,8 @@ const visibleMessages = computed<readonly Message[]>(() => {
     content: t.content,
     createdAt: t.createdAt,
   }));
-  // Append after persisted; v1 doesn't reorder by createdAt — the
-  // user just submitted the slash command, so it's freshest.
-  return [...persisted, ...synthetic];
+  // Merged by time so a slash result sits where it happened.
+  return mergeTransientByTime(persisted, synthetic);
 });
 
 function gotoProviders() {

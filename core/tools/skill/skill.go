@@ -55,7 +55,9 @@ const (
 	ToolDescription = "Invoke a user-defined skill (slash command) by name. " +
 		"Use this when the skills catalog lists a skill that matches the user's request. " +
 		"Pass the skill name and any required arguments. " +
-		"Returns the rendered output of the skill."
+		"A text or tool skill returns its result. A PROMPT skill returns an instruction, " +
+		"not a result: its output is the task the user wants done — carry it out yourself, " +
+		"in this conversation, before answering (the response's `instruction` field says so)."
 
 	// MaxNameLen caps the command name to prevent denial-of-service via
 	// a pathologically long name that would never match a real command.
@@ -128,7 +130,13 @@ type input struct {
 type output struct {
 	Output string `json:"output"`
 	Kind   string `json:"kind"`
+	// Instruction is set for a prompt-kind skill. It tells the model that
+	// Output is a task to perform, not a finished answer.
+	Instruction string `json:"instruction,omitempty"`
 }
+
+// promptSkillInstruction accompanies a prompt-kind skill's output.
+const promptSkillInstruction = "This skill is a prompt: `output` is an instruction the user wants carried out, not a result. Perform it now, in this conversation, and answer with what it asks for."
 
 // errOutput is the error response shape.
 type errOutput struct {
@@ -182,6 +190,9 @@ func (t *Tool) Call(ctx context.Context, args json.RawMessage) (json.RawMessage,
 	out := output{
 		Output: result.Text,
 		Kind:   result.Kind,
+	}
+	if rendered, _ := result.Metadata["prompt_rendered"].(bool); rendered {
+		out.Instruction = promptSkillInstruction
 	}
 	data, jsonErr := json.Marshal(out)
 	if jsonErr != nil {

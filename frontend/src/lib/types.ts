@@ -2796,6 +2796,8 @@ export interface SlashCommandInfo {
   description: string;
   comingSoon: boolean;
   isUser?: boolean;
+  /** A fleet-installed skill: listed with built-ins, ranks below user commands. */
+  isSkill?: boolean;
 }
 
 // ── user-defined slash commands (user-slash-commands-01KQ8TD9) ───────

@@ -687,7 +687,14 @@ type StreamCheckpointStore interface {
 // alignment (backend-context-window-length-01KQ8TD3 WP06). The hook
 // must not block the chat turn — it should write async or accept the
 // latency.
-type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp corellm.Response)
+//
+// resp is the persisted row's OWN model call — the latest call, which is
+// what the context-window bar measures (last_usage_json /
+// session.usage.updated). billed is what to ADD to the session's
+// cumulative usage for this row: resp plus every earlier call in the turn
+// that produced no row of its own (a fire that only requested tools).
+// billed equals resp when there were none.
+type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp, billed corellm.Response)
 
 // TurnUsageObserver receives the conversation-lifecycle facts of a chat turn.
 //
@@ -1585,7 +1592,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 						"session_id", capturedSessionID, "message_id", messageID)
 					return
 				}
-				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp)
+				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp, resp)
 			})
 		}
 		// Register the post_send hook (ledger #46). Unlike the usage hook
@@ -1744,6 +1751,9 @@ func (r *ChatRunner) StopStream(_ context.Context, subID string) error {
 		return fmt.Errorf("chat: subscription %q not found", subID)
 	}
 	sub.cancelCause.Store("stop-called")
+	// Before cancelling: the provider's own "context canceled" error
+	// chunk must not reach the surface as a failure.
+	sub.bridge.MarkStopped()
 	logging.L().Info("chat.run.stop_called",
 		"sub_id", subID, "session_id", sub.sessionID)
 	sub.cancel()
@@ -2118,6 +2128,14 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		})
 	}
 
+	// Request-too-large verdict for a context-overflow rejection: read
+	// before the switch because classifying it needs the session's
+	// history, and only the overflow arm consumes it.
+	var tooLarge *ErrRequestTooLarge
+	if err != nil && isContextOverflowError(err) {
+		tooLarge = r.classifyRequestTooLarge(context.WithoutCancel(ctx), sub.sessionID, sub.profileID, sub.modelOverride, err, sub.journal.TurnContent())
+	}
+
 	switch {
 	case err == nil:
 		reason = "completed"
@@ -2155,6 +2173,22 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		reason = "backend-error"
 		message = compaction.ErrSessionFull.Error()
 		errorKind = StreamClosedErrorKindSessionFull
+	case err != nil && isContextOverflowError(err) && tooLarge != nil:
+		// The provider rejected the request for its size, but the
+		// session's history is empty or a small fraction of the window:
+		// the overflow is the request the harness built (tool schemas +
+		// system prompt), not the conversation. Compaction cannot help —
+		// there is nothing to summarise — so skip overflow recovery and
+		// say what is actually wrong instead of ErrSessionFull's "your
+		// conversation is full".
+		reason = "backend-error"
+		message = tooLarge.Error()
+		errorKind = StreamClosedErrorKindRequestTooLarge
+		failure = requestTooLargeFailure(sub.providerKind, tooLarge)
+		log.Warn("chat.run.request_too_large",
+			"sub_id", sub.id, "session_id", sub.sessionID,
+			"model", tooLarge.Model, "window", tooLarge.Window,
+			"history_tokens", tooLarge.HistoryTokens)
 	case err != nil && isContextOverflowError(err):
 		// Reactive context-overflow recovery (FR-005 / agent-loop-
 		// robustness-parity WP05), budgeted by
@@ -2406,6 +2440,17 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 
 	if !sub.finished.CompareAndSwap(false, true) {
 		return
+	}
+	// Flush the journal's parked segment BEFORE the close is announced:
+	// stream-closed subscribers read the transcript on that event (the
+	// scheduled-chat dispatcher's snippet, cost and empty-session check),
+	// so every row the turn produced must already be persisted. The
+	// deferred Finish above stays as the backstop for the paths that
+	// return without reaching here; Finish is idempotent.
+	{
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+		sub.journal.Finish(flushCtx)
+		flushCancel()
 	}
 	// Persist the outcome BEFORE the close is announced, so a surface
 	// that re-reads Sessions_TurnRuns on stream-closed sees it.

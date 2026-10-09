@@ -68,6 +68,11 @@ type ChatRunDispatcherDeps struct {
 	// as core/rpc/api.go's wfDeps.DefaultProfileFunc for workflow
 	// model_turn steps. Returns "" when no profile is configured.
 	DefaultProfile func() string
+	// DefaultModel resolves the model a run with no model override is
+	// dispatched with on the given profile. It is recorded on the history
+	// row so the run list can say which model ran. nil, or "" back,
+	// records the model as unknown.
+	DefaultModel func(profileID string) string
 	// Origins records the (sessionID -> chat-run id) mapping for the
 	// duration of this dispatch (model-scheduled-jobs-01PMSJ01 WP06),
 	// so a filesystem-permission denial mid-run can attribute its
@@ -196,6 +201,26 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			"chat_run_id", id, "raw", rec.OutputSink, "error", sinkErr.Error())
 	}
 
+	// Step 6 (spec.md §5.2), run ahead of steps 4-5: resolve the profile
+	// (and so the model) before any session exists, so a run that cannot
+	// start leaves no empty "Scheduled: …"
+	// session behind. rec.Model is a model OVERRIDE, not a profile —
+	// spec.md §8 D-1.
+	if d.deps.LLM == nil {
+		return failedRecord(now, "no LLM connector wired"), nil
+	}
+	profileID := ""
+	if d.deps.DefaultProfile != nil {
+		profileID = d.deps.DefaultProfile()
+	}
+	if profileID == "" {
+		return failedRecord(now, "no default LLM profile configured"), nil
+	}
+	model := rec.Model
+	if model == "" && d.deps.DefaultModel != nil {
+		model = d.deps.DefaultModel(profileID)
+	}
+
 	// Step 4: create a headless session.
 	if d.deps.Sessions == nil {
 		return failedRecord(now, "no sessions API wired"), nil
@@ -237,20 +262,10 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	// runner never persists a user turn (chat-single-writer-01DOGF0G).
 	// Without it, StartStream runs with no user message at all.
 	if _, aerr := d.deps.Sessions.AppendMessage(ctx, sess.ID, "user", prompt); aerr != nil {
-		return failedRecord(now, fmt.Sprintf("append prompt: %v", aerr)), nil
-	}
-
-	// Step 6: resolve the profile. rec.Model is a model OVERRIDE, not a
-	// profile — spec.md §8 D-1.
-	if d.deps.LLM == nil {
-		return failedRecord(now, "no LLM connector wired"), nil
-	}
-	profileID := ""
-	if d.deps.DefaultProfile != nil {
-		profileID = d.deps.DefaultProfile()
-	}
-	if profileID == "" {
-		return failedRecord(now, "no default LLM profile configured"), nil
+		r := failedRecord2(sess.ID, now, fmt.Sprintf("append prompt: %v", aerr))
+		r.Model = model
+		d.discardEmptyFailedSession(ctx, &r, prompt)
+		return r, nil
 	}
 
 	// Step 7: subscribe BEFORE starting the stream so a fast completion
@@ -269,7 +284,10 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		if containment.Contained {
 			d.deps.Containment.Release(sess.ID)
 		}
-		return failedRecord2(sess.ID, now, fmt.Sprintf("start stream: %v", serr)), nil
+		r := failedRecord2(sess.ID, now, fmt.Sprintf("start stream: %v", serr))
+		r.Model = model
+		d.discardEmptyFailedSession(ctx, &r, prompt)
+		return r, nil
 	}
 
 	// WP02 re-review: the run's OWN streams — this sub plus any
@@ -303,8 +321,14 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 				continue // another stream's terminal event; keep waiting.
 			}
 			histRec := d.buildRecord(ctx, sess.ID, now, payload)
+			histRec.Model = model
+			// The run is over (terminal event), so a failure that never
+			// produced an assistant message leaves an empty session
+			// nobody will open: delete it. Not on timeout / ctx-cancel
+			// below — the run may still be executing there.
+			d.discardEmptyFailedSession(ctx, &histRec, prompt)
 			if sinkKind == "banner" {
-				d.deliverBanner(id, rec.Name, sess.ID, histRec)
+				d.deliverBanner(id, rec.Name, histRec.SessionID, histRec)
 			}
 			return histRec, nil
 		case <-deadline.C:
@@ -312,8 +336,9 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 				d.releaseOnOwnTerminal(own, subCh)
 			}
 			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("timed out after %s waiting for the run to finish", d.deps.Timeout))
+			histRec.Model = model
 			if sinkKind == "banner" {
-				d.deliverBanner(id, rec.Name, sess.ID, histRec)
+				d.deliverBanner(id, rec.Name, histRec.SessionID, histRec)
 			}
 			return histRec, nil
 		case <-ctx.Done():
@@ -321,8 +346,9 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 				d.releaseOnOwnTerminal(own, subCh)
 			}
 			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("context cancelled while awaiting completion: %v", ctx.Err()))
+			histRec.Model = model
 			if sinkKind == "banner" {
-				d.deliverBanner(id, rec.Name, sess.ID, histRec)
+				d.deliverBanner(id, rec.Name, histRec.SessionID, histRec)
 			}
 			return histRec, nil
 		}
@@ -484,8 +510,47 @@ func (d *LiveChatRunDispatcher) buildRecord(ctx context.Context, sessionID strin
 		if snippet, ok := lastAssistantSnippet(ctx, d.deps.Sessions, sessionID); ok {
 			rec.OutputSnippet = snippet
 		}
+		// The run's cost: each scheduled run owns its session, so the
+		// session's cumulative usage at the terminal event IS the run's.
+		if usage, err := d.deps.Sessions.GetUsage(ctx, sessionID); err == nil {
+			rec.CostUSD = usage.CostUSD
+		}
 	}
 	return rec
+}
+
+// discardEmptyFailedSession deletes the run's session when a failed run
+// left nothing in it but the dispatcher's own prompt. Such a session has
+// no output to read and is invisible in the sidebar; the history row
+// keeps the error, model and time, and its SessionID is cleared so
+// nothing links to the deleted session.
+//
+// The rule is deliberately strict: the session is kept if it holds ANY
+// row other than the user prompt this dispatch appended — an assistant
+// segment, a tool call or tool result (the record of what the agent
+// did, e.g. a mail it sent before failing), a system note. A session
+// whose rows cannot be listed is kept. Completed runs never reach here.
+func (d *LiveChatRunDispatcher) discardEmptyFailedSession(ctx context.Context, rec *scheduler.ChatRunHistoryRecord, prompt string) {
+	if rec.Status != "failed" || rec.SessionID == "" || d.deps.Sessions == nil {
+		return
+	}
+	msgs, err := d.deps.Sessions.ListMessages(ctx, rec.SessionID)
+	if err != nil {
+		return // cannot prove it is empty; keep it
+	}
+	for _, m := range msgs {
+		if m.Role != "user" || m.Content != prompt {
+			return
+		}
+	}
+	if derr := d.deps.Sessions.Delete(context.WithoutCancel(ctx), rec.SessionID); derr != nil {
+		logging.L().Warn("scheduler.chat_dispatch.discard_session_failed",
+			"session_id", rec.SessionID, "error", derr.Error())
+		return
+	}
+	logging.L().Info("scheduler.chat_dispatch.discarded_empty_session",
+		"session_id", rec.SessionID, "reason", rec.Error)
+	rec.SessionID = ""
 }
 
 // lastAssistantSnippet reads the persisted assistant reply back from

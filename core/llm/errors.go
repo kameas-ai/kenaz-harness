@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -240,6 +241,15 @@ func (e *ErrCancelled) Error() string {
 		return "llm: cancelled"
 	}
 	return "llm: cancelled: " + e.Reason
+}
+
+// Is makes a provider-reported cancellation match context.Canceled.
+// Adapters report "the caller's ctx was cancelled" / "Stream.Cancel was
+// called" as ErrCancelled without wrapping the ctx error; callers that
+// branch on errors.Is(err, context.Canceled) — the chat runner's Stop
+// arm in particular — must see a cancellation however it was reported.
+func (e *ErrCancelled) Is(target error) bool {
+	return target == context.Canceled
 }
 
 // ErrProviderAuthFailed is the registry-level decoration of *ErrAuth with

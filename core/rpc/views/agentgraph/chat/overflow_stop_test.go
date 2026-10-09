@@ -81,7 +81,7 @@ func buildOverflowStopRunner(t *testing.T, llm coreag.LLMProvider, budget int) (
 		Registry:              stubRegistry{},
 		Broker:                broker,
 		HistoryWriter:         &recordingHistoryWriter{},
-		History:               staticHistoryReader{},
+		History:               staticHistoryReader{msgs: conversationFillingWindow()},
 		GraphLoader:           func() (coreag.Graph, error) { return graph, nil },
 		MaxTurns:              func() int { return 25 },
 		Compaction:            &CompactionDeps{Engine: engine},

@@ -171,6 +171,23 @@ type turnJournal struct {
 	heldResp         corellm.Response
 	heldProviderKind string
 	heldModelID      string
+	// unbilled sums the usage of this turn's model calls that produced
+	// no transcript row of their own — a chat-bound fire whose only
+	// output was tool calls (RecordAssistantMove with empty text). Such
+	// a call has no row for usage.Add to UPDATE, so fireUsage folds it
+	// into the NEXT row this journal bills, then clears it: every call
+	// is billed exactly once while last_usage still reports the row's
+	// own (latest) call. Known gap: a tool-only call followed by a turn
+	// end that persists no further billed row (a Stop or failure before
+	// the next assistant segment) is not billed.
+	unbilled      corellm.Response
+	unbilledCalls int
+	// turnContent is the content of every row this journal persisted
+	// this turn (assistant moves, tool calls, tool results). The model
+	// saw all of it inside the run even where the session's composed
+	// history (classic move fidelity) drops those rows, so a
+	// "how big was the request" measurement must add it back.
+	turnContent []string
 	// lastAssistant is the content of the last assistant-role row this
 	// journal actually wrote (a flushed move, the final, or a partial).
 	// UnpersistedTail reads it so a terminal path never re-persists text
@@ -364,7 +381,21 @@ func (j *turnJournal) persist(ctx context.Context, e coreag.HistoryEntry) (strin
 			"err", err.Error())
 		return "", err
 	}
+	if e.Content != "" {
+		j.turnContent = append(j.turnContent, e.Content)
+	}
 	return id, nil
+}
+
+// TurnContent returns a copy of the content this journal persisted this
+// turn. Safe on a nil journal.
+func (j *turnJournal) TurnContent() []string {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return append([]string(nil), j.turnContent...)
 }
 
 // fireUsage invokes j.usageHook for one persisted assistant-role row,
@@ -378,7 +409,79 @@ func (j *turnJournal) fireUsage(ctx context.Context, id string, err error,
 	if err != nil || id == "" || j.usageHook == nil {
 		return
 	}
-	j.usageHook(ctx, j.sessionID, id, providerKind, modelID, resp)
+	billed := resp
+	if j.unbilledCalls > 0 {
+		billed = sumUsage(resp, j.unbilled)
+		j.unbilled, j.unbilledCalls = corellm.Response{}, 0
+	}
+	j.usageHook(ctx, j.sessionID, id, providerKind, modelID, resp, billed)
+}
+
+// addUnbilled records a model call that will have no transcript row of
+// its own. Caller holds j.mu.
+func (j *turnJournal) addUnbilled(resp corellm.Response) {
+	if resp.Usage == (corellm.Usage{}) && resp.Cost.Total == 0 {
+		return
+	}
+	j.unbilled = sumUsage(j.unbilled, resp)
+	j.unbilledCalls++
+}
+
+// sumUsage returns a's token and cost figures plus b's. Only the
+// accounting fields are summed; content is not carried.
+//
+// Cost source of the sum (sumCostSource): a side that contributed no cost
+// does not vote; two contributing sides with the same source keep it; a
+// provider-reported side mixed with a derived (or unlabelled) side is
+// "derived" — the total is no longer purely what the provider reported.
+// The sum is indeterminate when either side is, unless the resulting
+// source is "provider" (a provider-reported total needs no price table).
+func sumUsage(a, b corellm.Response) corellm.Response {
+	out := corellm.Response{FinishReason: a.FinishReason}
+	out.Usage = corellm.Usage{
+		InputTokens:      a.Usage.InputTokens + b.Usage.InputTokens,
+		OutputTokens:     a.Usage.OutputTokens + b.Usage.OutputTokens,
+		CachedInputRead:  a.Usage.CachedInputRead + b.Usage.CachedInputRead,
+		CachedInputWrite: a.Usage.CachedInputWrite + b.Usage.CachedInputWrite,
+		ReasoningTokens:  a.Usage.ReasoningTokens + b.Usage.ReasoningTokens,
+		ImagesGenerated:  a.Usage.ImagesGenerated + b.Usage.ImagesGenerated,
+	}
+	out.Cost = corellm.Cost{
+		Currency:      a.Cost.Currency,
+		Total:         a.Cost.Total + b.Cost.Total,
+		InputCost:     a.Cost.InputCost + b.Cost.InputCost,
+		OutputCost:    a.Cost.OutputCost + b.Cost.OutputCost,
+		CachedCost:    a.Cost.CachedCost + b.Cost.CachedCost,
+		ReasoningCost: a.Cost.ReasoningCost + b.Cost.ReasoningCost,
+		ImageCost:     a.Cost.ImageCost + b.Cost.ImageCost,
+		Source:        sumCostSource(a.Cost, b.Cost),
+	}
+	out.Cost.Indeterminate = (a.Cost.Indeterminate || b.Cost.Indeterminate) && out.Cost.Source != "provider"
+	if out.Cost.Currency == "" {
+		out.Cost.Currency = b.Cost.Currency
+	}
+	return out
+}
+
+// sumCostSource resolves the cost source of a summed pair (see sumUsage).
+func sumCostSource(a, b corellm.Cost) string {
+	aVotes := a.Total != 0 || a.Indeterminate
+	bVotes := b.Total != 0 || b.Indeterminate
+	switch {
+	case !aVotes && !bVotes:
+		if a.Source != "" {
+			return a.Source
+		}
+		return b.Source
+	case !bVotes:
+		return a.Source
+	case !aVotes:
+		return b.Source
+	case a.Source == b.Source:
+		return a.Source
+	default:
+		return "derived"
+	}
 }
 
 // flushHeld writes the parked assistant text as an assistant_move.
@@ -468,6 +571,8 @@ func (j *turnJournal) RecordAssistantMove(ctx context.Context, text string,
 	idx := j.openIdx
 	j.openIdx = -1
 	if text == "" {
+		// No row for this call (tools only): bill it with the next row.
+		j.addUnbilled(resp)
 		return
 	}
 	j.flushHeld(ctx)

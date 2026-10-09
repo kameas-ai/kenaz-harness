@@ -11,6 +11,7 @@
  */
 import { ref, onMounted } from 'vue';
 import ScheduledChatFormModal from './ScheduledChatFormModal.vue';
+import ChatRunOutcome from './ChatRunOutcome.vue';
 import {
   createScheduledChatClient,
   type ScheduledChatClient,
@@ -98,7 +99,8 @@ async function runNow(id: string) {
   actionError.value = null;
   try {
     await chatClient.runNow(id);
-    // Show brief confirmation by reloading (history update).
+    // Reload so the row's last-run line reflects the run just made.
+    await loadRuns();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : String(err);
   }
@@ -201,6 +203,19 @@ function fmtDate(iso: string): string {
             </div>
             <div class="mt-0.5 font-ui text-xs text-ink-muted">
               Updated {{ fmtDate(run.updatedAt) }}
+            </div>
+            <ChatRunOutcome
+              v-if="run.lastRun"
+              class="mt-1"
+              :run="run.lastRun"
+              label="Last run"
+            />
+            <div
+              v-else
+              class="mt-1 font-ui text-xs text-ink-muted"
+              :data-testid="`scheduled-chat-never-run-${run.id}`"
+            >
+              Not run yet
             </div>
           </div>
 

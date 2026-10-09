@@ -47,7 +47,19 @@ func (f *fakeStdioPool) Close(_ context.Context) error {
 	return nil
 }
 func (f *fakeStdioPool) CloseOne(_ context.Context, id string) error {
-	return nil // best-effort for tests
+	// Faithful to *stdio.Pool.CloseOne: the server leaves the sub-pool.
+	// The dispatch pool adopts servers its sub-pool still holds, so a
+	// fake that kept a closed server would read as "still running".
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	kept := f.opened[:0]
+	for _, n := range f.opened {
+		if n != id {
+			kept = append(kept, n)
+		}
+	}
+	f.opened = kept
+	return nil
 }
 func (f *fakeStdioPool) Tools(_ context.Context) ([]coremcp.Tool, error) {
 	f.mu.Lock()
