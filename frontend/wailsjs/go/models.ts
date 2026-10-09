@@ -8028,6 +8028,92 @@ export namespace settings {
 	        this.reason = source["reason"];
 	    }
 	}
+	export class MLShippingStatusView {
+	    lastBatchAt: string;
+	    accepted: number;
+	    duplicates: number;
+	    rejected: number;
+	    stopReason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MLShippingStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.lastBatchAt = source["lastBatchAt"];
+	        this.accepted = source["accepted"];
+	        this.duplicates = source["duplicates"];
+	        this.rejected = source["rejected"];
+	        this.stopReason = source["stopReason"];
+	    }
+	}
+	export class MLStatusView {
+	    signedIn: boolean;
+	    entitled: boolean;
+	    orgPaused: boolean;
+	    pausedCategory?: string;
+	    loaded: boolean;
+	    orgOffloadEnabled: boolean;
+	    orgPolicy: string;
+	    userWorkflowEventsOptedIn: boolean;
+	    noticeAckRequired: boolean;
+	    effective: boolean;
+	    noticeVersion: number;
+	    noticeAckedAt: string;
+	    retentionDays: number;
+	    retainOnWithdrawal: boolean;
+	    orgName: string;
+	    noticeText: string;
+	    noticeChanged?: boolean;
+	    fleetError?: string;
+	    shipping?: MLShippingStatusView;
+	
+	    static createFrom(source: any = {}) {
+	        return new MLStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.signedIn = source["signedIn"];
+	        this.entitled = source["entitled"];
+	        this.orgPaused = source["orgPaused"];
+	        this.pausedCategory = source["pausedCategory"];
+	        this.loaded = source["loaded"];
+	        this.orgOffloadEnabled = source["orgOffloadEnabled"];
+	        this.orgPolicy = source["orgPolicy"];
+	        this.userWorkflowEventsOptedIn = source["userWorkflowEventsOptedIn"];
+	        this.noticeAckRequired = source["noticeAckRequired"];
+	        this.effective = source["effective"];
+	        this.noticeVersion = source["noticeVersion"];
+	        this.noticeAckedAt = source["noticeAckedAt"];
+	        this.retentionDays = source["retentionDays"];
+	        this.retainOnWithdrawal = source["retainOnWithdrawal"];
+	        this.orgName = source["orgName"];
+	        this.noticeText = source["noticeText"];
+	        this.noticeChanged = source["noticeChanged"];
+	        this.fleetError = source["fleetError"];
+	        this.shipping = this.convertValues(source["shipping"], MLShippingStatusView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MemorySyncStatusView {
 	    wired: boolean;
 	    entitled: boolean;

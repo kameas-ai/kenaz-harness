@@ -1759,6 +1759,16 @@ type SettingsAPI interface {
 	// deleteFromFleet it first erases everything on Fleet (forget-all);
 	// confirm must then be exactly "forget-all".
 	FleetMemorySyncDisable(ctx context.Context, deleteFromFleet bool, confirm string) (MemorySyncStatusView, error)
+	// FleetMLStatus returns the Cloud ML consent panel state: a fresh
+	// GET /me/ml read (ml-producer-01MLPRD01 WP01, spec §5), the rendered
+	// notice, and the producer's shipping status.
+	FleetMLStatus(ctx context.Context) (MLStatusView, error)
+	// FleetMLAckNotice acknowledges the notice version the panel showed. A
+	// 409 policy_changed re-reads and returns the state with NoticeChanged.
+	FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatusView, error)
+	// FleetSetWorkflowEventsOptIn writes the member's workflow_events
+	// opt-in (PUT /me/telemetry-opt-ins) and re-reads /me/ml.
+	FleetSetWorkflowEventsOptIn(ctx context.Context, optedIn bool) (MLStatusView, error)
 
 	// FleetProfile returns the active env profile for UI rendering.
 	// Does NOT expose ClientID, APIAudience, or any secret fields.

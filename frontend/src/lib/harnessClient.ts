@@ -181,6 +181,7 @@ import type {
   FleetProfileInfo,
   FleetSessionView,
   MemorySyncStatus,
+  MLStatus,
   CapabilitiesView,
   FleetConfigPullStatusView,
   FleetHealthView,
@@ -1021,6 +1022,10 @@ interface WailsBindingsLike {
   Fleet_MemorySyncStatus(): Promise<MemorySyncStatus>;
   Fleet_MemorySyncEnable(scopes: string[], consentVersion: string): Promise<MemorySyncStatus>;
   Fleet_MemorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
+  // ── Fleet Cloud ML consent (ml-producer-01MLPRD01 WP01) ───────────────
+  Fleet_MLStatus(): Promise<MLStatus>;
+  Fleet_MLAckNotice(noticeVersion: number): Promise<MLStatus>;
+  Fleet_SetWorkflowEventsOptIn(optedIn: boolean): Promise<MLStatus>;
 
   // ── Capabilities: the one install framework (install-framework-01DOGF0B) ──
   /** Every install provider's items (consumer-derived state) + unreachable sources with reasons. */
@@ -3943,6 +3948,15 @@ export interface FleetClient {
    * Fleet first; confirm must then be exactly "forget-all".
    */
   memorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
+  /** Cloud ML consent panel state: a fresh GET /me/ml read (ml-producer-01MLPRD01 WP01). */
+  mlStatus(): Promise<MLStatus>;
+  /**
+   * Acknowledge the notice version that was shown. On 409 policy_changed the
+   * re-read state comes back with noticeChanged set (show the notice again).
+   */
+  mlAckNotice(noticeVersion: number): Promise<MLStatus>;
+  /** The member's own workflow_events opt-in (policy member_choice). */
+  setWorkflowEventsOptIn(optedIn: boolean): Promise<MLStatus>;
 }
 
 // ── Capabilities client (install-framework-01DOGF0B) ────────────────────────
@@ -5038,6 +5052,9 @@ export function createHarnessClient(): HarnessClient {
       memorySyncStatus: () => b().Fleet_MemorySyncStatus(),
       memorySyncEnable: (scopes, consentVersion) => b().Fleet_MemorySyncEnable(scopes, consentVersion),
       memorySyncDisable: (deleteFromFleet, confirm) => b().Fleet_MemorySyncDisable(deleteFromFleet, confirm),
+      mlStatus: () => b().Fleet_MLStatus(),
+      mlAckNotice: (noticeVersion) => b().Fleet_MLAckNotice(noticeVersion),
+      setWorkflowEventsOptIn: (optedIn) => b().Fleet_SetWorkflowEventsOptIn(optedIn),
     },
     // ── Capabilities (install-framework-01DOGF0B) ─────────────────────────
     capabilities: {
@@ -6978,6 +6995,9 @@ export function createFakeHarnessClient(
       memorySyncStatus: async () => fakeMemorySyncStatus(),
       memorySyncEnable: async () => fakeMemorySyncStatus(),
       memorySyncDisable: async () => fakeMemorySyncStatus(),
+      mlStatus: async () => fakeMLStatus(),
+      mlAckNotice: async () => fakeMLStatus(),
+      setWorkflowEventsOptIn: async () => fakeMLStatus(),
       getTelemetryStatus: async () => ({
         wired: false,
         enrolled: false,
@@ -7159,6 +7179,27 @@ export function createFakeHarnessClient(
   };
 
   return { ...defaults, ...seed };
+}
+
+/** Fake-client Cloud ML state: signed out (no Fleet in the fake). */
+function fakeMLStatus(): MLStatus {
+  return {
+    signedIn: false,
+    entitled: false,
+    orgPaused: false,
+    loaded: false,
+    orgOffloadEnabled: false,
+    orgPolicy: '',
+    userWorkflowEventsOptedIn: false,
+    noticeAckRequired: false,
+    effective: false,
+    noticeVersion: 0,
+    noticeAckedAt: '',
+    retentionDays: 0,
+    retainOnWithdrawal: false,
+    orgName: '',
+    noticeText: '',
+  };
 }
 
 /** Fake-client memory sync state: not wired (no store in the fake). */

@@ -40,6 +40,7 @@ import AgentsView from '@/views/settings/AgentsView.vue';
 // fleet-share-and-sync-01NDFSEX14 WP06 — Sync panel
 import SyncPanel from '@/views/settings/SyncPanel.vue';
 import MemorySyncPanel from '@/views/settings/MemorySyncPanel.vue';
+import CloudMLPanel from '@/views/settings/CloudMLPanel.vue';
 // fleet-audit-archival-01NDFSEX13 WP06 — Compliance panel
 import CompliancePanel from '@/views/settings/CompliancePanel.vue';
 // nav-settings-ia-cleanup WP02 — Crash Reporting panel (PRIVACY group)
@@ -1259,6 +1260,11 @@ onMounted(() => {
            without the memory_sync capability). -->
       <div class="px-6 py-4">
         <MemorySyncPanel />
+      </div>
+      <!-- ml-producer-01MLPRD01 WP01: Cloud ML consent (hidden when signed
+           out or without the hosted_inference capability). -->
+      <div class="px-6 py-4">
+        <CloudMLPanel />
       </div>
     </div>
 
