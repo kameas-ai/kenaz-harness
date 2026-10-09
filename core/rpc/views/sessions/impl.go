@@ -997,7 +997,7 @@ func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, err
 	if err != nil {
 		return SessionUsage{}, fmt.Errorf("rpc/sessions: GetUsage: %w", err)
 	}
-	return SessionUsage{
+	out := SessionUsage{
 		PromptTokens:     agg.PromptTokens,
 		CompletionTokens: agg.CompletionTokens,
 		TotalTokens:      agg.TotalTokens,
@@ -1005,7 +1005,27 @@ func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, err
 		CostSource:       agg.CostSource,
 		MessageCount:     agg.MessageCount,
 		PricingDataDate:  pricingDate,
-	}, nil
+		CachedTokens:     agg.CachedTokens,
+	}
+	// The composition is the last call's, not a sum: it reads the
+	// last-usage snapshot. A failed read leaves it nil — the aggregate
+	// above is still the answer to what this RPC was asked.
+	if a.mgr != nil {
+		if last, lerr := a.mgr.GetLastUsage(ctx, id); lerr == nil && last.Composition != nil {
+			c := last.Composition
+			out.Composition = &UsageComposition{
+				System:       c.System,
+				Tools:        c.Tools,
+				History:      c.History,
+				Attachments:  c.Attachments,
+				Memory:       c.Memory,
+				Cached:       c.Cached,
+				ToolsFull:    c.ToolsFull,
+				ToolsSummary: c.ToolsSummary,
+			}
+		}
+	}
+	return out, nil
 }
 
 // ResumeMessage implements SessionsAPI. Validates the partial row's

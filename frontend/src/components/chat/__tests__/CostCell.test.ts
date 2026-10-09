@@ -84,4 +84,13 @@ describe('CostCell', () => {
     const w = mount(CostCell, { props: { usage: makeUsage() } });
     expect(w.html()).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
   });
+
+  it('states cached prompt tokens in the tooltip when the provider reported any', () => {
+    const cached = mount(CostCell, { props: { usage: makeUsage({ cachedTokens: 200_000 }) } });
+    expect(cached.find('[data-testid="session-cost-cell"]').attributes('title')).toContain(
+      `${(200_000).toLocaleString()} prompt tokens served from cache`,
+    );
+    const none = mount(CostCell, { props: { usage: makeUsage() } });
+    expect(none.find('[data-testid="session-cost-cell"]').attributes('title')).not.toContain('cache');
+  });
 });

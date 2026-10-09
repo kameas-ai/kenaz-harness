@@ -105,6 +105,27 @@ type LastUsage struct {
 	TotalTokens      int     `json:"totalTokens"`
 	CostUSD          float64 `json:"costUsd"`
 	CostSource       string  `json:"costSource"`
+	// Composition is the last call's prompt by part, in tokens. nil on
+	// a snapshot written before the field existed or by a call that was
+	// not measured.
+	Composition *UsageComposition `json:"composition,omitempty"`
+}
+
+// UsageComposition is one model call's prompt by part. Every part but
+// Cached is the harness estimate (ceil(bytes / 3.5)); Cached is the
+// provider-reported prompt-cache read.
+type UsageComposition struct {
+	System      int `json:"system"`
+	Tools       int `json:"tools"`
+	History     int `json:"history"`
+	Attachments int `json:"attachments"`
+	Memory      int `json:"memory"`
+	Cached      int `json:"cached"`
+	// ToolsFull is the number of tool definitions the call carried.
+	ToolsFull int `json:"toolsFull"`
+	// ToolsSummary is the number of tools listed only by summary (0 until
+	// summary-tier exposure exists).
+	ToolsSummary int `json:"toolsSummary"`
 }
 
 // StreamCheckpoint is a durable mid-run snapshot of one active stream

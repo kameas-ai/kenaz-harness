@@ -218,7 +218,12 @@ func TestAuditRetention_DeleteAfterWindow_AgainstPopulatedUpgradedDatabase(t *te
 			// of all four is asserted by assertArtifactsMigratedToUnits and
 			// migration_1104_test.go.
 			continue
-		case "scheduled_chat_runs", "scheduled_chat_run_history":
+		case "scheduled_chat_runs", "scheduled_chat_run_history", "session_messages":
+			// session_messages: sessions/0346 (tool-context-budget-
+			// 01TCBUD01 WP01) ADD COLUMNs cached_tokens +
+			// cache_write_tokens — the same digest-only schema side
+			// effect, row count still checked.
+			//
 			// scheduled_chat_run_history: sessions/0345 (dogfood
 			// 2026-10-08 round 2) ADD COLUMNs model + cost_usd — the same
 			// digest-only schema side effect as 0340 below.

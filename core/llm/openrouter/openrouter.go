@@ -1065,6 +1065,12 @@ func (s *chatStream) handleSSEData(raw []byte) {
 			CompletionTokens int      `json:"completion_tokens"`
 			TotalTokens      int      `json:"total_tokens"`
 			Cost             *float64 `json:"cost,omitempty"`
+			// PromptTokensDetails carries the prompt-cache split. Both
+			// counts are part of PromptTokens, not added to it.
+			PromptTokensDetails *struct {
+				CachedTokens     int `json:"cached_tokens"`
+				CacheWriteTokens int `json:"cache_write_tokens"`
+			} `json:"prompt_tokens_details,omitempty"`
 		} `json:"usage"`
 		Error *struct {
 			Message string `json:"message"`
@@ -1169,6 +1175,10 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		s.mu.Lock()
 		s.usage.InputTokens = env.Usage.PromptTokens
 		s.usage.OutputTokens = env.Usage.CompletionTokens
+		if d := env.Usage.PromptTokensDetails; d != nil {
+			s.usage.CachedInputRead = d.CachedTokens
+			s.usage.CachedInputWrite = d.CacheWriteTokens
+		}
 		if env.Usage.Cost != nil && *env.Usage.Cost > 0 {
 			v := *env.Usage.Cost
 			s.providerCostUSD = &v

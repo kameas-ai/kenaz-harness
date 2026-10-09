@@ -52,6 +52,7 @@ import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
+import ContextCompositionPopover from '@/components/chat/ContextCompositionPopover.vue';
 import AdviceChip from '@/components/chat/AdviceChip.vue';
 import AdviceAutoActedBanner from '@/components/chat/AdviceAutoActedBanner.vue';
 import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
@@ -1491,7 +1492,7 @@ function formatSize(bytes: number): string {
 //
 // The nudge banner fires when the session crosses either threshold:
 //   - 30 human turns (counted by countTurns — NOT a row count), OR
-//   - 50,000 cumulative prompt tokens
+//   - 50,000 conversation-history tokens (last request's composition)
 // Both thresholds are configurable via Settings → Display.
 //
 // Per-session dismiss: the user can click "Dismiss for this session" and
@@ -1505,35 +1506,33 @@ function formatSize(bytes: number): string {
 // (model-moves-transcript-01PMCH01 WP04).
 const _nudgeTurnCount = computed(() => countTurns(visibleMessages.value));
 
-// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
-// FR-020): session.lastUsage.promptTokens is a PER-TURN snapshot,
-// overwritten on every session.usage.updated event (see useSession.ts
-// — correct for the context-window meter above, which wants "how full
-// is the model's context right now"). useLongSessionNudge's threshold
-// is documented as CUMULATIVE prompt tokens; against a per-turn value
-// it essentially never crosses the 50,000 default. Sessions_GetUsage
-// returns the real cumulative aggregate — refetch it whenever a turn
-// completes or the session switches.
-const _nudgeCumulativePromptTokens = ref(0);
-async function refreshNudgeCumulativeUsage() {
+// The nudge measures how long the CONVERSATION is: the history part of
+// the last request's composition (Sessions_GetUsage). Prompt tokens —
+// per-turn or cumulative — also count the system prompt and every tool
+// definition, so a one-message session with ~220k tokens of tool schemas
+// would read as "long" on turn 1. Refetched whenever a turn completes or
+// the session switches. A session whose last call predates the
+// composition has no history figure and is judged on turn count alone.
+const _nudgeHistoryTokens = ref(0);
+async function refreshNudgeHistoryTokens() {
   const id = sessionId.value;
   if (!id) {
-    _nudgeCumulativePromptTokens.value = 0;
+    _nudgeHistoryTokens.value = 0;
     return;
   }
   try {
     const usage = await client.sessions.getUsage(id);
-    _nudgeCumulativePromptTokens.value = usage.promptTokens ?? 0;
+    _nudgeHistoryTokens.value = usage.composition?.history ?? 0;
   } catch {
     // Transient RPC failure: keep the last known value rather than
     // flapping the nudge visibility to zero.
   }
 }
-watch(() => session.lastUsage.value, () => { void refreshNudgeCumulativeUsage(); });
+watch(() => session.lastUsage.value, () => { void refreshNudgeHistoryTokens(); });
 
 const longSessionNudge = useLongSessionNudge({
   turnCount: _nudgeTurnCount,
-  promptTokens: _nudgeCumulativePromptTokens,
+  historyTokens: _nudgeHistoryTokens,
 });
 
 // laya-advisors-01LAYA001 WP07: the advisor seam's passive chip.
@@ -1569,7 +1568,7 @@ function onAdviceAutoActedDismiss() {
 // composable, restoring correct per-session behaviour.
 watch(sessionId, () => {
   longSessionNudge.reset();
-  void refreshNudgeCumulativeUsage();
+  void refreshNudgeHistoryTokens();
 }, { immediate: true });
 
 // ── Scroll position (controls-and-readouts-that-tell-the-truth-01PMZ808
@@ -2542,12 +2541,18 @@ async function onShared() {
                Known window (hasContextWindow): bar + pct + used/max label.
                Unknown window (!hasContextWindow): greyed label only — no bar,
                no percentage, no misleading 200k fallback. -->
-          <div
+          <ContextCompositionPopover
+            v-slot="{ open: compositionOpen }"
+            :composition="sessionUsage?.composition ?? null"
+          >
+          <span
             class="flex items-center gap-2"
             data-testid="session-context-meter"
-            :title="hasContextWindow
-              ? `Context use — ${contextNumerator.toLocaleString()} of ${contextDenominator.toLocaleString()} tokens`
-              : 'Context window size unknown for this model'"
+            :title="compositionOpen
+              ? undefined
+              : hasContextWindow
+                ? `Context use — ${contextNumerator.toLocaleString()} of ${contextDenominator.toLocaleString()} tokens`
+                : 'Context window size unknown for this model'"
           >
             <span
               class="uppercase tracking-[0.14em]"
@@ -2556,17 +2561,17 @@ async function onShared() {
               context
             </span>
             <template v-if="hasContextWindow">
-              <div class="h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
-                <div
-                  class="h-full transition-[width] duration-300"
+              <span class="block h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
+                <span
+                  class="block h-full transition-[width] duration-300"
                   :class="{
                     'bg-signal-ok': contextBarTone === 'ok',
                     'bg-signal-warn': contextBarTone === 'warn',
                     'bg-signal-danger': contextBarTone === 'danger',
                   }"
                   :style="{ width: contextWindowPct + '%' }"
-                ></div>
-              </div>
+                ></span>
+              </span>
               <span class="font-mono text-ink-muted tabular-nums">
                 {{ contextWindowPct }}%
               </span>
@@ -2581,7 +2586,8 @@ async function onShared() {
             >
               unknown
             </span>
-          </div>
+          </span>
+          </ContextCompositionPopover>
         </div>
         <!-- Long-session nudge banner (v0.5.6 memory-trust-signals).
              Appears once per session when message/token thresholds are crossed.

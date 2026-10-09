@@ -632,8 +632,9 @@ func init() {
 		"LongSessionNudgeTokens",
 		"controls-and-readouts-that-tell-the-truth-01PMZ808 WP13/UNIT-8: "+
 			"EffectiveLongSessionNudgeTokens() read by the long-session "+
-			"nudge against cumulative usage (mission-branch commit "+
-			"12906668).",
+			"nudge against the last request's history tokens "+
+			"(SessionUsage.composition.history; tool-context-budget-"+
+			"01TCBUD01 WP01).",
 	)
 	knobcoverage.Register[settings.Settings](
 		"ContextWindowOverrides",

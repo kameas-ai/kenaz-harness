@@ -985,8 +985,10 @@ func (s *stream) handleSSEData(_ string, raw []byte) {
 		if env.Message != nil {
 			var ms struct {
 				Usage *struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
+					InputTokens        int `json:"input_tokens"`
+					OutputTokens       int `json:"output_tokens"`
+					CacheCreationInput int `json:"cache_creation_input_tokens"`
+					CacheReadInput     int `json:"cache_read_input_tokens"`
 				} `json:"usage"`
 			}
 			if err := json.Unmarshal(env.Message, &ms); err == nil && ms.Usage != nil {
@@ -995,6 +997,10 @@ func (s *stream) handleSSEData(_ string, raw []byte) {
 				if s.usage.OutputTokens == 0 {
 					s.usage.OutputTokens = ms.Usage.OutputTokens
 				}
+				// The cache split is reported here; message_delta may
+				// repeat it, and a non-zero value there wins.
+				s.usage.CachedInputRead = ms.Usage.CacheReadInput
+				s.usage.CachedInputWrite = ms.Usage.CacheCreationInput
 				s.mu.Unlock()
 			}
 		}

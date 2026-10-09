@@ -338,6 +338,29 @@ type SessionUsage struct {
 	// PricingDataDate is the last_updated date of the pricing table
 	// ("YYYY-MM-DD") so the UI tooltip can surface data age.
 	PricingDataDate string `json:"pricingDataDate"`
+	// CachedTokens is the sum of provider-reported prompt-cache reads
+	// across the session's assistant rows (session_messages.cached_tokens).
+	CachedTokens int `json:"cachedTokens"`
+	// Composition is the most recent model call's prompt by part, from
+	// the session's last-usage snapshot. nil until a measured call has
+	// completed.
+	Composition *UsageComposition `json:"composition,omitempty"`
+}
+
+// UsageComposition is the wire mirror of session.UsageComposition: one
+// model call's prompt by part, in tokens. Every part but Cached is the
+// harness estimate (ceil(bytes / 3.5)); Cached is provider-reported.
+type UsageComposition struct {
+	System      int `json:"system"`
+	Tools       int `json:"tools"`
+	History     int `json:"history"`
+	Attachments int `json:"attachments"`
+	Memory      int `json:"memory"`
+	Cached      int `json:"cached"`
+	// ToolsFull is the number of tool definitions the call carried.
+	ToolsFull int `json:"toolsFull"`
+	// ToolsSummary is the number of tools listed only by summary.
+	ToolsSummary int `json:"toolsSummary"`
 }
 
 // SessionsAPI is the view-scoped accessor for session CRUD + streams.

@@ -7797,6 +7797,25 @@ func usageCost(resp corellm.Response) (*float64, string) {
 	return nil, "unknown"
 }
 
+// usageComposition maps a measured request composition onto the
+// persisted last-usage snapshot; nil stays nil (the call was not
+// measured).
+func usageComposition(c *corellm.PromptComposition) *session.UsageComposition {
+	if c == nil {
+		return nil
+	}
+	return &session.UsageComposition{
+		System:       c.System,
+		Tools:        c.Tools,
+		History:      c.History,
+		Attachments:  c.Attachments,
+		Memory:       c.Memory,
+		Cached:       c.Cached,
+		ToolsFull:    c.ToolsFull,
+		ToolsSummary: c.ToolsSummary,
+	}
+}
+
 // buildChatRunner constructs the *chat.ChatRunner that replaces
 // core/toolloop as the chassis chat path. Returns nil when the graph
 // manager is unavailable (test path or boot failure) so the LLM view
@@ -8125,6 +8144,8 @@ func buildChatRunner(
 					ModelID:          modelID,
 					PromptTokens:     billed.Usage.InputTokens,
 					CompletionTokens: billed.Usage.OutputTokens,
+					CachedTokens:     billed.Usage.CachedInputRead,
+					CacheWriteTokens: billed.Usage.CachedInputWrite,
 					CostUSD:          billedCost,
 					CostSource:       billedSource,
 				}
@@ -8155,6 +8176,7 @@ func buildChatRunner(
 				TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
 				CostUSD:          costVal,
 				CostSource:       source,
+				Composition:      usageComposition(resp.Composition),
 			}
 			// Persist the per-session last_usage_json snapshot so the frontend
 			// context-window indicator refreshes without a full GetUsage RPC.

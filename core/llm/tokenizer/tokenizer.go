@@ -72,6 +72,14 @@ func CountRequestTokens(systemPrompt string, messages []Message) int {
 	return total
 }
 
+// CountText returns the per-rune estimate for one piece of text with no
+// message framing — the same rule CountRequestTokens applies to each
+// message's content. For text that is not a chat message (a tool
+// definition, a prompt layer measured on its own).
+func CountText(s string) int {
+	return countContent(s)
+}
+
 // countContent returns the rune-derived token estimate for a single
 // content string. Empty strings cost zero tokens (the caller adds
 // framing separately).
