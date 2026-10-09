@@ -520,6 +520,18 @@ jobs:
         # documents today's single instance.
         run: bash scripts/ci/check-builtin-tool-registration.sh
 
+      - name: tool-exposure gate (FR-E1)
+        # tool-context-budget-01TCBUD01 WP08. Every non-test writer of
+        # llm.GenerationRequest.Tools must be the exposure-partition path
+        # (hot / pinned / activated via chat.exposureTurn.selectTools) or
+        # a dated gap in scripts/ci/allowlists/tool-exposure-writers.txt;
+        # then the FR-E1 seed test and the production-wiring first-turn
+        # test run. Catches the pre-mission shape: the whole discovered
+        # catalog (~220k tokens of schemas) written straight into Tools.
+        env:
+          CGO_ENABLED: "1"
+        run: bash scripts/ci/check-tool-exposure-gate.sh
+
       - name: hook-event-fire-sites guard (I17, G-2)
         # trust-surfaces-that-fire-01PMZ202 WP08 (UNIT-7). Catches the
         # event-picker-that-lies defect: before this WP, the hook editor
