@@ -2118,6 +2118,14 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		})
 	}
 
+	// Request-too-large verdict for a context-overflow rejection: read
+	// before the switch because classifying it needs the session's
+	// history, and only the overflow arm consumes it.
+	var tooLarge *ErrRequestTooLarge
+	if err != nil && isContextOverflowError(err) {
+		tooLarge = r.classifyRequestTooLarge(context.WithoutCancel(ctx), sub.sessionID, sub.profileID, sub.modelOverride, err)
+	}
+
 	switch {
 	case err == nil:
 		reason = "completed"
@@ -2155,6 +2163,22 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		reason = "backend-error"
 		message = compaction.ErrSessionFull.Error()
 		errorKind = StreamClosedErrorKindSessionFull
+	case err != nil && isContextOverflowError(err) && tooLarge != nil:
+		// The provider rejected the request for its size, but the
+		// session's history is empty or a small fraction of the window:
+		// the overflow is the request the harness built (tool schemas +
+		// system prompt), not the conversation. Compaction cannot help —
+		// there is nothing to summarise — so skip overflow recovery and
+		// say what is actually wrong instead of ErrSessionFull's "your
+		// conversation is full" (dogfood 2026-10-08 round 2).
+		reason = "backend-error"
+		message = tooLarge.Error()
+		errorKind = StreamClosedErrorKindRequestTooLarge
+		failure = requestTooLargeFailure(sub.providerKind, tooLarge)
+		log.Warn("chat.run.request_too_large",
+			"sub_id", sub.id, "session_id", sub.sessionID,
+			"model", tooLarge.Model, "window", tooLarge.Window,
+			"history_tokens", tooLarge.HistoryTokens)
 	case err != nil && isContextOverflowError(err):
 		// Reactive context-overflow recovery (FR-005 / agent-loop-
 		// robustness-parity WP05), budgeted by
