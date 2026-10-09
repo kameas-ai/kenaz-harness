@@ -140,6 +140,22 @@ export interface UsageComposition {
    * and fakes type-check; absent reads as 0.
    */
   toolsSummary?: number;
+  /** Tool-schema budget the call was fitted to; absent when none applied. */
+  schemaBudget?: number;
+  /** Loaded tools left out of the call to fit the schema budget. */
+  toolsEvicted?: number;
+  /**
+   * Tokens of the overage pinned tools account for; > 0 is
+   * the composer's "Pinned tools exceed the schema budget by N tokens"
+   * warning. Absent reads as 0.
+   */
+  pinnedOverBudgetBy?: number;
+  /**
+   * Tokens by which the always-sent core tools alone exceed the schema
+   * budget; > 0 means this model's window is too small for the core
+   * tools. Absent reads as 0.
+   */
+  hotOverBudgetBy?: number;
 }
 
 export interface SessionUsage {

@@ -70,6 +70,8 @@ func TestGenerate_LogsRequestCompositionWithEveryField(t *testing.T) {
 		"cache_write_tokens":     24000,
 		"budget":                 0,
 		"evicted":                0,
+		"pinned_over_budget_by":  0,
+		"hot_over_budget_by":     0,
 	}
 	for k, v := range want {
 		got, ok := rec[k].(float64)

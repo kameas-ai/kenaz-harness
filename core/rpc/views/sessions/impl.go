@@ -1029,6 +1029,11 @@ func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, err
 				Cached:       c.Cached,
 				ToolsFull:    c.ToolsFull,
 				ToolsSummary: c.ToolsSummary,
+
+				SchemaBudget:       c.SchemaBudget,
+				ToolsEvicted:       c.ToolsEvicted,
+				PinnedOverBudgetBy: c.PinnedOverBudgetBy,
+				HotOverBudgetBy:    c.HotOverBudgetBy,
 			}
 		}
 	}

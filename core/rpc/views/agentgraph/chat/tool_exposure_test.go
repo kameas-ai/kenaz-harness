@@ -343,7 +343,7 @@ func TestRequestBuilder_NeverSendsSummaryToolUnlessActivated(t *testing.T) {
 func TestRequestBuilder_FallbackListsDefaultsWithNote(t *testing.T) {
 	specs := exposureCatalog()
 	src := brokenSettingsExposure(t, specs)
-	sel := newExposureTurn(context.Background(), src, "s1", specs).selectTools(context.Background())
+	sel := newExposureTurn(context.Background(), src, "s1", specs).selectTools(context.Background(), 0)
 	var names []string
 	for _, tl := range sel.tools {
 		names = append(names, tl.Name)
@@ -442,7 +442,7 @@ func TestAssembleRequestTools_SegmentOrderAndStablePrefix(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sel := newExposureTurn(ctx, svc, "s1", specs).selectTools(ctx)
+	sel := newExposureTurn(ctx, svc, "s1", specs).selectTools(ctx, 0)
 	var got []string
 	for _, tl := range sel.tools {
 		got = append(got, tl.Name)

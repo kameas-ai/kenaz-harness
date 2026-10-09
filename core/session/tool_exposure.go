@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
@@ -127,6 +128,43 @@ func (m *Manager) SetToolActivations(ctx context.Context, id string, as []toolex
 		return err
 	}
 	return m.store.SetToolActivations(ctx, id, as)
+}
+
+// InheritToolExposure copies the parent session's tool-exposure state
+// onto a newly forked child (spec Q-F): the session override layer and
+// the activated set.
+//
+// The override is a consent surface — a tool the user turned off for the
+// parent must stay off in the child — so a failed override copy fails
+// the call. A failed activations copy only costs the child some loaded
+// schemas: it is logged and the call succeeds.
+//
+// The child counts its own turns from zero, so each copied activation is
+// stamped LastUsedTurn 0: a non-sticky inherited activation gets a full
+// TTL in the child. Sticky stays sticky.
+func (m *Manager) InheritToolExposure(ctx context.Context, parentID, childID string) error {
+	st, err := m.store.ToolExposureState(ctx, parentID)
+	if err != nil {
+		return err
+	}
+	if !st.Override.IsZero() {
+		if err := m.SetToolExposure(ctx, childID, st.Override.Clone()); err != nil {
+			return err
+		}
+	}
+	if len(st.Activations) == 0 {
+		return nil
+	}
+	out := make([]toolexposure.Activation, len(st.Activations))
+	for i, a := range st.Activations {
+		a.LastUsedTurn = 0
+		out[i] = a
+	}
+	if err := m.SetToolActivations(ctx, childID, out); err != nil {
+		logging.L().Warn("session.fork.inherit_activations_failed",
+			"parent_session_id", parentID, "child_session_id", childID, "err", err.Error())
+	}
+	return nil
 }
 
 // SessionToolExposure returns what the exposure resolver needs from the

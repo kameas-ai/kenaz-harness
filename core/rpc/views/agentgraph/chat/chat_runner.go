@@ -317,6 +317,10 @@ type Config struct {
 	// discovered catalog on every call. Production wiring is
 	// *loadtools.Service.
 	ToolExposure ToolExposure
+	// ModelWindow returns a model's context window, which caps the tool
+	// schema budget at 15 % of it (spec FR-B1). nil (or 0) is an unknown
+	// window: the budget setting applies uncapped.
+	ModelWindow ModelWindowFunc
 	// Attachments resolves the session's system-kind attachments onto
 	// each LLMProviderAdapter (first-run-onboarding-01PMOB01 WP02). nil
 	// disables the layer — pre-existing behaviour for every session
@@ -1253,6 +1257,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
 		withToolExposure(exposure).
+		withModelWindow(r.cfg.ModelWindow).
 		WithSessionID(sessionID).
 		WithAttachments(r.cfg.Attachments).
 		withPendingContext(r.pendingContext).

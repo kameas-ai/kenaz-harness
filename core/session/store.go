@@ -608,6 +608,19 @@ func (s *memStore) RecordTurnRunOutcome(_ context.Context, sessionID, runID stri
 	return nil
 }
 
+// CountTurnRuns counts a session's recorded turn runs.
+func (s *memStore) CountTurnRuns(_ context.Context, sessionID string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, tr := range s.turnRuns {
+		if tr.SessionID == sessionID {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (s *memStore) ListTurnRuns(_ context.Context, sessionID string) ([]TurnRun, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1396,6 +1409,14 @@ func (s *sqlStore) RecordTurnRun(ctx context.Context, tr TurnRun) error {
         `, tr.RunID, tr.SessionID, tr.TurnSpanID, tr.GraphID, tr.SpecDigest, tr.CreatedAt.UnixNano())
 		return err
 	})
+}
+
+// CountTurnRuns counts a session's recorded turn runs.
+func (s *sqlStore) CountTurnRuns(ctx context.Context, sessionID string) (int, error) {
+	var n int
+	err := s.db.Reader().QueryRow(ctx,
+		"SELECT COUNT(*) FROM session_turn_runs WHERE session_id = ?", sessionID).Scan(&n)
+	return n, err
 }
 
 // ListTurnRuns returns a session's recorded turn -> run mappings, oldest

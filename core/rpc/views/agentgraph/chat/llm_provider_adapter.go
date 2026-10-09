@@ -81,6 +81,10 @@ type LLMProviderAdapter struct {
 	// pinned and activated tools in full; the rest summarised in
 	// kenaz__load_tools' description). nil sends every tool.
 	exposure *exposureTurn
+	// modelWindow returns a (provider kind, model id) pair's context
+	// window in tokens, 0 when unknown; the schema budget is capped at
+	// 15 % of it. nil leaves every window unknown.
+	modelWindow ModelWindowFunc
 	// lastRespMu protects lastResp.
 	lastRespMu sync.Mutex
 	// lastResp stores the most recent llm.Response produced by Generate —
@@ -273,6 +277,32 @@ func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string
 func (a *LLMProviderAdapter) withToolExposure(t *exposureTurn) *LLMProviderAdapter {
 	a.exposure = t
 	return a
+}
+
+// withModelWindow attaches the context-window lookup the schema budget
+// is capped against.
+func (a *LLMProviderAdapter) withModelWindow(f ModelWindowFunc) *LLMProviderAdapter {
+	a.modelWindow = f
+	return a
+}
+
+// windowFor returns the context window of the model this call is
+// dispatched to — model, or the profile's dispatch default when empty
+// (llm.ProviderProfile.DispatchModel) — on this adapter's provider; 0
+// when unknown.
+func (a *LLMProviderAdapter) windowFor(model string) int {
+	if a.modelWindow == nil || a.reg == nil || a.profileID == "" {
+		return 0
+	}
+	prof, err := a.reg.Profile(a.profileID)
+	if err != nil {
+		return 0
+	}
+	dispatched := prof.DispatchModel(model)
+	if prof.Kind == "" || dispatched == "" {
+		return 0
+	}
+	return a.modelWindow(prof.Kind, dispatched)
 }
 
 // WithMoveJournal attaches the turn's move journal
@@ -722,7 +752,7 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	sendTools := a.tools
 	var sel toolSelection
 	if a.exposure != nil {
-		sel = a.exposure.selectTools(ctx)
+		sel = a.exposure.selectTools(ctx, a.windowFor(model))
 		sendTools = sel.tools
 	}
 	gen := corellm.GenerationRequest{
@@ -798,6 +828,10 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	// response for the usage hook.
 	comp := measureComposition(gen, attachmentsBlock)
 	comp.ToolsSummary = sel.summary
+	comp.Budget = sel.budget
+	comp.Evicted = sel.evicted
+	comp.PinnedOverBudgetBy = sel.pinnedOverBy
+	comp.HotOverBudgetBy = sel.hotOverBy
 	var (
 		compUsage corellm.Usage
 		compErr   error
@@ -1160,8 +1194,12 @@ func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) 
 // summary tools this turn has activated because the model called them by
 // name before loading them.
 //
-// budget and evicted are 0: no schema budget or eviction is applied to
-// the request yet (WP04). FR-H3 — the estimated parts reconciling with
+// budget is the call's effective schema budget (0 when no exposure view
+// applied one); evicted is how many loaded tools were left out to fit
+// it; pinned_over_budget_by is how much of the overage pinned tools
+// account for, and hot_over_budget_by how far the always-sent core tools
+// alone exceed it (the window is too small for them).
+// FR-H3 — the estimated parts reconciling with
 // prompt_tokens_total within 10 % — is not asserted anywhere yet
 // (2026-10-09; owner alec; deferred to WP08's recorded-frame test).
 func logComposition(sessionID, providerKind string, comp corellm.PromptComposition, systemChars, toolsStable, autoActivated int, usage corellm.Usage, err error) {
@@ -1186,7 +1224,9 @@ func logComposition(sessionID, providerKind string, comp corellm.PromptCompositi
 		"cache_write_tokens", usage.CachedInputWrite,
 		"tools_stable", toolsStable,
 		"auto_activated", autoActivated,
-		"budget", 0,
-		"evicted", 0,
+		"budget", comp.Budget,
+		"evicted", comp.Evicted,
+		"pinned_over_budget_by", comp.PinnedOverBudgetBy,
+		"hot_over_budget_by", comp.HotOverBudgetBy,
 	)
 }

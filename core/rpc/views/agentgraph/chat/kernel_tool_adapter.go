@@ -407,6 +407,7 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 			return res, nil
 		}
 		ctx = loadtools.WithTurnView(ctx, a.exposure.willSend)
+		ctx = loadtools.WithTurnBudget(ctx, a.exposure.fitLoaded)
 	}
 	if a.perms != nil {
 		v, err := a.perms.Resolve(ctx, a.sessionID, server, tool)
@@ -462,6 +463,12 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 				IsError: true,
 			}, nil
 		}
+	}
+
+	// Past every gate: the call runs, so it counts as a use of the tool
+	// (a denied or declined call does not).
+	if a.exposure != nil {
+		a.exposure.markCalled(ctx, server+"__"+tool)
 	}
 
 	argsJSON, err := json.Marshal(call.Args)

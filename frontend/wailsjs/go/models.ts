@@ -7424,6 +7424,10 @@ export namespace sessions {
 	    cached: number;
 	    toolsFull: number;
 	    toolsSummary: number;
+	    schemaBudget?: number;
+	    toolsEvicted?: number;
+	    pinnedOverBudgetBy?: number;
+	    hotOverBudgetBy?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new UsageComposition(source);
@@ -7439,6 +7443,10 @@ export namespace sessions {
 	        this.cached = source["cached"];
 	        this.toolsFull = source["toolsFull"];
 	        this.toolsSummary = source["toolsSummary"];
+	        this.schemaBudget = source["schemaBudget"];
+	        this.toolsEvicted = source["toolsEvicted"];
+	        this.pinnedOverBudgetBy = source["pinnedOverBudgetBy"];
+	        this.hotOverBudgetBy = source["hotOverBudgetBy"];
 	    }
 	}
 	export class SessionToolExposure {
