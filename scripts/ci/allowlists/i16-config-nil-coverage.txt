@@ -253,6 +253,7 @@ github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp.WithHealthPool
 github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp.WithRegistry
 # at core/rpc/views/mcp/impl.go:83: github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp.WithRegistry is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+# 2026-10-08: blocker — no MCP-supervisor→views/mcp.Registry adapter exists, so neither mcp.NewAPI site (core/rpc/api.go ~l.2043, ~l.2078) passes one and MCP_ListServers is always empty; owner — alec, next MCP wiring mission (finish, not delete: only surface for per-server tool policy). docs/unwired-ledger.md "views/mcp.WithRegistry has no non-test caller".
 
 github.com/kameas-ai/kenaz-harness/core/rpc/views/memory.Config.Journal
 # at core/rpc/views/memory/impl.go:126: Config.Journal (interface) is never set to a non-nil value in any non-test composite literal under core/
