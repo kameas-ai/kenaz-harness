@@ -387,6 +387,13 @@ func mapSiteError(resp *http.Response) error {
 		msg = string(body)
 	}
 
+	// 403 org_paused (kenaz-fleet #206): a reversible staff hold, not a
+	// tier answer — never surfaced as "not in your tier". Deploy uses
+	// httpClient directly, so the Client.do choke point does not see it.
+	if pe := ParseOrgPaused(resp.StatusCode, body); pe != nil {
+		return pe
+	}
+
 	switch resp.StatusCode {
 	case http.StatusForbidden:
 		// 403 may come with code="capability_not_in_tier" or without.

@@ -156,6 +156,15 @@ func (s *UnitSyncer) canSync() error {
 	return cur.Require(CapSharedTeamGraph)
 }
 
+// orgPausedNow reports a staff pause hold from the capability snapshot or
+// the client's last org_paused refusal.
+func (s *UnitSyncer) orgPausedNow() bool {
+	if s.caps != nil && s.caps.Current().Paused {
+		return true
+	}
+	return s.client != nil && s.client.OrgPause().Paused
+}
+
 // ── Push-up ─────────────────────────────────────────────────────────────────
 
 // PushDirty pushes every dirty team and org unit to the fleet context graph,
@@ -739,6 +748,14 @@ func (s *UnitSyncer) reportPoll(err error, consecutive int, nextRetry time.Time)
 	s.mu.RLock()
 	lanes := s.lanes
 	s.mu.RUnlock()
+	if IsOrgPaused(err) || (err == nil && s.orgPausedNow()) {
+		// A staff pause hold (kenaz-fleet #206): not a server error and not
+		// "ok" — the lane is off with the honest reason. Transient: the
+		// loop keeps its cadence and resumes on its own when the pause
+		// lifts (canSync passes again).
+		lanes.RecordOff(LaneUnitPoll, ReasonOrgPaused)
+		return
+	}
 	if err == nil {
 		lanes.RecordSuccess(LaneUnitPoll)
 		return

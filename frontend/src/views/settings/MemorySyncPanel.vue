@@ -12,6 +12,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MemorySyncStatus } from '@/lib/types';
+import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
 
 const client = useHarnessClient();
 
@@ -35,7 +36,13 @@ async function refresh() {
 
 onMounted(refresh);
 
-const visible = computed(() => !!status.value?.wired && !!status.value?.entitled);
+// A staff org pause (kenaz-fleet PR 206) withholds memory_sync, but the panel
+// stays visible: it shows the paused state and keeps the data-rights
+// actions (turn off, delete from Fleet) — forget-all stays open while paused.
+const paused = computed(() => !!status.value?.orgPaused);
+const visible = computed(
+  () => !!status.value?.wired && (!!status.value?.entitled || paused.value),
+);
 const chosenScopes = computed(() => {
   const out: string[] = [];
   if (scopeLongTerm.value) out.push('long_term');
@@ -71,6 +78,7 @@ const laneLine = computed<string>(() => {
       if (l.reason === 'rate_limited') return 'Fleet asked us to slow down; retrying shortly.';
       return `Not syncing right now (${l.reason ?? 'error'}); retrying automatically.`;
     case 'off':
+      if (l.reason === 'org_paused') return ''; // the paused banner speaks for it
       if (l.reason === 'signed_out') return 'Sign in to Fleet to sync.';
       if (l.reason === 'disabled_on_fleet') return 'Turned off from another device.';
       return '';
@@ -126,8 +134,11 @@ async function confirmDisable() {
       Learned memory across devices
     </h2>
 
-    <!-- Off: disclosure + scope choice + consent. -->
-    <div v-if="!status.enabled" class="space-y-3" data-testid="memory-sync-off">
+    <OrgPausedBanner v-if="paused" force :category="status.pausedCategory" />
+
+    <!-- Off: disclosure + scope choice + consent. Turning sync ON is a paid
+         action, so it is not offered while paused. -->
+    <div v-if="!status.enabled && !paused" class="space-y-3" data-testid="memory-sync-off">
       <div class="text-[12px] text-ink-muted space-y-1.5" data-testid="memory-sync-disclosure">
         <p>
           When on, the memories this harness has learned in the scopes you pick are copied to
@@ -172,12 +183,13 @@ async function confirmDisable() {
       </button>
     </div>
 
-    <!-- On: readout + disable. -->
-    <div v-else class="space-y-2 text-[12px]" data-testid="memory-sync-on">
+    <!-- On: readout + disable (the disable / delete-from-Fleet path stays
+         enabled while paused). -->
+    <div v-else-if="status.enabled" class="space-y-2 text-[12px]" data-testid="memory-sync-on">
       <p data-testid="memory-sync-scopes-on">
         Syncing: {{ status.scopes.map(scopeLabel).join(', ') || '—' }}
       </p>
-      <p class="text-ink-muted" data-testid="memory-sync-usage">
+      <p v-if="!paused" class="text-ink-muted" data-testid="memory-sync-usage">
         On Fleet: {{ status.liveRecords }} of {{ status.maxRecords }} memories,
         {{ formatBytes(status.liveBytes) }} of {{ formatBytes(status.maxBytes) }}.
         <span v-if="status.pendingCount > 0">{{ status.pendingCount }} waiting to sync.</span>

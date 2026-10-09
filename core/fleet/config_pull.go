@@ -105,6 +105,14 @@ type ConfigPoller struct {
 	checksum      string // SHA-256 hex of last-seen bundle JSON (for 304)
 	source        string
 	keyUnknown    bool // last rejection was ErrSigningKeyUnknown
+	// orgPaused: the last fetch was refused 403 org_paused (kenaz-fleet
+	// #206) — transient; the last applied bundle stays in force, and
+	// ResumeAfterOrgUnpause clears the "org_paused" lastError it set. The
+	// session snapshot's paused flag is what surfaces it.
+	orgPaused bool
+	// wake asks the loop for an immediate round with a reset backoff
+	// (buffered 1; the OnOrgUnpaused fan-out never blocks).
+	wake chan struct{}
 
 	// buildVersion is this binary's version (SetBuildVersion). With
 	// reapplyID it implements review F1's re-apply rule: when the build
@@ -160,6 +168,7 @@ func NewConfigPoller(client *Client, dataDir string, applier ConfigApplier) *Con
 		dataDir:  dataDir,
 		interval: configPollInterval,
 		backoff:  &configBackoffState{},
+		wake:     make(chan struct{}, 1),
 		applier:  applier,
 		source:   "default-deny",
 	}
@@ -255,6 +264,8 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 			wait := p.backoff.next()
 			select {
 			case <-time.After(wait):
+			case <-p.wake:
+				p.backoff.reset()
 			case <-innerCtx.Done():
 				return
 			}
@@ -268,6 +279,17 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 			select {
 			case <-innerCtx.Done():
 				return
+			case <-p.wake:
+				// The org pause lifted: the backoff it built up is moot.
+				p.backoff.reset()
+				if err := p.round(innerCtx); err != nil {
+					if innerCtx.Err() != nil {
+						return
+					}
+					ticker.Reset(p.backoff.next())
+				} else {
+					ticker.Reset(p.interval)
+				}
 			case <-ticker.C:
 				if err := p.round(innerCtx); err != nil {
 					if innerCtx.Err() != nil {
@@ -342,6 +364,16 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		if errors.Is(err, ErrNotSignedIn) {
 			// Not signed in — skip silently; don't backoff.
 			return nil
+		}
+		if IsOrgPaused(err) {
+			// A staff pause hold: transient (normal backoff); the last
+			// applied bundle stays in force; keyUnknown is untouched (no
+			// bundle body was judged).
+			p.mu.Lock()
+			p.lastError = ReasonOrgPaused
+			p.orgPaused = true
+			p.mu.Unlock()
+			return err
 		}
 		p.setError(fmt.Sprintf("fetch config: %v", err))
 		return err
@@ -446,6 +478,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		p.lastAppliedAt = time.Now()
 		p.checksum = newChecksum
 		p.lastError = ""
+		p.orgPaused = false
 		p.reapplyID = 0
 	} else {
 		// Surface the error set but leave ID + checksum untouched.
@@ -495,7 +528,27 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 func (p *ConfigPoller) setError(msg string) {
 	p.mu.Lock()
 	p.lastError = msg
+	p.orgPaused = false
 	p.mu.Unlock()
+}
+
+// ResumeAfterOrgUnpause is the OnOrgUnpaused hook: clears the org_paused
+// status and asks the loop for an immediate round with a reset backoff.
+func (p *ConfigPoller) ResumeAfterOrgUnpause() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	was := p.orgPaused
+	p.orgPaused = false
+	if was && p.lastError == ReasonOrgPaused {
+		p.lastError = ""
+	}
+	p.mu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
 }
 
 // setRejection records a hard rejection of a served bundle body for a reason
@@ -504,6 +557,7 @@ func (p *ConfigPoller) setError(msg string) {
 func (p *ConfigPoller) setRejection(msg string) {
 	p.mu.Lock()
 	p.lastError = msg
+	p.orgPaused = false
 	p.keyUnknown = false
 	p.mu.Unlock()
 }
@@ -511,6 +565,7 @@ func (p *ConfigPoller) setRejection(msg string) {
 func (p *ConfigPoller) clearError() {
 	p.mu.Lock()
 	p.lastError = ""
+	p.orgPaused = false
 	p.keyUnknown = false
 	p.mu.Unlock()
 }

@@ -283,6 +283,14 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 				case "node_removed":
 					c.keyReg.set(KeyRegistration{Message: keyRegNodeGoneCopy})
 					return Identity{}, ErrNodeRemoved
+				case CodeOrgPaused:
+					// Defensive: fleet keeps enroll open while paused
+					// (#206), but if a gate ever covers it this is a
+					// transient hold, never "signed out" / unprovisioned.
+					if pe := ParseOrgPaused(status, respBody); pe != nil {
+						c.observeOrgPaused(pe.PausedCategory)
+						return Identity{}, pe
+					}
 				}
 			}
 		}

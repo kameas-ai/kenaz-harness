@@ -72,6 +72,10 @@ type Client struct {
 	// registration (enroll / PUT keys) for the session snapshot
 	// (device-keys-handoff-01DEVKH01 WP02). Mutex-guarded inside.
 	keyReg keyRegState
+
+	// orgPause is the staff "pause paid features" state this client has
+	// observed (org_paused.go). Mutex-guarded inside.
+	orgPause orgPauseState
 }
 
 // SetSessionBroker wires the session sink into the client. When set, a

@@ -23,6 +23,7 @@
 
 import { computed, effectScope, ref, type EffectScope } from 'vue';
 import { useEventStream } from './useEventStream';
+import { ORG_PAUSED_REASON } from './orgPausedCopy';
 import type {
   FleetIdentity,
   FleetSessionState,
@@ -332,6 +333,8 @@ export function describeFleetReason(reason: string | undefined): string {
       return 'Update your sign-in — telemetry export is off';
     case 'node_removed':
       return 'This device was removed by an org admin';
+    case ORG_PAUSED_REASON:
+      return "Paused by your organization's account status";
     default:
       return reason ? `Fleet: ${reason}` : '';
   }
@@ -354,9 +357,23 @@ export function formatRoles(roles: string[] | undefined | null): string {
     .join(', ');
 }
 
+/**
+ * fleetOrgPaused — a Kameas-staff "pause paid features" hold is on the org
+ * (kenaz-fleet PR 206). Not a tier answer and not a sign-out: surfaces render
+ * OrgPausedBanner instead of their tier-gated / upsell copy.
+ */
+export const fleetOrgPaused = computed<boolean>(() => _session.value?.paused === true);
+
+/** The paused category ('' when not paused). */
+export const fleetPausedCategory = computed<string>(() =>
+  fleetOrgPaused.value ? (_session.value?.pausedCategory ?? 'other') : '',
+);
+
 /** Short copy for a sync lane's reason code (FR-6). */
 export function describeSyncReason(reason: string | undefined): string {
   switch (reason) {
+    case ORG_PAUSED_REASON:
+      return "paused by your organization's account status";
     case 'remote_context_missing':
       return 'remote context missing on fleet';
     case 'fleet_api_not_routed':
@@ -408,9 +425,14 @@ export interface DegradedLane {
 export const fleetDegradedLanes = computed<DegradedLane[]>(() => {
   const sync = _session.value?.sync;
   if (!sync || !fleetSignedIn.value) return [];
+  const paused = fleetOrgPaused.value;
   const out: DegradedLane[] = [];
   const add = (key: DegradedLane['key'], label: string) => {
     const lane = sync[key];
+    // While the org is paused the banner speaks for every lane the hold
+    // stopped: no per-lane failure, and never the tier copy for an
+    // entitlement the pause (not the plan) withheld.
+    if (paused && (lane?.reason === ORG_PAUSED_REASON || lane?.reason === 'not_entitled')) return;
     // An Off lane is normally deliberate (consent, entitlement) and hidden —
     // except when the backend latched the fleet route as unsupported: sync
     // was asked for and is not happening, so it is shown like a failure.
@@ -503,6 +525,8 @@ export function useFleetSession(client?: FleetSessionSource) {
     initials: fleetInitials,
     capability: fleetSessionCapability,
     degradedLanes: fleetDegradedLanes,
+    orgPaused: fleetOrgPaused,
+    pausedCategory: fleetPausedCategory,
     refresh: refreshFleetSession,
     retry: retryFleetSession,
     signIn: signInFleet,

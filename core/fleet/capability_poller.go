@@ -134,10 +134,18 @@ func (p *CapabilityPoller) setCurrent(c Capabilities) {
 	prev := p.current
 	p.current = c
 	var fns []func(Capabilities)
-	if enabledSetChanged(prev, c) && len(p.listeners) > 0 {
+	changed := enabledSetChanged(prev, c) || prev.Paused != c.Paused || prev.PausedCategory != c.PausedCategory
+	if changed && len(p.listeners) > 0 {
 		fns = append(fns, p.listeners...)
 	}
 	p.mu.Unlock()
+	// The capability poll is the authoritative pause signal (org_paused.go):
+	// a fresh or cached snapshot reports it to the client, whose true→false
+	// transition fans out OnOrgUnpaused. A default-deny snapshot (signed
+	// out, endpoint absent) says nothing about the pause and is ignored.
+	if c.Source == "fleet" || c.Source == "cache" {
+		p.client.ObserveCapabilitiesPause(c.Paused, c.PausedCategory)
+	}
 	if len(fns) == 0 {
 		return
 	}
@@ -294,6 +302,9 @@ type capabilitiesWireResponse struct {
 	Tier         string          `json:"tier"`
 	Capabilities map[string]bool `json:"capabilities"`
 	FetchedAt    time.Time       `json:"fetched_at"`
+	// Paused / PausedCategory: the staff pause hold (kenaz-fleet #206).
+	Paused         bool   `json:"paused"`
+	PausedCategory string `json:"paused_category"`
 }
 
 // Refresh calls GET /api/v1/me/capabilities on the fleet server via
@@ -374,6 +385,10 @@ func (p *CapabilityPoller) fetch(ctx context.Context) (Capabilities, error) {
 		Enabled:   enabled,
 		FetchedAt: wire.FetchedAt,
 		Source:    "fleet",
+		Paused:    wire.Paused,
+	}
+	if wire.Paused {
+		caps.PausedCategory = NormalizePausedCategory(wire.PausedCategory)
 	}
 	if caps.FetchedAt.IsZero() {
 		caps.FetchedAt = time.Now()

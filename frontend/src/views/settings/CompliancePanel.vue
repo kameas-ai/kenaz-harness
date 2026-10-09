@@ -17,6 +17,8 @@
 import { ref, computed, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { ComplianceStatus } from '@/lib/types';
+import { fleetOrgPaused } from '@/lib/fleetSession';
+import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
 
 const client = useHarnessClient();
 
@@ -139,16 +141,22 @@ async function setRetention(days: number) {
       <h2 class="text-sm font-semibold text-ink mb-1">Audit Archival</h2>
       <p class="text-xs text-ink-muted">
         Audit events are signed with your device key and archived to an
-        immutable immudb ledger. Requires the
-        <span class="font-medium">Team+</span> subscription tier.
+        immutable immudb ledger.
+        <template v-if="!fleetOrgPaused">
+          Requires the <span class="font-medium">Team+</span> subscription tier.
+        </template>
         No conversation content, API keys, or credentials are included in
         audit records.
       </p>
     </div>
 
+    <!-- A staff org pause (kenaz-fleet PR 206) withholds audit_log_immudb
+         too: show the paused state, never the upgrade copy below. -->
+    <OrgPausedBanner v-if="status !== null && !enabled && fleetOrgPaused" />
+
     <!-- Not-enabled gate -->
     <div
-      v-if="status !== null && !enabled"
+      v-else-if="status !== null && !enabled"
       class="rounded border border-border-muted p-4 text-center space-y-1"
       data-testid="compliance-disabled-notice"
     >

@@ -63,6 +63,11 @@ const (
 	// the identity cache and node_id.txt are cleared, and the next sign-in
 	// enrolls under a fresh node id (device-keys-handoff-01DEVKH01 WP02).
 	FleetReasonNodeRemoved = "node_removed"
+	// FleetReasonOrgPaused: an identity refresh was refused 403 org_paused
+	// (a Kameas-staff "pause paid features" hold, kenaz-fleet #206).
+	// Defensive — fleet keeps enroll open while paused — and never
+	// signed-out: the session is fine, the org's paid features are held.
+	FleetReasonOrgPaused = "org_paused"
 )
 
 // fleetNodeRemovedCopy is the signed-out message for FleetReasonNodeRemoved.
@@ -156,7 +161,16 @@ type FleetSessionView struct {
 	// DeviceKeys is the last device-key registration outcome; absent until
 	// an enroll attempted one this process.
 	DeviceKeys *FleetDeviceKeysView `json:"deviceKeys,omitempty"`
-	UpdatedAt  string               `json:"updatedAt"`
+	// Paused is true while a Kameas-staff "pause paid features" hold is on
+	// the org (kenaz-fleet #206): from the capability poll (paused:true) or
+	// any 403 org_paused refusal, cleared only by a poll reporting
+	// paused:false. Every surface shows the paused banner instead of tier /
+	// upsell copy; data-rights actions stay enabled.
+	Paused bool `json:"paused"`
+	// PausedCategory is billing_review | security | abuse | legal | other
+	// while Paused.
+	PausedCategory string `json:"pausedCategory,omitempty"`
+	UpdatedAt      string `json:"updatedAt"`
 }
 
 // sessionTrack is fleetState's record of the session's recent transitions.
@@ -322,7 +336,15 @@ func (a *API) fleetSessionSnapshot() FleetSessionView {
 	applyClaimFallbacks(&v, ts.Claims)
 
 	if poller != nil {
-		v.Capabilities = capabilitiesToView(poller.Current())
+		cur := poller.Current()
+		v.Capabilities = capabilitiesToView(cur)
+		// Only a real (fleet / cache) answer for THIS session may say
+		// paused: right after a sign-in the poller is default-deny and the
+		// client's pause state is reset (ResetOrgPause), so a previous
+		// org's pause never bleeds into the new session's snapshot.
+		if st := client.OrgPause(); st.Paused && cur.Source != "default-deny" {
+			v.Paused, v.PausedCategory = true, st.PausedCategory
+		}
 	}
 	v.Sync = syncViewFromLanes(lanes)
 	if kr := client.KeyRegistration(); kr.Status != "" {
@@ -428,6 +450,8 @@ func classifyEnrollError(err error) (reason string, expired bool) {
 		return FleetReasonNodeRemoved, true
 	case errors.Is(err, fleet.ErrUserNotProvisioned):
 		return FleetReasonNotProvisioned, false
+	case fleet.IsOrgPaused(err):
+		return FleetReasonOrgPaused, false
 	case errors.Is(err, fleet.ErrProfileNotConfigured):
 		return FleetReasonNotConfigured, false
 	case errors.Is(err, fleet.ErrFleetUnreachable),

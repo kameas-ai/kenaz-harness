@@ -105,9 +105,9 @@ type AuditArchiver struct {
 	parentCtx context.Context
 	stopped   bool
 	running   atomic.Bool
-	mu       sync.RWMutex
-	cursor   string
-	chainErr atomic.Bool // true after a chain-break hard-stop
+	mu        sync.RWMutex
+	cursor    string
+	chainErr  atomic.Bool // true after a chain-break hard-stop
 
 	// status fields for the Compliance RPC view.
 	lastArchivedAt atomic.Int64 // unix nano; 0 = never
@@ -134,6 +134,28 @@ type AuditArchiver struct {
 	// advances past them — retrying cannot change the answer — but they are
 	// logged and counted, never silent (review F10).
 	rejectedEvents atomic.Int64
+
+	// orgPaused is true while the last flush was refused 403 org_paused
+	// (kenaz-fleet #206 staff pause). TRANSIENT: the loop keeps its normal
+	// backoff, nothing latches, events stay in the local log; the
+	// OnOrgUnpaused fan-out (ResumeAfterOrgUnpause) clears it and wakes the
+	// loop so archival resumes without waiting out the backoff.
+	orgPaused atomic.Bool
+	// wake cuts a backoff wait short (buffered 1; never blocks a sender).
+	wake chan struct{}
+}
+
+// ResumeAfterOrgUnpause is the OnOrgUnpaused hook: clears the org-pause
+// hold and wakes the loop out of its backoff.
+func (a *AuditArchiver) ResumeAfterOrgUnpause() {
+	if a == nil || !a.orgPaused.CompareAndSwap(true, false) {
+		return
+	}
+	logging.L().Info("fleet.audit_archive.org_unpaused_resume")
+	select {
+	case a.wake <- struct{}{}:
+	default:
+	}
 }
 
 // RejectedEvents is the cumulative count of events fleet refused per-event.
@@ -245,7 +267,7 @@ func NewAuditArchiver(cfg AuditArchiverConfig) *AuditArchiver {
 	if cfg.BatchInterval <= 0 {
 		cfg.BatchInterval = auditBatchInterval
 	}
-	return &AuditArchiver{cfg: cfg}
+	return &AuditArchiver{cfg: cfg, wake: make(chan struct{}, 1)}
 }
 
 // Start launches the archive background loop. Idempotent: second Start
@@ -431,11 +453,24 @@ func (a *AuditArchiver) loop(ctx context.Context) {
 			if errors.Is(err, ErrEndpointUnsupported) {
 				return // latched: no route, nothing to retry
 			}
-			slog.Warn("fleet/audit_archive: flush error", "err", err)
+			if IsOrgPaused(err) {
+				// A staff pause hold: transient, back off on the normal
+				// tiers, log the transition once (not every cycle).
+				if a.orgPaused.CompareAndSwap(false, true) {
+					logging.L().Info("fleet.audit_archive.org_paused",
+						"reason", ReasonOrgPaused, "paused_category", OrgPausedCategoryOf(err))
+				}
+			} else {
+				slog.Warn("fleet/audit_archive: flush error", "err", err)
+			}
 			// Exponential backoff (a 429 waits its Retry-After, capped).
+			// An org unpause wakes the loop early.
 			select {
 			case <-ctx.Done():
 				return
+			case <-a.wake:
+				backoff = auditBackoffBase
+				continue
 			case <-time.After(retryWait(err, backoff)):
 			}
 			if backoff < auditBackoffMax {
@@ -446,6 +481,7 @@ func (a *AuditArchiver) loop(ctx context.Context) {
 			}
 		} else {
 			backoff = auditBackoffBase
+			a.orgPaused.Store(false)
 		}
 	}
 }
@@ -596,6 +632,19 @@ func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
 			return &UnsupportedEndpointError{Feature: FeatureAuditAppend, Endpoint: auditArchiveEndpoint}
 		}
 	}
+	if resp.StatusCode == http.StatusForbidden {
+		// Client.do already converts org_paused to an error; an injected
+		// Poster (tests, alternative transports) may still hand back the
+		// raw 403, so classify it here too.
+		peek, _ := io.ReadAll(io.LimitReader(resp.Body, orgPausedPeekLimit))
+		if pe := ParseOrgPaused(resp.StatusCode, peek); pe != nil {
+			if a.cfg.Client != nil {
+				a.cfg.Client.observeOrgPaused(pe.PausedCategory)
+			}
+			return pe
+		}
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
 	if resp.StatusCode == http.StatusRequestEntityTooLarge {
 		if a.tooLarge.CompareAndSwap(false, true) {
 			logging.L().Warn("fleet.audit_archive.batch_too_large",
@@ -640,9 +689,9 @@ func (a *AuditArchiver) post(ctx context.Context, body []byte) error {
 
 // auditBatchPayload is the JSON body POSTed to /api/v1/audit/append.
 type auditBatchPayload struct {
-	DevicePubkeyFingerprint string            `json:"device_pubkey_fingerprint"`
-	Signature               string            `json:"signature"`
-	Events                  []auditEventWire  `json:"events"`
+	DevicePubkeyFingerprint string           `json:"device_pubkey_fingerprint"`
+	Signature               string           `json:"signature"`
+	Events                  []auditEventWire `json:"events"`
 }
 
 // auditEventWire is the wire shape for a single audit event in the batch.

@@ -264,3 +264,49 @@ func (a *API) fleetClientVersion() string {
 	}
 	return a.fleet.clientVersion
 }
+
+// OnOrgUnpaused registers fn to run when the org's staff pause lifts
+// (kenaz-fleet #206): the capability poll reported paused true→false.
+// Every circuit / latch an org_paused refusal set outside this package
+// registers its reopen here (the context-sync append breaker, the audit
+// archiver). fn must be quick and must not call back into the settings
+// API's fleet lock.
+func (a *API) OnOrgUnpaused(fn func()) {
+	if a == nil || fn == nil {
+		return
+	}
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	a.fleet.orgUnpausedHooks = append(a.fleet.orgUnpausedHooks, fn)
+	a.fleet.mu.Unlock()
+}
+
+// onOrgUnpaused is the one fan-out for the pause lifting — the analogue of
+// the sign-in reset path, without a sign-in: the config poller's backoff
+// resets and it polls now, the memory lane drops its org_paused backoff and
+// runs, the revocation sweep stops skipping, and every registered hook
+// (append breakers per session, the audit archiver) reopens.
+func (a *API) onOrgUnpaused() {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	cp := a.fleet.configPoller
+	sw := a.fleet.revocationSweeper
+	hooks := append([]func(){}, a.fleet.orgUnpausedHooks...)
+	a.fleet.mu.RUnlock()
+	logging.L().Info("fleet.org_unpaused.fan_out", "hooks", len(hooks))
+	cp.ResumeAfterOrgUnpause()
+	if sw != nil {
+		sw.ResetBackoff()
+	}
+	if ms := a.memorySync.Load(); ms != nil {
+		ms.ResumeAfterOrgUnpause()
+	}
+	for _, fn := range hooks {
+		fn()
+	}
+	go a.publishFleetSession("org_unpaused")
+}

@@ -23,6 +23,8 @@ import SyncPanel from '@/views/settings/SyncPanel.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import { capability } from '@/lib/featureFlags';
+import { fakeFleetSession } from '@/lib/harnessClient';
+import { _resetFleetSessionForTest, applyFleetSession } from '@/lib/fleetSession';
 import type { SyncStatusView, PendingMCPSecret } from '@/lib/types';
 
 // ── featureFlags mock ──────────────────────────────────────────────────────
@@ -115,6 +117,24 @@ describe('SyncPanel', () => {
     _enabledCaps.clear();
     _enabledCaps.add(SYNC_CAPABILITY);
     vi.mocked(capability).mockImplementation((key: string) => _enabledCaps.has(key));
+  });
+
+  it('a staff org pause short-circuits the Pro gate with the paused banner (no upsell)', async () => {
+    // kenaz-fleet PR 206: every capability reads false while paused.
+    _enabledCaps.clear();
+    applyFleetSession(
+      fakeFleetSession({ state: 'signed_in', tokensUsable: true, paused: true, pausedCategory: 'billing_review' }),
+    );
+    try {
+      const { client } = buildClient();
+      const wrapper = mountPanel(client);
+      await flushPromises();
+      expect(wrapper.find('[data-testid="org-paused-banner"]').exists()).toBe(true);
+      expect(wrapper.find('[data-testid="sync-pro-gate"]').exists()).toBe(false);
+      expect(wrapper.text()).not.toMatch(/pro\+|subscription|upgrade|plan/i);
+    } finally {
+      _resetFleetSessionForTest();
+    }
   });
 
   it('1. shows not-signed-in gate when signedIn is false', async () => {

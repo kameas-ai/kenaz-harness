@@ -33,6 +33,7 @@ import {
   isSignInCancelled,
   useFleetSession,
 } from '@/lib/fleetSession';
+import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
 
 const client = useHarnessClient();
 const fleet = useFleetSession(client);
@@ -333,6 +334,10 @@ async function refreshIdentity() {
         data-testid="env-badge"
       >{{ envName }}</span>
     </div>
+
+    <!-- kenaz-fleet PR 206: a staff pause hold on the org. Not a tier or
+         sign-in problem; never upsell copy. -->
+    <OrgPausedBanner />
 
     <p
       v-if="isDegraded"

@@ -199,6 +199,15 @@ type fleetState struct {
 	// package — the context-sync append breaker — forgets the old session.
 	sessionResetHooks []func()
 
+	// orgUnpausedHooks run when the org pause lifts (OnOrgUnpaused): the
+	// circuits / latches org_paused set outside this package — the append
+	// breaker, the audit archiver — reopen in the same fan-out as this
+	// package's config poller, memory lane and revocation sweep.
+	orgUnpausedHooks []func()
+	// orgPauseHooked is the client whose pause callbacks are registered
+	// (registration is per client, once).
+	orgPauseHooked *fleet.Client
+
 	// lanesHooked / supervisorStarted make their one-time wiring idempotent.
 	lanesHooked       bool
 	supervisorStarted bool
@@ -228,6 +237,13 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 		// before a broker is wired.
 		c.SetSessionBroker(sessionExpiredTap{api: a, inner: a.fleet.lockdownBroker})
 		c.SetAuthOKHook(a.onFleetAuthOK)
+		if a.fleet.orgPauseHooked != c {
+			a.fleet.orgPauseHooked = c
+			// A refusal observed on any request goroutine — which may hold
+			// locks of its own — republishes asynchronously.
+			c.OnOrgPauseChange(func(fleet.OrgPauseStatus) { go a.publishFleetSession("org_pause") })
+			c.OnOrgUnpaused(a.onOrgUnpaused)
+		}
 	}
 	// Lane-health changes republish the snapshot (registered once).
 	if !a.fleet.lanesHooked {

@@ -23,6 +23,8 @@ import SlashCommandEditor from '@/views/settings/SlashCommandEditor.vue';
 import SkillsPanel from '@/views/settings/SkillsPanel.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { signedIn, capability } from '@/lib/featureFlags';
+import { fleetOrgPaused } from '@/lib/fleetSession';
+import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
 import { push as pushToast } from '@/composables/useToastQueue';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import type {
@@ -415,6 +417,9 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
             >
               {{ publishing ? 'Publishing…' : 'Publish to team' }}
             </Button>
+            <!-- A staff org pause (kenaz-fleet PR 206) withholds the capability:
+                 the paused line, not the Team+ upsell. -->
+            <OrgPausedBanner v-else-if="fleetOrgPaused" compact />
             <p
               v-else
               class="font-ui text-[11px] text-ink-muted"

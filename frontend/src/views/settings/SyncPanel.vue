@@ -33,6 +33,8 @@
 import { ref, computed, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { signedIn, capability } from '@/lib/featureFlags';
+import { fleetOrgPaused } from '@/lib/fleetSession';
+import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
 import { useRouter } from 'vue-router';
 import type { SyncStatusView, PendingMCPSecret } from '@/lib/types';
 
@@ -272,6 +274,9 @@ function goToMCPTools() {
       Sign in to fleet to enable cross-device settings sync.
       Go to Settings → Account to sign in.
     </div>
+    <!-- A staff org pause (kenaz-fleet PR 206) withholds context_sync too —
+         it short-circuits the Pro gate: a pause is not a plan problem. -->
+    <OrgPausedBanner v-else-if="fleetOrgPaused" />
     <div v-else-if="!capability('context_sync')" class="text-sm text-ink-muted" data-testid="sync-pro-gate">
       Cross-device sync requires a Pro+ subscription.
     </div>

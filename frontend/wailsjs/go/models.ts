@@ -7653,6 +7653,8 @@ export namespace settings {
 	    profile?: FleetProfileInfo;
 	    sync: FleetSyncView;
 	    deviceKeys?: FleetDeviceKeysView;
+	    paused: boolean;
+	    pausedCategory?: string;
 	    updatedAt: string;
 	
 	    static createFrom(source: any = {}) {
@@ -7677,6 +7679,8 @@ export namespace settings {
 	        this.profile = this.convertValues(source["profile"], FleetProfileInfo);
 	        this.sync = this.convertValues(source["sync"], FleetSyncView);
 	        this.deviceKeys = this.convertValues(source["deviceKeys"], FleetDeviceKeysView);
+	        this.paused = source["paused"];
+	        this.pausedCategory = source["pausedCategory"];
 	        this.updatedAt = source["updatedAt"];
 	    }
 	
@@ -7774,6 +7778,8 @@ export namespace settings {
 	    pendingCount: number;
 	    fleetError?: string;
 	    lane: FleetSyncLaneView;
+	    orgPaused: boolean;
+	    pausedCategory?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MemorySyncStatusView(source);
@@ -7796,6 +7802,8 @@ export namespace settings {
 	        this.pendingCount = source["pendingCount"];
 	        this.fleetError = source["fleetError"];
 	        this.lane = this.convertValues(source["lane"], FleetSyncLaneView);
+	        this.orgPaused = source["orgPaused"];
+	        this.pausedCategory = source["pausedCategory"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

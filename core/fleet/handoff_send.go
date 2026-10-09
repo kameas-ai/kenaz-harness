@@ -168,6 +168,10 @@ func handoffTransportError(err error) error {
 		return &HandoffError{Code: "not_signed_in", msg: "Sign in to your organization to share sessions.", cause: err}
 	case errors.Is(err, context.Canceled):
 		return err
+	case IsOrgPaused(err):
+		// A staff pause hold, not "fleet is unavailable" and never an
+		// upsell: the frontend owns the per-category copy.
+		return &HandoffError{Code: CodeOrgPaused, Status: http.StatusForbidden, msg: OrgPausedCopy, cause: err}
 	}
 	return &HandoffError{Code: "unavailable", msg: "Sharing failed: fleet is unavailable right now. Please try again later.", cause: err}
 }
