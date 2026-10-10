@@ -786,6 +786,13 @@ type Response struct {
 	// adapter), never by a provider adapter; nil when the caller did not
 	// measure it. Not part of any wire or persisted Response encoding.
 	Composition *PromptComposition `json:"-"`
+
+	// Meta is the provider-returned call metadata (ids, served model,
+	// provider extras) the adapter read off this call's own response.
+	// Read only by core/llm/genaitrace for the gen_ai.chat span; nil when
+	// the adapter maps nothing. Not part of any wire or persisted
+	// Response encoding. (llm-call-telemetry-01LLMTEL01 WP01)
+	Meta *CallMeta `json:"-"`
 }
 
 // ProviderAdapter is the per-provider plug-in contract (FR-018).

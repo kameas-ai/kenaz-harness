@@ -562,26 +562,29 @@ func (s *redactedSpan) Attributes() []attribute.KeyValue {
 	if len(raw) == 0 {
 		return raw
 	}
-	// Convert to map, redact, convert back.
-	m := make(map[string]any, len(raw))
+	// Only string values go through the redactor; every other value keeps
+	// its OTLP type. This used to round-trip every attribute through
+	// Value.Emit() — a string — so ints, bools and floats reached Fleet as
+	// strings and a string[] (gen_ai.response.finish_reasons) as one
+	// "[stop]" string (llm-call-telemetry-01LLMTEL01 WP01). A sensitive KEY
+	// is still blanked whatever its type, as before.
+	out := make([]attribute.KeyValue, 0, len(raw))
 	for _, kv := range raw {
-		m[string(kv.Key)] = kv.Value.Emit()
-	}
-	cleaned := DefaultRedactor.RedactAttributes(m)
-	out := make([]attribute.KeyValue, 0, len(cleaned))
-	for k, v := range cleaned {
-		switch val := v.(type) {
-		case string:
-			out = append(out, attribute.String(k, val))
-		default:
-			// Non-string values were not modified by the redactor; re-use
-			// the original KeyValue to preserve the original type.
-			for _, orig := range raw {
-				if string(orig.Key) == k {
-					out = append(out, orig)
-					break
-				}
+		k := string(kv.Key)
+		switch {
+		case DefaultRedactor.IsSensitiveKey(k):
+			out = append(out, attribute.String(k, "[REDACTED]"))
+		case kv.Value.Type() == attribute.STRING:
+			out = append(out, attribute.String(k, DefaultRedactor.RedactString(kv.Value.AsString())))
+		case kv.Value.Type() == attribute.STRINGSLICE:
+			vals := kv.Value.AsStringSlice()
+			red := make([]string, len(vals))
+			for i, v := range vals {
+				red[i] = DefaultRedactor.RedactString(v)
 			}
+			out = append(out, attribute.StringSlice(k, red))
+		default:
+			out = append(out, kv)
 		}
 	}
 	return out

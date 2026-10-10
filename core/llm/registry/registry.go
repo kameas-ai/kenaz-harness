@@ -27,6 +27,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/llm/custom"
 	"github.com/kameas-ai/kenaz-harness/core/llm/events"
 	"github.com/kameas-ai/kenaz-harness/core/llm/gemini"
+	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
 	"github.com/kameas-ai/kenaz-harness/core/llm/ollama"
 	"github.com/kameas-ai/kenaz-harness/core/llm/openai"
 	"github.com/kameas-ai/kenaz-harness/core/llm/openrouter"
@@ -741,8 +742,18 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		_ = emitter.RetryAttempted(ctx, req, prof, attempt, plannedMS, actualMS, msg)
 	})
 	start := r.now()
+	// gen_ai.chat span per provider call (llm-call-telemetry-01LLMTEL01
+	// WP01). This closure is the one place every attempt reaches the
+	// adapter, so it is the instrumentation choke point: each retry here,
+	// each chat-layer retry and each fallback hop (which re-enter
+	// registry.Stream) is its own span; no adapter touches OTel.
+	ctx = genaitrace.WithCallSequence(ctx)
+	traceCall := genaitrace.CallFromRequest(req, prof)
+	spanCost := func(resp llm.Response) llm.Cost { return deriveCost(resp, reducer, prof) }
 	stream, attempts, err := retry.Run(mw, ctx, policyP, func(c context.Context) (llm.Stream, error) {
-		return adapter.Stream(c, req, prof, credBytes)
+		return genaitrace.Instrument(c, traceCall, spanCost, func(c context.Context) (llm.Stream, error) {
+			return adapter.Stream(c, req, prof, credBytes)
+		})
 	})
 	if err != nil {
 		// Zeroize the adapter's credential copy on failure path.
@@ -810,8 +821,11 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 					llm.Message{Role: llm.RoleAssistant, Content: priorResp.Content},
 					llm.NewTextMessage(llm.RoleUser, hint),
 				)
-				s2, _, rerr := retry.Run(mw, rctx, policyP, func(c context.Context) (llm.Stream, error) {
-					return adapter.Stream(c, req2, prof, credBytes)
+				repairCall := genaitrace.CallFromRequest(req2, prof)
+				s2, _, rerr := retry.Run(mw, genaitrace.WithCallSequence(rctx), policyP, func(c context.Context) (llm.Stream, error) {
+					return genaitrace.Instrument(c, repairCall, spanCost, func(c context.Context) (llm.Stream, error) {
+						return adapter.Stream(c, req2, prof, credBytes)
+					})
 				})
 				if rerr != nil {
 					return llm.Response{}, rerr
@@ -825,14 +839,17 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		}
 	}
 
-	// 7. Wrap the returned stream so we can attach the cost reducer and
-	// audit terminal events on Final()/Cancel().
+	// 7. Wrap the returned stream so we can audit terminal events on
+	// Final()/Cancel(). The cost readout is NOT derived here any more: the
+	// gen_ai.chat choke point above (genaitrace.Instrument with spanCost)
+	// derives it once per provider call and stamps it onto the response
+	// the span reports, so the chat surface and the span show one number
+	// and the reducer runs once (llm-call-telemetry-01LLMTEL01 WP01).
 	wrapped := &auditedStream{
 		inner:    pipelineStream,
 		req:      req,
 		prof:     prof,
 		emitter:  emitter,
-		reducer:  reducer,
 		started:  start,
 		attempts: attempts,
 		credBuf:  credBytes,

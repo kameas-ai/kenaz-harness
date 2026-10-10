@@ -532,6 +532,18 @@ jobs:
           CGO_ENABLED: "1"
         run: bash scripts/ci/check-tool-exposure-gate.sh
 
+      - name: gen_ai span no-content gate
+        # llm-call-telemetry-01LLMTEL01 WP01. The gen_ai.chat /
+        # kenaz.chat.turn spans emitted for every model provider call
+        # never carry content: the allowlist (core/llm/genaitrace/attrs.go)
+        # holds no content key and no unbounded string, model-call keys
+        # have one writer, no semconv content keys or span events; then
+        # the per-adapter table tests, the chat-turn test and the Fleet
+        # fence test run. Planted proofs: TestGenAISpanGate_*.
+        env:
+          CGO_ENABLED: "1"
+        run: bash scripts/ci/check-genai-span-no-content.sh
+
       - name: hook-event-fire-sites guard (I17, G-2)
         # trust-surfaces-that-fire-01PMZ202 WP08 (UNIT-7). Catches the
         # event-picker-that-lies defect: before this WP, the hook editor

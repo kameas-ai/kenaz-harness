@@ -36,3 +36,13 @@ core/rpc/views/agentgraph/chat/llm_provider_adapter.go|(*LLMProviderAdapter).gen
 # step's explicit names as pins) and deletes this line. Recorded in
 # docs/unwired-ledger.md (tool-context-budget WP08 entry).
 core/rpc/wf_adapters.go|(*wfLLMStreamerAdapter).Stream|literal x1
+
+# 2026-10-09 — NOT A MODEL PATH, owner alec. The gen_ai span test kit
+# (llm-call-telemetry-01LLMTEL01 WP01) builds one content-bearing fixture
+# request with one tool, so the per-adapter span tables can prove
+# kenaz.llm.tool_count / tool_schema_tokens_est and that no tool schema
+# text reaches a span. spantest is a non-_test package only because seven
+# adapter packages' tests share it (the core/llm/wirecheck precedent); no
+# production code imports it, and its requests go to httptest servers.
+# Deleted if spantest ever moves into _test.go files.
+core/llm/genaitrace/spantest/spantest.go|Request|literal x1

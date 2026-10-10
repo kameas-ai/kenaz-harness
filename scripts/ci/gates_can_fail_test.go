@@ -5264,3 +5264,111 @@ func TestToolExposureGate_StructuralVerdictIsCWDIndependent(t *testing.T) {
 		}
 	}
 }
+
+// ── check-genai-span-no-content.sh (llm-call-telemetry-01LLMTEL01 WP01) ──
+
+// genaiSpanStructuralOnly runs only the structural half of
+// check-genai-span-no-content.sh; the planted cases below exercise it, and
+// the runtime half (eleven go test runs) would only slow them down.
+var genaiSpanStructuralOnly = map[string]string{"GENAI_SPAN_GATE_STRUCTURAL_ONLY": "1"}
+
+const genaiAllowlistAnchor = "var SpanAttributes = []AttrSpec{\n"
+
+func genaiGateMustFail(t *testing.T, root, wantSubstr, what string) {
+	t.Helper()
+	code, out := runGateEnv(t, "check-genai-span-no-content.sh", root, genaiSpanStructuralOnly)
+	if code == 0 {
+		t.Fatalf("check-genai-span-no-content.sh exited 0 with %s planted — the gate cannot fail.\n%s", what, out)
+	}
+	if !strings.Contains(out, wantSubstr) {
+		t.Fatalf("gate failed, but its output does not name the planted %s (%q):\n%s", what, wantSubstr, out)
+	}
+}
+
+// TestGenAISpanGate_PlantedContentKeyFires: an OpenLLMetry content key
+// (gen_ai.prompt.0.content) added to the allowlist fails the build, as do
+// the semconv message shape and a tool call's arguments / result.
+func TestGenAISpanGate_PlantedContentKeyFires(t *testing.T) {
+	root := repoRoot(t)
+	attrs := filepath.Join(root, "core", "llm", "genaitrace", "attrs.go")
+	for _, key := range []string{"gen_ai.prompt.0.content", "gen_ai.completion", "gen_ai.input.messages", "kenaz.llm.tool.arguments", "kenaz.llm.tool.result"} {
+		t.Run(key, func(t *testing.T) {
+			cleanup := plantReplace(t, attrs, genaiAllowlistAnchor, genaiAllowlistAnchor+
+				"\t{Key: \""+key+"\", Type: TypeString, Class: ClassID, Spans: chatOnly, Doc: \"probe\"},\n")
+			defer cleanup()
+			genaiGateMustFail(t, root, "key "+key+" is a content key", "content key "+key)
+		})
+	}
+}
+
+// TestGenAISpanGate_PlantedFreeTextAttributeFires: a string attribute with
+// no bounded class — the shape an "error message" attribute would take —
+// fails the build even though its key is innocent.
+func TestGenAISpanGate_PlantedFreeTextAttributeFires(t *testing.T) {
+	root := repoRoot(t)
+	attrs := filepath.Join(root, "core", "llm", "genaitrace", "attrs.go")
+	cleanup := plantReplace(t, attrs, genaiAllowlistAnchor, genaiAllowlistAnchor+
+		"\t{Key: \"kenaz.llm.error_detail\", Type: TypeString, Class: ValueClass(\"text\"), Spans: chatOnly, Doc: \"probe\"},\n")
+	defer cleanup()
+	genaiGateMustFail(t, root, "string key kenaz.llm.error_detail has Class", "free-text attribute")
+}
+
+// TestGenAISpanGate_PlantedSecondEmitterFires: a gen_ai.* attribute set
+// anywhere but the allowlist-enforcing instrumentation package fails.
+func TestGenAISpanGate_PlantedSecondEmitterFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "rpc", "views", "agentgraph", "chat", "zz_gate_probe_genai.go")
+	cleanup := plant(t, probe, "package chat\n\nimport \"go.opentelemetry.io/otel/attribute\"\n\n"+
+		"var zzGateProbeGenAI = attribute.String(\"gen_ai.completion\", \"text\")\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "model-call span key literal \"gen_ai.completion\" outside", "second emitter")
+}
+
+// TestGenAISpanGate_PlantedUndeclaredKeyInPackageFires: a key literal in
+// the instrumentation package that is not on the allowlist fails
+// statically (attrSet would also drop it at runtime).
+func TestGenAISpanGate_PlantedUndeclaredKeyInPackageFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "llm", "genaitrace", "zz_gate_probe.go")
+	cleanup := plant(t, probe, "package genaitrace\n\nvar zzGateProbeKey = \"kenaz.llm.system_prompt\"\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "literal \"kenaz.llm.system_prompt\" is not a declared attribute key", "undeclared key")
+}
+
+// TestGenAISpanGate_PlantedSemconvContentKeyFires: referencing a semconv
+// content key (gen_ai.input.messages) anywhere fails.
+func TestGenAISpanGate_PlantedSemconvContentKeyFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "llm", "zz_gate_probe_semconv.go")
+	cleanup := plant(t, probe, "package llm\n\nimport semconv \"go.opentelemetry.io/otel/semconv/v1.40.0\"\n\n"+
+		"var zzGateProbeSemconv = semconv.GenAIInputMessagesKey\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "semconv content key GenAIInputMessagesKey", "semconv content key")
+}
+
+// TestGenAISpanGate_PlantedSpanEventFires: data in a span event (which
+// Fleet drops, and which bypasses the allowlist) fails.
+func TestGenAISpanGate_PlantedSpanEventFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "llm", "genaitrace", "zz_gate_probe_event.go")
+	cleanup := plant(t, probe, "package genaitrace\n\nimport \"go.opentelemetry.io/otel/trace\"\n\n"+
+		"func zzGateProbeEvent(s trace.Span) { s.AddEvent(\"prompt\") }\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "AddEvent", "span event")
+}
+
+// TestGenAISpanGate_StructuralVerdictIsCWDIndependent: the clean tree
+// passes from the repo root and from a foreign cwd, and the scan is
+// non-vacuous.
+func TestGenAISpanGate_StructuralVerdictIsCWDIndependent(t *testing.T) {
+	root := repoRoot(t)
+	for _, dir := range []string{root, t.TempDir()} {
+		code, out := runGateEnv(t, "check-genai-span-no-content.sh", dir, genaiSpanStructuralOnly)
+		if code != 0 {
+			t.Fatalf("check-genai-span-no-content.sh from %s exited %d on the clean tree:\n%s", dir, code, out)
+		}
+		if !strings.Contains(out, "keys, all bounded, none content") || !strings.Contains(out, "under core, cmd") {
+			t.Fatalf("check-genai-span-no-content.sh from %s passed without reporting its scan:\n%s", dir, out)
+		}
+	}
+}

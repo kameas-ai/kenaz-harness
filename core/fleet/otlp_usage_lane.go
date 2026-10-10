@@ -48,6 +48,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
 )
 
 // usageScopeName is the instrumentation scope for both usage lanes.
@@ -300,7 +302,44 @@ func (e *closableSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace
 	if e.admitted != nil && !e.admitted.Load() {
 		return nil
 	}
+	spans = withoutModelCallSpans(spans)
+	if len(spans) == 0 {
+		// No request at all for a batch of only model-call spans: an empty
+		// export is still an identity-stamped POST.
+		return nil
+	}
 	return e.inner.ExportSpans(ctx, spans)
+}
+
+// withoutModelCallSpans drops every span of the model-call instrumentation
+// scope (gen_ai.chat and kenaz.chat.turn, core/llm/genaitrace) from a Fleet
+// batch.
+//
+// Owner ruling 2026-10-09 (llm-call-telemetry-01LLMTEL01): model-call
+// telemetry is collected and kept locally; it reaches Fleet only under an
+// explicit "Share model-call telemetry with Fleet" setting, default OFF and
+// separate from the general telemetry consent that admits this lane. That
+// setting is WP02. Until it exists, the answer is unconditionally "not
+// shared": these spans go to the local exporter only. WP02 replaces this
+// unconditional drop with the setting's value — it must not simply delete
+// it, or general consent would start carrying model-call spans.
+func withoutModelCallSpans(spans []sdktrace.ReadOnlySpan) []sdktrace.ReadOnlySpan {
+	var out []sdktrace.ReadOnlySpan // nil until the first model-call span
+	for i, s := range spans {
+		isModelCall := s.InstrumentationScope().Name == genaitrace.ScopeName
+		switch {
+		case out == nil && !isModelCall:
+			continue
+		case out == nil:
+			out = append(make([]sdktrace.ReadOnlySpan, 0, len(spans)), spans[:i]...)
+		case !isModelCall:
+			out = append(out, s)
+		}
+	}
+	if out == nil {
+		return spans // common case: nothing dropped, no copy
+	}
+	return out
 }
 
 func (e *closableSpanExporter) Shutdown(ctx context.Context) error { return e.inner.Shutdown(ctx) }

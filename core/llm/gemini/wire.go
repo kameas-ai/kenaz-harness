@@ -102,6 +102,9 @@ type geminiResponse struct {
 	Candidates    []geminiCandidate `json:"candidates"`
 	UsageMetadata *geminiUsage      `json:"usageMetadata,omitempty"`
 	ModelVersion  string            `json:"modelVersion,omitempty"`
+	// ResponseID is the per-generation id (llm-call-telemetry-01LLMTEL01
+	// WP01: gen_ai.response.id).
+	ResponseID string `json:"responseId,omitempty"`
 }
 
 // geminiCandidate is one generation candidate (we always request 1).
@@ -118,6 +121,9 @@ type geminiUsage struct {
 	TotalTokenCount         int `json:"totalTokenCount"`
 	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 	ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
+	// ToolUsePromptTokenCount is the prompt tokens spent on tool-use
+	// results (llm-call-telemetry-01LLMTEL01 WP01 provider extra).
+	ToolUsePromptTokenCount int `json:"toolUsePromptTokenCount,omitempty"`
 }
 
 // ─── Translation: llm → Gemini ───────────────────────────────────────────────

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
 )
 
 // Resolver maps a session / node context to the active Chain (if any).
@@ -188,7 +189,9 @@ func (r *Runner) Stream(ctx context.Context, req llm.GenerationRequest) (llm.Str
 		}
 
 		// Issue the hop.
-		hopStream, hopErr := r.streamer.Stream(ctx, hopReq)
+		// genaitrace.WithFallback marks the hop's gen_ai.chat span(s)
+		// kenaz.llm.fallback=true (llm-call-telemetry-01LLMTEL01 WP01).
+		hopStream, hopErr := r.streamer.Stream(genaitrace.WithFallback(ctx), hopReq)
 		if hopErr == nil {
 			return hopStream, nil
 		}
