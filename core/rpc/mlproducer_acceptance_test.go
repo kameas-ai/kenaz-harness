@@ -224,6 +224,18 @@ func wireRecords(t *testing.T, posts []*collogs.ExportLogsServiceRequest) []wire
 // and file×3, terminal×2, commit×1, phase_change (coding, testing) and
 // agent.turn — with exactly the contract attributes and nothing raw.
 func TestMLAcceptance_8_1_ChatSessionShipsContractRecords(t *testing.T) {
+	runMLAcceptance81(t, true)
+}
+
+// The sibling: the same session with Fleet's ai_usage_allowed=false (the
+// org has not instructed AI-usage collection). agent.turn is a Rev2Kind:
+// it never enters the outbox and never ships; every other record is
+// unchanged.
+func TestMLAcceptance_8_1_NoAIUsageShipsNoAgentTurn(t *testing.T) {
+	runMLAcceptance81(t, false)
+}
+
+func runMLAcceptance81(t *testing.T, aiUsage bool) {
 	const testCmd = "go test ./..."
 	const commitCmd = "git commit -m x"
 
@@ -296,20 +308,35 @@ func TestMLAcceptance_8_1_ChatSessionShipsContractRecords(t *testing.T) {
 		{corebash.Name, map[string]any{"command": commitCmd}},
 	}
 	ctx := context.Background()
-	if !r.w.gate.Refresh(ctx).Open {
-		t.Fatalf("gate closed: %+v", r.w.gate.Last())
+	if !aiUsage {
+		r.fleet.set(func(f *mlFleet) { f.meML = mlBodyAIUsage(f.meML, false) })
+	}
+	if d := r.w.gate.Refresh(ctx); !d.Open || d.AIUsageAllowed != aiUsage {
+		t.Fatalf("gate decision %+v, want open with AIUsageAllowed=%v", d, aiUsage)
 	}
 	mc := newMLChat(t, r, steps, nil)
 	sess := mc.start("zz-ml-accept")
-	// The turn is over when agent.turn is in the outbox.
-	waitForCond(t, func() bool {
+	hasTurn := func() bool {
 		for _, rec := range r.outbox() {
 			if strings.Contains(string(rec.Body), `"kind":"`+mlproducer.KindTurn+`"`) {
 				return true
 			}
 		}
 		return false
-	}, "agent.turn in the outbox")
+	}
+	if aiUsage {
+		// The turn is over when agent.turn is in the outbox.
+		waitForCond(t, hasTurn, "agent.turn in the outbox")
+	} else {
+		// No agent.turn will come: wait for the turn's final answer, then
+		// give the TurnEnded fan-out time to reach the recorder (whose
+		// queue the shutdown drain flushes).
+		mc.toolOutputs(sess.ID)
+		time.Sleep(300 * time.Millisecond)
+		if hasTurn() {
+			t.Fatal("agent.turn entered the outbox with ai_usage_allowed=false")
+		}
+	}
 	for _, f := range files {
 		if _, err := os.Stat(f); err != nil {
 			t.Fatalf("the agent's write did not happen (the tool never ran): %v", err)
@@ -402,6 +429,9 @@ func TestMLAcceptance_8_1_ChatSessionShipsContractRecords(t *testing.T) {
 		mlproducer.KindFile: 3, mlproducer.KindTerminal: 2, mlproducer.KindCommit: 1,
 		mlproducer.KindPhaseChange: 2, mlproducer.KindTurn: 1,
 	}
+	if !aiUsage {
+		delete(want, mlproducer.KindTurn)
+	}
 	for k, n := range want {
 		if kinds[k] != n {
 			t.Errorf("%s × %d on the wire, want %d (all kinds: %v)", k, kinds[k], n, kinds)
@@ -419,7 +449,10 @@ func TestMLAcceptance_8_1_ChatSessionShipsContractRecords(t *testing.T) {
 			t.Errorf("terminal payloads = %v", terms)
 		}
 	}
-	if turn == nil || turn["tool_calls"] != float64(5) || turn["model_calls"] != float64(6) || turn["outcome"] != "completed" {
+	switch {
+	case !aiUsage && turn != nil:
+		t.Errorf("agent.turn shipped with ai_usage_allowed=false: %v", turn)
+	case aiUsage && (turn == nil || turn["tool_calls"] != float64(5) || turn["model_calls"] != float64(6) || turn["outcome"] != "completed"):
 		t.Errorf("agent.turn payload = %v, want tool_calls 5, model_calls 6, completed", turn)
 	}
 

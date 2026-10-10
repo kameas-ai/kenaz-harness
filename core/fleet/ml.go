@@ -125,6 +125,33 @@ type MeML struct {
 	// AckedTextRevision is the text revision this member last acknowledged
 	// (0 = none, or an older Fleet that does not send it).
 	AckedTextRevision int `json:"acked_text_revision"`
+	// IncludeAIUsage is the org's instruction to include AI-usage metadata
+	// (agent.turn's model_calls / tool_calls; counsel ruling 2026-10-10)
+	// in what it collects. OPTIONAL on the wire: absent decodes as false.
+	IncludeAIUsage bool `json:"include_ai_usage"`
+	// AIUsageTermsOK: the terms that permit AI-usage collection are in
+	// place (kenaz-fleet #235). OPTIONAL: absent decodes as false.
+	AIUsageTermsOK bool `json:"ai_usage_terms_ok"`
+	// AIUsageAllowed is Fleet's DERIVED verdict (include_ai_usage AND
+	// ai_usage_terms_ok) that rev-2 (AI-usage) kinds may ship for this
+	// member now. OPTIONAL: absent decodes as false, so an older Fleet never
+	// unlocks agent.turn. The producer branches on this, never on
+	// IncludeAIUsage (see AIUsageEffective).
+	AIUsageAllowed bool `json:"ai_usage_allowed"`
+	// AIUsageEpoch bumps each time the org turns AI usage on (≥ 0;
+	// OPTIONAL, absent = 0). While IncludeAIUsage, a notice ack must echo
+	// it exactly (AckMLNotice) or Fleet answers 409 policy_changed.
+	AIUsageEpoch int `json:"ai_usage_epoch"`
+}
+
+// AckAIUsageEpoch is the ai_usage_epoch a notice ack based on m must echo:
+// non-nil (m's epoch) only while include_ai_usage is true.
+func (m *MeML) AckAIUsageEpoch() *int {
+	if m == nil || !m.IncludeAIUsage {
+		return nil
+	}
+	e := m.AIUsageEpoch
+	return &e
 }
 
 // MLExclusions is /me/ml's `exclusions` object.
@@ -158,6 +185,13 @@ func (m *MeML) IsEffective() bool {
 	return m != nil && m.Effective && m.NoticeAckedAt != nil
 }
 
+// AIUsageEffective is the predicate for the rev-2 (AI-usage) kinds such as
+// agent.turn: IsEffective AND Fleet's derived ai_usage_allowed. An absent
+// ai_usage_allowed (an older Fleet) is false, so those kinds stay off.
+func (m *MeML) AIUsageEffective() bool {
+	return m.IsEffective() && m.AIUsageAllowed
+}
+
 // mlWire has one pointer per key so a MISSING key is distinguishable from a
 // zero value. notice_acked_at is json.RawMessage so "null" (present, not
 // acked) is distinguishable from absent.
@@ -177,6 +211,12 @@ type mlWire struct {
 	// Optional (PR #225): absent decodes as 0.
 	NoticeTextRevision *int `json:"notice_text_revision"`
 	AckedTextRevision  *int `json:"acked_text_revision"`
+	// Optional (Fleet rev-2 gate, 2026-10-10): absent or null decodes as
+	// false; a non-bool is a decode error.
+	IncludeAIUsage *bool `json:"include_ai_usage"`
+	AIUsageTermsOK *bool `json:"ai_usage_terms_ok"`
+	AIUsageAllowed *bool `json:"ai_usage_allowed"`
+	AIUsageEpoch   *int  `json:"ai_usage_epoch"`
 }
 
 // mlExclusionsWire is the exclusions object, one pointer per key.
@@ -379,6 +419,21 @@ func DecodeMeML(raw []byte) (MeML, error) {
 		}
 		m.AckedTextRevision = *w.AckedTextRevision
 	}
+	if w.IncludeAIUsage != nil {
+		m.IncludeAIUsage = *w.IncludeAIUsage
+	}
+	if w.AIUsageTermsOK != nil {
+		m.AIUsageTermsOK = *w.AIUsageTermsOK
+	}
+	if w.AIUsageAllowed != nil {
+		m.AIUsageAllowed = *w.AIUsageAllowed
+	}
+	if w.AIUsageEpoch != nil {
+		if *w.AIUsageEpoch < 0 {
+			return MeML{}, fmt.Errorf("%w: ai_usage_epoch %d < 0", ErrMLDecode, *w.AIUsageEpoch)
+		}
+		m.AIUsageEpoch = *w.AIUsageEpoch
+	}
 	switch m.OrgPolicy {
 	case MLPolicyOn, MLPolicyOff, MLPolicyMemberChoice:
 	default:
@@ -460,7 +515,13 @@ func (c *Client) GetMeML(ctx context.Context) (MeML, error) {
 // answers 409 policy_changed (errors.Is(err, ErrMLPolicyChanged)): re-read
 // and show the notice again. On success Fleet returns the fresh /me/ml
 // object.
-func (c *Client) AckMLNotice(ctx context.Context, noticeVersion, textRevision int) (MeML, error) {
+//
+// aiUsageEpoch (kenaz-fleet #235): while /me/ml's include_ai_usage is
+// true the ack must echo its ai_usage_epoch exactly, or Fleet answers 409
+// policy_changed (re-read and re-show). Pass MeML.AckAIUsageEpoch() of the
+// read the notice was shown from: nil (include_ai_usage false) sends no
+// epoch.
+func (c *Client) AckMLNotice(ctx context.Context, noticeVersion, textRevision int, aiUsageEpoch *int) (MeML, error) {
 	if c == nil || c.isNop {
 		return MeML{}, ErrFleetDisabled
 	}
@@ -470,9 +531,15 @@ func (c *Client) AckMLNotice(ctx context.Context, noticeVersion, textRevision in
 	if textRevision < 0 {
 		return MeML{}, fmt.Errorf("fleet: ack ml notice: text_revision %d < 0", textRevision)
 	}
+	if aiUsageEpoch != nil && *aiUsageEpoch < 0 {
+		return MeML{}, fmt.Errorf("fleet: ack ml notice: ai_usage_epoch %d < 0", *aiUsageEpoch)
+	}
 	body := map[string]int{"notice_version": noticeVersion}
 	if textRevision > 0 {
 		body["text_revision"] = textRevision
+	}
+	if aiUsageEpoch != nil {
+		body["ai_usage_epoch"] = *aiUsageEpoch
 	}
 	resp, err := c.PostJSON(ctx, "/api/v1/me/ml/notice-ack", body)
 	if err != nil {

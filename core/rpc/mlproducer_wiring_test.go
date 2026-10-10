@@ -87,10 +87,23 @@ func mlEffectiveBody(offload bool, policy string, optedIn, acked bool) string {
 		"notice_acked_at": nil, "retention_days": 90, "retain_on_withdrawal": false,
 		"exclusions":         map[string]any{"paths": []string{}, "commands": []string{}, "exclude_browser": false},
 		"exclusions_version": 1, "legacy_exclusion_notes": []string{},
+		// Fleet's rev-2 gate: the org instructs AI-usage collection and
+		// Fleet derives ai_usage_allowed (true whenever effective here;
+		// mlBodyAIUsage overrides it).
+		"include_ai_usage": true, "ai_usage_allowed": ships && acked,
 	}
 	if acked {
 		m["notice_acked_at"] = "2026-10-09T12:00:00Z"
 	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// mlBodyAIUsage returns body with ai_usage_allowed set to allowed.
+func mlBodyAIUsage(body string, allowed bool) string {
+	var m map[string]any
+	_ = json.Unmarshal([]byte(body), &m)
+	m["ai_usage_allowed"] = allowed
 	b, _ := json.Marshal(m)
 	return string(b)
 }
@@ -259,7 +272,7 @@ func newMLWiringRigWithStore(t *testing.T, enrollOrg string, beforeCore func(dat
 	if _, err := api.CapabilityPoller().Refresh(ctx); err != nil {
 		t.Fatalf("capabilities: %v", err)
 	}
-	w := newMLProducerWiring(c, api, nil)
+	w := newMLProducerWiring(c, api)
 	if w == nil {
 		t.Fatal("newMLProducerWiring returned nil over a real DataDir")
 	}

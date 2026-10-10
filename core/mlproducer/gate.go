@@ -88,8 +88,14 @@ type ConsentSource interface {
 
 // MLConsent is one /me/ml read, reduced to what the producer acts on.
 type MLConsent struct {
-	Effective  bool
-	Exclusions Exclusions
+	Effective bool
+	// AIUsageAllowed is Fleet's derived ai_usage_allowed folded with
+	// Effective (absent on the wire = false): the org has instructed
+	// collection of AI-usage metadata and this member may ship it. It
+	// gates the Rev2Kinds (record.go) only; every other kind follows
+	// Effective alone.
+	AIUsageAllowed bool
+	Exclusions     Exclusions
 }
 
 // Gate closure reasons (Decision.Reason, and the shipping status's stop
@@ -122,6 +128,9 @@ type Decision struct {
 	// carries (set only when Open).
 	ResourceOrgID string
 	NodeID        string
+	// AIUsageAllowed: the Rev2Kinds (agent.turn) may be recorded and
+	// shipped under this decision. Only ever true when Open.
+	AIUsageAllowed bool
 	// At is when the decision was made.
 	At  time.Time
 	gen uint64
@@ -203,6 +212,23 @@ func (g *ConsentGate) Recording() bool {
 		return false
 	}
 	return d.Open
+}
+
+// AIUsageAllowed implements AIUsageGate: Recording's answer (same cache,
+// same freshness rule) AND the cached decision's AIUsageAllowed. It never
+// does I/O and never starts a re-read (Recording, consulted first, does).
+// A flip of ai_usage_allowed alone does not notify OnChange; it takes
+// effect at the next read (≤ TTL) and, at ship time, on the shipper's
+// fresh read.
+func (g *ConsentGate) AIUsageAllowed() bool {
+	if g == nil {
+		return false
+	}
+	d := g.snap.Load()
+	if d == nil || d.gen != g.gen.Load() || g.cfg.Now().Sub(d.At) > g.cfg.TTL {
+		return false
+	}
+	return d.Open && d.AIUsageAllowed
 }
 
 // Last returns the most recent decision (zero = never evaluated: closed).
@@ -369,7 +395,8 @@ func (g *ConsentGate) evaluate(ctx context.Context) Decision {
 	if !consent.Effective {
 		return Decision{Reason: ReasonNotEffective, Definitive: true}
 	}
-	return Decision{Open: true, ResourceOrgID: id.ResourceOrgID, NodeID: id.NodeID}
+	return Decision{Open: true, ResourceOrgID: id.ResourceOrgID, NodeID: id.NodeID,
+		AIUsageAllowed: consent.Effective && consent.AIUsageAllowed}
 }
 
 // Start runs the background refresher: a re-read every 5/6 of the TTL, so

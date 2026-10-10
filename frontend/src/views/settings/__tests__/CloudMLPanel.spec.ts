@@ -396,5 +396,128 @@ describe('CloudMLPanel', () => {
       expect(mlAckNotice).toHaveBeenCalledWith(3);
       expect(approveItem).not.toHaveBeenCalled();
     });
+
+    it("shows the hub item's title as the heading above the verbatim body_text (Fleet rev-2)", async () => {
+      const body = "What's new\n\nAI usage is now included.";
+      const { wrapper } = mountWith(
+        hub({ noticeTitle: 'Your organization has enabled workflow data offload', noticeText: body }),
+      );
+      await flushPromises();
+      const heading = q(wrapper, 'cloud-ml-notice-heading');
+      expect(heading.exists()).toBe(true);
+      expect(heading.text()).toBe('Your organization has enabled workflow data offload');
+      expect(q(wrapper, 'cloud-ml-notice-text').element.textContent).toBe(body);
+      // The heading comes before the body.
+      const html = q(wrapper, 'cloud-ml-notice').html();
+      expect(html.indexOf('cloud-ml-notice-heading')).toBeLessThan(html.indexOf('cloud-ml-notice-text'));
+    });
+  });
+
+  describe("fallback notice: counsel's rev-1 text (no hub)", () => {
+    const SECTIONS = [
+      { label: 'What leaves your machine:', text: 'a record of your workflow activity: file paths, …' },
+      { label: 'Where it goes:', text: "Kameas's cloud in Ohio, USA (AWS us-east-2), …" },
+    ];
+    const notice = (policy: string, policyText: string, actions: string[]) => ({
+      heading: 'Your organization has enabled workflow data offload',
+      intro: 'Acme Corp has turned on Offload for your account. Here is exactly what that means.',
+      sections: SECTIONS,
+      policyText,
+      policy,
+      actions,
+    });
+    const MEMBER =
+      'You decide. Offload is off for you until you turn it on below. You can turn it off at any time in Settings → Offload.';
+    const REQUIRED =
+      'Your organization has made Offload required for all members. If you have questions about this, contact your organization\'s administrator.';
+    const memberChoice = (over: Partial<MLStatus> = {}) =>
+      status({
+        orgOffloadEnabled: true,
+        orgPolicy: 'member_choice',
+        noticeVersion: 3,
+        noticeText: 'plain',
+        notice: notice('member_choice', MEMBER, ['Turn on Offload', 'Not now']),
+        ...over,
+      });
+    const required = (over: Partial<MLStatus> = {}) =>
+      status({
+        orgOffloadEnabled: true,
+        orgPolicy: 'on',
+        noticeAckRequired: true,
+        noticeVersion: 3,
+        noticeText: 'plain',
+        notice: notice('on', REQUIRED, ['I have read this']),
+        ...over,
+      });
+    const actions = (w: any) => w.findAll('[data-testid="cloud-ml-notice-action"]');
+
+    it('lays out heading, intro, bold labels and the member-choice paragraph', async () => {
+      const { wrapper } = mountWith(memberChoice());
+      await flushPromises();
+      expect(q(wrapper, 'cloud-ml-notice-heading').text()).toBe('Your organization has enabled workflow data offload');
+      expect(q(wrapper, 'cloud-ml-notice-intro').text()).toBe(
+        'Acme Corp has turned on Offload for your account. Here is exactly what that means.',
+      );
+      const secs = wrapper.findAll('[data-testid="cloud-ml-notice-section"]');
+      expect(secs.length).toBe(2);
+      expect(secs[0].find('strong').text()).toBe('What leaves your machine:');
+      expect(secs[0].text()).toBe('What leaves your machine: a record of your workflow activity: file paths, …');
+      expect(q(wrapper, 'cloud-ml-notice-policy').text()).toBe(MEMBER);
+      expect(actions(wrapper).map((b: any) => b.text())).toEqual(['Turn on Offload', 'Not now']);
+      // The plain-text fallback and the legacy Acknowledge button are not shown.
+      expect(q(wrapper, 'cloud-ml-notice-text').exists()).toBe(false);
+      expect(q(wrapper, 'cloud-ml-ack').exists()).toBe(false);
+    });
+
+    it('"Turn on Offload" sets the opt-in, then acknowledges the version shown', async () => {
+      const optedIn = memberChoice({ userWorkflowEventsOptedIn: true, noticeAckRequired: true, noticeVersion: 3 });
+      const done = memberChoice({ userWorkflowEventsOptedIn: true, effective: true, noticeAckedAt: '2026-10-10T12:00:00Z' });
+      const { wrapper, setWorkflowEventsOptIn, mlAckNotice, approveItem } = mountWith(memberChoice(), {
+        optIn: async () => optedIn,
+        ack: async () => done,
+      });
+      await flushPromises();
+      await actions(wrapper)[0].trigger('click');
+      await flushPromises();
+      expect(setWorkflowEventsOptIn).toHaveBeenCalledWith(true);
+      expect(mlAckNotice).toHaveBeenCalledWith(3);
+      expect(setWorkflowEventsOptIn.mock.invocationCallOrder[0]).toBeLessThan(mlAckNotice.mock.invocationCallOrder[0]);
+      expect(approveItem).not.toHaveBeenCalled();
+      expect(q(wrapper, 'cloud-ml-effective').text()).toContain('On');
+      expect(q(wrapper, 'cloud-ml-notice').exists()).toBe(false);
+    });
+
+    it('"Not now" closes the notice and makes no request', async () => {
+      const { wrapper, setWorkflowEventsOptIn, mlAckNotice, approveItem } = mountWith(memberChoice());
+      await flushPromises();
+      await actions(wrapper)[1].trigger('click');
+      await flushPromises();
+      expect(q(wrapper, 'cloud-ml-notice').exists()).toBe(false);
+      expect(setWorkflowEventsOptIn).not.toHaveBeenCalled();
+      expect(mlAckNotice).not.toHaveBeenCalled();
+      expect(approveItem).not.toHaveBeenCalled();
+    });
+
+    it('required: the required paragraph and "I have read this" acknowledges', async () => {
+      const { wrapper, mlAckNotice, setWorkflowEventsOptIn } = mountWith(required());
+      await flushPromises();
+      expect(q(wrapper, 'cloud-ml-notice-policy').text()).toBe(REQUIRED);
+      expect(actions(wrapper).map((b: any) => b.text())).toEqual(['I have read this']);
+      await actions(wrapper)[0].trigger('click');
+      await flushPromises();
+      expect(mlAckNotice).toHaveBeenCalledWith(3);
+      expect(setWorkflowEventsOptIn).not.toHaveBeenCalled();
+    });
+
+    it('a 409 on the ack re-shows the notice with the "changed" line', async () => {
+      const { wrapper } = mountWith(required(), {
+        ack: async () => required({ noticeVersion: 4, noticeChanged: true }),
+      });
+      await flushPromises();
+      await actions(wrapper)[0].trigger('click');
+      await flushPromises();
+      expect(q(wrapper, 'cloud-ml-notice-changed').exists()).toBe(true);
+      expect(q(wrapper, 'cloud-ml-notice-heading').exists()).toBe(true);
+    });
   });
 });

@@ -8028,6 +8028,60 @@ export namespace settings {
 	        this.reason = source["reason"];
 	    }
 	}
+	export class MLNoticeSection {
+	    label: string;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MLNoticeSection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.text = source["text"];
+	    }
+	}
+	export class MLNoticeView {
+	    heading: string;
+	    intro: string;
+	    sections: MLNoticeSection[];
+	    policyText: string;
+	    policy: string;
+	    actions: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MLNoticeView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.heading = source["heading"];
+	        this.intro = source["intro"];
+	        this.sections = this.convertValues(source["sections"], MLNoticeSection);
+	        this.policyText = source["policyText"];
+	        this.policy = source["policy"];
+	        this.actions = source["actions"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MLShippingStatusView {
 	    lastBatchAt: string;
 	    accepted: number;
@@ -8065,6 +8119,8 @@ export namespace settings {
 	    retainOnWithdrawal: boolean;
 	    orgName: string;
 	    noticeText: string;
+	    notice?: MLNoticeView;
+	    noticeTitle?: string;
 	    noticeChanged?: boolean;
 	    noticeTextRevision: number;
 	    ackedTextRevision: number;
@@ -8102,6 +8158,8 @@ export namespace settings {
 	        this.retainOnWithdrawal = source["retainOnWithdrawal"];
 	        this.orgName = source["orgName"];
 	        this.noticeText = source["noticeText"];
+	        this.notice = this.convertValues(source["notice"], MLNoticeView);
+	        this.noticeTitle = source["noticeTitle"];
 	        this.noticeChanged = source["noticeChanged"];
 	        this.noticeTextRevision = source["noticeTextRevision"];
 	        this.ackedTextRevision = source["ackedTextRevision"];

@@ -18,6 +18,7 @@ type fakeConsent struct {
 	capsErr error
 	eff     bool
 	excl    Exclusions
+	ai      bool // AIUsageAllowed (Rev2Kinds)
 	effErr  error
 	mlReads int
 	idReads int
@@ -28,6 +29,7 @@ func devConsent() *fakeConsent {
 		id:   Identity{SignedIn: true, Enrolled: true, ResourceOrgID: "390451413051827052", NodeID: "NODE1"},
 		caps: CapabilityState{HostedInference: true},
 		eff:  true,
+		ai:   true, // the org instructs AI usage: Rev2Kinds ship unless a test turns it off
 	}
 }
 
@@ -59,7 +61,7 @@ func (f *fakeConsent) MLConsent(context.Context) (MLConsent, error) {
 	if f.effErr != nil {
 		return MLConsent{}, f.effErr
 	}
-	return MLConsent{Effective: f.eff, Exclusions: f.excl}, nil
+	return MLConsent{Effective: f.eff, AIUsageAllowed: f.ai, Exclusions: f.excl}, nil
 }
 
 type purgeCounter struct {

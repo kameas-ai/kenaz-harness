@@ -23,6 +23,15 @@
  * the dashboard routing above are only the fallback for a Fleet without the
  * hub.
  *
+ * Fallback notice (2026-10-10): without the hub, `notice` is counsel's
+ * approved rev-1 text (Fleet text revision 1) as structured fields: heading,
+ * intro, bold-labelled paragraphs and the policy paragraph, laid out here
+ * with the policy's buttons — member_choice: "Turn on Offload" (set the
+ * workflow_events opt-in, then acknowledge the version shown) and "Not now"
+ * (close, no request); required (policy on): "I have read this" (ack).
+ * With the hub, the item's title (`noticeTitle`) is the heading above its
+ * verbatim body_text (Fleet's rev-2 notice keeps the heading out of it).
+ *
  * Hidden when signed out or without the hosted_inference capability.
  */
 import { computed, onMounted, ref } from 'vue';
@@ -68,9 +77,32 @@ const DASHBOARD_NOTICE =
   'approve it; uploads from this device stay off until you do.';
 const needsDashboard = computed(() => loaded.value && !!status.value?.noticeNeedsDashboard);
 const dashboardUrl = computed(() => status.value?.noticeDashboardUrl ?? '');
-const showNotice = computed(
-  () => loaded.value && !!status.value?.noticeAckRequired && !needsDashboard.value,
+/** "Not now" closes the fallback notice for this visit; no request is made. */
+const dismissed = ref(false);
+/** The fallback notice (counsel's rev-1 text), when the hub is not the source. */
+const localNotice = computed(() => (status.value?.noticeFromHub ? undefined : status.value?.notice));
+/**
+ * Member choice, offload on, not opted in: the fallback notice is how the
+ * member turns Offload on ("Turn on Offload" / "Not now"), so it shows even
+ * before Fleet asks for an acknowledgement.
+ */
+const memberChoicePrompt = computed(
+  () =>
+    !!localNotice.value &&
+    localNotice.value.policy === 'member_choice' &&
+    !!status.value?.orgOffloadEnabled &&
+    !status.value?.userWorkflowEventsOptedIn,
 );
+const showNotice = computed(
+  () =>
+    loaded.value &&
+    !needsDashboard.value &&
+    !dismissed.value &&
+    (!!status.value?.noticeAckRequired || memberChoicePrompt.value),
+);
+const ACTION_TURN_ON = 'Turn on Offload';
+const ACTION_NOT_NOW = 'Not now';
+const ACTION_READ = 'I have read this';
 
 function openDashboard() {
   if (dashboardUrl.value) client.openExternalURL(dashboardUrl.value);
@@ -151,6 +183,43 @@ async function acknowledge() {
   }
 }
 
+/**
+ * "Turn on Offload" (member choice): set the workflow_events opt-in, then
+ * acknowledge the notice version that was shown. If Fleet now serves the
+ * notice from the hub, or routes to the dashboard, that (different) text is
+ * shown instead and nothing more is acknowledged here.
+ */
+async function turnOnOffload() {
+  const s = status.value;
+  if (!s || busy.value) return;
+  const shownVersion = s.noticeVersion;
+  busy.value = true;
+  errorMsg.value = '';
+  try {
+    const next = await client.fleet.setWorkflowEventsOptIn(true);
+    status.value = next;
+    if (next.noticeFromHub || next.noticeNeedsDashboard || !next.noticeAckRequired) return;
+    const acked = await client.fleet.mlAckNotice(shownVersion);
+    status.value = acked;
+    noticeChanged.value = !!acked.noticeChanged;
+  } catch (err) {
+    if (isPolicyChanged(err)) {
+      noticeChanged.value = true;
+      await refresh();
+    } else {
+      errorMsg.value = err instanceof Error ? err.message : String(err);
+    }
+  } finally {
+    busy.value = false;
+  }
+}
+
+function onNoticeAction(action: string) {
+  if (action === ACTION_TURN_ON) void turnOnOffload();
+  else if (action === ACTION_NOT_NOW) dismissed.value = true;
+  else if (action === ACTION_READ) void acknowledge();
+}
+
 async function setOptIn(optedIn: boolean) {
   if (busy.value) return;
   busy.value = true;
@@ -217,16 +286,44 @@ function onOptInChange(ev: Event) {
         <p v-if="noticeChanged" class="text-signal-warn" data-testid="cloud-ml-notice-changed">
           The notice changed since it was shown. Please read it again.
         </p>
-        <p class="whitespace-pre-wrap" data-testid="cloud-ml-notice-text">{{ status.noticeText }}</p>
-        <button
-          type="button"
-          class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          :disabled="busy"
-          data-testid="cloud-ml-ack"
-          @click="acknowledge"
-        >
-          Acknowledge
-        </button>
+        <!-- Fallback (no hub): counsel's rev-1 text, laid out from structured fields. -->
+        <template v-if="localNotice">
+          <h3 class="text-[13px] font-semibold" data-testid="cloud-ml-notice-heading">{{ localNotice.heading }}</h3>
+          <p data-testid="cloud-ml-notice-intro">{{ localNotice.intro }}</p>
+          <p v-for="s in localNotice.sections" :key="s.label" data-testid="cloud-ml-notice-section">
+            <strong>{{ s.label }}</strong> {{ s.text }}
+          </p>
+          <p v-if="localNotice.policyText" data-testid="cloud-ml-notice-policy">{{ localNotice.policyText }}</p>
+          <div class="flex gap-2">
+            <button
+              v-for="a in localNotice.actions"
+              :key="a"
+              type="button"
+              class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              :disabled="busy"
+              data-testid="cloud-ml-notice-action"
+              @click="onNoticeAction(a)"
+            >
+              {{ a }}
+            </button>
+          </div>
+        </template>
+        <!-- Hub: the item title is the heading; body_text verbatim below it. -->
+        <template v-else>
+          <h3 v-if="status.noticeTitle" class="text-[13px] font-semibold" data-testid="cloud-ml-notice-heading">
+            {{ status.noticeTitle }}
+          </h3>
+          <p class="whitespace-pre-wrap" data-testid="cloud-ml-notice-text">{{ status.noticeText }}</p>
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="busy"
+            data-testid="cloud-ml-ack"
+            @click="acknowledge"
+          >
+            Acknowledge
+          </button>
+        </template>
       </div>
 
       <div

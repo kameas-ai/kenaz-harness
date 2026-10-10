@@ -5360,6 +5360,66 @@ func TestMLMinimisationGate_PlantedRealBranchNameFires(t *testing.T) {
 		`does not match ^x*$`, `canary`)
 }
 
+// The agent.turn clamp loses its upper bound: the corpus's out-of-range
+// turn (50 000 model calls, 72 h) reaches the outbox unclamped and the
+// dynamic half's bounds rule fires.
+func TestMLMinimisationGate_PlantedOutOfRangeTurnValueFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		"v = min(max(v, b.Min), b.Max)",
+		"v = max(v, b.Min)",
+		`agent.turn.model_calls = 50000 is outside the bounds sent to Fleet`,
+		`agent.turn.dur_ms = 259200000 is outside the bounds sent to Fleet`)
+}
+
+// A bound widened in PayloadBounds: the static half sees the drift from
+// the contract, and the dynamic half the out-of-range value it lets out.
+func TestMLMinimisationGate_PlantedWidenedTurnBoundFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		`"model_calls": {0, 10_000},`,
+		`"model_calls": {0, 100_000},`,
+		`PayloadBounds agent.turn.model_calls is 0..100000, the contract says 0..10000`,
+		`agent.turn.model_calls = 50000 is outside the bounds sent to Fleet`)
+}
+
+// Counsel D43/C3: agent.tool.tool carrying the MCP name in clear instead
+// of mcp:h(name). The closed-tool rule fires, and so does the canary scan
+// (the corpus's user-named and shipped-recipe MCP names).
+func TestMLMinimisationGate_PlantedClearMCPToolNameFires(t *testing.T) {
+	mlMinimisationPlant(t, "minimise.go",
+		"return MCPToolPrefix + m.h(name)",
+		"return name",
+		`agent.tool.tool = "github__create_issue" is neither a BuiltinToolNames entry nor mcp:<16 hex>`,
+		`canary "zzprivateserver"`)
+}
+
+// An MCP tool name smuggled into the clear list: the static half refuses
+// a non-first-party entry.
+func TestMLMinimisationGate_PlantedMCPNameInBuiltinListFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		"\t\"fleet-sites__sites_delete\",\n",
+		"\t\"fleet-sites__sites_delete\",\n\t\"github__create_issue\",\n",
+		`BuiltinToolNames has "github__create_issue", which is not a first-party tool`)
+}
+
+// agent.tool's dur_ms bound dropped: the corpus's 30-hour MCP call reaches
+// the outbox unclamped (and the static half sees the table drift).
+func TestMLMinimisationGate_PlantedAgentToolDurationUnboundedFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		"\tKindTool: {\n\t\t\"dur_ms\": {0, 86_400_000}, // one day\n\t},\n",
+		"",
+		`PayloadBounds has no bound for agent.tool.dur_ms`,
+		`agent.tool.dur_ms = 108000000 is outside the bounds sent to Fleet`)
+}
+
+// agent.tool dropped from Rev2Kinds: it would record and ship without the
+// org's AI-usage instruction.
+func TestMLMinimisationGate_PlantedRev2KindDroppedFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		"var Rev2Kinds = []string{KindTool, KindTurn}",
+		"var Rev2Kinds = []string{KindTurn}",
+		`Rev2Kinds is missing "agent.tool"`)
+}
+
 // WP07: a read's `file` event carrying the raw absolute path instead of
 // h(abs)+ext.
 func TestMLMinimisationGate_PlantedRawReadPathFires(t *testing.T) {

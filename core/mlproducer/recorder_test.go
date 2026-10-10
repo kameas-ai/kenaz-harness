@@ -48,6 +48,7 @@ type harness struct {
 	store *mlstore.Store
 	rec   *Recorder
 	gate  *atomic.Bool
+	ai    *atomic.Bool // AIUsageAllowed (Rev2Kinds); true by default
 	clock *fakeClock
 }
 
@@ -66,9 +67,10 @@ func openDB(t *testing.T, dir string) (storage.DB, *mlstore.Store) {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{t: t, dir: t.TempDir(), gate: &atomic.Bool{},
+	h := &harness{t: t, dir: t.TempDir(), gate: &atomic.Bool{}, ai: &atomic.Bool{},
 		clock: &fakeClock{now: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}}
 	h.gate.Store(true)
+	h.ai.Store(true)
 	h.db, h.store = openDB(t, h.dir)
 	h.rec = h.newRecorder()
 	t.Cleanup(func() {
@@ -82,8 +84,7 @@ func (h *harness) newRecorder() *Recorder {
 	return NewRecorder(Config{
 		Store:         h.store,
 		Hasher:        NewHasher(h.dir),
-		Gate:          GateFunc(h.gate.Load),
-		Servers:       ServerClassifierFunc(func(s string) bool { return s == "my-private-server" }),
+		Gate:          KindGateFunc{Record: h.gate.Load, AIUsage: h.ai.Load},
 		Workspace:     func() string { return workspace },
 		Now:           h.clock.Now,
 		SweepInterval: -1,
@@ -467,7 +468,7 @@ func TestRecorder_OutcomesAndBackgroundBash(t *testing.T) {
 	if _, has := tools[1].event.Payload["path"]; has {
 		t.Error("agent.tool carried a path (not in its A-10 key set)")
 	}
-	if tools[2].event.Payload["tool"] != "custom__"+h.hash("my-private-server")+"__lookup" || tools[2].event.Payload["outcome"] != "cancelled" {
+	if tools[2].event.Payload["tool"] != MCPToolPrefix+h.hash("my-private-server__lookup") || tools[2].event.Payload["outcome"] != "cancelled" {
 		t.Errorf("custom MCP call = %v", tools[2].event.Payload)
 	}
 	if tools[3].event.Payload["tool"] != "kenaz__bash" || tools[3].event.Payload["outcome"] != "cancelled" {
@@ -736,6 +737,7 @@ func TestRecorder_TrailingUpsertCarriesFinalCounters(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.gate.Store(true)
+	h.ai.Store(true)
 	if n := countTasks(h.outbox()); n != 3 {
 		t.Fatalf("FlushTasks wrote with the gate closed (%d upserts)", n)
 	}

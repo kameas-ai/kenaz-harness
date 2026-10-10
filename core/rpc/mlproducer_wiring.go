@@ -33,12 +33,10 @@ package rpc
 // this producer follows it. It records and ships only when a fleet
 // identity is enrolled in that process and every gate condition holds.
 //
-// MCP server classification (spec §3.2): a server whose recipe is
-// Source user / imported is user-named and ships as custom__h(server). An
-// org-provisioned recipe (Source org) is NOT custom: its name is chosen
-// and published by the org, not a person's private naming (WP03 decision).
-// A server with no recipe in the merged catalog is treated as custom —
-// failing private.
+// Tool names (counsel D43/C3): agent.tool carries a first-party tool by
+// its exact name only when it is in mlproducer.BuiltinToolNames; every
+// MCP tool, whatever its recipe's source, ships as mcp:h("<server>__<tool>"),
+// so no recipe classification is needed here.
 
 import (
 	"bytes"
@@ -55,7 +53,6 @@ import (
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
-	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer"
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
@@ -72,7 +69,6 @@ const (
 type mlProducerWiring struct {
 	dataDir  string
 	settings *settings.API
-	catalog  *recipes.MergedCatalog
 
 	store   *mlstore.Store
 	rec     *mlproducer.Recorder
@@ -92,7 +88,7 @@ type mlProducerWiring struct {
 // newMLProducerWiring builds the producer over c's database and data dir.
 // nil (every accessor nil-safe) when there is no real DataDir, database or
 // settings API — the rpc.New(nil) chassis.
-func newMLProducerWiring(c *core.Core, settingsImpl *settings.API, catalog *recipes.MergedCatalog) *mlProducerWiring {
+func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWiring {
 	if c == nil || settingsImpl == nil || c.DataDir() == "" {
 		return nil
 	}
@@ -105,7 +101,7 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API, catalog *reci
 		logging.L().Warn("mlproducer.wiring.no_sql_handle")
 		return nil
 	}
-	w := &mlProducerWiring{dataDir: c.DataDir(), settings: settingsImpl, catalog: catalog}
+	w := &mlProducerWiring{dataDir: c.DataDir(), settings: settingsImpl}
 	w.store = mlstore.New(h.SQL())
 	w.source = &fleetMLConsentSource{settings: settingsImpl}
 	w.gate = mlproducer.NewConsentGate(mlproducer.GateConfig{
@@ -126,7 +122,6 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API, catalog *reci
 		Store:     w.store,
 		Hasher:    mlproducer.NewHasher(c.DataDir()),
 		Gate:      w.gate,
-		Servers:   mlproducer.ServerClassifierFunc(w.isCustomServer),
 		Workspace: c.WorkspaceDir,
 		// WP07: tasks.branch = "x"×len(current branch of the workspace).
 		GitBranch: mlproducer.ReadGitBranch,
@@ -323,20 +318,6 @@ func (w *mlProducerWiring) shippingStatus() settings.MLShippingStatusView {
 	return v
 }
 
-// isCustomServer: user / imported recipes and servers with no recipe are
-// user-named (hashed on the wire); shipped, registry and org recipes are
-// not.
-func (w *mlProducerWiring) isCustomServer(server string) bool {
-	if w == nil || w.catalog == nil {
-		return true
-	}
-	r, ok := w.catalog.Get(server)
-	if !ok {
-		return true
-	}
-	return r.Source == recipes.SourceUser || r.Source == recipes.SourceImported
-}
-
 // ---- ConsentSource over core/fleet ----
 
 // fleetMLConsentSource implements mlproducer.ConsentSource.
@@ -427,8 +408,8 @@ func (s *fleetMLConsentSource) hookPoller(p *corefleet.CapabilityPoller) {
 	p.OnChange(func(corefleet.Capabilities) { inv() })
 }
 
-// MLConsent is a fresh GET /api/v1/me/ml folded through IsEffective, plus
-// the org's typed exclusions from the same read (WP05). A malformed
+// MLConsent is a fresh GET /api/v1/me/ml folded through IsEffective (and
+// AIUsageEffective for the rev-2 kinds), plus the org's typed exclusions from the same read (WP05). A malformed
 // exclusions value fails GetMeML's strict decode, so the gate closes.
 // legacy_exclusion_notes are deliberately not passed on: free text, never
 // patterns (contract "Producers ignore them").
@@ -443,6 +424,9 @@ func (s *fleetMLConsentSource) MLConsent(ctx context.Context) (mlproducer.MLCons
 	}
 	return mlproducer.MLConsent{
 		Effective: m.IsEffective(),
+		// Fleet's derived ai_usage_allowed (absent = false), folded with
+		// IsEffective: gates the rev-2 kinds (agent.turn).
+		AIUsageAllowed: m.AIUsageEffective(),
 		Exclusions: mlproducer.Exclusions{
 			Paths:          m.Exclusions.Paths,
 			Commands:       m.Exclusions.Commands,
