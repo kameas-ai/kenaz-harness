@@ -7,6 +7,7 @@ name: Release
 #   Trigger                                 Target env   Notes
 #   ─────────────────────────────────────── ──────────── ────────────────────────
 #   push to main (any non-tag commit)       dev          Rolling "latest" build.
+#   (only when repo var AUTO_RELEASE=true)
 #                                                        Published to
 #                                                        s3://kameas-ai-dev-releases-use2
 #                                                        and served from
@@ -105,6 +106,10 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   resolve-env:
     name: Resolve target environment
+    # Push-to-main (dev) builds are opt-in via the repository variable
+    # AUTO_RELEASE=true; tag pushes, release events and dispatches always run.
+    # Every other job needs this one, so a skip here skips the whole run.
+    if: github.event_name != 'push' || github.ref_type == 'tag' || vars.AUTO_RELEASE == 'true'
     # Trivial bash coordinator — moved off ubuntu-latest to keep release
     # runs entirely on the self-hosted pool except for the Apple/Microsoft
     # platform builds below that genuinely need macos-latest / windows-latest.
