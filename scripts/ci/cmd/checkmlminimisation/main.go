@@ -27,8 +27,11 @@
 // absolute, relative and Windows paths; bash with long commands carrying
 // paths, secrets, env assignments and URLs; a custom (user-named) MCP
 // server; git commit; test commands; refused and denied calls; background
-// bash; an invented tool name; turn ends; a subagent child; a session
-// delete. The outbox is then read back and every record is checked
+// bash and its exit (WP07: a failing background test); reads whose
+// results name canary paths (read_file, grep, glob, list_dir; WP07: reads
+// ship `file` events); an invented tool name; turn ends; a subagent child;
+// a session delete. The workspace branch is a canary name read from a
+// fake repository by the real HEAD reader. The outbox is then read back and every record is checked
 // against §7:
 //
 //   - a kind outside the contract table;
@@ -40,10 +43,13 @@
 //     secrets and the private server name) appearing verbatim;
 //   - a task `files` key that is not h+ext;
 //   - a task `repo_root` that is not h(workspace) under the fixed key —
-//     recomputed here with crypto/hmac, not with the package's Hasher.
+//     recomputed here with crypto/hmac, not with the package's Hasher;
+//   - a task `branch` that does not match `^x*$` (WP07: only the branch
+//     name's length ships, as a placeholder; the name never leaves the
+//     device).
 //
-// Floor: every contract kind and at least one task upsert must appear in
-// the outbox, so a recorder that silently records nothing cannot pass.
+// Floor: every contract kind, at least one task upsert and at least one
+// non-empty branch placeholder must appear in the outbox, so a recorder that silently records nothing cannot pass.
 //
 // Exit codes (when run directly): 0 clean; 1 the scan or the harness
 // itself failed; 2 at least one violation. check-ml-producer-
@@ -71,6 +77,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -367,6 +374,11 @@ const workspace = "/Users/zzcanaryuser/src/zzcanaryrepo"
 // privateServer is a user-named MCP server; its name must never ship.
 const privateServer = "zzprivateserver"
 
+// canaryBranch is the workspace's git branch in the fixture repository
+// (multi-byte on purpose: the placeholder counts runes). Only "x"×len
+// may ship.
+const canaryBranch = "zzcanary/feature-ünïcode"
+
 type fixture struct {
 	session    string
 	unattended bool
@@ -432,6 +444,24 @@ func corpus() []fixture {
 		canaries: []string{"zzcanarymissing"}})
 	add(fixture{tool: "kenaz__read_file", args: map[string]any{"path": workspace + "/README_zzcanary.md"},
 		result: "zzcanary file contents", canaries: []string{"README_zzcanary"}})
+	// WP07 reads: every path named by the RESULT ships as a `file` event
+	// (h+ext), relative ones resolved against the tool's root.
+	add(fixture{tool: "kenaz__read_file", args: map[string]any{"path": "internal/zzcanaryread/secret_zzcanary.go", "offset": 0},
+		result:   `{"content":"zzcanary contents","byte_size":17,"truncated":false}`,
+		canaries: []string{"zzcanaryread", "secret_zzcanary"}})
+	add(fixture{tool: "kenaz__grep", args: map[string]any{"pattern": "zzcanarypattern", "path": "internal"},
+		result: `{"matches":[{"file":"` + workspace + `/internal/zzcanarygrep/a.go","line":3,"content":"zzcanary match line"},` +
+			`{"file":"` + workspace + `/internal/zzcanarygrep/a.go","line":9,"content":"zzcanary again"},` +
+			`{"file":"zzcanaryrelgrep/b.py","line":1,"content":"zzcanary rel"}],"truncated":false}`,
+		canaries: []string{"zzcanarygrep", "zzcanaryrelgrep", "zzcanary match line"}})
+	add(fixture{tool: "kenaz__glob", args: map[string]any{"pattern": "**/*.ts", "base_dir": workspace + "/web"},
+		result:   `{"matches":["` + workspace + `/web/zzcanaryglob/x.ts","zzcanaryglobrel/y.tsx"],"truncated":false}`,
+		canaries: []string{"zzcanaryglob"}})
+	add(fixture{tool: "kenaz__list_dir", args: map[string]any{"path": "docs/zzcanarylist", "recursive": true},
+		result: `{"entries":[{"name":"plan_zzcanary.md","type":"file","size":1,"path":"plan_zzcanary.md"},` +
+			`{"name":"zzcanarysub","type":"dir","size":0,"path":"zzcanarysub"},` +
+			`{"name":"n.txt","type":"file","size":1,"path":"zzcanarysub/n.txt"}],"truncated":false}`,
+		canaries: []string{"zzcanarylist", "plan_zzcanary", "zzcanarysub"}})
 	// Bash that ran.
 	for _, c := range cmds {
 		add(fixture{tool: "kenaz__bash", args: bashArgs(c.cmd), result: bashResult(c.exit),
@@ -468,7 +498,7 @@ func corpus() []fixture {
 
 // Generic canaries checked against every record, in addition to each
 // fixture's own list: every canary value in the corpus embeds one.
-var globalCanaries = []string{"zzcanary", "zzhunter", privateServer, workspace, "/Users/zzcanaryuser"}
+var globalCanaries = []string{"zzcanary", "zzhunter", privateServer, workspace, "/Users/zzcanaryuser", canaryBranch, "feature-"}
 
 func dynamicHalf() ([]string, error) {
 	tmp, err := os.MkdirTemp("", "ml-minimisation-gate-")
@@ -491,6 +521,19 @@ func dynamicHalf() ([]string, error) {
 	}
 	store := mlstore.New(h.SQL())
 
+	// WP07: the workspace's branch is a canary name, served from a fake
+	// repository through the real HEAD reader. Only "x"×len may ship.
+	fakeRepo := filepath.Join(tmp, "zzcanaryrepo")
+	if err := os.MkdirAll(filepath.Join(fakeRepo, ".git"), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(fakeRepo, ".git", "HEAD"), []byte("ref: refs/heads/"+canaryBranch+"\n"), 0o644); err != nil {
+		return nil, err
+	}
+	if got := mlproducer.ReadGitBranch(fakeRepo); got != canaryBranch {
+		return nil, fmt.Errorf("fake repository branch reads as %q, want %q — the branch fixture is broken", got, canaryBranch)
+	}
+
 	clock := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	now := func() time.Time { clock = clock.Add(90 * time.Second); return clock }
 	rec := mlproducer.NewRecorder(mlproducer.Config{
@@ -499,6 +542,7 @@ func dynamicHalf() ([]string, error) {
 		Gate:          mlproducer.GateFunc(func() bool { return true }),
 		Servers:       mlproducer.ServerClassifierFunc(func(s string) bool { return s == privateServer }),
 		Workspace:     func() string { return workspace },
+		GitBranch:     func(string) string { return mlproducer.ReadGitBranch(fakeRepo) },
 		Now:           now,
 		SweepInterval: -1,
 	})
@@ -524,6 +568,9 @@ func dynamicHalf() ([]string, error) {
 		}
 	}
 	ctx := context.Background()
+	// WP07: the background `go test` spawned above fails; its exit arrives
+	// on a detached, unattended ctx and ships a follow-up terminal.
+	rec.BackgroundEnded(runposture.Unattended(ctx), "bg-zzcanary", 1)
 	rec.TurnEnded(ctx, "zzcanary-session-attended", "completed", 3, 9, 1500*time.Millisecond)
 	rec.TurnEnded(runposture.Unattended(ctx), "zzcanary-child", "stopped", 1, 1, time.Second)
 	rec.TurnEnded(ctx, "zzcanary-session-attended", "failed", 1, 0, time.Second) // no tool call → idle
@@ -543,7 +590,7 @@ func dynamicHalf() ([]string, error) {
 
 	var v []string
 	kindsSeen := map[string]int{}
-	tasks := 0
+	tasks, branches := 0, 0
 	wantRepoRoot := hmacHex(workspace)
 	for _, r := range recs {
 		where := fmt.Sprintf("outbox seq %d (%s/%s)", r.Seq, r.Table, r.Op)
@@ -562,7 +609,9 @@ func dynamicHalf() ([]string, error) {
 			_ = ev
 		case r.Table == mlstore.TableTasks && r.Op == mlstore.OpUpsert:
 			tasks++
-			checkTask(where, r, wantRepoRoot, &v)
+			if checkTask(where, r, wantRepoRoot, &v) {
+				branches++
+			}
 		default:
 			v = append(v, fmt.Sprintf("%s: unknown table/op", where))
 		}
@@ -583,6 +632,10 @@ func dynamicHalf() ([]string, error) {
 	}
 	if tasks == 0 {
 		v = append(v, "dynamic floor: the fixture corpus produced no task upsert")
+	}
+	if branches == 0 {
+		v = append(v, "dynamic floor: no task upsert carried a non-empty branch placeholder — the branch "+
+			"read is not reaching the wire, so the ^x*$ rule checked nothing")
 	}
 	var seen []string
 	for k, n := range kindsSeen {
@@ -606,6 +659,7 @@ var (
 	rePathTok  = regexp.MustCompile(`^[0-9a-f]{16}(\.[a-z0-9]{1,12})?$`)
 	reToolName = regexp.MustCompile(`^(custom__[0-9a-f]{16}__[A-Za-z0-9_.-]{1,128}|invalid__[0-9a-f]{16}|[A-Za-z0-9_.-]{1,128})$`)
 	reHashPfx  = regexp.MustCompile(`^(custom__[0-9a-f]{16}__|invalid__[0-9a-f]{16})`)
+	reBranch   = regexp.MustCompile(`^x*$`)
 )
 
 var toolOutcomes = map[string]bool{"ok": true, "error": true, "denied": true, "cancelled": true}
@@ -746,11 +800,13 @@ func checkValue(where, kind, key string, val any, v *[]string) {
 	}
 }
 
-func checkTask(where string, r mlstore.Record, wantRepoRoot string, v *[]string) {
+// checkTask checks one task upsert; it reports whether the task carried a
+// non-empty (and valid) branch placeholder.
+func checkTask(where string, r mlstore.Record, wantRepoRoot string, v *[]string) bool {
 	t, err := decodeObj(r.Body)
 	if err != nil {
 		*v = append(*v, fmt.Sprintf("%s: body is not a JSON object: %v", where, err))
-		return
+		return false
 	}
 	for k := range t {
 		if !taskKeys[k] {
@@ -763,8 +819,15 @@ func checkTask(where string, r mlstore.Record, wantRepoRoot string, v *[]string)
 	if rr, _ := t["repo_root"].(string); !reHash.MatchString(rr) || rr != wantRepoRoot {
 		*v = append(*v, fmt.Sprintf("%s: repo_root %v is not h(workspace) under the install key", where, t["repo_root"]))
 	}
-	if b, ok := t["branch"].(string); !ok || b != "" {
-		*v = append(*v, fmt.Sprintf("%s: branch %v must be \"\"", where, t["branch"]))
+	branchOK := false
+	if b, ok := t["branch"].(string); !ok || !reBranch.MatchString(b) {
+		*v = append(*v, fmt.Sprintf("%s: branch %q does not match ^x*$ (only the name's length may ship; the name never leaves the device)",
+			where, fmt.Sprint(t["branch"])))
+	} else if b != "" {
+		branchOK = true
+		if n := utf8.RuneCountInString(canaryBranch); len(b) != n {
+			*v = append(*v, fmt.Sprintf("%s: branch placeholder has length %d, want %d (the fixture branch's rune count)", where, len(b), n))
+		}
 	}
 	if p, _ := t["phase"].(string); !phases[p] {
 		*v = append(*v, fmt.Sprintf("%s: phase %v is not a phase", where, t["phase"]))
@@ -786,6 +849,7 @@ func checkTask(where string, r mlstore.Record, wantRepoRoot string, v *[]string)
 			*v = append(*v, fmt.Sprintf("%s: task %s is not an integer", where, k))
 		}
 	}
+	return branchOK
 }
 
 // rawPath: a `/` or `\` with more than one non-empty segment.

@@ -306,8 +306,9 @@ func TestRecorder_SubagentOfAttended_LandsOnRootTask(t *testing.T) {
 			t.Errorf("child event on task %v, want root %s", r.event.Payload["task"], rootID)
 		}
 	}
-	if n := len(events(recs, KindTool)) + len(events(recs, KindFile)); n != 2 {
-		t.Fatalf("tool events = %d, want root's + child's", n)
+	// root's read = agent.tool + file (WP07), child's edit = file.
+	if n := len(events(recs, KindTool)) + len(events(recs, KindFile)); n != 3 {
+		t.Fatalf("tool events = %d, want root's read (agent.tool + file) + child's edit", n)
 	}
 	if n := len(events(recs, KindTurn)); n != 1 {
 		t.Errorf("child turn not emitted on the root task")

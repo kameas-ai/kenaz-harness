@@ -5351,6 +5351,33 @@ func TestMLMinimisationGate_PlantedMissingKindFires(t *testing.T) {
 		`KindTable is missing A-10 kind "commit"`)
 }
 
+// WP07: the real branch name in tasks.branch instead of its "x"×len
+// placeholder. The gate's ^x*$ rule (and its canary scan) must fire.
+func TestMLMinimisationGate_PlantedRealBranchNameFires(t *testing.T) {
+	mlMinimisationPlant(t, "branch.go",
+		"length: branchPlaceholder(name)",
+		"length: name",
+		`does not match ^x*$`, `canary`)
+}
+
+// WP07: a read's `file` event carrying the raw absolute path instead of
+// h(abs)+ext.
+func TestMLMinimisationGate_PlantedRawReadPathFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"tok := r.min.pathToken(c.abs)",
+		"tok := c.abs",
+		`file.path`, `is not h(abs)+ext`)
+}
+
+// WP07: the background follow-up terminal carrying the full command line
+// remembered at spawn instead of its two-token prefix.
+func TestMLMinimisationGate_PlantedFullBackgroundCmdFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"bgSpawn = &bgPending{at: at, taskID: id, cmd: r.min.cmdPrefix(cmd),",
+		"bgSpawn = &bgPending{at: at, taskID: id, cmd: cmd,",
+		`terminal.cmd`, `has 4 tokens`, `canary`)
+}
+
 // Negative control: the unmutated tree is clean, and says what it looked at.
 func TestMLMinimisationGate_CleanOnUnmutatedTree(t *testing.T) {
 	root := repoRoot(t)

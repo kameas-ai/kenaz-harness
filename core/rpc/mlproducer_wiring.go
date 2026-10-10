@@ -128,6 +128,8 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API, catalog *reci
 		Gate:      w.gate,
 		Servers:   mlproducer.ServerClassifierFunc(w.isCustomServer),
 		Workspace: c.WorkspaceDir,
+		// WP07: tasks.branch = "x"×len(current branch of the workspace).
+		GitBranch: mlproducer.ReadGitBranch,
 	})
 	w.shipper = mlproducer.NewShipper(mlproducer.ShipperConfig{
 		Store:     w.store,
@@ -189,6 +191,16 @@ func (w *mlProducerWiring) bashEnvProvider(sessionFromCtx func(context.Context) 
 		return nil
 	}
 	return w.rec.EnvProvider(sessionFromCtx)
+}
+
+// backgroundEnded is the recorder's half of bash.BackgroundEndFunc
+// (WP07): a background kenaz__bash job's exit becomes a follow-up
+// `terminal` for the spawning call. nil without a producer.
+func (w *mlProducerWiring) backgroundEnded() func(ctx context.Context, taskID string, exitCode int) {
+	if w == nil || w.rec == nil {
+		return nil
+	}
+	return w.rec.BackgroundEnded
 }
 
 // ---- lifecycle ----

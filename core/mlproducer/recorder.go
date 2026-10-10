@@ -76,6 +76,10 @@ type Config struct {
 	// DefaultSweepInterval; negative disables the ticker (SweepIdle can
 	// still be called).
 	SweepInterval time.Duration
+	// GitBranch reads the workspace's current git branch name; only its
+	// rune length ships (tasks.branch = "x"×len; WP07). nil =
+	// ReadGitBranch.
+	GitBranch func(workspace string) string
 }
 
 // Recorder turns agent tool calls, turn ends and session deletes into
@@ -114,6 +118,13 @@ type Recorder struct {
 
 	// excl is the newest org exclusion set (SetExclusions; WP05).
 	excl atomic.Pointer[ExclusionSet]
+
+	// WP07, guarded by mu (worker only): background bash spawns awaiting
+	// their exit, exits that arrived before their spawn, and the
+	// throttled branch read (background.go, branch.go).
+	bgPending map[string]bgPending
+	bgParked  map[string]bgParked
+	branch    branchCache
 }
 
 var _ coreag.ToolCallObserver = (*Recorder)(nil)
@@ -145,6 +156,9 @@ func NewRecorder(cfg Config) *Recorder {
 		tasks:  map[string]*mlstore.TaskRow{},
 		dirty:  map[string]bool{},
 		parent: map[string]string{},
+
+		bgPending: map[string]bgPending{},
+		bgParked:  map[string]bgParked{},
 	}
 	go r.run()
 	return r
@@ -484,6 +498,9 @@ func (r *Recorder) Purge(ctx context.Context) error {
 	defer r.mu.Unlock()
 	r.tasks = map[string]*mlstore.TaskRow{}
 	r.dirty = map[string]bool{}
+	// A background exit never ships across a purge.
+	r.bgPending = map[string]bgPending{}
+	r.bgParked = map[string]bgParked{}
 	return r.cfg.Store.Purge(ctx)
 }
 
@@ -613,6 +630,17 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 	// excluded call).
 	cmd := ""
 	exitCode, exitKnown := 0, false
+	var bgSpawn *bgPending
+	bgSpawnID := ""
+	if excluded && rec.ToolName == toolBash {
+		// An excluded background spawn leaves an entry that swallows its
+		// exit: no follow-up terminal (WP07).
+		if bg, _ := args["run_in_background"].(bool); bg {
+			if tid := bashBackgroundTaskID(rec.ResultContent); tid != "" {
+				bgSpawn, bgSpawnID = &bgPending{at: at, excluded: true}, tid
+			}
+		}
+	}
 	switch {
 	case excluded:
 		drafts = append(drafts, draft{KindTool, map[string]any{
@@ -634,13 +662,24 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 		cmd = stringArg(args, "command")
 		payload := map[string]any{"task": id, "cmd": r.min.cmdPrefix(cmd)}
 		background, _ := args["run_in_background"].(bool)
-		if !background {
-			// Background bash records at spawn; its exit arrives later
-			// (spec §12 A-5), so it carries no exit_code.
+		bgTaskID := ""
+		if background {
+			bgTaskID = bashBackgroundTaskID(rec.ResultContent)
+		}
+		if bgTaskID == "" {
+			// Foreground, or a background job that exited before the spawn
+			// returned (bash then reports its exit_code inline, no task id).
 			exitCode, exitKnown = bashExitCode(rec.ResultContent)
 			if exitKnown {
 				payload["exit_code"] = exitCode
 			}
+		} else {
+			// Background bash records at spawn with no exit_code (spec §12
+			// A-5); its exit arrives later via BackgroundEnded, which ships
+			// the follow-up terminal from what is remembered here (WP07).
+			bgSpawn = &bgPending{at: at, taskID: id, cmd: r.min.cmdPrefix(cmd),
+				isTest: isTestCommand(cmd), isCommit: gitSubcommand(cmd) == "commit"}
+			bgSpawnID = bgTaskID
 		}
 		if outcome == coreag.ToolOutcomeOK && isTestCommand(cmd) {
 			task.TestRuns++
@@ -656,6 +695,21 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 			"outcome": string(outcome),
 			"dur_ms":  rec.Duration.Milliseconds(),
 		}})
+	}
+
+	// WP07 item 1: a successful read ships one `file` event per file it
+	// touched (reads.go), in addition to its agent.tool row above. Each
+	// path is matched against the org exclusions before it is hashed.
+	// Reads never touch task.Files (writes only).
+	if outcome == coreag.ToolOutcomeOK && isReadTool(rec.ToolName) {
+		for _, c := range readPaths(rec.ToolName, args, rec.ResultContent, workspace) {
+			c := c
+			if excludedBy(seen, now, func(s *ExclusionSet) bool { return s.MatchPath(c.abs) || s.MatchPath(c.raw) }) {
+				continue
+			}
+			tok := r.min.pathToken(c.abs)
+			drafts = append(drafts, draft{KindFile, map[string]any{"task": id, "path": tok, "file": tok}})
+		}
 	}
 
 	if ran && !excluded {
@@ -678,6 +732,9 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 		}})
 	}
 	r.commit(ctx, &task, events, prev == nil || at-task.LastUpsertAt >= r.cfg.UpsertEvery.Milliseconds())
+	if bgSpawn != nil {
+		r.rememberSpawn(ctx, bgSpawnID, *bgSpawn)
+	}
 }
 
 func (r *Recorder) handleTurn(sessionID string, unattended bool, outcome string, modelCalls, toolCalls int, dur time.Duration, at int64) {
@@ -787,7 +844,7 @@ func (r *Recorder) commit(ctx context.Context, task *mlstore.TaskRow, events []m
 	w := mlstore.Write{Events: events, Task: task}
 	if upsert {
 		task.LastUpsertAt = task.LastActive
-		body, err := json.Marshal(taskWireBody(*task))
+		body, err := json.Marshal(taskWireBody(*task, r.currentBranch()))
 		if err != nil {
 			logging.L().Warn("mlproducer.recorder.task_encode_failed", "err", err.Error())
 			return
@@ -807,13 +864,25 @@ func (r *Recorder) commit(ctx context.Context, task *mlstore.TaskRow, events []m
 	}
 }
 
-func taskWireBody(t mlstore.TaskRow) taskBody {
+// currentBranch is the length-only placeholder of the workspace's current
+// branch (WP07; branch.go), read at most once per branchEvery. Caller
+// holds r.mu.
+func (r *Recorder) currentBranch() string {
+	workspace := ""
+	if r.cfg.Workspace != nil {
+		workspace = r.cfg.Workspace()
+	}
+	return r.branchFor(workspace)
+}
+
+// taskWireBody encodes a task upsert; branch is already the placeholder.
+func taskWireBody(t mlstore.TaskRow, branch string) taskBody {
 	files := t.Files
 	if files == nil {
 		files = map[string]int{}
 	}
 	b := taskBody{
-		ID: t.TaskID, RepoRoot: t.RepoRootHash, Branch: "", Phase: t.Phase, Files: files,
+		ID: t.TaskID, RepoRoot: t.RepoRootHash, Branch: branch, Phase: t.Phase, Files: files,
 		StartedAt: t.StartedAt, LastActive: t.LastActive,
 		CommitCount: t.CommitCount, TestRuns: t.TestRuns, TestFails: t.TestFails,
 	}
