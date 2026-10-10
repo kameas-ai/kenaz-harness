@@ -554,21 +554,21 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 }
 
-// A closed gate ships nothing (and never posts); the dev-org guard is one
+// A closed gate ships nothing (and never posts); consent withdrawn is one
 // such closure.
 func TestShipper_ClosedGateShipsNothing(t *testing.T) {
 	t.Parallel()
 	r := newShipRig(t)
 	r.seedEvents(3, 0) // left from a previous session
-	r.src.set(func(f *fakeConsent) { f.id.FleetOrgID = "f7ab6cc5-d86f-45ed-8b46-c0967a000000" })
+	r.src.set(func(f *fakeConsent) { f.eff = false })
 	r.shipNow()
 	if reqs, _ := r.poster.snapshot(); len(reqs) != 0 {
-		t.Fatalf("posted %d batches for an org other than the dev org", len(reqs))
+		t.Fatalf("posted %d batches while not effective", len(reqs))
 	}
 	if r.pending() != 0 {
-		t.Fatalf("pending = %d: entering the org_not_allowed closure must purge", r.pending())
+		t.Fatalf("pending = %d: entering the ml_not_effective closure must purge", r.pending())
 	}
-	if r.ship.Status().StopReason != ReasonOrgNotAllowed {
+	if r.ship.Status().StopReason != ReasonNotEffective {
 		t.Errorf("stop = %q", r.ship.Status().StopReason)
 	}
 }

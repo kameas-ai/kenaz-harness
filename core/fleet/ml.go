@@ -15,7 +15,10 @@ package fleet
 //   - the body is decoded strictly on the contract's keys: a missing key, an
 //     out-of-contract policy / retention / version, a malformed timestamp, or
 //     a self-contradicting object (effective without an ack) is a decode
-//     error. Unknown EXTRA keys are tolerated: Fleet adds response fields
+//     error — the typed exclusions included (WP05: required, validated
+//     against the contract limits, an unknown key inside them refused
+//     unless its value is empty).
+//     Unknown EXTRA top-level keys are tolerated: Fleet adds response fields
 //     additively as routine, and refusing them would silently stop the ML
 //     lane on every installed harness until users upgrade.
 //
@@ -30,7 +33,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // TelemetryClassWorkflowEvents is the opt-in class a member flips under
@@ -100,7 +106,35 @@ type MeML struct {
 	NoticeAckedAt      *time.Time `json:"notice_acked_at"`
 	RetentionDays      int        `json:"retention_days"`
 	RetainOnWithdrawal bool       `json:"retain_on_withdrawal"`
+	// Exclusions are the org's typed exclusions (contract "Typed
+	// exclusions"): matched ON DEVICE, before hashing, by the producer
+	// (core/mlproducer/exclusions.go). Never nil slices after a decode.
+	Exclusions MLExclusions `json:"exclusions"`
+	// ExclusionsVersion is bumped by Fleet on every exclusions change.
+	ExclusionsVersion int `json:"exclusions_version"`
+	// LegacyExclusionNotes are the org's previous FREE-TEXT exclusions:
+	// display only, never patterns, never matched (contract: "Producers
+	// ignore them").
+	LegacyExclusionNotes []string `json:"legacy_exclusion_notes"`
 }
+
+// MLExclusions is /me/ml's `exclusions` object.
+type MLExclusions struct {
+	// Paths are file-path globs.
+	Paths []string `json:"paths"`
+	// Commands are terminal command prefixes.
+	Commands []string `json:"commands"`
+	// ExcludeBrowser drops browser page events. The harness ships none, so
+	// the producer treats it as a no-op (it is decoded and displayed).
+	ExcludeBrowser bool `json:"exclude_browser"`
+}
+
+// Exclusion list limits (contract "Typed exclusions": server-validated on
+// PUT; re-checked here so an out-of-contract body fails closed).
+const (
+	MLExclusionsMaxEntries  = 50
+	MLExclusionsMaxEntryLen = 256
+)
 
 // IsEffective is the one predicate a sender may branch on: effective AND a
 // non-null ack (the contract says read both). A nil MeML is not effective.
@@ -121,6 +155,128 @@ type mlWire struct {
 	NoticeAckedAt             json.RawMessage `json:"notice_acked_at"`
 	RetentionDays             *int            `json:"retention_days"`
 	RetainOnWithdrawal        *bool           `json:"retain_on_withdrawal"`
+	Exclusions                json.RawMessage `json:"exclusions"`
+	ExclusionsVersion         *int            `json:"exclusions_version"`
+	LegacyExclusionNotes      json.RawMessage `json:"legacy_exclusion_notes"`
+}
+
+// mlExclusionsWire is the exclusions object, one pointer per key.
+type mlExclusionsWire struct {
+	Paths          *[]string `json:"paths"`
+	Commands       *[]string `json:"commands"`
+	ExcludeBrowser *bool     `json:"exclude_browser"`
+}
+
+// decodeMLExclusions is strict on purpose, stricter than the outer object:
+// every known key required, null refused. An UNKNOWN key is a new kind of
+// exclusion this build cannot honour. Rule agreed with Fleet (2026-10-09):
+// Fleet adds new exclusion types only as lists or bools that default to
+// empty, so an unknown key whose value is EMPTY (`[]` or `false`) excludes
+// nothing and is accepted and ignored; an unknown key with any NON-empty
+// value (a non-empty list, `true`, a string, an object, a number, null) is
+// a decode error — silently ignoring a customer's exclusion would breach
+// the DPA (SA v1.1 §4), so the read fails and the gate stays closed until
+// the harness learns the new type.
+func decodeMLExclusions(raw json.RawMessage) (MLExclusions, error) {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 || t[0] != '{' {
+		return MLExclusions{}, fmt.Errorf("%w: exclusions is not an object", ErrMLDecode)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(t, &fields); err != nil {
+		return MLExclusions{}, fmt.Errorf("%w: exclusions: %v", ErrMLDecode, err)
+	}
+	for k, v := range fields {
+		switch k {
+		case "paths", "commands", "exclude_browser":
+			continue
+		}
+		if !emptyExclusionValue(v) {
+			return MLExclusions{}, fmt.Errorf("%w: exclusions has an unknown non-empty key %q this build cannot honour", ErrMLDecode, k)
+		}
+		delete(fields, k)
+	}
+	known, err := json.Marshal(fields)
+	if err != nil {
+		return MLExclusions{}, fmt.Errorf("%w: exclusions: %v", ErrMLDecode, err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(known))
+	dec.DisallowUnknownFields()
+	var w mlExclusionsWire
+	if err := dec.Decode(&w); err != nil {
+		return MLExclusions{}, fmt.Errorf("%w: exclusions: %v", ErrMLDecode, err)
+	}
+	switch {
+	case w.Paths == nil || *w.Paths == nil:
+		return MLExclusions{}, fmt.Errorf("%w: exclusions.paths missing or null", ErrMLDecode)
+	case w.Commands == nil || *w.Commands == nil:
+		return MLExclusions{}, fmt.Errorf("%w: exclusions.commands missing or null", ErrMLDecode)
+	case w.ExcludeBrowser == nil:
+		return MLExclusions{}, fmt.Errorf("%w: exclusions.exclude_browser missing", ErrMLDecode)
+	}
+	if err := checkExclusionEntries("paths", *w.Paths); err != nil {
+		return MLExclusions{}, err
+	}
+	if err := checkExclusionEntries("commands", *w.Commands); err != nil {
+		return MLExclusions{}, err
+	}
+	return MLExclusions{
+		Paths:          append([]string{}, *w.Paths...),
+		Commands:       append([]string{}, *w.Commands...),
+		ExcludeBrowser: *w.ExcludeBrowser,
+	}, nil
+}
+
+// emptyExclusionValue reports whether an unknown exclusions key carries an
+// empty value: exactly `[]` (whitespace allowed) or `false`.
+func emptyExclusionValue(v json.RawMessage) bool {
+	t := bytes.TrimSpace(v)
+	if string(t) == "false" {
+		return true
+	}
+	if len(t) >= 2 && t[0] == '[' && t[len(t)-1] == ']' {
+		return len(bytes.TrimSpace(t[1:len(t)-1])) == 0
+	}
+	return false
+}
+
+// checkExclusionEntries enforces the contract limits: ≤50 entries, each
+// non-empty after trimming, ≤256 characters, valid UTF-8, no control
+// characters.
+func checkExclusionEntries(field string, entries []string) error {
+	if len(entries) > MLExclusionsMaxEntries {
+		return fmt.Errorf("%w: exclusions.%s has %d entries (max %d)", ErrMLDecode, field, len(entries), MLExclusionsMaxEntries)
+	}
+	for i, e := range entries {
+		if strings.TrimSpace(e) == "" {
+			return fmt.Errorf("%w: exclusions.%s[%d] is empty", ErrMLDecode, field, i)
+		}
+		if !utf8.ValidString(e) || utf8.RuneCountInString(e) > MLExclusionsMaxEntryLen {
+			return fmt.Errorf("%w: exclusions.%s[%d] is not UTF-8 or longer than %d characters", ErrMLDecode, field, i, MLExclusionsMaxEntryLen)
+		}
+		for _, r := range e {
+			if unicode.IsControl(r) {
+				return fmt.Errorf("%w: exclusions.%s[%d] has a control character", ErrMLDecode, field, i)
+			}
+		}
+	}
+	return nil
+}
+
+// decodeLegacyNotes requires a JSON array of strings (null refused).
+func decodeLegacyNotes(raw json.RawMessage) ([]string, error) {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 || t[0] != '[' {
+		return nil, fmt.Errorf("%w: legacy_exclusion_notes is not an array", ErrMLDecode)
+	}
+	var notes []string
+	if err := json.Unmarshal(t, &notes); err != nil {
+		return nil, fmt.Errorf("%w: legacy_exclusion_notes: %v", ErrMLDecode, err)
+	}
+	if notes == nil {
+		notes = []string{}
+	}
+	return notes, nil
 }
 
 // DecodeMeML decodes a /me/ml (or notice-ack) response body: every contract
@@ -155,6 +311,29 @@ func DecodeMeML(raw []byte) (MeML, error) {
 		return MeML{}, missing("retention_days")
 	case w.RetainOnWithdrawal == nil:
 		return MeML{}, missing("retain_on_withdrawal")
+	// The exclusion keys are REQUIRED, not optional (WP05): the contract
+	// says they are "Always present (empty lists, not null, when nothing
+	// is excluded)", and Fleet #220 (live on dev + prod) always sends
+	// them. Reading an absent key as "no exclusions" would ship a
+	// customer's excluded paths whenever a Fleet did not send them; a
+	// missing key fails the read and the gate stays closed instead.
+	case w.Exclusions == nil:
+		return MeML{}, missing("exclusions")
+	case w.ExclusionsVersion == nil:
+		return MeML{}, missing("exclusions_version")
+	case w.LegacyExclusionNotes == nil:
+		return MeML{}, missing("legacy_exclusion_notes")
+	}
+	excl, err := decodeMLExclusions(w.Exclusions)
+	if err != nil {
+		return MeML{}, err
+	}
+	notes, err := decodeLegacyNotes(w.LegacyExclusionNotes)
+	if err != nil {
+		return MeML{}, err
+	}
+	if *w.ExclusionsVersion < 1 {
+		return MeML{}, fmt.Errorf("%w: exclusions_version %d < 1", ErrMLDecode, *w.ExclusionsVersion)
 	}
 	m := MeML{
 		OrgOffloadEnabled:         *w.OrgOffloadEnabled,
@@ -165,6 +344,9 @@ func DecodeMeML(raw []byte) (MeML, error) {
 		NoticeVersion:             *w.NoticeVersion,
 		RetentionDays:             *w.RetentionDays,
 		RetainOnWithdrawal:        *w.RetainOnWithdrawal,
+		Exclusions:                excl,
+		ExclusionsVersion:         *w.ExclusionsVersion,
+		LegacyExclusionNotes:      notes,
 	}
 	switch m.OrgPolicy {
 	case MLPolicyOn, MLPolicyOff, MLPolicyMemberChoice:

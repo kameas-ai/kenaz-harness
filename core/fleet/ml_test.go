@@ -6,6 +6,7 @@ package fleet
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,12 +27,17 @@ const contractExample = `{
   "notice_version": 1,
   "notice_acked_at": null,
   "retention_days": 90,
-  "retain_on_withdrawal": false
+  "retain_on_withdrawal": false,
+  "exclusions": { "paths": [], "commands": [], "exclude_browser": false },
+  "exclusions_version": 1,
+  "legacy_exclusion_notes": []
 }`
 
 const effectiveBody = `{"org_offload_enabled":true,"org_policy":"on","user_workflow_events_opted_in":false,
 "notice_ack_required":false,"effective":true,"notice_version":3,"notice_acked_at":"2026-10-09T12:00:00Z",
-"retention_days":30,"retain_on_withdrawal":true}`
+"retention_days":30,"retain_on_withdrawal":true,
+"exclusions":{"paths":["hr/**","**/secrets/*"],"commands":["ssh","git push"],"exclude_browser":true},
+"exclusions_version":4,"legacy_exclusion_notes":["no HR folders please"]}`
 
 func TestDecodeMeML_Table(t *testing.T) {
 	replace := func(old, new string) string { return strings.Replace(contractExample, old, new, 1) }
@@ -70,6 +76,88 @@ func TestDecodeMeML_Table(t *testing.T) {
 					t.Errorf("extra key changed the decode: %+v", m)
 				}
 			}},
+		{name: "typed exclusions decoded", body: effectiveBody, check: func(t *testing.T, m MeML) {
+			e := m.Exclusions
+			if len(e.Paths) != 2 || e.Paths[0] != "hr/**" || e.Paths[1] != "**/secrets/*" ||
+				len(e.Commands) != 2 || e.Commands[1] != "git push" || !e.ExcludeBrowser {
+				t.Errorf("exclusions: %+v", e)
+			}
+			if m.ExclusionsVersion != 4 || len(m.LegacyExclusionNotes) != 1 || m.LegacyExclusionNotes[0] != "no HR folders please" {
+				t.Errorf("version/notes: %d %q", m.ExclusionsVersion, m.LegacyExclusionNotes)
+			}
+		}},
+		{name: "empty exclusions are non-nil empty lists", body: contractExample, check: func(t *testing.T, m MeML) {
+			if m.Exclusions.Paths == nil || m.Exclusions.Commands == nil || m.LegacyExclusionNotes == nil {
+				t.Errorf("nil list after decode: %+v %#v", m.Exclusions, m.LegacyExclusionNotes)
+			}
+			if m.ExclusionsVersion != 1 {
+				t.Errorf("exclusions_version = %d", m.ExclusionsVersion)
+			}
+		}},
+		// WP05: the exclusion keys are required (contract: "Always
+		// present"); a malformed value is a decode error so the gate
+		// fails closed.
+		{name: "missing exclusions refused", body: replace(`"exclusions": { "paths": [], "commands": [], "exclude_browser": false },`, ``), wantErr: true},
+		{name: "missing exclusions_version refused", body: replace(`"exclusions_version": 1,`, ``), wantErr: true},
+		{name: "missing legacy_exclusion_notes refused", body: replace(`,
+  "legacy_exclusion_notes": []`, ``), wantErr: true},
+		{name: "null exclusions refused", body: replace(`{ "paths": [], "commands": [], "exclude_browser": false }`, `null`), wantErr: true},
+		{name: "exclusions not an object refused", body: replace(`{ "paths": [], "commands": [], "exclude_browser": false }`, `["hr/**"]`), wantErr: true},
+		{name: "null paths refused", body: replace(`"paths": []`, `"paths": null`), wantErr: true},
+		{name: "missing commands refused", body: replace(`"commands": [], `, ``), wantErr: true},
+		{name: "missing exclude_browser refused", body: replace(`, "exclude_browser": false`, ``), wantErr: true},
+		{name: "paths not an array refused", body: replace(`"paths": []`, `"paths": "hr/**"`), wantErr: true},
+		{name: "non-string path entry refused", body: replace(`"paths": []`, `"paths": [7]`), wantErr: true},
+		{name: "non-string command entry refused", body: replace(`"commands": []`, `"commands": [{"p":"ssh"}]`), wantErr: true},
+		{name: "exclude_browser wrong type refused", body: replace(`"exclude_browser": false`, `"exclude_browser": "yes"`), wantErr: true},
+		// Unknown keys inside exclusions (rule agreed with Fleet): an EMPTY
+		// value excludes nothing and is ignored; anything non-empty is an
+		// exclusion this build cannot honour, so the read fails closed.
+		{name: "unknown empty list inside exclusions accepted",
+			body: replace(`"exclude_browser": false }`, `"exclude_browser": false, "urls": [ ] }`),
+			check: func(t *testing.T, m MeML) {
+				if len(m.Exclusions.Paths) != 0 || len(m.Exclusions.Commands) != 0 || m.Exclusions.ExcludeBrowser {
+					t.Errorf("exclusions = %+v", m.Exclusions)
+				}
+			}},
+		{name: "unknown false inside exclusions accepted",
+			body: replace(`"exclude_browser": false }`, `"exclude_browser": false, "exclude_clipboard": false }`),
+			check: func(t *testing.T, m MeML) {
+				if m.ExclusionsVersion != 1 {
+					t.Errorf("decode changed: %+v", m)
+				}
+			}},
+		{name: "unknown non-empty list inside exclusions refused",
+			body: replace(`"exclude_browser": false }`, `"exclude_browser": false, "urls": ["x"] }`), wantErr: true},
+		{name: "unknown true inside exclusions refused",
+			body: replace(`"exclude_browser": false }`, `"exclude_browser": false, "exclude_clipboard": true }`), wantErr: true},
+		{name: "unknown string inside exclusions refused",
+			body: replace(`"exclude_browser": false }`, `"exclude_browser": false, "urls": "x" }`), wantErr: true},
+		{name: "unknown empty string inside exclusions refused (only [] and false are empty)",
+			body: replace(`"exclude_browser": false }`, `"exclude_browser": false, "urls": "" }`), wantErr: true},
+		{name: "unknown object inside exclusions refused",
+			body: replace(`"exclude_browser": false }`, `"exclude_browser": false, "rules": {} }`), wantErr: true},
+		{name: "unknown null inside exclusions refused",
+			body: replace(`"exclude_browser": false }`, `"exclude_browser": false, "urls": null }`), wantErr: true},
+		{name: "51 paths refused", body: replace(`"paths": []`, `"paths": [`+quotedN("p", 51)+`]`), wantErr: true},
+		{name: "50 paths accepted", body: replace(`"paths": []`, `"paths": [`+quotedN("p", 50)+`]`), check: func(t *testing.T, m MeML) {
+			if len(m.Exclusions.Paths) != 50 {
+				t.Errorf("paths = %d", len(m.Exclusions.Paths))
+			}
+		}},
+		{name: "51 commands refused", body: replace(`"commands": []`, `"commands": [`+quotedN("c", 51)+`]`), wantErr: true},
+		{name: "257-char entry refused", body: replace(`"commands": []`, `"commands": ["`+strings.Repeat("a", 257)+`"]`), wantErr: true},
+		{name: "256-char entry accepted", body: replace(`"commands": []`, `"commands": ["`+strings.Repeat("é", 256)+`"]`), check: func(t *testing.T, m MeML) {
+			if len(m.Exclusions.Commands) != 1 {
+				t.Errorf("commands = %v", m.Exclusions.Commands)
+			}
+		}},
+		{name: "empty entry refused", body: replace(`"paths": []`, `"paths": ["  "]`), wantErr: true},
+		{name: "control character refused", body: replace(`"paths": []`, `"paths": ["a\u0007b"]`), wantErr: true},
+		{name: "exclusions_version 0 refused", body: replace(`"exclusions_version": 1`, `"exclusions_version": 0`), wantErr: true},
+		{name: "exclusions_version wrong type refused", body: replace(`"exclusions_version": 1`, `"exclusions_version": "1"`), wantErr: true},
+		{name: "null legacy notes refused", body: replace(`"legacy_exclusion_notes": []`, `"legacy_exclusion_notes": null`), wantErr: true},
+		{name: "legacy notes not strings refused", body: replace(`"legacy_exclusion_notes": []`, `"legacy_exclusion_notes": [1]`), wantErr: true},
 		{name: "missing key refused", body: replace(`"retain_on_withdrawal": false`, `"retain_on_withdrawal_x": false`), wantErr: true},
 		{name: "missing notice_acked_at refused", body: replace(`"notice_acked_at": null,`, ``), wantErr: true},
 		{name: "unknown policy refused", body: replace(`"member_choice"`, `"maybe"`), wantErr: true},
@@ -300,4 +388,13 @@ func TestHostedInferenceCapabilityAndClass(t *testing.T) {
 	if !found {
 		t.Error("KnownTelemetryClasses lacks workflow_events")
 	}
+}
+
+// quotedN renders n distinct quoted JSON strings, comma-separated.
+func quotedN(prefix string, n int) string {
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = fmt.Sprintf("%q", fmt.Sprintf("%s%d/**", prefix, i))
+	}
+	return strings.Join(parts, ",")
 }

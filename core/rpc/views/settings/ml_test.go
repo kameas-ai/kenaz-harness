@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -134,6 +135,8 @@ func mlBody(offload bool, policy string, optedIn, ackRequired, effective bool, v
 		"org_offload_enabled": offload, "org_policy": policy, "user_workflow_events_opted_in": optedIn,
 		"notice_ack_required": ackRequired, "effective": effective, "notice_version": version,
 		"notice_acked_at": nil, "retention_days": days, "retain_on_withdrawal": retain,
+		"exclusions":         map[string]any{"paths": []string{}, "commands": []string{}, "exclude_browser": false},
+		"exclusions_version": 1, "legacy_exclusion_notes": []string{},
 	}
 	if ackedAt != "" {
 		m["notice_acked_at"] = ackedAt
@@ -237,6 +240,41 @@ func TestFleetMLStatus_States(t *testing.T) {
 	}
 }
 
+// WP05: the org's typed exclusions and legacy notes reach the panel view
+// read-only; with none configured the lists are [] (never null).
+func TestFleetMLStatus_Exclusions(t *testing.T) {
+	r := newMLRig(t, true)
+	var m map[string]any
+	_ = json.Unmarshal([]byte(mlBody(true, "on", false, false, true, 3, "2026-10-09T12:00:00Z", 60, false)), &m)
+	m["exclusions"] = map[string]any{"paths": []string{"hr/**", "~/private/**"}, "commands": []string{"ssh"}, "exclude_browser": true}
+	m["exclusions_version"] = 6
+	m["legacy_exclusion_notes"] = []string{"Nothing from the HR share"}
+	b, _ := json.Marshal(m)
+	r.fleet.set(func(f *mlFakeFleet) { f.state = string(b) })
+	v, err := r.api.FleetMLStatus(context.Background())
+	if err != nil || !v.Loaded {
+		t.Fatalf("FleetMLStatus: %+v %v", v, err)
+	}
+	if len(v.ExclusionPaths) != 2 || v.ExclusionPaths[1] != "~/private/**" || len(v.ExclusionCommands) != 1 ||
+		!v.ExcludeBrowser || v.ExclusionsVersion != 6 || len(v.LegacyExclusionNotes) != 1 {
+		t.Errorf("exclusions view = %+v", v)
+	}
+
+	r.fleet.set(func(f *mlFakeFleet) { f.state = mlBody(true, "on", false, false, false, 1, "", 90, false) })
+	v, _ = r.api.FleetMLStatus(context.Background())
+	raw, _ := json.Marshal(v)
+	for _, k := range []string{`"exclusionPaths":[]`, `"exclusionCommands":[]`, `"legacyExclusionNotes":[]`} {
+		if !strings.Contains(string(raw), k) {
+			t.Errorf("wire view missing %s: %s", k, raw)
+		}
+	}
+	// Not loaded (unwired): still [] on the wire.
+	raw, _ = json.Marshal(func() MLStatusView { v, _ := (&API{}).FleetMLStatus(context.Background()); return v }())
+	if !strings.Contains(string(raw), `"exclusionPaths":[]`) {
+		t.Errorf("unloaded wire view: %s", raw)
+	}
+}
+
 func TestFleetMLStatus_ErrorsFailClosed(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -246,6 +284,8 @@ func TestFleetMLStatus_ErrorsFailClosed(t *testing.T) {
 		{"staff 403", 403, `{"code":"staff_not_permitted","message":"staff"}`},
 		{"500", 500, `{"code":"internal_error"}`},
 		{"undecodable effective", 200, `{"effective":true}`},
+		{"malformed exclusions", 200, strings.Replace(mlBody(true, "on", false, false, true, 1, "2026-10-09T12:00:00Z", 90, false),
+			`"paths":[]`, `"paths":"hr/**"`, 1)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

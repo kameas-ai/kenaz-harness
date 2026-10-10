@@ -8066,6 +8066,11 @@ export namespace settings {
 	    orgName: string;
 	    noticeText: string;
 	    noticeChanged?: boolean;
+	    exclusionPaths: string[];
+	    exclusionCommands: string[];
+	    excludeBrowser: boolean;
+	    exclusionsVersion: number;
+	    legacyExclusionNotes: string[];
 	    fleetError?: string;
 	    shipping?: MLShippingStatusView;
 	
@@ -8092,6 +8097,11 @@ export namespace settings {
 	        this.orgName = source["orgName"];
 	        this.noticeText = source["noticeText"];
 	        this.noticeChanged = source["noticeChanged"];
+	        this.exclusionPaths = source["exclusionPaths"];
+	        this.exclusionCommands = source["exclusionCommands"];
+	        this.excludeBrowser = source["excludeBrowser"];
+	        this.exclusionsVersion = source["exclusionsVersion"];
+	        this.legacyExclusionNotes = source["legacyExclusionNotes"];
 	        this.fleetError = source["fleetError"];
 	        this.shipping = this.convertValues(source["shipping"], MLShippingStatusView);
 	    }

@@ -33,6 +33,11 @@ function status(over: Partial<MLStatus> = {}): MLStatus {
     retainOnWithdrawal: false,
     orgName: 'Acme Corp',
     noticeText: '',
+    exclusionPaths: [],
+    exclusionCommands: [],
+    excludeBrowser: false,
+    exclusionsVersion: 1,
+    legacyExclusionNotes: [],
     ...over,
   };
 }
@@ -61,6 +66,51 @@ function mountWith(
 const q = (w: any, id: string) => w.find(`[data-testid="${id}"]`);
 
 describe('CloudMLPanel', () => {
+  it('lists the org exclusions read-only (WP05)', async () => {
+    const { wrapper } = mountWith(
+      status({
+        effective: true,
+        exclusionPaths: ['hr/**', '**/secrets/*'],
+        exclusionCommands: ['ssh', 'git push'],
+        excludeBrowser: true,
+        legacyExclusionNotes: ['Nothing from the HR share'],
+      }),
+    );
+    await flushPromises();
+    const block = q(wrapper, 'cloud-ml-exclusions');
+    expect(block.exists()).toBe(true);
+    expect(block.text()).toContain('Your organization excludes:');
+    const paths = wrapper.findAll('[data-testid="cloud-ml-exclusion-path"]').map((w) => w.text());
+    expect(paths).toEqual(['files matching hr/**', 'files matching **/secrets/*']);
+    const cmds = wrapper.findAll('[data-testid="cloud-ml-exclusion-command"]').map((w) => w.text());
+    expect(cmds).toEqual(['commands starting with ssh', 'commands starting with git push']);
+    // Read-only: no inputs inside the exclusions block.
+    expect(block.findAll('input').length).toBe(0);
+    expect(block.findAll('button').length).toBe(0);
+    const notes = q(wrapper, 'cloud-ml-legacy-notes');
+    expect(notes.exists()).toBe(true);
+    expect(notes.text()).toContain('not applied as patterns');
+    expect(wrapper.findAll('[data-testid="cloud-ml-legacy-note"]').map((w) => w.text())).toEqual([
+      'Nothing from the HR share',
+    ]);
+  });
+
+  it('shows no exclusions block when the org excludes nothing', async () => {
+    const { wrapper } = mountWith(status({ effective: true, excludeBrowser: true }));
+    await flushPromises();
+    expect(q(wrapper, 'cloud-ml-exclusions').exists()).toBe(false);
+    expect(q(wrapper, 'cloud-ml-legacy-notes').exists()).toBe(false);
+  });
+
+  it('shows no exclusions while /me/ml is not loaded', async () => {
+    const { wrapper } = mountWith(
+      status({ loaded: false, fleetError: 'boom', exclusionPaths: ['hr/**'], legacyExclusionNotes: ['x'] }),
+    );
+    await flushPromises();
+    expect(q(wrapper, 'cloud-ml-exclusions').exists()).toBe(false);
+    expect(q(wrapper, 'cloud-ml-legacy-notes').exists()).toBe(false);
+  });
+
   it('is hidden when signed out', async () => {
     const { wrapper } = mountWith(status({ signedIn: false }));
     await flushPromises();

@@ -7199,6 +7199,11 @@ function fakeMLStatus(): MLStatus {
     retainOnWithdrawal: false,
     orgName: '',
     noticeText: '',
+    exclusionPaths: [],
+    exclusionCommands: [],
+    excludeBrowser: false,
+    exclusionsVersion: 0,
+    legacyExclusionNotes: [],
   };
 }
 
