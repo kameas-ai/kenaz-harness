@@ -48,10 +48,10 @@ import (
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 )
 
-// mlAcceptOrg is the org every acceptance rig enrolls as. It is the one
-// place these tests name the WP03 dev-org guard's constant, so WP05's
-// removal of the guard is a one-line change here.
-const mlAcceptOrg = mlproducer.DevOrgID
+// mlAcceptOrg is the org every acceptance rig enrolls as. Any org ships
+// once its gate is open (WP05 removed the dev-org-only guard); this is the
+// owner's dev org so the fixtures match the §8.5 live target.
+const mlAcceptOrg = "fa81ec53-d374-4c48-8b72-dd6b8584d968"
 
 // scriptedToolCall is one model step: a single tool_use block.
 type scriptedToolCall struct {
