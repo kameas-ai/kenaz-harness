@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -428,6 +429,48 @@ func (r *Registry) Profile(id string) (llm.ProviderProfile, error) {
 		return llm.ProviderProfile{}, fmt.Errorf("llm: profile %q not registered", id)
 	}
 	return p, nil
+}
+
+// statsHTTPClient serves the provider stats pull (FetchProviderStats).
+var statsHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
+// FetchProviderStats performs one provider-side stats pull for a finished
+// generation of profileID — today OpenRouter's GET /api/v1/generation?id=
+// (llm-call-telemetry-01LLMTEL01 WP02; the caller is the local model-call
+// store's StatsPuller, core/modelcalls). The profile's credential is
+// resolved here, copied for this one request and zeroed when it returns,
+// so the puller never holds a key. A profile whose provider offers no
+// stats pull is an error; an error wrapping llm.ErrProviderStatsNotReady
+// means "retry later". The values are raw: the caller applies
+// genaitrace.BoundProviderStats before storing anything.
+func (r *Registry) FetchProviderStats(ctx context.Context, profileID, generationID string) (genaitrace.RawProviderStats, error) {
+	prof, err := r.Profile(profileID)
+	if err != nil {
+		return genaitrace.RawProviderStats{}, err
+	}
+	if prof.Kind != openrouter.Kind {
+		return genaitrace.RawProviderStats{}, fmt.Errorf("llm: provider kind %q offers no stats pull", prof.Kind)
+	}
+	r.mu.RLock()
+	resolver := r.resolver
+	r.mu.RUnlock()
+	var credBytes []byte
+	if resolver != nil {
+		s, rerr := resolver.Resolve(ctx, prof.ID, prof.Cred)
+		if rerr != nil {
+			return genaitrace.RawProviderStats{}, rerr
+		}
+		uerr := s.Use(func(value []byte) error {
+			credBytes = append([]byte(nil), value...)
+			return nil
+		})
+		s.Destroy()
+		if uerr != nil {
+			return genaitrace.RawProviderStats{}, uerr
+		}
+	}
+	defer zero(credBytes)
+	return openrouter.FetchGenerationStats(ctx, statsHTTPClient, prof.Endpoint, credBytes, generationID)
 }
 
 // Profiles returns a snapshot list of loaded profiles in insertion-

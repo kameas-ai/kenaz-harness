@@ -4056,8 +4056,10 @@ func TestKnobCoverageGate_UnregisteredSettingsFieldFires(t *testing.T) {
 	// be re-anchored to the real last field whenever a later WP appends
 	// one, the same maintenance TestServedModeTopicForwardingGate_Planted*
 	// documents for passthroughTopics' own terminator-anchored proof.
-	const target = "\tAdviceLabelCaptureDisabled bool `json:\"adviceLabelCaptureDisabled,omitempty\"`\n}"
-	const mutated = "\tAdviceLabelCaptureDisabled bool `json:\"adviceLabelCaptureDisabled,omitempty\"`\n\n" +
+	// Re-anchored 2026-10-09 to ShareModelCallTelemetryWithFleet
+	// (llm-call-telemetry-01LLMTEL01 WP02 appended the model-call fields).
+	const target = "\tShareModelCallTelemetryWithFleet bool `json:\"shareModelCallTelemetryWithFleet,omitempty\"`\n}"
+	const mutated = "\tShareModelCallTelemetryWithFleet bool `json:\"shareModelCallTelemetryWithFleet,omitempty\"`\n\n" +
 		"\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
 		"\t// to prove check-knob-coverage.sh's real settings.Settings guard\n" +
 		"\t// (TestKnobCoverage_Settings) fails when a field has no\n" +
@@ -5357,6 +5359,43 @@ func TestGenAISpanGate_PlantedSpanEventFires(t *testing.T) {
 	genaiGateMustFail(t, root, "AddEvent", "span event")
 }
 
+// TestGenAISpanGate_PlantedContentStoreColumnFires (WP02): a column added
+// to the local model_calls store by a migration anywhere under core/ —
+// here a prompt_text column in a new file — fails the build: it is
+// neither structural nor bound to an allowlisted key, and it names
+// content.
+func TestGenAISpanGate_PlantedContentStoreColumnFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "modelcalls", "zz_gate_probe_column.go")
+	cleanup := plant(t, probe, "package modelcalls\n\nconst zzGateProbeColumn = `ALTER TABLE model_calls ADD COLUMN prompt_text TEXT`\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "model_calls column prompt_text is neither structural nor bound", "content store column")
+	genaiGateMustFail(t, root, "model_calls column prompt_text is a content column", "content store column")
+}
+
+// TestGenAISpanGate_PlantedUnmappedStoreColumnFires (WP02): an innocently
+// named column in the CREATE TABLE itself, with no allowlisted key behind
+// it, fails — a free-text column cannot hide behind a harmless name.
+func TestGenAISpanGate_PlantedUnmappedStoreColumnFires(t *testing.T) {
+	root := repoRoot(t)
+	mig := filepath.Join(root, "core", "modelcalls", "migrations.go")
+	const anchor = "\t  span_id                     TEXT NOT NULL,\n"
+	cleanup := plantReplace(t, mig, anchor, anchor+"\t  provider_note               TEXT NOT NULL DEFAULT '',\n")
+	defer cleanup()
+	genaiGateMustFail(t, root, "model_calls column provider_note is neither structural nor bound", "unmapped store column")
+}
+
+// TestGenAISpanGate_PlantedStoreMappingToUndeclaredKeyFires (WP02): a
+// store column bound to a key the span allowlist does not declare fails.
+func TestGenAISpanGate_PlantedStoreMappingToUndeclaredKeyFires(t *testing.T) {
+	root := repoRoot(t)
+	rec := filepath.Join(root, "core", "llm", "genaitrace", "record.go")
+	const anchor = "var RecordColumns = []RecordColumn{\n"
+	cleanup := plantReplace(t, rec, anchor, anchor+"\t{Column: \"system_text\", Key: \"gen_ai.system_instructions\"},\n")
+	defer cleanup()
+	genaiGateMustFail(t, root, "column system_text maps to gen_ai.system_instructions, which is not an allowlisted attribute key", "store mapping to an undeclared key")
+}
+
 // TestGenAISpanGate_StructuralVerdictIsCWDIndependent: the clean tree
 // passes from the repo root and from a foreign cwd, and the scan is
 // non-vacuous.
@@ -5367,7 +5406,8 @@ func TestGenAISpanGate_StructuralVerdictIsCWDIndependent(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("check-genai-span-no-content.sh from %s exited %d on the clean tree:\n%s", dir, code, out)
 		}
-		if !strings.Contains(out, "keys, all bounded, none content") || !strings.Contains(out, "under core, cmd") {
+		if !strings.Contains(out, "keys, all bounded, none content") || !strings.Contains(out, "under core, cmd") ||
+			!strings.Contains(out, "local store model_calls: 42 columns") {
 			t.Fatalf("check-genai-span-no-content.sh from %s passed without reporting its scan:\n%s", dir, out)
 		}
 	}

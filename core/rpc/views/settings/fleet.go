@@ -432,6 +432,13 @@ func (a *API) SetFleetOTLPPipeline(
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
 	a.fleet.otlpPipeline = p
+	// "Share model-call telemetry with Fleet" (default OFF): the persisted
+	// value reaches the span lane the moment the pipeline is wired.
+	if p != nil && a.store != nil {
+		if s, err := a.store.LoadAll(); err == nil {
+			p.SetModelCallSharing(s.ShareModelCallTelemetryWithFleet)
+		}
+	}
 	a.fleet.telemetryRes = startupRes
 	a.fleet.tpFunc = tpFunc
 	a.fleet.consent = consent
@@ -458,6 +465,22 @@ func (a *API) SetFleetOTLPPipeline(
 	// startFleetBackgroundLocked registers on every poller it creates
 	// (fleet-session-truth-01DOGF0A WP02 moved it there so a poller
 	// recreated after sign-in carries it too).
+}
+
+// applyModelCallSharing hands the "Share model-call telemetry with Fleet"
+// setting to the live span lane (llm-call-telemetry-01LLMTEL01 WP02). No
+// pipeline (fleet disabled / not configured) means nothing can be shared,
+// so there is nothing to apply.
+func (a *API) applyModelCallSharing(on bool) {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	p := a.fleet.otlpPipeline
+	a.fleet.mu.RUnlock()
+	if p != nil {
+		p.SetModelCallSharing(on)
+	}
 }
 
 // SetFleetTelemetryResourceFunc supplies a lazy accessor for the startup OTel

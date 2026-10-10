@@ -1266,6 +1266,10 @@ export function Sessions_LoadTools(arg1, arg2, arg3, arg4) {
   return window['go']['rpc']['Bindings']['Sessions_LoadTools'](arg1, arg2, arg3, arg4);
 }
 
+export function Sessions_ModelCalls(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_ModelCalls'](arg1, arg2);
+}
+
 export function Sessions_MoveToProject(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_MoveToProject'](arg1, arg2);
 }
@@ -1482,6 +1486,10 @@ export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
 }
 
+export function Settings_GetModelCallTelemetry() {
+  return window['go']['rpc']['Bindings']['Settings_GetModelCallTelemetry']();
+}
+
 export function Settings_GetMonthlyCostNotifyUSD() {
   return window['go']['rpc']['Bindings']['Settings_GetMonthlyCostNotifyUSD']();
 }
@@ -1608,6 +1616,10 @@ export function Settings_SetMaxGeneratedImageBytes(arg1) {
 
 export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
+}
+
+export function Settings_SetModelCallTelemetry(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetModelCallTelemetry'](arg1);
 }
 
 export function Settings_SetMonthlyCostNotifyUSD(arg1) {

@@ -26,9 +26,14 @@
 //
 // Through the process TracerProvider: the local exporter always. The
 // Fleet span lane (core/fleet closableSpanExporter) drops this package's
-// instrumentation scope (ScopeName) until the explicit, default-off
-// "Share model-call telemetry with Fleet" opt-in lands (WP02); general
-// telemetry consent does not carry them.
+// instrumentation scope (ScopeName) unless the explicit, default-off
+// "Share model-call telemetry with Fleet" setting is on (WP02), and then
+// only spans started after it was turned on; general telemetry consent
+// does not carry them.
+//
+// Every finished gen_ai.chat call is also handed, with the same
+// attributes, to the installed Recorder (record.go) — the durable local
+// model-call store, core/modelcalls (WP02).
 package genaitrace
 
 import (
@@ -66,15 +71,32 @@ var droppedAttrs atomic.Int64
 // process start (test/diagnostic seam; payload-free).
 func DroppedAttributes() int64 { return droppedAttrs.Load() }
 
-type attrSet struct{ kv []attribute.KeyValue }
+// attrSet accumulates validated attributes. scope, when set, names the
+// span (or StoredRecord) the attributes are for: a key whose Spans list
+// does not name it is refused, so a stats-pull-only key can never land on
+// a span and a chat-only key can never land on the turn span.
+type attrSet struct {
+	kv    []attribute.KeyValue
+	scope string
+}
 
 func (a *attrSet) spec(key string, t AttrType) (AttrSpec, bool) {
 	s, ok := specByKey[key]
-	if !ok || s.Type != t {
+	if !ok || s.Type != t || (a.scope != "" && !s.carriedOn(a.scope)) {
 		droppedAttrs.Add(1)
 		return AttrSpec{}, false
 	}
 	return s, true
+}
+
+// carriedOn reports whether the spec lists scope in Spans.
+func (s AttrSpec) carriedOn(scope string) bool {
+	for _, sp := range s.Spans {
+		if sp == scope {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *attrSet) str(key, v string) {
@@ -155,18 +177,23 @@ func (a *attrSet) bool(key string, v bool) {
 
 // ── session hash ─────────────────────────────────────────────────────────────
 
-// sessionKey keys the session hash. Per process: two spans of one session
-// in one run share a hash; nothing outside this process can reverse or
-// recompute it, and the raw id never leaves.
-var sessionKey = func() []byte {
-	k := make([]byte, 32)
+// sessionKey keys the session hash. It starts as a per-process random key
+// and is replaced at boot by the per-install key SetSessionHashKey loads
+// from <dataDir>/telemetry/session_hash_key (LoadOrCreateSessionHashKey),
+// so one session hashes the same across restarts — the local model-call
+// store queries by it. The key never leaves the machine, so nothing
+// outside it can reverse or recompute a hash, and the raw id never leaves.
+var sessionKey atomic.Pointer[[]byte]
+
+func init() {
+	k := make([]byte, sessionHashKeyBytes)
 	if _, err := rand.Read(k); err != nil {
 		// crypto/rand cannot fail on supported platforms; a nil key would
 		// still be a keyed construction, just a known key — refuse that.
 		panic("genaitrace: crypto/rand: " + err.Error())
 	}
-	return k
-}()
+	sessionKey.Store(&k)
+}
 
 // SessionHash returns the keyed hash emitted as kenaz.session.hash, or ""
 // for an empty id.
@@ -174,7 +201,7 @@ func SessionHash(sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
-	m := hmac.New(sha256.New, sessionKey)
+	m := hmac.New(sha256.New, *sessionKey.Load())
 	m.Write([]byte(sessionID))
 	return hex.EncodeToString(m.Sum(nil))[:16]
 }
@@ -223,7 +250,7 @@ func isFallback(ctx context.Context) bool {
 // it into kenaz.session.hash without it riding on the GenerationRequest.
 // The caller ends the span when the turn's run exits.
 func StartTurn(ctx context.Context, sessionID string) (context.Context, trace.Span) {
-	var a attrSet
+	a := attrSet{scope: SpanNameTurn}
 	a.str("kenaz.session.hash", SessionHash(sessionID))
 	if sessionID != "" {
 		ctx = context.WithValue(ctx, sessionKeyCtx{}, sessionID)
@@ -246,6 +273,9 @@ type Call struct {
 	ToolCount          int
 	ToolSchemaTokens   int
 	SessionID          string
+	// ProfileID routes the provider stats pull (WP02) to the profile's
+	// credential. It is never an attribute and never stored.
+	ProfileID string
 }
 
 // CallFromRequest builds the Call for req dispatched on prof (prof.Model
@@ -257,6 +287,7 @@ func CallFromRequest(req llm.GenerationRequest, prof llm.ProviderProfile) Call {
 		RequestModel:       prof.Model,
 		ToolCount:          len(req.Tools),
 		SessionID:          req.SessionID,
+		ProfileID:          prof.ID,
 	}
 	if len(req.Tools) > 0 {
 		c.ToolSchemaTokens = llm.ToolsTokens(req.Tools)
@@ -341,7 +372,7 @@ type CostFunc func(llm.Response) llm.Cost
 // the first content chunk, a timestamp.
 func Instrument(ctx context.Context, call Call, cost CostFunc, open func(context.Context) (llm.Stream, error)) (llm.Stream, error) {
 	start := time.Now()
-	var a attrSet
+	a := attrSet{scope: SpanNameChat}
 	provider := ProviderName(call.ProviderKind, call.GeminiEndpointKind)
 	a.str("gen_ai.operation.name", "chat")
 	a.str("gen_ai.provider.name", provider)
@@ -369,29 +400,46 @@ func Instrument(ctx context.Context, call Call, cost CostFunc, open func(context
 		trace.WithTimestamp(start),
 		trace.WithAttributes(a.kv...))
 
+	c := &callEnd{span: span, start: start, startKV: a.kv, profileID: call.ProfileID}
 	s, err := open(ctx)
 	if err != nil {
-		endWithError(span, err)
+		c.endWithError(err)
 		return nil, err
 	}
-	return &tracedStream{inner: s, span: span, start: start, cost: cost}, nil
+	return &tracedStream{inner: s, end: c, start: start, cost: cost}, nil
 }
 
-func endWithError(span trace.Span, err error) {
-	var a attrSet
+// callEnd ends one gen_ai.chat span and hands the same attributes to the
+// local model-call recorder (record.go).
+type callEnd struct {
+	span      trace.Span
+	start     time.Time
+	startKV   []attribute.KeyValue
+	profileID string
+}
+
+func (c *callEnd) endWithError(err error) {
+	a := attrSet{scope: SpanNameChat}
 	a.str("error.type", ErrorType(err))
-	span.SetAttributes(a.kv...)
+	c.span.SetAttributes(a.kv...)
 	// Code only: Fleet drops Status.Message, and a provider message is
 	// text this span must not carry anyway.
-	span.SetStatus(codes.Error, "")
-	span.End()
+	c.span.SetStatus(codes.Error, "")
+	c.finish(a.kv, false)
+}
+
+// finish ends the span at one timestamp and records the call.
+func (c *callEnd) finish(endKV []attribute.KeyValue, ok bool) {
+	end := time.Now()
+	c.span.End(trace.WithTimestamp(end))
+	recordCall(c, endKV, end, ok)
 }
 
 // tracedStream ends its gen_ai.chat span exactly once, at Final() or
 // Cancel().
 type tracedStream struct {
 	inner llm.Stream
-	span  trace.Span
+	end   *callEnd
 	start time.Time
 	cost  CostFunc
 
@@ -428,7 +476,7 @@ func (s *tracedStream) pump() {
 
 func (s *tracedStream) Cancel() error {
 	err := s.inner.Cancel()
-	s.endOnce.Do(func() { endWithError(s.span, &llm.ErrCancelled{Reason: "caller"}) })
+	s.endOnce.Do(func() { s.end.endWithError(&llm.ErrCancelled{Reason: "caller"}) })
 	return err
 }
 
@@ -443,18 +491,19 @@ func (s *tracedStream) Final() (llm.Response, error) {
 	}
 	s.endOnce.Do(func() {
 		if err != nil {
-			endWithError(s.span, err)
+			s.end.endWithError(err)
 			return
 		}
-		s.span.SetAttributes(responseAttrs(resp, resp.Cost, s.ttftNS.Load()).kv...)
-		s.span.End()
+		kv := responseAttrs(resp, resp.Cost, s.ttftNS.Load()).kv
+		s.end.span.SetAttributes(kv...)
+		s.end.finish(kv, true)
 	})
 	return resp, err
 }
 
 // responseAttrs maps a final response onto the allowlist.
 func responseAttrs(resp llm.Response, cost llm.Cost, ttftNS int64) attrSet {
-	var a attrSet
+	a := attrSet{scope: SpanNameChat}
 	u := resp.Usage
 	a.int("gen_ai.usage.input_tokens", int64(u.InputTokens))
 	a.int("gen_ai.usage.output_tokens", int64(u.OutputTokens))

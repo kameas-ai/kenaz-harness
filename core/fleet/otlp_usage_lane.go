@@ -119,6 +119,13 @@ type PipelineStatus struct {
 	ExportsFailed         uint64 `json:"exports_failed"`
 	ExportsUnauthorized   uint64 `json:"exports_unauthorized"`
 	ExportsIdentityMism   uint64 `json:"exports_identity_mismatch"`
+
+	// Model-call opt-in (llm-call-telemetry-01LLMTEL01 WP02): whether the
+	// "Share model-call telemetry with Fleet" setting is on, and how many
+	// model-call spans the lane exported / withheld.
+	ModelCallsShared   bool   `json:"model_calls_shared"`
+	ModelCallsExported uint64 `json:"model_calls_exported"`
+	ModelCallsWithheld uint64 `json:"model_calls_withheld"`
 }
 
 // usageLane is the per-activation state. A new one is built on every
@@ -293,46 +300,92 @@ type closableSpanExporter struct {
 	inner    sdktrace.SpanExporter
 	closed   *atomic.Bool
 	admitted *atomic.Bool
+	// modelCalls is the "Share model-call telemetry with Fleet" opt-in
+	// (llm-call-telemetry-01LLMTEL01 WP02). nil = never shared.
+	modelCalls *modelCallShare
 }
 
 func (e *closableSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
 	if e.closed.Load() {
 		return nil
 	}
-	if e.admitted != nil && !e.admitted.Load() {
-		return nil
-	}
-	spans = withoutModelCallSpans(spans)
+	general := e.admitted == nil || e.admitted.Load()
+	spans = withoutModelCallSpans(spans, general, e.modelCalls)
 	if len(spans) == 0 {
-		// No request at all for a batch of only model-call spans: an empty
-		// export is still an identity-stamped POST.
+		// No request at all for an empty batch: an empty export is still an
+		// identity-stamped POST.
 		return nil
 	}
 	return e.inner.ExportSpans(ctx, spans)
 }
 
-// withoutModelCallSpans drops every span of the model-call instrumentation
-// scope (gen_ai.chat and kenaz.chat.turn, core/llm/genaitrace) from a Fleet
-// batch.
+// ModelCallTelemetryClass is the Fleet opt-in class model-call spans
+// (gen_ai.chat, kenaz.chat.turn) are expected to be gated on server-side.
+//
+// TODO(llm-call-telemetry-01LLMTEL01, owner: Fleet): the name is the
+// harness's PROPOSAL; Fleet has not confirmed it. Align this one constant
+// once Fleet does. Until then it only ever NARROWS: a Fleet snapshot that
+// lists this class opted OUT withholds model-call spans even with the local
+// setting on; a snapshot that does not mention it leaves the local setting
+// in charge (no class Fleet sends can widen sharing).
+const ModelCallTelemetryClass = "model_call_telemetry"
+
+// modelCallShare is the span lane's view of the "Share model-call
+// telemetry with Fleet" setting.
+type modelCallShare struct {
+	// sinceNS is 0 while the setting is off; while on, the wall-clock
+	// instant (UnixNano) it was turned on. Only spans that STARTED at or
+	// after it are shared: turning the setting on never back-fills.
+	sinceNS atomic.Int64
+	// fleetDenied: Fleet's opt-in snapshot lists ModelCallTelemetryClass
+	// opted out.
+	fleetDenied atomic.Bool
+
+	exported atomic.Uint64
+	withheld atomic.Uint64
+}
+
+// admits reports whether s, a model-call span, may leave for Fleet.
+func (m *modelCallShare) admits(s sdktrace.ReadOnlySpan) bool {
+	if m == nil {
+		return false
+	}
+	since := m.sinceNS.Load()
+	return since != 0 && !m.fleetDenied.Load() && s.StartTime().UnixNano() >= since
+}
+
+// withoutModelCallSpans filters a Fleet batch: an ordinary span passes
+// when the lane's general admission (consent + the diagnostics class) is
+// granted; a span of the model-call instrumentation scope (gen_ai.chat
+// and kenaz.chat.turn, core/llm/genaitrace) passes ONLY under the
+// model-call opt-in (share.admits), whatever the general admission says.
 //
 // Owner ruling 2026-10-09 (llm-call-telemetry-01LLMTEL01): model-call
-// telemetry is collected and kept locally; it reaches Fleet only under an
+// telemetry is collected and kept locally; it reaches Fleet only under the
 // explicit "Share model-call telemetry with Fleet" setting, default OFF and
-// separate from the general telemetry consent that admits this lane. That
-// setting is WP02. Until it exists, the answer is unconditionally "not
-// shared": these spans go to the local exporter only. WP02 replaces this
-// unconditional drop with the setting's value — it must not simply delete
-// it, or general consent would start carrying model-call spans.
-func withoutModelCallSpans(spans []sdktrace.ReadOnlySpan) []sdktrace.ReadOnlySpan {
-	var out []sdktrace.ReadOnlySpan // nil until the first model-call span
+// separate from the general telemetry consent. With the setting off this
+// filter still drops every model-call span — it must never be deleted, or
+// general consent would start carrying them.
+func withoutModelCallSpans(spans []sdktrace.ReadOnlySpan, general bool, share *modelCallShare) []sdktrace.ReadOnlySpan {
+	var out []sdktrace.ReadOnlySpan // nil until the first dropped span
 	for i, s := range spans {
-		isModelCall := s.InstrumentationScope().Name == genaitrace.ScopeName
+		keep := general
+		if s.InstrumentationScope().Name == genaitrace.ScopeName {
+			keep = share.admits(s)
+			if share != nil {
+				if keep {
+					share.exported.Add(1)
+				} else {
+					share.withheld.Add(1)
+				}
+			}
+		}
 		switch {
-		case out == nil && !isModelCall:
+		case out == nil && keep:
 			continue
 		case out == nil:
 			out = append(make([]sdktrace.ReadOnlySpan, 0, len(spans)), spans[:i]...)
-		case !isModelCall:
+		case keep:
 			out = append(out, s)
 		}
 	}
@@ -340,6 +393,27 @@ func withoutModelCallSpans(spans []sdktrace.ReadOnlySpan) []sdktrace.ReadOnlySpa
 		return spans // common case: nothing dropped, no copy
 	}
 	return out
+}
+
+// SetModelCallSharing applies the "Share model-call telemetry with Fleet"
+// setting. Turning it on records "now": only model-call spans that start
+// from this instant are exported (no back-fill); calling it again while on
+// keeps the original instant. Turning it off stops export at the next
+// batch. Safe before Activate — the value carries into every activation.
+func (p *FleetOTLPPipeline) SetModelCallSharing(on bool) {
+	if p == nil {
+		return
+	}
+	if !on {
+		p.modelCalls.sinceNS.Store(0)
+		return
+	}
+	p.modelCalls.sinceNS.CompareAndSwap(0, time.Now().UnixNano())
+}
+
+// ModelCallSharing reports whether the opt-in is on.
+func (p *FleetOTLPPipeline) ModelCallSharing() bool {
+	return p != nil && p.modelCalls.sinceNS.Load() != 0
 }
 
 func (e *closableSpanExporter) Shutdown(ctx context.Context) error { return e.inner.Shutdown(ctx) }
@@ -623,6 +697,9 @@ func (p *FleetOTLPPipeline) Status() PipelineStatus {
 		ExportsFailed:         p.stats.exportsFailed.Load(),
 		ExportsUnauthorized:   p.stats.exportsUnauthorized.Load(),
 		ExportsIdentityMism:   p.stats.exportsIdentityMism.Load(),
+		ModelCallsShared:      p.modelCalls.sinceNS.Load() != 0,
+		ModelCallsExported:    p.modelCalls.exported.Load(),
+		ModelCallsWithheld:    p.modelCalls.withheld.Load(),
 	}
 	p.stats.mu.Lock()
 	if !p.stats.lastExportAt.IsZero() {

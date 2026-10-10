@@ -64,6 +64,16 @@ core/event/retention
 core/fswatch
 core/llm/anthropic/smoke
 core/llm/bundleartifact
+core/llm/genaitrace/spantest
+#     Added 2026-10-09 (llm-call-telemetry-01LLMTEL01 WP02; the package
+#     shipped in WP01 and tripped this gate there). Read-only test kit for
+#     the gen_ai.chat span: Record/Drive/AssertExact/AssertAllowlisted and
+#     the content fixture strings, imported by every adapter's
+#     genai_span_test.go, genaitrace's span_test.go and the chat-runner
+#     turn test. Not dead: a non-_test package so seven packages' tests can
+#     share it (check-genai-span-no-content.sh runs those tests by name and
+#     exempts this directory from its one-emitter scan). Owner: alec.
+#     Clears if Go ever lets _test.go files be imported across packages.
 core/llm/wirecheck
 core/llm/wirecheck/scrub
 core/mcp/fixture

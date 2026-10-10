@@ -90,6 +90,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/memory/narrative"
 	"github.com/kameas-ai/kenaz-harness/core/memory/prune"
 	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
+	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
 	"github.com/kameas-ai/kenaz-harness/core/policy/blockedrequests"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
@@ -195,6 +196,11 @@ type HarnessAPI interface {
 	// resolved exposure tier for a session, or (sessionID empty) for a
 	// project or the user's default (tool-context-budget-01TCBUD01 §2.5).
 	ToolSchemaCosts(ctx context.Context, sessionID, projectID string) ([]loadtools.ServerCost, error)
+
+	// ModelCallsForSession lists the session's most recent stored model
+	// provider calls for the read-only "Model calls" view
+	// (llm-call-telemetry-01LLMTEL01 WP02).
+	ModelCallsForSession(ctx context.Context, sessionID string, limit int) ([]modelcalls.CallView, error)
 
 	// Advice_Respond is laya-advisors-01LAYA001 WP07's chip response RPC:
 	// action is "accept" or "dismiss". Returns the newly created child
@@ -749,6 +755,12 @@ type API struct {
 	// (memory-sync-01MEMSY01 WP07). nil when there is no memory store,
 	// clock or outbox (nil-core chassis, unreadable clock state).
 	memorySync *corefleet.MemorySync
+
+	// modelCalls is the local model-call store and its workers
+	// (llm-call-telemetry-01LLMTEL01 WP02, model_calls_wiring.go). nil
+	// when there is no storage (nil-core chassis) — Sessions_ModelCalls
+	// then returns an empty list.
+	modelCalls *modelCallsWiring
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
 	// WP07). The manager owns the resolved catalog + user-override
@@ -1512,6 +1524,11 @@ func (a *API) Shutdown() {
 		dcancel()
 	}
 	shutdownStep("chat_runs_drained")
+	// llm-call-telemetry-01LLMTEL01 WP02: after the chat runs drain (their
+	// last provider calls are recorded), flush the model-call recorder into
+	// storage — which the caller closes after Shutdown returns — and stop
+	// the pruner and the stats pull.
+	a.modelCalls.stop()
 	// laya-advisors-01LAYA001 WP13: a clean stop on app exit means "stop
 	// pinning the shared engine alive" — cancel + drain any in-flight
 	// demand-driven Ensure, then release this client's lease (the engine's own 120s
@@ -2601,6 +2618,19 @@ func New(c *core.Core, opts ...Option) *API {
 	a.scheduledRunContainment = NewScheduledRunContainmentRegistry(blockedSink)
 	stack.sessionArm.SetScheduledRunContainment(a.scheduledRunContainment)
 	a.llmAPI = stack.api
+	// llm-call-telemetry-01LLMTEL01 WP02: the local model-call store. The
+	// registry is its source for the OpenRouter stats pull
+	// (*llmregistry.Registry implements FetchProviderStats and keeps the
+	// credential to itself; the stub LLM does not, and then there is no
+	// pull).
+	{
+		var mcStats modelcalls.StatsSource
+		if ss, ok := stack.reg.(modelcalls.StatsSource); ok {
+			mcStats = ss
+		}
+		a.modelCalls = newModelCallsWiring(c, mcStats, settingsImpl)
+		a.modelCalls.startUnlessTesting()
+	}
 	// trust-surfaces-that-fire-01PMZ202 WP24 review finding: fold the
 	// static tool-permission load error (if any) into the boot-health
 	// report so BootHealthBanner tells the user their configured

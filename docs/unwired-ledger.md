@@ -6472,6 +6472,28 @@ does not fix the cross-org id. Pre-existing, not introduced by WP07.
 (id + checksum + meta, per org). **Owner:** alec — a separate fix deletes
 this entry.
 
+### 2026-10-09 (llm-call-telemetry-01LLMTEL01 WP02) — "Share model-call telemetry with Fleet" ON yields no Fleet-side rows yet
+
+The harness half is live: with `Settings.ShareModelCallTelemetryWithFleet`
+on and the user signed in, `closableSpanExporter`'s `withoutModelCallSpans`
+admits `gen_ai.chat` / `kenaz.chat.turn` spans that started after the
+toggle onto the per-user `/otlp/v1/traces` lane (pinned by
+`TestOTLPPipeline_ModelCallSharing_OffOnOff` against a fake Fleet). Fleet's
+traces receiver does not accept them today: it drops any span whose name
+it has not declared and any attribute outside its allowlist, and neither
+`gen_ai.chat` / `kenaz.chat.turn` nor the `gen_ai.*` / `kenaz.*` keys
+(`docs/telemetry/gen-ai-span-attributes.md`) are declared there. The
+proposed Fleet opt-in class `model_call_telemetry`
+(`fleet.ModelCallTelemetryClass`) is likewise unconfirmed; the harness
+only lets it narrow. So the toggle tells the truth on this side ("sent") and
+nothing lands on the far side. Nothing here is a lie in the harness, but
+the user-visible effect is absent until Fleet ships its half.
+**Blocker:** Fleet's receiver span-name + attribute allowlist, and the
+class name. **Owner:** Fleet (kenaz-fleet) — the receiver change that
+declares the names, plus the one-line rename of
+`fleet.ModelCallTelemetryClass` if Fleet picks another name, deletes this
+entry.
+
 ## Drained
 
 ### 2026-10-09 · CLOSED — owner-accepted extensions of FR-K4's `tool_exposure` shape (tool-context-budget-01TCBUD01 WP07)

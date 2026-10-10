@@ -318,6 +318,34 @@ func init() {
 			"proof on the store, not a row-count check).",
 	)
 
+	// ── Model-call telemetry (llm-call-telemetry-01LLMTEL01 WP02) ────
+	knobcoverage.Register[settings.Settings](
+		"ModelCallStatsPullDisabled",
+		"core/rpc/model_calls_wiring.go passes settings.API."+
+			"ModelCallStatsPullEnabled as modelcalls.StatsPuller's Enabled "+
+			"closure, read on every Consider and every retry attempt — true "+
+			"stops the OpenRouter generation-stats GET "+
+			"(TestModelCallsWiring_SettingsReachConsumers).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"ModelCallRetentionDays",
+		"core/rpc/model_calls_wiring.go passes settings.API."+
+			"ModelCallRetentionDays to modelcalls.NewPruner, read on every "+
+			"pass through EffectiveRetentionDays (0 = 30 days) — decides "+
+			"which model_calls rows PruneBefore deletes "+
+			"(TestModelCallsWiring_SettingsReachConsumers).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"ShareModelCallTelemetryWithFleet",
+		"views/settings applyModelCallSharing (every Set / "+
+			"SetModelCallTelemetry, and SetFleetOTLPPipeline at wiring) calls "+
+			"fleet.FleetOTLPPipeline.SetModelCallSharing, which "+
+			"closableSpanExporter's withoutModelCallSpans reads per batch — "+
+			"false withholds every gen_ai span; true exports those started "+
+			"after the toggle (TestOTLPPipeline_ModelCallSharing_*, "+
+			"TestSettings_ModelCallSharingReachesPipeline).",
+	)
+
 	// ── Compaction dials ─────────────────────────────────────────────
 	knobcoverage.Register[settings.Settings](
 		"CompactionAggressiveness",

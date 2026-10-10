@@ -49,6 +49,7 @@ import {secrets} from '../models';
 import {sentry} from '../models';
 import {sessions} from '../models';
 import {loadtools} from '../models';
+import {modelcalls} from '../models';
 import {context} from '../models';
 import {risk} from '../models';
 import {sidecar} from '../models';
@@ -697,6 +698,8 @@ export function Sessions_LoadScrollPosition(arg1:string):Promise<number>;
 
 export function Sessions_LoadTools(arg1:string,arg2:Array<string>,arg3:Array<string>,arg4:boolean):Promise<loadtools.Result>;
 
+export function Sessions_ModelCalls(arg1:string,arg2:number):Promise<Array<modelcalls.CallView>>;
+
 export function Sessions_MoveToProject(arg1:string,arg2:string):Promise<void>;
 
 export function Sessions_Rename(arg1:string,arg2:string):Promise<void>;
@@ -805,6 +808,8 @@ export function Settings_GetMaxGeneratedImageBytes():Promise<number>;
 
 export function Settings_GetMemory():Promise<boolean>;
 
+export function Settings_GetModelCallTelemetry():Promise<settings.ModelCallTelemetrySettings>;
+
 export function Settings_GetMonthlyCostNotifyUSD():Promise<number>;
 
 export function Settings_GetMultimodalInput():Promise<boolean>;
@@ -868,6 +873,8 @@ export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 export function Settings_SetMaxGeneratedImageBytes(arg1:number):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
+
+export function Settings_SetModelCallTelemetry(arg1:settings.ModelCallTelemetrySettings):Promise<void>;
 
 export function Settings_SetMonthlyCostNotifyUSD(arg1:number):Promise<void>;
 

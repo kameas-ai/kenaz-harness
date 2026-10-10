@@ -1,5 +1,7 @@
 package llm
 
+import "errors"
+
 // CallMeta is the provider-returned metadata of one provider call that
 // is not usage or content: the ids, the model that actually served the
 // call, and whatever per-call extras the provider puts on the response
@@ -42,3 +44,9 @@ type CallMeta struct {
 func (m *CallMeta) IsZero() bool {
 	return m == nil || *m == (CallMeta{})
 }
+
+// ErrProviderStatsNotReady marks a provider stats pull (OpenRouter's
+// /api/v1/generation, llm-call-telemetry-01LLMTEL01 WP02) that should be
+// retried later: the stats are not there yet, the provider throttled, or
+// the transport failed. Any other pull error is final.
+var ErrProviderStatsNotReady = errors.New("llm: provider stats not available yet")

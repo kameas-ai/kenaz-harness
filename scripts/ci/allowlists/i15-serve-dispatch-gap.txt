@@ -1325,3 +1325,29 @@
 # caller is views/tools/ToolExposurePanel.vue, mounted only by
 # views/tools/ToolsView.vue, which renders NotAvailableInServedMode.
 "Settings_SetToolExposure"
+
+# CLASS: gated -- llm-call-telemetry-01LLMTEL01 WP02, 2026-10-09.
+# 1 entries.
+#
+# Sessions_ModelCalls: the read-only "Model calls" list of the local
+# model-call store. Its only caller is
+# components/chat/ModelCallsDisclosure.vue, mounted in SessionsView's
+# status bar next to the cost readout — the served chat surface — so it is
+# gated, not panelled (the ToolsMenu precedent above): with servedMode set
+# the disclosure renders NotAvailableInServedMode and load() returns
+# before any call (ModelCallsDisclosure.test.ts pins "fetches nothing").
+# The store lives on the host's Kenaz; ports if the served build ever
+# reads it.
+"Sessions_ModelCalls"
+
+# CLASS: boundary-panelled -- llm-call-telemetry-01LLMTEL01 WP02, 2026-10-09.
+# 2 entries.
+#
+# Settings_GetModelCallTelemetry / Settings_SetModelCallTelemetry: the
+# stats-pull, retention and "Share model-call telemetry with Fleet"
+# settings. Their only caller is views/settings/ModelCallTelemetryPanel.vue,
+# mounted only in SettingsView's desktop SettingsShell (the Account pane);
+# in served mode SettingsView renders FleetTelemetryPanel, AgentsView and
+# NotAvailableInServedMode instead.
+"Settings_GetModelCallTelemetry"
+"Settings_SetModelCallTelemetry"

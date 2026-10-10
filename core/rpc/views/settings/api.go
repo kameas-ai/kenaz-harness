@@ -902,6 +902,51 @@ type Settings struct {
 	// rows written" is a call-count proof on the underlying Store, not a
 	// row-count check — see labels.CaptureAdvisor's doc comment.
 	AdviceLabelCaptureDisabled bool `json:"adviceLabelCaptureDisabled,omitempty"`
+
+	// ── Model-call telemetry (llm-call-telemetry-01LLMTEL01 WP02) ──────
+	// Owner ruling 2026-10-09: the harness collects every LLM provider
+	// call into a local store (core/modelcalls); users opt in to send to
+	// Fleet. UI: Settings → Account → "Model-call telemetry"
+	// (ModelCallTelemetryPanel.vue), written through
+	// Settings_SetModelCallTelemetry or a whole-settings Set.
+
+	// ModelCallStatsPullDisabled turns OFF the OpenRouter generation-stats
+	// pull ("Fetch OpenRouter generation stats", default ON — the zero
+	// value). Read fresh by core/modelcalls.StatsPuller for every call and
+	// every retry (core/rpc/model_calls_wiring.go), so a flip applies to
+	// the next call with no restart.
+	ModelCallStatsPullDisabled bool `json:"modelCallStatsPullDisabled,omitempty"`
+
+	// ModelCallRetentionDays is how long stored model-call records are
+	// kept. 0 = the 30-day default; valid range 1..3650
+	// (modelcalls.EffectiveRetentionDays). Read on every pass of
+	// core/modelcalls.Pruner.
+	ModelCallRetentionDays int `json:"modelCallRetentionDays,omitempty"`
+
+	// ShareModelCallTelemetryWithFleet is "Share model-call telemetry
+	// with Fleet" — default OFF, separate from the general telemetry
+	// consent. ON exports gen_ai.chat / kenaz.chat.turn spans that START
+	// after the toggle over the signed-in user's /otlp/v1/traces lane (no
+	// back-fill); OFF stops export at the next batch. Applied to the live
+	// pipeline by API.applyModelCallSharing (fleet.go) on every write and
+	// at pipeline wiring; the consumer is fleet.closableSpanExporter's
+	// model-call filter. Never content.
+	ShareModelCallTelemetryWithFleet bool `json:"shareModelCallTelemetryWithFleet,omitempty"`
+}
+
+// ModelCallTelemetrySettings is the wire shape of the three model-call
+// telemetry settings (llm-call-telemetry-01LLMTEL01 WP02).
+type ModelCallTelemetrySettings struct {
+	// StatsPullEnabled is "Fetch OpenRouter generation stats" (default
+	// true).
+	StatsPullEnabled bool `json:"statsPullEnabled"`
+	// RetentionDays as stored (0 = default).
+	RetentionDays int `json:"retentionDays"`
+	// EffectiveRetentionDays is read-only: the window the pruner applies.
+	EffectiveRetentionDays int `json:"effectiveRetentionDays"`
+	// ShareWithFleet is "Share model-call telemetry with Fleet" (default
+	// false).
+	ShareWithFleet bool `json:"shareWithFleet"`
 }
 
 // EffectiveBundleSigningPolicy normalizes BundleSigningPolicy to one of
@@ -1642,6 +1687,13 @@ type SettingsAPI interface {
 	// SetToolExposure validates and persists the user's tool-exposure
 	// layer, budget and TTL (0 = default); Effective* are ignored.
 	SetToolExposure(ctx context.Context, ts toolexposure.Settings) error
+	// GetModelCallTelemetry returns the model-call telemetry settings
+	// (stats pull, retention, Fleet sharing) — llm-call-telemetry-
+	// 01LLMTEL01 WP02.
+	GetModelCallTelemetry(ctx context.Context) (ModelCallTelemetrySettings, error)
+	// SetModelCallTelemetry persists them and applies the Fleet-sharing
+	// opt-in to the live span lane.
+	SetModelCallTelemetry(ctx context.Context, mc ModelCallTelemetrySettings) error
 	// GetAutoTitleEnabled returns whether session auto-titling is on.
 	// Default true on a fresh install (zero-value → enabled).
 	// (p0-wiring-fixes-3TVMG0MX WP05)

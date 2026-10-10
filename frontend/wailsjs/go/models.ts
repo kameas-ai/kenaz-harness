@@ -3106,6 +3106,9 @@ export namespace fleet {
 	    exports_failed: number;
 	    exports_unauthorized: number;
 	    exports_identity_mismatch: number;
+	    model_calls_shared: boolean;
+	    model_calls_exported: number;
+	    model_calls_withheld: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new PipelineStatus(source);
@@ -3127,6 +3130,9 @@ export namespace fleet {
 	        this.exports_failed = source["exports_failed"];
 	        this.exports_unauthorized = source["exports_unauthorized"];
 	        this.exports_identity_mismatch = source["exports_identity_mismatch"];
+	        this.model_calls_shared = source["model_calls_shared"];
+	        this.model_calls_exported = source["model_calls_exported"];
+	        this.model_calls_withheld = source["model_calls_withheld"];
 	    }
 	}
 	export class ResolvedUnitView {
@@ -5411,6 +5417,79 @@ export namespace memory {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace modelcalls {
+	
+	export class CallView {
+	    spanId: string;
+	    startedAtMs: number;
+	    durationMs: number;
+	    status: string;
+	    provider: string;
+	    requestModel: string;
+	    responseModel: string;
+	    responseId: string;
+	    upstream: string;
+	    finishReasons: string[];
+	    errorType: string;
+	    attempt: number;
+	    fallback: boolean;
+	    inputTokens: number;
+	    outputTokens: number;
+	    cacheReadTokens: number;
+	    cacheWriteTokens: number;
+	    reasoningTokens: number;
+	    ttftMs: number;
+	    costUsd?: number;
+	    statsState: string;
+	    providerLatencyMs?: number;
+	    providerGenerationTimeMs?: number;
+	    providerCostUsd?: number;
+	    nativeInputTokens?: number;
+	    nativeOutputTokens?: number;
+	    nativeReasoningTokens?: number;
+	    nativeCachedTokens?: number;
+	    nativeFinishReason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CallView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.spanId = source["spanId"];
+	        this.startedAtMs = source["startedAtMs"];
+	        this.durationMs = source["durationMs"];
+	        this.status = source["status"];
+	        this.provider = source["provider"];
+	        this.requestModel = source["requestModel"];
+	        this.responseModel = source["responseModel"];
+	        this.responseId = source["responseId"];
+	        this.upstream = source["upstream"];
+	        this.finishReasons = source["finishReasons"];
+	        this.errorType = source["errorType"];
+	        this.attempt = source["attempt"];
+	        this.fallback = source["fallback"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.cacheReadTokens = source["cacheReadTokens"];
+	        this.cacheWriteTokens = source["cacheWriteTokens"];
+	        this.reasoningTokens = source["reasoningTokens"];
+	        this.ttftMs = source["ttftMs"];
+	        this.costUsd = source["costUsd"];
+	        this.statsState = source["statsState"];
+	        this.providerLatencyMs = source["providerLatencyMs"];
+	        this.providerGenerationTimeMs = source["providerGenerationTimeMs"];
+	        this.providerCostUsd = source["providerCostUsd"];
+	        this.nativeInputTokens = source["nativeInputTokens"];
+	        this.nativeOutputTokens = source["nativeOutputTokens"];
+	        this.nativeReasoningTokens = source["nativeReasoningTokens"];
+	        this.nativeCachedTokens = source["nativeCachedTokens"];
+	        this.nativeFinishReason = source["nativeFinishReason"];
+	    }
 	}
 
 }
@@ -8090,6 +8169,24 @@ export namespace settings {
 		    return a;
 		}
 	}
+	export class ModelCallTelemetrySettings {
+	    statsPullEnabled: boolean;
+	    retentionDays: number;
+	    effectiveRetentionDays: number;
+	    shareWithFleet: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelCallTelemetrySettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.statsPullEnabled = source["statsPullEnabled"];
+	        this.retentionDays = source["retentionDays"];
+	        this.effectiveRetentionDays = source["effectiveRetentionDays"];
+	        this.shareWithFleet = source["shareWithFleet"];
+	    }
+	}
 	export class ProviderProfileRef {
 	    providerId?: string;
 	    modelId?: string;
@@ -8210,6 +8307,9 @@ export namespace settings {
 	    adviceCompactNowDisabled?: boolean;
 	    adviceEscalateModelDisabled?: boolean;
 	    adviceLabelCaptureDisabled?: boolean;
+	    modelCallStatsPullDisabled?: boolean;
+	    modelCallRetentionDays?: number;
+	    shareModelCallTelemetryWithFleet?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8308,6 +8408,9 @@ export namespace settings {
 	        this.adviceCompactNowDisabled = source["adviceCompactNowDisabled"];
 	        this.adviceEscalateModelDisabled = source["adviceEscalateModelDisabled"];
 	        this.adviceLabelCaptureDisabled = source["adviceLabelCaptureDisabled"];
+	        this.modelCallStatsPullDisabled = source["modelCallStatsPullDisabled"];
+	        this.modelCallRetentionDays = source["modelCallRetentionDays"];
+	        this.shareModelCallTelemetryWithFleet = source["shareModelCallTelemetryWithFleet"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

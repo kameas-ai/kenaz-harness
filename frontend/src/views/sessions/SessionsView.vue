@@ -52,6 +52,7 @@ import ToolPermissionModal from '@/components/permissions/ToolPermissionModal.vu
 import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
+import ModelCallsDisclosure from '@/components/chat/ModelCallsDisclosure.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
 import ContextCompositionPopover from '@/components/chat/ContextCompositionPopover.vue';
 import ToolsMenu from '@/components/chat/ToolsMenu.vue';
@@ -2620,6 +2621,13 @@ async function onShared() {
           <CostCell
             :usage="sessionUsage"
             :loading="sessionUsageLoading"
+          />
+          <!-- llm-call-telemetry-01LLMTEL01 WP02: read-only "Model calls"
+               disclosure under the cost readout (local model-call store). -->
+          <ModelCallsDisclosure
+            v-if="hasSession"
+            :session-id="sessionId"
+            :served-mode="servedMode"
           />
           <!-- Context window meter.
                Known window (hasContextWindow): bar + pct + used/max label.

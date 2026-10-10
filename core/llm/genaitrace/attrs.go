@@ -52,6 +52,14 @@ const (
 	SpanNameTurn = "kenaz.chat.turn"
 )
 
+// StoredRecord names the local model-call store (core/modelcalls, the
+// model_calls table) in an AttrSpec's Spans list (llm-call-telemetry-
+// 01LLMTEL01 WP02). Every gen_ai.chat attribute is also kept on the
+// call's stored record; a key whose Spans names ONLY StoredRecord comes
+// from the provider stats pull, which lands after the span has ended, so
+// it is never set on a span — attrSet refuses it on one.
+const StoredRecord = "stored record"
+
 // AttrType is the OTel attribute value type.
 type AttrType string
 
@@ -106,6 +114,12 @@ const maxInt = 1 << 40 // ~1.1e12: no token count, latency or index reaches it
 var (
 	chatOnly  = []string{SpanNameChat}
 	bothSpans = []string{SpanNameChat, SpanNameTurn}
+	// storedOnly keys come from the provider stats pull (WP02) and live
+	// on the stored record only.
+	storedOnly = []string{StoredRecord}
+	// chatAndStored keys are set on the span and may be filled on the
+	// stored record later by the stats pull when the span lacked them.
+	chatAndStored = []string{SpanNameChat, StoredRecord}
 )
 
 // ProviderNames is the closed gen_ai.provider.name / gen_ai.system value
@@ -170,16 +184,32 @@ var SpanAttributes = []AttrSpec{
 		Doc: "Estimated tokens of the tool schemas sent"},
 	{Key: "kenaz.llm.ttft_ms", Type: TypeInt, Min: 0, Max: maxInt, Spans: chatOnly,
 		Doc: "Milliseconds from call start to the first streamed text/tool/reasoning chunk"},
+	{Key: "kenaz.provider.cost_usd", Type: TypeFloat, Min: 0, Max: 1e6, Spans: storedOnly,
+		Doc: "Provider-side cost in USD from the OpenRouter generation-stats pull (total_cost)"},
+	{Key: "kenaz.provider.generation_time_ms", Type: TypeInt, Min: 0, Max: maxInt, Spans: storedOnly,
+		Doc: "Provider-side generation time in ms from the OpenRouter generation-stats pull (generation_time)"},
+	{Key: "kenaz.provider.latency_ms", Type: TypeInt, Min: 0, Max: maxInt, Spans: storedOnly,
+		Doc: "Provider-side latency to first token in ms from the OpenRouter generation-stats pull (latency)"},
+	{Key: "kenaz.provider.native_cached_tokens", Type: TypeInt, Min: 0, Max: maxInt, Spans: storedOnly,
+		Doc: "Upstream-native cached prompt tokens from the OpenRouter generation-stats pull (native_tokens_cached)"},
+	{Key: "kenaz.provider.native_finish_reason", Type: TypeString, Class: ClassToken, Spans: storedOnly,
+		Doc: "Upstream-native finish reason from the OpenRouter generation-stats pull, normalised"},
+	{Key: "kenaz.provider.native_input_tokens", Type: TypeInt, Min: 0, Max: maxInt, Spans: storedOnly,
+		Doc: "Upstream-native prompt tokens from the OpenRouter generation-stats pull (native_tokens_prompt)"},
+	{Key: "kenaz.provider.native_output_tokens", Type: TypeInt, Min: 0, Max: maxInt, Spans: storedOnly,
+		Doc: "Upstream-native completion tokens from the OpenRouter generation-stats pull (native_tokens_completion)"},
+	{Key: "kenaz.provider.native_reasoning_tokens", Type: TypeInt, Min: 0, Max: maxInt, Spans: storedOnly,
+		Doc: "Upstream-native reasoning tokens from the OpenRouter generation-stats pull (native_tokens_reasoning)"},
 	{Key: "kenaz.provider.request_id", Type: TypeString, Class: ClassID, Spans: chatOnly,
 		Doc: "Provider request-id response header (Anthropic request-id, OpenAI x-request-id, Azure apim-request-id)"},
 	{Key: "kenaz.provider.system_fingerprint", Type: TypeString, Class: ClassID, Spans: chatOnly,
 		Doc: "OpenAI-family system_fingerprint"},
 	{Key: "kenaz.provider.tool_use_prompt_tokens", Type: TypeInt, Min: 0, Max: maxInt, Spans: chatOnly,
 		Doc: "Gemini usageMetadata.toolUsePromptTokenCount"},
-	{Key: "kenaz.provider.upstream", Type: TypeString, Class: ClassToken, Spans: chatOnly,
-		Doc: "Upstream provider a router (OpenRouter) dispatched to, normalised"},
+	{Key: "kenaz.provider.upstream", Type: TypeString, Class: ClassToken, Spans: chatAndStored,
+		Doc: "Upstream provider a router (OpenRouter) dispatched to, normalised; the stats pull fills it on the stored record when the stream did not report it (provider_name)"},
 	{Key: "kenaz.session.hash", Type: TypeString, Class: ClassHash, Spans: bothSpans,
-		Doc: "Keyed HMAC-SHA256 of the session id (per-process key), never the raw id"},
+		Doc: "Keyed HMAC-SHA256 of the session id (per-install key that never leaves the machine), never the raw id"},
 }
 
 // specByKey indexes SpanAttributes.
@@ -284,6 +314,7 @@ func RenderAttributeTable() string {
 	b.WriteString("No data travels in span events, links, tracestate or Status.Message: the spans set none of them (status is code-only).\n\n")
 	b.WriteString("## Attributes\n\n")
 	b.WriteString("Any key not listed here is never set. Content (prompts, completions, tool arguments, tool results, system prompt text) is never set, under any key.\n\n")
+	b.WriteString("Every `" + SpanNameChat + "` attribute is also kept on the call's record in the local model-call store (`model_calls`). A key whose span list is only `" + StoredRecord + "` comes from the provider stats pull (OpenRouter `/api/v1/generation`), which lands after the span has ended: it is never set on a span and never reaches Fleet.\n\n")
 	b.WriteString("| Key | Type | Bound | Span(s) | Meaning |\n|---|---|---|---|---|\n")
 	for _, s := range SpanAttributes {
 		spans := "`" + strings.Join(s.Spans, "`, `") + "`"

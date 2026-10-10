@@ -24,6 +24,16 @@
 //     Content}* (gen_ai.input.messages, gen_ai.system_instructions, …).
 //  5. NO SIDE CHANNELS in core/llm/genaitrace: no AddEvent, RecordError or
 //     AddLink call, and SetStatus only with an empty description.
+//  6. THE LOCAL STORE (llm-call-telemetry-01LLMTEL01 WP02): every column
+//     any non-test Go file under core/ or cmd/ declares for the model_calls
+//     table (CREATE TABLE model_calls / ALTER TABLE model_calls ADD COLUMN
+//     in a string literal) is either a structural column
+//     (genaitrace.RecordStructuralColumns) or bound to an allowlisted key
+//     by genaitrace.RecordColumns; no column or mapping names content
+//     (a segment content / message* / arguments / result(s) /
+//     instructions / text / body / prompt(s) / completion(s) other than
+//     a *_tokens count); every mapped column exists in the DDL. The store
+//     can hold nothing the span allowlist would refuse.
 //
 // Exit 1 with one line per finding; exit 0 prints a summary.
 package main
@@ -42,8 +52,10 @@ import (
 )
 
 const (
-	pkgDir    = "core/llm/genaitrace"
-	attrsFile = "core/llm/genaitrace/attrs.go"
+	pkgDir     = "core/llm/genaitrace"
+	attrsFile  = "core/llm/genaitrace/attrs.go"
+	recordFile = "core/llm/genaitrace/record.go"
+	storeTable = "model_calls"
 )
 
 var (
@@ -56,7 +68,15 @@ var (
 	}
 	semconvContent = regexp.MustCompile(`^GenAI\w*(Messages|Instructions|Prompt|Completion|Arguments|Result|Content)\w*$`)
 	outsideKey     = regexp.MustCompile(`^(gen_ai\.|kenaz\.(llm|provider|session|chat)\.)`)
+	storeCreate    = regexp.MustCompile(`(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?model_calls\s*\((.*?)\)\s*;`)
+	storeAlter     = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+model_calls\s+ADD\s+(?:COLUMN\s+)?([A-Za-z_][A-Za-z0-9_]*)`)
+	storeMention   = regexp.MustCompile(`(?i)(CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?model_calls\b|ALTER\s+TABLE\s+model_calls\b)`)
 )
+
+// storeDDL collects every model_calls column declaration found in the tree
+// scan: column name -> "file:line" of the literal that declares it.
+var storeDDL = map[string]string{}
+var storeCreates int
 
 var findings []string
 
@@ -81,6 +101,7 @@ func main() {
 	declared, spanNames := checkAllowlist(fset)
 	pkgFiles := checkPackage(fset, declared, spanNames)
 	scanned := scanTree(fset)
+	storeCols := checkStore(fset, declared)
 
 	if len(findings) > 0 {
 		sort.Strings(findings)
@@ -89,8 +110,8 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	fmt.Printf("[genai-span-no-content] allowlist: %d keys, all bounded, none content; instrumentation package: %d files; scanned %d files under core, cmd — one emitter, no semconv content keys, no side channels.\n",
-		len(declared), pkgFiles, scanned)
+	fmt.Printf("[genai-span-no-content] allowlist: %d keys, all bounded, none content; instrumentation package: %d files; scanned %d files under core, cmd — one emitter, no semconv content keys, no side channels; local store %s: %d columns, every one structural or an allowlisted key.\n",
+		len(declared), pkgFiles, scanned, storeTable, storeCols)
 }
 
 // checkAllowlist parses SpanAttributes and returns its keys plus the span
@@ -292,10 +313,14 @@ func scanTree(fset *token.FileSet) int {
 			ast.Inspect(f, func(node ast.Node) bool {
 				switch v := node.(type) {
 				case *ast.BasicLit:
-					if inPkg || v.Kind != token.STRING {
+					if v.Kind != token.STRING {
 						return true
 					}
 					s, _ := strconv.Unquote(v.Value)
+					collectStoreDDL(fset.Position(v.Pos()).String(), s)
+					if inPkg {
+						return true
+					}
 					if outsideKey.MatchString(s) {
 						fail("%s: model-call span key literal %q outside %s — attributes have one writer (genaitrace.attrSet, which enforces the allowlist)", fset.Position(v.Pos()), s, pkgDir)
 					}
@@ -323,4 +348,179 @@ func identName(e ast.Expr) string {
 		return v.Sel.Name
 	}
 	return ""
+}
+
+// collectStoreDDL records every model_calls column a string literal
+// declares.
+func collectStoreDDL(pos, lit string) {
+	if !storeMention.MatchString(lit) {
+		return
+	}
+	for _, m := range storeCreate.FindAllStringSubmatch(lit, -1) {
+		storeCreates++
+		for _, item := range splitTopLevel(m[1]) {
+			fields := strings.Fields(item)
+			if len(fields) == 0 {
+				continue
+			}
+			switch strings.ToUpper(fields[0]) {
+			case "PRIMARY", "UNIQUE", "CHECK", "FOREIGN", "CONSTRAINT":
+				continue
+			}
+			storeDDL[strings.Trim(fields[0], "`\"[]")] = pos
+		}
+	}
+	for _, m := range storeAlter.FindAllStringSubmatch(lit, -1) {
+		storeDDL[m[1]] = pos
+	}
+}
+
+// splitTopLevel splits a column list on commas outside parentheses.
+func splitTopLevel(s string) []string {
+	var out []string
+	depth, start := 0, 0
+	for i, r := range s {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				out = append(out, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(out, s[start:])
+}
+
+// contentColumn reports why a store column name names content, or "".
+func contentColumn(col string) string {
+	c := strings.ToLower(col)
+	segs := strings.Split(c, "_")
+	counted := strings.HasSuffix(c, "_tokens")
+	for _, seg := range segs {
+		if contentSegs[seg] || strings.HasPrefix(seg, "message") {
+			return "segment " + strconv.Quote(seg) + " names content"
+		}
+		switch seg {
+		case "prompt", "prompts", "completion", "completions":
+			if !counted {
+				return "segment " + strconv.Quote(seg) + " names content (only a *_tokens count may)"
+			}
+		}
+	}
+	return ""
+}
+
+// checkStore applies check 6 and returns the number of store columns.
+func checkStore(fset *token.FileSet, declared map[string]bool) int {
+	f, err := parser.ParseFile(fset, recordFile, nil, 0)
+	if err != nil {
+		fail("parse %s: %v", recordFile, err)
+		return 0
+	}
+	mapped := map[string]string{} // column -> key
+	structural := map[string]bool{}
+	foundMap, foundStruct := false, false
+	ast.Inspect(f, func(n ast.Node) bool {
+		vs, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		for i, name := range vs.Names {
+			if i >= len(vs.Values) {
+				continue
+			}
+			cl, ok := vs.Values[i].(*ast.CompositeLit)
+			if !ok {
+				continue
+			}
+			switch name.Name {
+			case "RecordColumns":
+				foundMap = true
+				for _, el := range cl.Elts {
+					ecl, ok := el.(*ast.CompositeLit)
+					if !ok {
+						fail("%s: RecordColumns element at %s is not a literal — entries must be statically checkable", recordFile, fset.Position(el.Pos()))
+						continue
+					}
+					var col, key string
+					for _, e := range ecl.Elts {
+						kv, ok := e.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						id, _ := kv.Key.(*ast.Ident)
+						bl, _ := kv.Value.(*ast.BasicLit)
+						if id == nil || bl == nil || bl.Kind != token.STRING {
+							continue
+						}
+						v, _ := strconv.Unquote(bl.Value)
+						switch id.Name {
+						case "Column":
+							col = v
+						case "Key":
+							key = v
+						}
+					}
+					if col == "" || key == "" {
+						fail("%s: RecordColumns entry at %s needs string-literal Column and Key", recordFile, fset.Position(ecl.Pos()))
+						continue
+					}
+					if _, dup := mapped[col]; dup {
+						fail("%s: column %s mapped twice", recordFile, col)
+					}
+					mapped[col] = key
+					if !declared[key] {
+						fail("%s: column %s maps to %s, which is not an allowlisted attribute key", recordFile, col, key)
+					}
+					if why := contentColumn(col); why != "" {
+						fail("%s: store column %s is a content column (%s)", recordFile, col, why)
+					}
+				}
+			case "RecordStructuralColumns":
+				foundStruct = true
+				for _, el := range cl.Elts {
+					bl, ok := el.(*ast.BasicLit)
+					if !ok || bl.Kind != token.STRING {
+						fail("%s: RecordStructuralColumns element at %s is not a string literal", recordFile, fset.Position(el.Pos()))
+						continue
+					}
+					v, _ := strconv.Unquote(bl.Value)
+					structural[v] = true
+					if why := contentColumn(v); why != "" {
+						fail("%s: structural column %s is a content column (%s)", recordFile, v, why)
+					}
+				}
+			}
+		}
+		return true
+	})
+	if !foundMap || !foundStruct {
+		fail("%s: var RecordColumns / RecordStructuralColumns literals not found — the store mapping moved; update this gate", recordFile)
+		return 0
+	}
+	if storeCreates == 0 || len(storeDDL) == 0 {
+		fail("no CREATE TABLE %s found under core, cmd — the store DDL moved or the scan looked at nothing; update this gate", storeTable)
+		return 0
+	}
+	for col, pos := range storeDDL {
+		if structural[col] {
+			continue
+		}
+		if _, ok := mapped[col]; !ok {
+			fail("%s: %s column %s is neither structural nor bound to an allowlisted key in %s RecordColumns — the local store may hold only what the span allowlist admits", pos, storeTable, col, recordFile)
+		}
+		if why := contentColumn(col); why != "" {
+			fail("%s: %s column %s is a content column (%s)", pos, storeTable, col, why)
+		}
+	}
+	for col := range mapped {
+		if _, ok := storeDDL[col]; !ok {
+			fail("%s: RecordColumns maps %s, but no %s DDL declares it — stale mapping", recordFile, col, storeTable)
+		}
+	}
+	return len(storeDDL)
 }

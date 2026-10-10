@@ -22,6 +22,8 @@ No data travels in span events, links, tracestate or Status.Message: the spans s
 
 Any key not listed here is never set. Content (prompts, completions, tool arguments, tool results, system prompt text) is never set, under any key.
 
+Every `gen_ai.chat` attribute is also kept on the call's record in the local model-call store (`model_calls`). A key whose span list is only `stored record` comes from the provider stats pull (OpenRouter `/api/v1/generation`), which lands after the span has ended: it is never set on a span and never reaches Fleet.
+
 | Key | Type | Bound | Span(s) | Meaning |
 |---|---|---|---|---|
 | `error.type` | string | one of: `auth_invalid`, `cancelled`, `forbidden`, `invalid_request`, `model_not_found`, `network`, `payment_required`, `provider_unavailable`, `rate_limited`, `timeout`, `unknown`, `unsupported` | `gen_ai.chat` | Typed failure class of a failed call; absent on success |
@@ -46,8 +48,16 @@ Any key not listed here is never set. Content (prompts, completions, tool argume
 | `kenaz.llm.tool_count` | int | integer 0..100000 | `gen_ai.chat` | Number of tool schemas sent |
 | `kenaz.llm.tool_schema_tokens_est` | int | integer 0..1099511627776 | `gen_ai.chat` | Estimated tokens of the tool schemas sent |
 | `kenaz.llm.ttft_ms` | int | integer 0..1099511627776 | `gen_ai.chat` | Milliseconds from call start to the first streamed text/tool/reasoning chunk |
+| `kenaz.provider.cost_usd` | float | number 0..1000000 | `stored record` | Provider-side cost in USD from the OpenRouter generation-stats pull (total_cost) |
+| `kenaz.provider.generation_time_ms` | int | integer 0..1099511627776 | `stored record` | Provider-side generation time in ms from the OpenRouter generation-stats pull (generation_time) |
+| `kenaz.provider.latency_ms` | int | integer 0..1099511627776 | `stored record` | Provider-side latency to first token in ms from the OpenRouter generation-stats pull (latency) |
+| `kenaz.provider.native_cached_tokens` | int | integer 0..1099511627776 | `stored record` | Upstream-native cached prompt tokens from the OpenRouter generation-stats pull (native_tokens_cached) |
+| `kenaz.provider.native_finish_reason` | string | provider enum token, lower-cased, ≤64 chars, `[a-z0-9._-]` | `stored record` | Upstream-native finish reason from the OpenRouter generation-stats pull, normalised |
+| `kenaz.provider.native_input_tokens` | int | integer 0..1099511627776 | `stored record` | Upstream-native prompt tokens from the OpenRouter generation-stats pull (native_tokens_prompt) |
+| `kenaz.provider.native_output_tokens` | int | integer 0..1099511627776 | `stored record` | Upstream-native completion tokens from the OpenRouter generation-stats pull (native_tokens_completion) |
+| `kenaz.provider.native_reasoning_tokens` | int | integer 0..1099511627776 | `stored record` | Upstream-native reasoning tokens from the OpenRouter generation-stats pull (native_tokens_reasoning) |
 | `kenaz.provider.request_id` | string | provider id, ≤128 chars, `[A-Za-z0-9._:/@+=-]` | `gen_ai.chat` | Provider request-id response header (Anthropic request-id, OpenAI x-request-id, Azure apim-request-id) |
 | `kenaz.provider.system_fingerprint` | string | provider id, ≤128 chars, `[A-Za-z0-9._:/@+=-]` | `gen_ai.chat` | OpenAI-family system_fingerprint |
 | `kenaz.provider.tool_use_prompt_tokens` | int | integer 0..1099511627776 | `gen_ai.chat` | Gemini usageMetadata.toolUsePromptTokenCount |
-| `kenaz.provider.upstream` | string | provider enum token, lower-cased, ≤64 chars, `[a-z0-9._-]` | `gen_ai.chat` | Upstream provider a router (OpenRouter) dispatched to, normalised |
-| `kenaz.session.hash` | string | 16 lowercase hex chars | `gen_ai.chat`, `kenaz.chat.turn` | Keyed HMAC-SHA256 of the session id (per-process key), never the raw id |
+| `kenaz.provider.upstream` | string | provider enum token, lower-cased, ≤64 chars, `[a-z0-9._-]` | `gen_ai.chat`, `stored record` | Upstream provider a router (OpenRouter) dispatched to, normalised; the stats pull fills it on the stored record when the stream did not report it (provider_name) |
+| `kenaz.session.hash` | string | 16 lowercase hex chars | `gen_ai.chat`, `kenaz.chat.turn` | Keyed HMAC-SHA256 of the session id (per-install key that never leaves the machine), never the raw id |

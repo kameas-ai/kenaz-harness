@@ -9,6 +9,7 @@ import (
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logstore"
+	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
@@ -111,6 +112,9 @@ func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
 func (f *fakeHarnessAPI) AppInfo(_ context.Context) (AppInfo, error) { return AppInfo{}, nil }
 func (f *fakeHarnessAPI) ToolSchemaCosts(_ context.Context, _, _ string) ([]loadtools.ServerCost, error) {
 	return nil, ErrToolExposureNotConfigured
+}
+func (f *fakeHarnessAPI) ModelCallsForSession(_ context.Context, _ string, _ int) ([]modelcalls.CallView, error) {
+	return []modelcalls.CallView{}, nil
 }
 func (f *fakeHarnessAPI) CompactionOverhead(_ context.Context) (CompactionOverheadInfo, error) {
 	return CompactionOverheadInfo{}, nil

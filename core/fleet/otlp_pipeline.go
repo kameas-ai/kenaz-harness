@@ -123,6 +123,10 @@ type FleetOTLPPipeline struct {
 	// Fleet's snapshot opts in SpanTelemetryClass. See closableSpanExporter.
 	spansAdmitted atomic.Bool
 
+	// modelCalls is the "Share model-call telemetry with Fleet" opt-in
+	// (SetModelCallSharing), shared by every activation's span exporter.
+	modelCalls modelCallShare
+
 	// usage is the account-attributed event + counter lane for the live
 	// activation; nil while inactive. See otlp_usage_lane.go.
 	usage          *usageLane
@@ -205,6 +209,13 @@ func (p *FleetOTLPPipeline) SetTelemetryOptIns(optIns []TelemetryOptInItem) {
 	p.optIns = append([]TelemetryOptInItem(nil), optIns...)
 	lane := p.usage
 	p.recomputeSpanAdmissionLocked()
+	denied := false
+	for _, item := range optIns {
+		if item.Class == ModelCallTelemetryClass && !item.OptedIn {
+			denied = true
+		}
+	}
+	p.modelCalls.fleetDenied.Store(denied)
 	p.mu.Unlock()
 	if lane != nil {
 		lane.gate.setOptIns(optIns)
@@ -340,7 +351,7 @@ func (p *FleetOTLPPipeline) Activate(
 		// Wrap to substitute resource on every export call.
 		spanClosed := &atomic.Bool{}
 		withResource := &resourceOverrideSpanExporter{
-			inner: &closableSpanExporter{inner: spanExp, closed: spanClosed, admitted: &p.spansAdmitted},
+			inner: &closableSpanExporter{inner: spanExp, closed: spanClosed, admitted: &p.spansAdmitted, modelCalls: &p.modelCalls},
 			res:   identityRes,
 		}
 		p.spanClosed = spanClosed

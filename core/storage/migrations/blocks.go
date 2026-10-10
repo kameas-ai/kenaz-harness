@@ -88,6 +88,13 @@ var CanonicalBlocks = map[string]VersionBlock{
 	// at the time this was reserved was 1500-1599, so 1600-1699 is the
 	// first free range; nothing else in this table touches it.
 	"laya-advisors": {Min: 1600, Max: 1699},
+	// llm-call-telemetry-01LLMTEL01 WP02: 1800-1899. The model_calls
+	// table backing core/modelcalls.Store — the durable local record of
+	// every LLM provider call. 1700-1799 is ml-producer's
+	// (ml-producer-01MLPRD01, migration ml-producer/1700-ml-outbox-and-tasks,
+	// on feat/ml-producer and already applied on a dev profile), so
+	// telemetry takes the next free range; nothing else touches it.
+	"model-calls": {Min: 1800, Max: 1899},
 }
 
 // LookupBlock returns the reserved block for the given owning-mission

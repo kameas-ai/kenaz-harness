@@ -19,11 +19,12 @@ import (
 // ruling for llm-call-telemetry-01LLMTEL01: gen_ai.chat / kenaz.chat.turn
 // spans reach Fleet only under an explicit "Share model-call telemetry
 // with Fleet" opt-in (default OFF, WP02), never under the general
-// telemetry consent. Until that setting exists they do not leave the
-// machine at all.
+// telemetry consent. With that setting at its default (OFF) they do not
+// leave the machine at all; otlp_model_call_optin_test.go covers ON.
 //
-// The pipeline is put in its most permissive reachable state (full
-// consent, the span class opted in) and a fake Fleet receives
+// The pipeline is put in its most permissive reachable state short of the
+// model-call opt-in (full consent, the span class opted in) and a fake
+// Fleet receives
 // /otlp/v1/traces: an ordinary harness span arrives, proving the lane is
 // open; the turn span and the provider-call span — real ones, through
 // genaitrace.StartTurn / Instrument — do not, and no gen_ai.* / kenaz.*

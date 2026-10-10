@@ -32,7 +32,12 @@
 #     4. no semconv GenAI*{Messages,Instructions,Prompt,Completion,
 #        Arguments,Result,Content}* selector anywhere under core/ or cmd/;
 #     5. no AddEvent / RecordError / AddLink, and code-only SetStatus, in
-#        the instrumentation package.
+#        the instrumentation package;
+#     6. (WP02) the local model-call store: every model_calls column any
+#        file under core/ or cmd/ declares (CREATE TABLE / ALTER TABLE ADD
+#        COLUMN) is structural (genaitrace.RecordStructuralColumns) or
+#        bound to an allowlisted key (genaitrace.RecordColumns); no column
+#        names content; no mapping is stale.
 # (b) RUNTIME: the per-adapter table tests drive a recorded, content-
 #     bearing request/response through the real choke point
 #     (genaitrace.Instrument) and assert the exact attribute set, that
@@ -44,7 +49,8 @@
 # Planted-violation proofs: scripts/ci/gates_can_fail_test.go
 # TestGenAISpanGate_* (content key in the allowlist, free-text class,
 # a second emitter, an undeclared key in the package, a semconv content
-# key, a span event).
+# key, a span event; WP02: a content column added to the store, an
+# unmapped store column, a store column mapped to a non-allowlisted key).
 #
 # GENAI_SPAN_GATE_STRUCTURAL_ONLY=1 skips (b) — used only by the planted-
 # violation meta-tests. CI runs both halves.
@@ -113,5 +119,10 @@ run_named_test core/llm/genaitrace TestAttrSet_RefusesUndeclaredAndUnbounded
 run_named_test core/llm/genaitrace TestSpanAttributeDocInSync
 run_named_test core/rpc/views/agentgraph/chat TestChatTurn_GenAISpans_NestedWithRetryAndToolCall
 run_named_test core/fleet TestOTLPPipeline_ModelCallSpansStayLocal
+# WP02: the local store, the stats pull and the opt-in Fleet export.
+run_named_test core/llm/genaitrace TestAttrSet_ScopeRefusesKeysOffTheirSpan
+run_named_test core/modelcalls TestRecorder_SpanToStore_NoContent
+run_named_test core/modelcalls TestStatsPuller_RetriesThenMapsAllowlistedFields
+run_named_test core/fleet TestOTLPPipeline_ModelCallSharing_OffOnOff
 
-echo "${GATE} clean — model-call spans carry only allowlisted, bounded, content-free attributes, from one emitter."
+echo "${GATE} clean — model-call spans and the local model_calls store carry only allowlisted, bounded, content-free attributes, from one emitter."

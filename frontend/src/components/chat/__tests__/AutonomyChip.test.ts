@@ -88,6 +88,7 @@ function mountChip(resolved: ResolvedAutonomy) {
       moveToProject: async () => undefined,
       resumeMessage: async () => ({ subscriptionId: 's', originalMessageId: 'm' }),
       turnRuns: async () => [],
+      modelCalls: async () => [],
       getUsage: async () => ({
         promptTokens: 0,
         completionTokens: 0,
