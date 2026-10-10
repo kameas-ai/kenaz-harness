@@ -12,6 +12,14 @@
 # is a Release row with ZERO assets, which is indistinguishable from a healthy
 # release in the releases list, behind a green checkmark on main.
 #
+# Since 2026-10 tag-on-merge creates that Release as a DRAFT and release.yml
+# publishes it only after every asset + manifest.json is attached, so a failed
+# build now leaves an invisible draft instead of an empty public Release. To
+# this script a draft is still "unreleased" — it is reported exactly like a
+# missing Release, subject to the same grace rules below. (With a read-only
+# GITHUB_TOKEN the releases list omits drafts entirely, so a draft usually
+# shows up here as "no GitHub Release exists"; either way the tag is unreleased.)
+#
 # That is exactly what happened to v0.56.0 and v0.57.0, and — in the sibling
 # repo kameas-ai/kenaz, where tag-on-merge does not create the Release at all —
 # to eleven tags across four days (v1.20.0 … v1.30.0). Both were found by
@@ -35,10 +43,18 @@
 # ------------
 # A tag younger than GRACE_MINUTES is not failed on its own — the release build
 # is cross-platform and signed, and legitimately takes the better part of an
-# hour. But grace only protects builds that are still *running*: if the Release
-# workflow run for that tag has already completed with a non-success conclusion,
-# the tag is failed immediately regardless of age. A known-failed release is not
+# hour. But grace only protects builds that are still *running* (or not yet
+# registered): if no Release run for the tag is queued/in progress and the
+# latest one has completed, the tag is failed immediately regardless of age —
+# whatever its conclusion, because a completed run that left the tag without a
+# published, non-empty Release did not ship it. A known-failed release is not
 # an in-flight release.
+#
+# "Running" means ANY Release run for the tag, not just the newest: a human
+# publishing the draft in the UI fires `release: published`, whose run
+# release.yml's guard turns into a quick no-op while the real dispatched build
+# is still going. Looking only at the newest run would see that no-op's
+# completed/success and fail an in-flight release.
 #
 # PERMANENTLY-EMPTY TAGS
 # ----------------------
@@ -171,6 +187,18 @@ while IFS= read -r tag; do
 done < "$WORK/ignored.txt"
 
 # ── 5. classify each unreconciled tag ────────────────────────────────────────
+# Recent Release runs, fetched once, as `head_branch<TAB>created_at<TAB>status
+# <TAB>conclusion`, sorted oldest → newest. Best-effort like the tag-date
+# lookups: on failure every tag reads as run=none/none, which only matters
+# inside grace (where "no run yet" is also pending) — past grace a tag fails
+# regardless.
+if ! gh api "repos/$REPO/actions/workflows/$RELEASE_WORKFLOW/runs?per_page=100" \
+     --jq '.workflow_runs[] | "\(.head_branch)\t\(.created_at)\t\(.status)\t\(.conclusion)"' \
+     > "$WORK/runs.raw" 2>/dev/null; then
+  : > "$WORK/runs.raw"
+fi
+sort -t$'\t' -k2,2 "$WORK/runs.raw" > "$WORK/runs.tsv"
+
 NOW=$(date -u +%s)
 FAILED=0
 PENDING=0
@@ -185,7 +213,9 @@ while IFS= read -r tag; do
   rel_draft="${rel%%$'\t'*}"
   rel_assets="${rel##*$'\t'}"
   if [ -z "$rel" ]; then
-    detail="no GitHub Release exists for this tag"
+    # Drafts are omitted from the list for tokens without push access, so a
+    # draft (a build that never finished) can land here too.
+    detail="no GitHub Release exists for this tag (or only a draft this token cannot see)"
   elif [ "$rel_draft" = "true" ]; then
     detail="Release exists but is a DRAFT — invisible to downloaders (assets=$rel_assets)"
   else
@@ -209,19 +239,19 @@ while IFS= read -r tag; do
     age_min=$(( (NOW - tag_epoch) / 60 ))
   fi
 
-  # Is the release build for this tag still running? tag-on-merge dispatches
-  # release.yml with --ref <tag>, so head_branch is the tag name.
-  run_state="$(gh api "repos/$REPO/actions/workflows/$RELEASE_WORKFLOW/runs?per_page=100" \
-    --jq "[.workflow_runs[] | select(.head_branch == \"$tag\")] | sort_by(.created_at) | last | \"\(.status)/\(.conclusion)\"" \
-    2>/dev/null || echo '')"
+  # Is a release build for this tag still running? tag-on-merge dispatches
+  # release.yml with --ref <tag>, so head_branch is the tag name. run_state is
+  # the newest run's status/conclusion (for the report); in_flight is true if
+  # ANY run for the tag has not completed (see GRACE PERIOD above).
+  run_state="$(awk -F'\t' -v t="$tag" '$1 == t { s = $3 "/" $4 } END { print s }' "$WORK/runs.tsv")"
   case "$run_state" in
-    ''|null|null/null) run_state='none/none' ;;
+    ''|null|null/null|/) run_state='none/none' ;;
   esac
 
   in_flight=false
-  case "$run_state" in
-    queued/*|in_progress/*|requested/*|waiting/*|pending/*) in_flight=true ;;
-  esac
+  if awk -F'\t' -v t="$tag" '$1 == t && $3 ~ /^(queued|in_progress|requested|waiting|pending)$/ { found = 1 } END { exit !found }' "$WORK/runs.tsv"; then
+    in_flight=true
+  fi
 
   if [ "$age_min" -lt "$GRACE_MINUTES" ] && [ "$in_flight" = true ]; then
     PENDING=$((PENDING + 1))
