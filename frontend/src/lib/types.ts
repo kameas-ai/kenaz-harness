@@ -4827,6 +4827,18 @@ export interface MLStatus {
   noticeText: string;
   /** Set on an ack Fleet refused with 409 policy_changed: show the notice again. */
   noticeChanged?: boolean;
+  /**
+   * Org exclusions (WP05), read-only. Path globs and command prefixes are
+   * matched on this device before anything is hashed or queued. Always
+   * arrays ([] when none or not loaded).
+   */
+  exclusionPaths: string[];
+  exclusionCommands: string[];
+  /** Shown for completeness: the harness sends no browser data. */
+  excludeBrowser: boolean;
+  exclusionsVersion: number;
+  /** The org's old free-text exclusions: display only, never matched. */
+  legacyExclusionNotes: string[];
   fleetError?: string;
   /** Absent until the ML shipper is wired. */
   shipping?: MLShippingStatus;

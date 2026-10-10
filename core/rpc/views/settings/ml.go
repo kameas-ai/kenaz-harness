@@ -168,6 +168,21 @@ type MLStatusView struct {
 	// be shown again.
 	NoticeChanged bool `json:"noticeChanged,omitempty"`
 
+	// Org exclusions (WP05; contract "Typed exclusions"), shown read-only:
+	// "Your organization excludes: …". The producer matches the paths and
+	// commands on this device before anything is hashed or queued.
+	// Always non-nil lists ([] on the wire) so the panel never branches
+	// on null.
+	ExclusionPaths    []string `json:"exclusionPaths"`
+	ExclusionCommands []string `json:"exclusionCommands"`
+	// ExcludeBrowser is shown for completeness; the harness sends no
+	// browser data, so it changes nothing here.
+	ExcludeBrowser    bool `json:"excludeBrowser"`
+	ExclusionsVersion int  `json:"exclusionsVersion"`
+	// LegacyExclusionNotes are the org's old free-text exclusions: display
+	// only, never matched.
+	LegacyExclusionNotes []string `json:"legacyExclusionNotes"`
+
 	// FleetError is the last /me/ml read error ("" on success).
 	FleetError string `json:"fleetError,omitempty"`
 
@@ -195,12 +210,23 @@ func mlFill(v *MLStatusView, m fleet.MeML) {
 	v.RetentionDays = m.RetentionDays
 	v.RetainOnWithdrawal = m.RetainOnWithdrawal
 	v.NoticeText = RenderMLNotice(v.OrgName, m.RetentionDays, m.RetainOnWithdrawal)
+	v.ExclusionPaths = append([]string{}, m.Exclusions.Paths...)
+	v.ExclusionCommands = append([]string{}, m.Exclusions.Commands...)
+	v.ExcludeBrowser = m.Exclusions.ExcludeBrowser
+	v.ExclusionsVersion = m.ExclusionsVersion
+	v.LegacyExclusionNotes = append([]string{}, m.LegacyExclusionNotes...)
 }
 
 // mlBase builds the view's session/capability part and reports whether a
 // /me/ml read may be made (signed in AND entitled).
 func (a *API) mlBase(ctx context.Context) (MLStatusView, *fleet.Client, bool) {
-	v := MLStatusView{Shipping: a.mlShippingStatus()}
+	v := MLStatusView{
+		Shipping:          a.mlShippingStatus(),
+		ExclusionPaths:    []string{},
+		ExclusionCommands: []string{},
+		// legacy notes too: the wire shape never carries null lists.
+		LegacyExclusionNotes: []string{},
+	}
 	if fleet.Disabled() {
 		return v, nil, false
 	}

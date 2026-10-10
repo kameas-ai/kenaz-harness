@@ -111,6 +111,9 @@ type Recorder struct {
 	parent map[string]string // child session -> parent session
 
 	dropped atomic.Int64
+
+	// excl is the newest org exclusion set (SetExclusions; WP05).
+	excl atomic.Pointer[ExclusionSet]
 }
 
 var _ coreag.ToolCallObserver = (*Recorder)(nil)
@@ -333,6 +336,26 @@ func (r *Recorder) EnvProvider(sessionFromCtx func(context.Context) string) func
 	}
 }
 
+// ---- org exclusions (WP05) ----
+
+// SetExclusions installs the org's newest exclusions (the gate calls it
+// after every /me/ml read: GateConfig.OnExclusions). Every call observed
+// after it is matched against s; see exclusions.go for the semantics.
+func (r *Recorder) SetExclusions(s *ExclusionSet) {
+	if r == nil {
+		return
+	}
+	r.excl.Store(s)
+}
+
+// excludedBy reports whether either set excludes: the set current when the
+// call was observed (seen) or the one current when it is handled. Checking
+// both means a call is never recorded under looser lists than the ones in
+// force at either moment.
+func excludedBy(seen, now *ExclusionSet, match func(*ExclusionSet) bool) bool {
+	return match(seen) || (now != seen && match(now))
+}
+
 // ---- observer entry points (enqueue only) ----
 
 // ToolCallCompleted implements agentgraph.ToolCallObserver.
@@ -342,7 +365,8 @@ func (r *Recorder) ToolCallCompleted(rec coreag.ToolCallRecord) {
 	}
 	unattended := runposture.IsUnattended(rec.Ctx)
 	at := r.nowMS()
-	r.enqueue(func() { r.handleTool(rec, unattended, at) })
+	seen := r.excl.Load()
+	r.enqueue(func() { r.handleTool(rec, unattended, at, seen) })
 }
 
 // TurnStarted is a no-op (chat.TurnUsageObserver shape).
@@ -490,7 +514,7 @@ func (r *Recorder) loadTask(ctx context.Context, id string) *mlstore.TaskRow {
 	return &t
 }
 
-func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int64) {
+func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int64, seen *ExclusionSet) {
 	root, ok := r.attributeTo(rec.SessionID, unattended)
 	if !ok {
 		return
@@ -554,15 +578,52 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 	}
 	var drafts []draft
 
+	// Org exclusions (WP05; spec §12 A-11): matched on the ABSOLUTE path
+	// before it is hashed and on the FULL command line before it is
+	// truncated. A match records the call only as agent.tool (tool,
+	// outcome, dur_ms): no file / terminal / commit / phase_change event,
+	// no files key, no test or commit counters.
+	now := r.excl.Load()
+	excluded := false
+	rawPath, abs := "", ""
+	switch {
+	case isFileWrite(rec.ToolName) && outcome == coreag.ToolOutcomeOK:
+		rawPath = stringArg(args, "path")
+		abs = absPath(rawPath, workspace)
+		excluded = excludedBy(seen, now, func(s *ExclusionSet) bool {
+			return s.MatchPath(abs) || s.MatchPath(rawPath)
+		})
+	case rec.ToolName == toolBash && ran:
+		full := stringArg(args, "command")
+		// The cwd relative path tokens resolve against: the call's
+		// working_dir (itself relative to the workspace), else the
+		// workspace.
+		cwd := absPath(stringArg(args, "working_dir"), workspace)
+		if cwd == "" {
+			cwd = workspace
+		}
+		excluded = excludedBy(seen, now, func(s *ExclusionSet) bool {
+			return s.MatchCommand(full) || s.MatchCommandPaths(full, cwd)
+		})
+	}
+
 	// Spec §12 A-10: the call's own event is file (a write that
 	// succeeded), terminal (bash that ran), or agent.tool (everything
-	// else, including denied / cancelled writes and bash).
+	// else, including denied / cancelled writes and bash, and every
+	// excluded call).
 	cmd := ""
 	exitCode, exitKnown := 0, false
 	switch {
+	case excluded:
+		drafts = append(drafts, draft{KindTool, map[string]any{
+			"task":    id,
+			"tool":    r.min.toolName(rec.ToolName),
+			"outcome": string(outcome),
+			"dur_ms":  rec.Duration.Milliseconds(),
+		}})
 	case isFileWrite(rec.ToolName) && outcome == coreag.ToolOutcomeOK:
 		payload := map[string]any{"task": id}
-		if abs := absPath(stringArg(args, "path"), workspace); abs != "" {
+		if abs != "" {
 			tok := r.min.pathToken(abs)
 			payload["path"] = tok
 			payload["file"] = tok
@@ -597,13 +658,13 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 		}})
 	}
 
-	if ran {
+	if ran && !excluded {
 		if p, ok := inferPhase(rec.ToolName, cmd); ok && string(p) != task.Phase {
 			task.Phase = string(p)
 			drafts = append(drafts, draft{KindPhaseChange, map[string]any{"task": id, "phase": string(p)}})
 		}
 	}
-	if outcome == coreag.ToolOutcomeOK && exitKnown && exitCode == 0 && gitSubcommand(cmd) == "commit" {
+	if !excluded && outcome == coreag.ToolOutcomeOK && exitKnown && exitCode == 0 && gitSubcommand(cmd) == "commit" {
 		task.CommitCount++
 		drafts = append(drafts, draft{KindCommit, map[string]any{"task": id}})
 	}

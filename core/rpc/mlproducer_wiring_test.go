@@ -51,6 +51,10 @@ const mlTestZitadelOrg = "390451413051827052"
 
 const mlOtherOrg = "f7ab6cc5-d86f-45ed-8b46-c0967a000000"
 
+// mlDevOrg is the internal dev org's Fleet uuid (WP03's former guard
+// value; WP05 removed the guard, so it is now just one org of many).
+const mlDevOrg = "fa81ec53-d374-4c48-8b72-dd6b8584d968"
+
 type otlpReply struct {
 	status     int
 	body       string
@@ -81,10 +85,27 @@ func mlEffectiveBody(offload bool, policy string, optedIn, acked bool) string {
 		"org_offload_enabled": offload, "org_policy": policy, "user_workflow_events_opted_in": optedIn,
 		"notice_ack_required": ships && !acked, "effective": ships && acked, "notice_version": 2,
 		"notice_acked_at": nil, "retention_days": 90, "retain_on_withdrawal": false,
+		"exclusions":         map[string]any{"paths": []string{}, "commands": []string{}, "exclude_browser": false},
+		"exclusions_version": 1, "legacy_exclusion_notes": []string{},
 	}
 	if acked {
 		m["notice_acked_at"] = "2026-10-09T12:00:00Z"
 	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// mlEffectiveBodyWithExclusions is an effective /me/ml (policy on, acked)
+// carrying the given exclusions object verbatim (raw JSON) and notes.
+func mlEffectiveBodyWithExclusions(exclusionsJSON string, version int, notes ...string) string {
+	var m map[string]any
+	_ = json.Unmarshal([]byte(mlEffectiveBody(true, "on", false, true)), &m)
+	m["exclusions"] = json.RawMessage(exclusionsJSON)
+	m["exclusions_version"] = version
+	if notes == nil {
+		notes = []string{}
+	}
+	m["legacy_exclusion_notes"] = notes
 	b, _ := json.Marshal(m)
 	return string(b)
 }
@@ -279,7 +300,7 @@ func (r *mlWiringRig) shipNow() {
 // Every row of the contract's effective-rule table, plus the capability /
 // pause / read-failure conditions, through the real fleet client.
 func TestMLWiring_GateMatrixOverContractEffectiveTable(t *testing.T) {
-	r := newMLWiringRig(t, mlproducer.DevOrgID, nil)
+	r := newMLWiringRig(t, mlDevOrg, nil)
 	ctx := context.Background()
 	rows := []struct {
 		name   string
@@ -317,37 +338,119 @@ func TestMLWiring_GateMatrixOverContractEffectiveTable(t *testing.T) {
 	}
 }
 
-// The dev-org guard (spec §12 A-11): enrolled into any other org, nothing
-// is recorded and nothing ships, with Fleet's consent fully effective.
-func TestMLWiring_DevOrgGuard_OtherOrgRecordsAndShipsNothing(t *testing.T) {
+// WP05 removed WP03's dev-org guard: enrolled into any other org, the
+// producer records and ships as soon as Fleet's consent is effective.
+func TestMLWiring_NonDevOrgShipsWhenEffective(t *testing.T) {
 	r := newMLWiringRig(t, mlOtherOrg, nil)
 	ctx := context.Background()
-	d := r.w.gate.Refresh(ctx)
-	if d.Open || d.Reason != mlproducer.ReasonOrgNotAllowed {
-		t.Fatalf("gate = %+v, want closed / %s", d, mlproducer.ReasonOrgNotAllowed)
+	if d := r.w.gate.Refresh(ctx); !d.Open {
+		t.Fatalf("gate = %+v, want open for org %s", d, mlOtherOrg)
 	}
 	r.toolCall("s1", "kenaz__read_file", `{"path":"a.go"}`, "x")
-	if recs := r.outbox(); len(recs) != 0 {
-		t.Fatalf("recorded %d rows for org %s", len(recs), mlOtherOrg)
+	if recs := r.outbox(); len(recs) == 0 {
+		t.Fatal("nothing recorded for a non-dev org with consent effective")
 	}
-	// Seed the outbox directly (as if left behind) — the shipper still
-	// sends nothing.
-	if _, err := r.w.store.Commit(ctx, mlstore.Write{Events: []mlstore.EventDraft{{CreatedAt: 1, Body: func(int64) ([]byte, error) { return []byte(`{}`), nil }}}}); err != nil {
+	r.shipNow()
+	if posts, _, _, _ := r.fleet.snapshot(); len(posts) != 1 || otlpRecordCount(posts[0]) == 0 {
+		t.Fatalf("posts = %d, want one non-empty batch", len(posts))
+	}
+}
+
+// WP05 end to end through the real fleet client: /me/ml's exclusions
+// reach the recorder on the gate read; an excluded write and an excluded
+// command ship only as agent.tool; the request bytes carry neither the
+// path, its hash, nor the command; and a narrowing change applies on the
+// next read.
+func TestMLWiring_ExclusionsFromMeMLApplied(t *testing.T) {
+	r := newMLWiringRig(t, mlOtherOrg, nil)
+	ctx := context.Background()
+	r.fleet.set(func(f *mlFleet) {
+		f.meML = mlEffectiveBodyWithExclusions(`{"paths":["hr/**"],"commands":["git push"],"exclude_browser":true}`, 3, "please skip HR")
+	})
+	if d := r.w.gate.Refresh(ctx); !d.Open {
+		t.Fatalf("gate = %+v", d)
+	}
+	hrPath := "/Users/alice/acme/hr/salaries.csv"
+	r.toolCall("s1", "kenaz__write_file", `{"path":"`+hrPath+`","content":"x"}`, `{"bytes_written":1}`)
+	r.toolCall("s1", "kenaz__bash", `{"command":"cd /Users/alice/acme && git push origin main"}`, `{"stdout":"","stderr":"","exit_code":0,"truncated":false}`)
+	r.toolCall("s1", "kenaz__write_file", `{"path":"/Users/alice/acme/src/ok.go","content":"x"}`, `{"bytes_written":1}`)
+
+	kinds := map[string]int{}
+	for _, rec := range r.outbox() {
+		if rec.Table != mlstore.TableEvents {
+			continue
+		}
+		var ev struct {
+			Kind    string         `json:"kind"`
+			Payload map[string]any `json:"payload"`
+		}
+		if err := json.Unmarshal(rec.Body, &ev); err != nil {
+			t.Fatal(err)
+		}
+		kinds[ev.Kind]++
+	}
+	if kinds[mlproducer.KindFile] != 1 || kinds[mlproducer.KindTerminal] != 0 || kinds[mlproducer.KindTool] != 2 {
+		t.Fatalf("event kinds = %v, want 1 file (ok.go), 0 terminal, 2 agent.tool", kinds)
+	}
+	hrHash, err := mlproducer.NewHasher(r.dataDir).H(hrPath)
+	if err != nil {
 		t.Fatal(err)
 	}
 	r.shipNow()
-	if posts, _, _, mlGets := r.fleet.snapshot(); len(posts) != 0 || mlGets != 0 {
-		t.Fatalf("posts=%d /me/ml reads=%d for a non-dev org, want 0 and 0", len(posts), mlGets)
+	posts, _, _, _ := r.fleet.snapshot()
+	if len(posts) == 0 {
+		t.Fatal("nothing shipped")
 	}
-	if v := r.w.shippingStatus(); v.StopReason != mlproducer.ReasonOrgNotAllowed {
-		t.Errorf("panel stop reason = %q", v.StopReason)
+	for _, post := range posts {
+		raw, _ := proto.Marshal(post)
+		for _, leak := range []string{hrHash, "salaries", "git push", "please skip HR"} {
+			if strings.Contains(string(raw), leak) {
+				t.Errorf("request bytes contain %q", leak)
+			}
+		}
+	}
+
+	// Narrowing between calls: a new path entry applies on the next read.
+	r.fleet.set(func(f *mlFleet) {
+		f.meML = mlEffectiveBodyWithExclusions(`{"paths":["hr/**","src/**"],"commands":["git push"],"exclude_browser":true}`, 4)
+	})
+	if d := r.w.gate.Refresh(ctx); !d.Open {
+		t.Fatalf("gate after narrowing = %+v", d)
+	}
+	r.toolCall("s1", "kenaz__write_file", `{"path":"/Users/alice/acme/src/ok.go","content":"y"}`, `{"bytes_written":1}`)
+	for _, rec := range r.outbox() {
+		if strings.Contains(string(rec.Body), `"kind":"file"`) {
+			t.Errorf("a write under the newly excluded src/** recorded a file event: %s", rec.Body)
+		}
+	}
+}
+
+// A malformed exclusions value is a decode error: the gate fails closed
+// and nothing records.
+func TestMLWiring_MalformedExclusionsCloseTheGate(t *testing.T) {
+	r := newMLWiringRig(t, mlOtherOrg, nil)
+	ctx := context.Background()
+	for _, bad := range []string{
+		`{"paths":"hr/**","commands":[],"exclude_browser":false}`,
+		`{"paths":[],"commands":[],"exclude_browser":false,"urls":["x"]}`,
+		`{"paths":[],"commands":[` + strings.Repeat(`"c",`, 50) + `"c"],"exclude_browser":false}`,
+		`null`,
+	} {
+		r.fleet.set(func(f *mlFleet) { f.meML = mlEffectiveBodyWithExclusions(bad, 2) })
+		if d := r.w.gate.Refresh(ctx); d.Open || d.Reason != mlproducer.ReasonConsentReadError {
+			t.Errorf("exclusions %s: gate = %+v, want closed / %s", bad, d, mlproducer.ReasonConsentReadError)
+		}
+		r.toolCall("s1", "kenaz__read_file", `{"path":"a.go"}`, "x")
+		if recs := r.outbox(); len(recs) != 0 {
+			t.Fatalf("exclusions %s: recorded %d rows with the gate closed", bad, len(recs))
+		}
 	}
 }
 
 // What reaches Fleet: protobuf, the token's resource-owner org, the
 // enrolled node id, and the five kameas.ml.* attributes per record.
 func TestMLWiring_WireShapeThroughRealClient(t *testing.T) {
-	r := newMLWiringRig(t, mlproducer.DevOrgID, nil)
+	r := newMLWiringRig(t, mlDevOrg, nil)
 	ctx := context.Background()
 	if !r.w.gate.Refresh(ctx).Open {
 		t.Fatalf("gate closed: %+v", r.w.gate.Last())
@@ -372,7 +475,7 @@ func TestMLWiring_WireShapeThroughRealClient(t *testing.T) {
 		t.Fatalf("resource attrs = %v (node_id.txt %q)", res, node)
 	}
 	raw, _ := proto.Marshal(posts[0])
-	for _, leak := range []string{"/Users/alice", "secret/plan", "./internal", mlproducer.DevOrgID} {
+	for _, leak := range []string{"/Users/alice", "secret/plan", "./internal", mlDevOrg} {
 		if strings.Contains(string(raw), leak) {
 			t.Errorf("request bytes contain %q", leak)
 		}
@@ -402,7 +505,7 @@ func TestMLWiring_ResponseTableThroughRealClient(t *testing.T) {
 	}
 
 	t.Run("2xx advances; rejections counted", func(t *testing.T) {
-		r := newMLWiringRig(t, mlproducer.DevOrgID, nil)
+		r := newMLWiringRig(t, mlDevOrg, nil)
 		open(r)
 		seed(r, 3)
 		r.fleet.set(func(f *mlFleet) {
@@ -420,7 +523,7 @@ func TestMLWiring_ResponseTableThroughRealClient(t *testing.T) {
 	})
 
 	t.Run("403 ml_not_effective stops, purges, re-reads", func(t *testing.T) {
-		r := newMLWiringRig(t, mlproducer.DevOrgID, nil)
+		r := newMLWiringRig(t, mlDevOrg, nil)
 		open(r)
 		seed(r, 3)
 		r.fleet.set(func(f *mlFleet) {
@@ -443,7 +546,7 @@ func TestMLWiring_ResponseTableThroughRealClient(t *testing.T) {
 	})
 
 	t.Run("403 ml_node_not_enrolled holds and re-enrolls", func(t *testing.T) {
-		r := newMLWiringRig(t, mlproducer.DevOrgID, nil)
+		r := newMLWiringRig(t, mlDevOrg, nil)
 		open(r)
 		seed(r, 2)
 		var refuse atomic.Bool
@@ -471,7 +574,7 @@ func TestMLWiring_ResponseTableThroughRealClient(t *testing.T) {
 	})
 
 	t.Run("400 unsupported_schema_version stops: update the harness", func(t *testing.T) {
-		r := newMLWiringRig(t, mlproducer.DevOrgID, nil)
+		r := newMLWiringRig(t, mlDevOrg, nil)
 		open(r)
 		seed(r, 2)
 		r.fleet.set(func(f *mlFleet) {
@@ -490,7 +593,7 @@ func TestMLWiring_ResponseTableThroughRealClient(t *testing.T) {
 	})
 
 	t.Run("413 ml_batch_too_large splits", func(t *testing.T) {
-		r := newMLWiringRig(t, mlproducer.DevOrgID, nil)
+		r := newMLWiringRig(t, mlDevOrg, nil)
 		open(r)
 		seed(r, 40)
 		r.fleet.set(func(f *mlFleet) {
@@ -508,7 +611,7 @@ func TestMLWiring_ResponseTableThroughRealClient(t *testing.T) {
 	})
 
 	t.Run("429 waits Retry-After, keeps records", func(t *testing.T) {
-		r := newMLWiringRig(t, mlproducer.DevOrgID, nil)
+		r := newMLWiringRig(t, mlDevOrg, nil)
 		open(r)
 		seed(r, 2)
 		r.fleet.set(func(f *mlFleet) {
@@ -530,7 +633,7 @@ func TestMLWiring_ResponseTableThroughRealClient(t *testing.T) {
 // shipper runs; a session reset (sign-out) purges and pauses it with a
 // stop reason; shutdown drains and removes agent_pids.
 func TestMLWiring_LifecycleAndAgentPIDs(t *testing.T) {
-	r := newMLWiringRig(t, mlproducer.DevOrgID, nil)
+	r := newMLWiringRig(t, mlDevOrg, nil)
 	pidPath := mlproducer.AgentPIDsPath(r.dataDir)
 	b, err := os.ReadFile(pidPath)
 	if err != nil || strings.TrimSpace(string(b)) != strconv.Itoa(os.Getpid()) {
@@ -578,7 +681,7 @@ func TestMLWiring_LifecycleAndAgentPIDs(t *testing.T) {
 // KENAZ_ACTOR=agent; with the gate closed the same turn writes nothing.
 func TestMLWiring_ChatRunnerToolCallReachesOutbox(t *testing.T) {
 	const cmd = "printenv KENAZ_ACTOR"
-	r := newMLWiringRig(t, mlproducer.DevOrgID, func(dataDir string) {
+	r := newMLWiringRig(t, mlDevOrg, func(dataDir string) {
 		pattern := corebash.DerivePattern(corebash.FirstSegmentArgv(cmd))
 		polDir := filepath.Join(dataDir, cedar.PolicyDir)
 		if err := os.MkdirAll(polDir, 0o755); err != nil {

@@ -17,6 +17,7 @@ type fakeConsent struct {
 	caps    CapabilityState
 	capsErr error
 	eff     bool
+	excl    Exclusions
 	effErr  error
 	mlReads int
 	idReads int
@@ -24,7 +25,7 @@ type fakeConsent struct {
 
 func devConsent() *fakeConsent {
 	return &fakeConsent{
-		id:   Identity{SignedIn: true, Enrolled: true, FleetOrgID: DevOrgID, ResourceOrgID: "390451413051827052", NodeID: "NODE1"},
+		id:   Identity{SignedIn: true, Enrolled: true, ResourceOrgID: "390451413051827052", NodeID: "NODE1"},
 		caps: CapabilityState{HostedInference: true},
 		eff:  true,
 	}
@@ -51,11 +52,14 @@ func (f *fakeConsent) Capabilities(context.Context) (CapabilityState, error) {
 	return f.caps, f.capsErr
 }
 
-func (f *fakeConsent) MLEffective(context.Context) (bool, error) {
+func (f *fakeConsent) MLConsent(context.Context) (MLConsent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.mlReads++
-	return f.eff, f.effErr
+	if f.effErr != nil {
+		return MLConsent{}, f.effErr
+	}
+	return MLConsent{Effective: f.eff, Exclusions: f.excl}, nil
 }
 
 type purgeCounter struct {
@@ -66,26 +70,84 @@ type purgeCounter struct {
 func (p *purgeCounter) purge(context.Context) error { p.mu.Lock(); p.n++; p.mu.Unlock(); return nil }
 func (p *purgeCounter) count() int                  { p.mu.Lock(); defer p.mu.Unlock(); return p.n }
 
-func TestOrgAllowed_DevOrgGuardNormalised(t *testing.T) {
+// WP05 removed the dev-org guard: an org other than the internal dev org
+// opens the gate whenever every spec §4 condition holds.
+func TestConsentGate_AnyOrgOpensWhenEffective(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		org  string
-		want bool
-	}{
-		{"fa81ec53-d374-4c48-8b72-dd6b8584d968", true},
-		{"FA81EC53-D374-4C48-8B72-DD6B8584D968", true},
-		{"fa81ec53d3744c488b72dd6b8584d968", true},
-		{" {fa81ec53-d374-4c48-8b72-dd6b8584d968} ", true},
-		{"", false},
-		{"f7ab6cc5-d86f-45ed-8b46-c0967a000000", false},
-		// The token's Zitadel resource-owner id for the same org is a
-		// different namespace and must NOT pass the guard.
-		{"390451413051827052", false},
-		{"fa81ec53", false},
-	} {
-		if got := orgAllowed(tc.org); got != tc.want {
-			t.Errorf("orgAllowed(%q) = %v, want %v", tc.org, got, tc.want)
+	src := devConsent()
+	src.set(func(f *fakeConsent) { f.id.ResourceOrgID = "999000111222333444" })
+	var p purgeCounter
+	g := NewConsentGate(GateConfig{Source: src, Purge: p.purge})
+	if d := g.Refresh(context.Background()); !d.Open || d.ResourceOrgID != "999000111222333444" {
+		t.Fatalf("decision = %+v, want open for a customer org", d)
+	}
+	if p.count() != 0 {
+		t.Errorf("purged %d times on an open gate", p.count())
+	}
+}
+
+// The /me/ml read hands the newest compiled exclusions to OnExclusions
+// before the decision is stored — on every read, effective or not — and a
+// list that cannot be compiled closes the gate without purging.
+func TestConsentGate_PassesNewestExclusions(t *testing.T) {
+	t.Parallel()
+	src := devConsent()
+	src.set(func(f *fakeConsent) {
+		f.excl = Exclusions{Paths: []string{"hr/**"}, Commands: []string{"ssh"}, Version: 2}
+	})
+	var mu sync.Mutex
+	var got []*ExclusionSet
+	var p purgeCounter
+	g := NewConsentGate(GateConfig{Source: src, Purge: p.purge, OnExclusions: func(s *ExclusionSet) {
+		mu.Lock()
+		got = append(got, s)
+		mu.Unlock()
+	}})
+	last := func() *ExclusionSet {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(got) == 0 {
+			return nil
 		}
+		return got[len(got)-1]
+	}
+	if d := g.Refresh(context.Background()); !d.Open {
+		t.Fatalf("decision = %+v", d)
+	}
+	if s := last(); s == nil || s.Version() != 2 || !s.MatchPath("/w/hr/a.txt") || !s.MatchCommand("ssh host") {
+		t.Fatalf("exclusions not handed over: %+v", s)
+	}
+
+	// Narrowing: a new entry applies on the next read.
+	src.set(func(f *fakeConsent) {
+		f.excl = Exclusions{Paths: []string{"hr/**", "/secret/**"}, Commands: []string{"ssh"}, Version: 3}
+	})
+	g.Refresh(context.Background())
+	if s := last(); s.Version() != 3 || !s.MatchPath("/secret/x") {
+		t.Fatalf("narrowed set not applied: v%d", s.Version())
+	}
+
+	// Not effective (a broadening change bumps notice_version server side):
+	// the set still updates; the gate closes on effective alone.
+	src.set(func(f *fakeConsent) { f.eff = false; f.excl = Exclusions{Version: 4} })
+	if d := g.Refresh(context.Background()); d.Open || d.Reason != ReasonNotEffective {
+		t.Fatalf("decision = %+v", d)
+	}
+	if s := last(); s.Version() != 4 || !s.Empty() {
+		t.Fatalf("set after broadening = v%d", s.Version())
+	}
+
+	// A pattern this build cannot compile: closed, transient, set untouched.
+	src.set(func(f *fakeConsent) { f.eff = true; f.excl = Exclusions{Paths: []string{"hr/[x"}, Version: 5} })
+	purgesBefore := p.count()
+	if d := g.Refresh(context.Background()); d.Open || d.Reason != ReasonExclusionsInvalid || d.Definitive {
+		t.Fatalf("decision = %+v, want closed / %s / transient", d, ReasonExclusionsInvalid)
+	}
+	if s := last(); s.Version() != 4 {
+		t.Errorf("an uncompilable set was handed over (v%d)", s.Version())
+	}
+	if p.count() != purgesBefore {
+		t.Errorf("an invalid exclusion list purged the outbox")
 	}
 }
 
@@ -106,13 +168,13 @@ func TestConsentGate_ConditionMatrix(t *testing.T) {
 		{"signed out", func(f *fakeConsent) { f.id.SignedIn = false }, false, ReasonSignedOut, false, false},
 		{"not enrolled", func(f *fakeConsent) { f.id.Enrolled = false }, false, ReasonNotEnrolled, false, false},
 		{"no node id", func(f *fakeConsent) { f.id.NodeID = "" }, false, ReasonNoNodeID, false, false},
-		{"another org (dev-org guard)", func(f *fakeConsent) { f.id.FleetOrgID = "f7ab6cc5-d86f-45ed-8b46-c0967a000000" }, false, ReasonOrgNotAllowed, true, false},
 		{"no resource-owner claim", func(f *fakeConsent) { f.id.ResourceOrgID = "" }, false, ReasonNoOrgClaim, false, false},
 		{"capabilities unknown", func(f *fakeConsent) { f.capsErr = ErrCapabilitiesUnknown }, false, ReasonCapsUnknown, false, false},
 		{"org paused (not a withdrawal)", func(f *fakeConsent) { f.caps.Paused = true }, false, ReasonOrgPaused, false, false},
 		{"hosted_inference off", func(f *fakeConsent) { f.caps.HostedInference = false }, false, ReasonNotEntitled, true, false},
 		{"/me/ml read fails", func(f *fakeConsent) { f.effErr = errors.New("503") }, false, ReasonConsentReadError, false, true},
 		{"/me/ml not effective", func(f *fakeConsent) { f.eff = false }, false, ReasonNotEffective, true, true},
+		{"exclusions cannot be honoured", func(f *fakeConsent) { f.excl.Commands = []string{"   "} }, false, ReasonExclusionsInvalid, false, true},
 	}
 	for _, tc := range cases {
 		tc := tc

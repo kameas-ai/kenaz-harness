@@ -115,6 +115,11 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API, catalog *reci
 		// own loop): reconcile runs on its own goroutine and re-reads the
 		// gate's latest decision under a lock.
 		OnChange: func(mlproducer.Decision) { go w.reconcile() },
+		// WP05: every /me/ml read hands the org's newest exclusions to the
+		// recorder before the decision is stored (DPA §4, on-device
+		// matching). w.rec is assigned below, before anything can start
+		// a gate read (Start runs from SetContext).
+		OnExclusions: func(s *mlproducer.ExclusionSet) { w.rec.SetExclusions(s) },
 	})
 	w.source.invalidate = w.gate.Invalidate
 	w.rec = mlproducer.NewRecorder(mlproducer.Config{
@@ -351,7 +356,7 @@ func (s *fleetMLConsentSource) Identity(ctx context.Context) (mlproducer.Identit
 	if c == nil {
 		return mlproducer.Identity{}, nil
 	}
-	orgID, nodeID, enrolled := s.settings.FleetEnrolledIdentity()
+	_, nodeID, enrolled := s.settings.FleetEnrolledIdentity()
 	if !enrolled {
 		// Reported as signed in but not enrolled: before the boot enroll
 		// lands we cannot tell signed-out from not-yet-enrolled without
@@ -362,7 +367,7 @@ func (s *fleetMLConsentSource) Identity(ctx context.Context) (mlproducer.Identit
 	if err != nil {
 		return mlproducer.Identity{}, err
 	}
-	id := mlproducer.Identity{SignedIn: signedIn, Enrolled: true, FleetOrgID: orgID, NodeID: nodeID}
+	id := mlproducer.Identity{SignedIn: signedIn, Enrolled: true, NodeID: nodeID}
 	if signedIn {
 		if tid, err := corefleet.TokenIdentityFromAccessToken(); err == nil {
 			id.ResourceOrgID = tid.OrgID
@@ -410,17 +415,29 @@ func (s *fleetMLConsentSource) hookPoller(p *corefleet.CapabilityPoller) {
 	p.OnChange(func(corefleet.Capabilities) { inv() })
 }
 
-// MLEffective is a fresh GET /api/v1/me/ml folded through IsEffective.
-func (s *fleetMLConsentSource) MLEffective(ctx context.Context) (bool, error) {
+// MLConsent is a fresh GET /api/v1/me/ml folded through IsEffective, plus
+// the org's typed exclusions from the same read (WP05). A malformed
+// exclusions value fails GetMeML's strict decode, so the gate closes.
+// legacy_exclusion_notes are deliberately not passed on: free text, never
+// patterns (contract "Producers ignore them").
+func (s *fleetMLConsentSource) MLConsent(ctx context.Context) (mlproducer.MLConsent, error) {
 	c := s.client()
 	if c == nil {
-		return false, corefleet.ErrFleetDisabled
+		return mlproducer.MLConsent{}, corefleet.ErrFleetDisabled
 	}
 	m, err := c.GetMeML(ctx)
 	if err != nil {
-		return false, err
+		return mlproducer.MLConsent{}, err
 	}
-	return m.IsEffective(), nil
+	return mlproducer.MLConsent{
+		Effective: m.IsEffective(),
+		Exclusions: mlproducer.Exclusions{
+			Paths:          m.Exclusions.Paths,
+			Commands:       m.Exclusions.Commands,
+			ExcludeBrowser: m.Exclusions.ExcludeBrowser,
+			Version:        m.ExclusionsVersion,
+		},
+	}, nil
 }
 
 // ---- Poster over fleet.Client.Post ----

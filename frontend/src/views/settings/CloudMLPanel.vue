@@ -49,6 +49,19 @@ const showOptIn = computed(
 );
 const showNotice = computed(() => loaded.value && !!status.value?.noticeAckRequired);
 
+/**
+ * WP05: the org's exclusions, read-only. Paths and command prefixes are
+ * enforced on this device; legacy notes are the org's old free text and are
+ * shown only (never matched). exclude_browser changes nothing here (the
+ * harness sends no browser data), so it is not listed.
+ */
+const exclusionPaths = computed(() => status.value?.exclusionPaths ?? []);
+const exclusionCommands = computed(() => status.value?.exclusionCommands ?? []);
+const legacyNotes = computed(() => status.value?.legacyExclusionNotes ?? []);
+const showExclusions = computed(
+  () => loaded.value && (exclusionPaths.value.length > 0 || exclusionCommands.value.length > 0),
+);
+
 function policyLabel(p: string): string {
   switch (p) {
     case 'on':
@@ -179,6 +192,28 @@ function onOptInChange(ev: Event) {
         >
           Acknowledge
         </button>
+      </div>
+
+      <div v-if="showExclusions" class="space-y-1 text-[12px]" data-testid="cloud-ml-exclusions">
+        <p>Your organization excludes:</p>
+        <ul class="list-disc pl-5">
+          <li v-for="p in exclusionPaths" :key="'p:' + p" data-testid="cloud-ml-exclusion-path">
+            files matching <code>{{ p }}</code>
+          </li>
+          <li v-for="c in exclusionCommands" :key="'c:' + c" data-testid="cloud-ml-exclusion-command">
+            commands starting with <code>{{ c }}</code>
+          </li>
+        </ul>
+        <p class="text-ink-muted">
+          These are checked on this device. Matching files and commands are never sent; only that a
+          tool ran, its outcome and timing.
+        </p>
+      </div>
+      <div v-if="loaded && legacyNotes.length" class="space-y-1 text-[12px] text-ink-muted" data-testid="cloud-ml-legacy-notes">
+        <p>Earlier notes from your organization (for information; not applied as patterns):</p>
+        <ul class="list-disc pl-5">
+          <li v-for="(n, i) in legacyNotes" :key="i" data-testid="cloud-ml-legacy-note">{{ n }}</li>
+        </ul>
       </div>
 
       <p class="text-[12px] text-ink-muted" data-testid="cloud-ml-harness-line">{{ HARNESS_LINE }}</p>

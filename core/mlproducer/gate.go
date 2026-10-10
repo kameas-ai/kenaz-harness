@@ -7,8 +7,14 @@ package mlproducer
 //  2. the hosted_inference capability;
 //  3. /me/ml effective with a current notice ack (MeML.IsEffective);
 //  4. the org not paused;
-//  5. the org is the internal dev org (DevOrgID) — spec §12 A-11, until
-//     WP05's on-device exclusions land.
+//  5. the org's typed exclusions compiled (WP05; spec §12 A-11): the same
+//     /me/ml read hands the newest lists to the recorder (OnExclusions)
+//     before the decision is stored, so an open gate never records
+//     under older exclusions than the read that opened it. A list this
+//     build cannot honour closes the gate.
+//
+// WP05 removed WP03's dev-org-only guard: any org whose gate is open may
+// record and ship, because its exclusions are now enforced on device.
 //
 // The Fleet calls live behind ConsentSource, implemented in core/rpc over
 // core/fleet; this package stays fleet-free (check-no-fleet-imports.sh).
@@ -35,7 +41,6 @@ package mlproducer
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,42 +48,12 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
-// DevOrgID is the only Fleet org this producer may record or ship for:
-// the owner's internal dev org (spec §12 A-11; owner directive
-// 2026-10-09, "build the sender for the owner's personal dev org").
-// Customer orgs need on-device path/command exclusions first (SA v1.1 DPA
-// §4), which are ml-producer-01MLPRD01 WP05; WP05 is the change that
-// deletes this constant and orgAllowed's check. Compared against Fleet's
-// own org UUID (the enroll response / identity.json org_id), never the
-// token's Zitadel resource-owner claim — that is a different namespace
-// (dev org fa81ec53 → zitadel org 390451413051827052, dogfood
-// 2026-10-04 notes).
-const DevOrgID = "fa81ec53-d374-4c48-8b72-dd6b8584d968"
-
-// normaliseUUID folds case, braces, hyphens and surrounding space so a
-// hyphenated, unhyphenated or upper-case rendering of the same UUID
-// compares equal.
-func normaliseUUID(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.Trim(s, "{}")
-	return strings.ReplaceAll(s, "-", "")
-}
-
-// orgAllowed is the dev-org guard (DevOrgID). WP05 deletes it.
-func orgAllowed(fleetOrgID string) bool {
-	n := normaliseUUID(fleetOrgID)
-	return n != "" && n == normaliseUUID(DevOrgID)
-}
-
 // Identity is who the producer would ship as.
 type Identity struct {
 	// SignedIn: a live fleet session (tokens present and not dead).
 	SignedIn bool
 	// Enrolled: this session completed an enroll.
 	Enrolled bool
-	// FleetOrgID is Fleet's org UUID from enroll — the dev-org guard's
-	// input. Never sent.
-	FleetOrgID string
 	// ResourceOrgID is the access token's resource-owner org claim —
 	// kameas.org.id on the wire (Fleet 401s any other value).
 	ResourceOrgID string
@@ -104,9 +79,17 @@ var ErrCapabilitiesUnknown = errors.New("mlproducer: capabilities not known yet"
 type ConsentSource interface {
 	Identity(ctx context.Context) (Identity, error)
 	Capabilities(ctx context.Context) (CapabilityState, error)
-	// MLEffective reads GET /api/v1/me/ml FRESH and returns
-	// MeML.IsEffective() (effective AND a current notice ack).
-	MLEffective(ctx context.Context) (bool, error)
+	// MLConsent reads GET /api/v1/me/ml FRESH and returns
+	// MeML.IsEffective() (effective AND a current notice ack) together
+	// with the org's typed exclusions from the SAME read. A body whose
+	// exclusions are malformed is an error (fail closed).
+	MLConsent(ctx context.Context) (MLConsent, error)
+}
+
+// MLConsent is one /me/ml read, reduced to what the producer acts on.
+type MLConsent struct {
+	Effective  bool
+	Exclusions Exclusions
 }
 
 // Gate closure reasons (Decision.Reason, and the shipping status's stop
@@ -116,12 +99,15 @@ const (
 	ReasonNotEnrolled      = "not_enrolled"
 	ReasonNoNodeID         = "no_node_id"
 	ReasonNoOrgClaim       = "no_org_claim"
-	ReasonOrgNotAllowed    = "org_not_allowed"
 	ReasonCapsUnknown      = "capabilities_unknown"
 	ReasonOrgPaused        = "org_paused"
 	ReasonNotEntitled      = "not_entitled"
 	ReasonNotEffective     = "ml_not_effective"
 	ReasonConsentReadError = "consent_read_failed"
+	// ReasonExclusionsInvalid: /me/ml carried an exclusion this build
+	// cannot compile. Transient (no purge): nothing records until Fleet
+	// serves lists the harness can honour.
+	ReasonExclusionsInvalid = "exclusions_invalid"
 )
 
 // Decision is one evaluation of the gate.
@@ -158,6 +144,12 @@ type GateConfig struct {
 	// outside the gate's locks, on the evaluating goroutine; it must not
 	// block on the shipper (core/rpc hands it to a goroutine).
 	OnChange func(Decision)
+	// OnExclusions receives the newest compiled exclusions after every
+	// successful /me/ml read, before the decision is stored
+	// (Recorder.SetExclusions). Must not block.
+	OnExclusions func(*ExclusionSet)
+	// HomeDir expands `~` in path globs; "" = the user's home directory.
+	HomeDir string
 }
 
 // DefaultGateTTL is the recording cache's maximum age (spec §4).
@@ -342,9 +334,6 @@ func (g *ConsentGate) evaluate(ctx context.Context) Decision {
 		return Decision{Reason: ReasonNotEnrolled}
 	case id.NodeID == "":
 		return Decision{Reason: ReasonNoNodeID}
-	case !orgAllowed(id.FleetOrgID):
-		// Definitive: nothing may ship for this org until WP05.
-		return Decision{Reason: ReasonOrgNotAllowed, Definitive: true}
 	case id.ResourceOrgID == "":
 		return Decision{Reason: ReasonNoOrgClaim}
 	}
@@ -360,11 +349,24 @@ func (g *ConsentGate) evaluate(ctx context.Context) Decision {
 	if !caps.HostedInference {
 		return Decision{Reason: ReasonNotEntitled, Definitive: true}
 	}
-	eff, err := src.MLEffective(ctx)
+	consent, err := src.MLConsent(ctx)
 	if err != nil {
 		return Decision{Reason: ReasonConsentReadError}
 	}
-	if !eff {
+	// The newest exclusions apply immediately, whatever the decision
+	// (contract "Typed exclusions": re-read /me/ml and apply the current
+	// lists). A broadening change also bumps notice_version server side,
+	// so effective is false below until the member re-acks — no version
+	// gating of our own.
+	set, err := CompileExclusions(consent.Exclusions, g.cfg.HomeDir)
+	if err != nil {
+		logging.L().Warn("mlproducer.gate.exclusions_invalid", "version", consent.Exclusions.Version)
+		return Decision{Reason: ReasonExclusionsInvalid}
+	}
+	if g.cfg.OnExclusions != nil {
+		g.cfg.OnExclusions(set)
+	}
+	if !consent.Effective {
 		return Decision{Reason: ReasonNotEffective, Definitive: true}
 	}
 	return Decision{Open: true, ResourceOrgID: id.ResourceOrgID, NodeID: id.NodeID}
