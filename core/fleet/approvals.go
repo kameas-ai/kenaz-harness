@@ -48,14 +48,19 @@ const (
 	ApprovePathLegalAcceptances = "/api/v1/me/legal-acceptances"
 	ApprovePathMLNoticeAck      = "/api/v1/me/ml/notice-ack"
 	ApprovePathMLExclusionsSeen = "/api/v1/me/ml/exclusions-seen"
+	// ApprovePathMLOptInPromptDismissed dismisses the informational
+	// ml_opt_in_available item (contract: Fleet's own approve allowlist
+	// includes it; added 2026-10-09).
+	ApprovePathMLOptInPromptDismissed = "/api/v1/me/ml/opt-in-prompt-dismissed"
 )
 
 // approveAllowlist is method + " " + path for every approve action the harness
 // may send.
 var approveAllowlist = map[string]struct{}{
-	http.MethodPost + " " + ApprovePathLegalAcceptances: {},
-	http.MethodPost + " " + ApprovePathMLNoticeAck:      {},
-	http.MethodPost + " " + ApprovePathMLExclusionsSeen: {},
+	http.MethodPost + " " + ApprovePathLegalAcceptances:       {},
+	http.MethodPost + " " + ApprovePathMLNoticeAck:            {},
+	http.MethodPost + " " + ApprovePathMLExclusionsSeen:       {},
+	http.MethodPost + " " + ApprovePathMLOptInPromptDismissed: {},
 }
 
 // ApproveActionAllowed reports whether an approve action's method + path is

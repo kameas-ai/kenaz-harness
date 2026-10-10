@@ -149,6 +149,7 @@ func TestApproveActionAllowed_ExactMatch(t *testing.T) {
 		{"POST", "/api/v1/me/legal-acceptances"},
 		{"POST", "/api/v1/me/ml/notice-ack"},
 		{"POST", "/api/v1/me/ml/exclusions-seen"},
+		{"POST", "/api/v1/me/ml/opt-in-prompt-dismissed"},
 	}
 	for _, a := range allowed {
 		if !ApproveActionAllowed(a[0], a[1]) {
@@ -163,7 +164,7 @@ func TestApproveActionAllowed_ExactMatch(t *testing.T) {
 		{"POST", "/api/v1/me/ml/notice-ack?x=1"},
 		{"POST", "/api/v1/me/ml/../ml/notice-ack"},
 		{"POST", "https://evil.example/api/v1/me/ml/notice-ack"},
-		{"POST", "/api/v1/me/ml/opt-in-prompt-dismissed"},
+		{"POST", "/api/v1/me/ml/opt-in-prompt-dismissed/"},
 		{"POST", "/api/v1/me/telemetry-opt-ins"},
 		{"POST", ""},
 	}
@@ -264,7 +265,7 @@ func TestApprovePendingItem_ForeignPathSendsNothing(t *testing.T) {
 	for _, act := range []ApproveAction{
 		{Method: "POST", Path: "/api/v1/admin/orgs/1/delete", Body: []byte(`{}`)},
 		{Method: "DELETE", Path: ApprovePathMLNoticeAck, Body: []byte(`{}`)},
-		{Method: "POST", Path: "/api/v1/me/ml/opt-in-prompt-dismissed", Body: []byte(`{"notice_version":1}`)},
+		{Method: "POST", Path: "/api/v1/me/telemetry-opt-ins", Body: []byte(`{"updates":[]}`)},
 	} {
 		err := c.ApprovePendingItem(t.Context(), PendingApproval{ID: "x", Kind: "future_kind", Approve: act})
 		if !errors.Is(err, ErrApproveActionNotAllowed) {
