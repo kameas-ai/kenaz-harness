@@ -18,6 +18,7 @@ import (
 	advicelabels "github.com/kameas-ai/kenaz-harness/core/advice/labels"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
@@ -192,6 +193,16 @@ func Open(cfg storage.Config) (storage.DB, error) {
 	if err := advicelabels.RegisterMigrations(registry); err != nil {
 		db.closeOnError()
 		return nil, fmt.Errorf("storage: register laya-advisors migrations: %w", err)
+	}
+	// ml-producer: ml-producer-01MLPRD01 WP02. Creates ml_outbox +
+	// ml_tasks (version 1700), the harness ML producer's durable outbox
+	// and task counters (core/mlproducer/mlstore). Registered here so the
+	// tables exist on every install, including upgraded ones — see
+	// core/storage/sqlite/upgrade_path_test.go and
+	// ml_producer_upgrade_test.go.
+	if err := mlstore.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register ml-producer migrations: %w", err)
 	}
 	db.registry = registry
 

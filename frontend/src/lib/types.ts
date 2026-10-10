@@ -4784,6 +4784,124 @@ export interface MemorySyncStatus {
   pausedCategory?: string;
 }
 
+/**
+ * Mirrors settings.MLShippingStatusView — the ML producer's shipping health
+ * (ml-producer-01MLPRD01 spec §5). Filled by the WP03 shipper.
+ */
+export interface MLShippingStatus {
+  /** RFC 3339 time of the last accepted batch ("" = none yet). */
+  lastBatchAt: string;
+  accepted: number;
+  duplicates: number;
+  rejected: number;
+  /** Last stop code ("" = running / never stopped). */
+  stopReason: string;
+}
+
+/**
+ * Mirrors settings.MLStatusView — the Cloud ML consent panel
+ * (ml-producer-01MLPRD01 WP01, kenaz-fleet docs/contract-harness-ml.md).
+ * `effective` is effective AND a current notice ack. `noticeText` is the
+ * contract notice rendered server-side (org, retention, variant).
+ */
+export interface MLStatus {
+  signedIn: boolean;
+  /** hosted_inference capability; the panel hides without it. */
+  entitled: boolean;
+  orgPaused: boolean;
+  pausedCategory?: string;
+  /** /me/ml was read and decoded on this call. */
+  loaded: boolean;
+  orgOffloadEnabled: boolean;
+  /** "on" | "off" | "member_choice" ("" when not loaded). */
+  orgPolicy: string;
+  userWorkflowEventsOptedIn: boolean;
+  noticeAckRequired: boolean;
+  effective: boolean;
+  noticeVersion: number;
+  /** RFC 3339; "" while not acknowledged. */
+  noticeAckedAt: string;
+  retentionDays: number;
+  retainOnWithdrawal: boolean;
+  orgName: string;
+  noticeText: string;
+  /** Set on an ack Fleet refused with 409 policy_changed: show the notice again. */
+  noticeChanged?: boolean;
+  /** Notice-text revision Fleet requires (0 = older Fleet without revisions). */
+  noticeTextRevision: number;
+  /** Notice-text revision this member last acknowledged (0 = none / older Fleet). */
+  ackedTextRevision: number;
+  /**
+   * An ack is required for a notice text NEWER than the one this harness
+   * renders: `noticeText` is "" and the panel routes the user to the Fleet
+   * dashboard instead of offering Acknowledge.
+   */
+  noticeNeedsDashboard: boolean;
+  /** `<fleet base>/settings#hosted-inference`; absent when the base is unknown. */
+  noticeDashboardUrl?: string;
+  /**
+   * WP06: `noticeText` is the pending-approvals hub's ml_notice body_text,
+   * verbatim (including any "Changed since you last approved" section).
+   * Approve it with fleet.approveItem(noticeItemId). False when the hub is
+   * unavailable (an older Fleet): the local-template / dashboard fallback.
+   */
+  noticeFromHub: boolean;
+  noticeItemId?: string;
+  /**
+   * Org exclusions (WP05), read-only. Path globs and command prefixes are
+   * matched on this device before anything is hashed or queued. Always
+   * arrays ([] when none or not loaded).
+   */
+  exclusionPaths: string[];
+  exclusionCommands: string[];
+  /** Shown for completeness: the harness sends no browser data. */
+  excludeBrowser: boolean;
+  exclusionsVersion: number;
+  /** The org's old free-text exclusions: display only, never matched. */
+  legacyExclusionNotes: string[];
+  fleetError?: string;
+  /** Absent until the ML shipper is wired. */
+  shipping?: MLShippingStatus;
+}
+
+/**
+ * Mirrors settings.PendingApprovalView — one item of Fleet's
+ * pending-approvals hub (ml-producer-01MLPRD01 WP06; kenaz-fleet
+ * docs/contract-pending-approvals.md). The approve action never reaches the
+ * frontend: approve by `id` and the backend looks it up.
+ */
+export interface PendingApprovalItem {
+  id: string;
+  /** legal_acceptance | ml_notice | ml_exclusions_change | … (unknown kinds render generically). */
+  kind: string;
+  title: string;
+  summary: string;
+  /** Plain text: render as text, verbatim ("" when absent). */
+  bodyText: string;
+  /** Absolute http(s) URL of an external document ("" when absent). */
+  documentUrl: string;
+  documentSha256: string;
+  version: string;
+  /** What is paused until this is approved. */
+  blocking: string;
+  /** true = blocking; false = informational. */
+  required: boolean;
+  /** False when Fleet's action is outside the harness allowlist: not approvable here. */
+  approveAllowed: boolean;
+}
+
+/** Mirrors settings.PendingApprovalsView. */
+export interface PendingApprovals {
+  signedIn: boolean;
+  /** This Fleet serves the hub (false on an older Fleet). */
+  available: boolean;
+  items: PendingApprovalItem[];
+  requiredCount: number;
+  /** An approval was stale or its item gone: `items` is the fresh list. */
+  changed?: boolean;
+  fleetError?: string;
+}
+
 /** Mirrors settings.FleetSyncView. */
 export interface FleetSyncView {
   contextSync: FleetSyncLaneView;

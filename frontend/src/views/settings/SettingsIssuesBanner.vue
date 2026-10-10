@@ -16,6 +16,9 @@
  * Desktop-only providers are skipped in a served build (their RPCs have no
  * serve dispatch), so in practice the banner is silent there today.
  *
+ * The pending-approvals issue's fix opens PendingApprovalsModal, which the
+ * banner mounts (lib/pendingApprovalsDialog.ts holds its open state).
+ *
  * The client is injected with a null default rather than through
  * useHarnessClient(), which throws: SettingsShell is mounted by many view
  * tests that provide no client, and a banner must never break the page
@@ -25,6 +28,8 @@ import { inject, onBeforeUnmount, onMounted, ref } from 'vue';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import { useServedMode } from '@/lib/useServedMode';
 import { collectSettingsIssues, type SettingsIssue } from '@/lib/settingsIssues';
+import { closePendingApprovalsDialog, pendingApprovalsDialog } from '@/lib/pendingApprovalsDialog';
+import PendingApprovalsModal from './PendingApprovalsModal.vue';
 
 const client = inject(HarnessClientKey, null);
 const served = useServedMode();
@@ -181,4 +186,9 @@ onBeforeUnmount(() => {
       </template>
     </section>
   </div>
+  <PendingApprovalsModal
+    v-if="client && pendingApprovalsDialog.open"
+    :client="client"
+    @close="closePendingApprovalsDialog"
+  />
 </template>

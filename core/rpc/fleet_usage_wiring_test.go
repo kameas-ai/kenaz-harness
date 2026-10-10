@@ -23,7 +23,7 @@ import (
 // this test is what makes a NEW builtin a deliberate addition.
 func TestKnownBuiltinTools_CoverProductionRegistry(t *testing.T) {
 	registry := toolloop.NewBuiltinRegistry()
-	registerBuiltinTools(nil, registry, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	registerBuiltinTools(nil, registry, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	names := registry.Names()
 	if len(names) == 0 {
 		t.Fatal("fixture registered no builtins")

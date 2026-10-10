@@ -116,6 +116,31 @@ func awaitParked(t *testing.T, bus *toolloop.ConfirmBus, n int) {
 	t.Fatalf("timed out waiting for %d parked confirmation(s); have %d", n, bus.PendingCount())
 }
 
+// awaitParked waits until n confirmations are parked on the bus AND the
+// spy has recorded n announcements. ConfirmBus.Pending registers the entry
+// and releases its lock BEFORE calling the publisher, so PendingCount can
+// read n while the spy still holds fewer — a test that indexes
+// f.spy.snapshot() right after the bus-only wait raced (observed:
+// TestKernelToolAdapter_ConfirmEach_DismissalDenies, index out of range
+// under -race -count=200 with -cpu 1,2,8).
+func (f *confirmFixture) awaitParked(t *testing.T, n int) {
+	t.Helper()
+	awaitParked(t, f.bus, n)
+	awaitPublished(t, f.spy, n)
+}
+
+// awaitPublished spins until spy has recorded at least n announcements.
+func awaitPublished(t *testing.T, spy *confirmSpy, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(spy.snapshot()) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d published confirmation(s); spy has %d", n, len(spy.snapshot()))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // confirmFixture wires an adapter with a live ConfirmBus and a scripted
 // confirm_each verdict.
 type confirmFixture struct {
@@ -154,7 +179,7 @@ func TestKernelToolAdapter_ConfirmEach_BlocksThenApproveDispatches(t *testing.T)
 
 	f := newConfirmFixture(t, "confirm_each")
 	done := f.call(context.Background(), map[string]any{"path": "/etc/hosts"})
-	awaitParked(t, f.bus, 1)
+	f.awaitParked(t, 1)
 
 	select {
 	case r := <-done:
@@ -207,7 +232,7 @@ func TestKernelToolAdapter_ConfirmEach_DenyReturnsToolError(t *testing.T) {
 
 	f := newConfirmFixture(t, "confirm_each")
 	done := f.call(context.Background(), map[string]any{"path": "/etc/hosts"})
-	awaitParked(t, f.bus, 1)
+	f.awaitParked(t, 1)
 
 	ev := f.spy.snapshot()[0]
 	if err := f.bus.Resolve(ev.SessionID, ev.CallID,
@@ -221,6 +246,9 @@ func TestKernelToolAdapter_ConfirmEach_DenyReturnsToolError(t *testing.T) {
 	}
 	if !r.res.IsError {
 		t.Fatal("denied call returned IsError=false")
+	}
+	if r.res.Outcome != coreag.ToolOutcomeDenied {
+		t.Fatalf("Outcome = %q, want denied for a declined confirmation", r.res.Outcome)
 	}
 	if !strings.Contains(r.res.Content, `tool "filesystem__write_file" denied`) ||
 		!strings.Contains(r.res.Content, "user denied") {
@@ -237,7 +265,7 @@ func TestKernelToolAdapter_ConfirmEach_DismissalDenies(t *testing.T) {
 
 	f := newConfirmFixture(t, "confirm_each")
 	done := f.call(context.Background(), nil)
-	awaitParked(t, f.bus, 1)
+	f.awaitParked(t, 1)
 
 	ev := f.spy.snapshot()[0]
 	if n := f.bus.CancelBatch(ev.BatchID, "dialog dismissed"); n != 1 {
@@ -275,6 +303,9 @@ func TestKernelToolAdapter_ConfirmEach_CedarDenyNeverPrompts(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, "cedar forbid rule matched") {
 		t.Fatalf("content = %q, want the policy reason", res.Content)
+	}
+	if res.Outcome != coreag.ToolOutcomeDenied {
+		t.Fatalf("Outcome = %q, want denied (ml-producer typed outcome)", res.Outcome)
 	}
 	if got := f.spy.snapshot(); len(got) != 0 {
 		t.Fatalf("deny published a confirmation prompt: %+v", got)
@@ -322,7 +353,7 @@ func TestKernelToolAdapter_ConfirmEach_BatchSharesBatchID(t *testing.T) {
 	for i := 0; i < n; i++ {
 		results = append(results, f.call(ctx, map[string]any{"path": "/tmp/x"}))
 	}
-	awaitParked(t, f.bus, n)
+	f.awaitParked(t, n)
 
 	events := f.spy.snapshot()
 	if len(events) != n {
@@ -390,7 +421,7 @@ func TestKernelToolAdapter_ConfirmEach_UngroupedCallGetsOwnBatch(t *testing.T) {
 
 	f := newConfirmFixture(t, "confirm_each")
 	done := f.call(context.Background(), nil)
-	awaitParked(t, f.bus, 1)
+	f.awaitParked(t, 1)
 
 	ev := f.spy.snapshot()[0]
 	if !strings.HasPrefix(ev.BatchID, "batch-") {
@@ -408,7 +439,7 @@ func TestKernelToolAdapter_ConfirmEach_ContextCancellationUnblocks(t *testing.T)
 	f := newConfirmFixture(t, "confirm_each")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := f.call(ctx, nil)
-	awaitParked(t, f.bus, 1)
+	f.awaitParked(t, 1)
 
 	cancel()
 
@@ -469,7 +500,7 @@ func TestKernelToolAdapter_ConfirmEach_PayloadRedactsArgValues(t *testing.T) {
 		"path":    "/home/alec/.ssh/id_rsa",
 		"count":   float64(3),
 	})
-	awaitParked(t, f.bus, 1)
+	f.awaitParked(t, 1)
 
 	ev := f.spy.snapshot()[0]
 	if strings.Contains(ev.ArgsSummary, secret) || strings.Contains(ev.ArgsSummary, "id_rsa") {

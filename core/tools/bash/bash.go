@@ -199,6 +199,13 @@ type Options struct {
 	// SessionIDFromCtx extracts the owning session ID from a context.
 	// nil means the task is registered without an owner.
 	SessionIDFromCtx func(ctx context.Context) string
+	// EnvProvider returns extra environment entries for every process
+	// this tool spawns, foreground and background (ml-producer-01MLPRD01
+	// WP02: KENAZ_ACTOR=agent, KENAZ_SESSION=h(root session) — the
+	// markers that let the person-side daemon skip agent activity). When
+	// set, the child env is os.Environ() plus these entries (later wins).
+	// nil inherits the process env unchanged.
+	EnvProvider func(ctx context.Context) []string
 }
 
 // BackgroundSpawnFunc is the function the bash tool calls to register a
@@ -244,6 +251,7 @@ type Tool struct {
 	backgroundSetPID            BackgroundSetPIDFunc
 	backgroundEnd               BackgroundEndFunc
 	sessionIDFromCtx            func(ctx context.Context) string
+	envProvider                 func(ctx context.Context) []string
 }
 
 // New constructs a Tool with the given options. SandboxRoot must be
@@ -268,6 +276,7 @@ func New(opts Options) *Tool {
 		backgroundSetPID:            opts.BackgroundSetPID,
 		backgroundEnd:               opts.BackgroundEnd,
 		sessionIDFromCtx:            opts.SessionIDFromCtx,
+		envProvider:                 opts.EnvProvider,
 	}
 }
 
@@ -326,6 +335,17 @@ type callResult struct {
 	ExitCode  int    `json:"exit_code"`
 	Truncated bool   `json:"truncated"`
 	RunID     string `json:"run_id,omitempty"`
+	// Refused marks a result where bash's OWN gate (Cedar, the legacy
+	// allowlist, the working-dir sandbox, a declined permission prompt)
+	// refused the command: no process ran. NotRun marks a result where
+	// the command did not run for a non-policy reason (secret resolution
+	// failure, a background spawn that could not register or start).
+	// Both carry exit_code -1, which a real process can also report, so
+	// they are the explicit discriminator consumers key on
+	// (ml-producer-01MLPRD01 WP02: such calls are not `terminal` events).
+	// omitempty: a result of a command that ran is byte-for-byte unchanged.
+	Refused bool `json:"refused,omitempty"`
+	NotRun  bool `json:"not_run,omitempty"`
 }
 
 // backgroundResult is the JSON return shape when run_in_background=true.
@@ -387,6 +407,7 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			return marshalResult(callResult{
 				Stderr:    "command not allowed: " + progBase,
 				ExitCode:  -1,
+				Refused:   true,
 				Truncated: false,
 			})
 		}
@@ -399,6 +420,7 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			Stderr:    err.Error(),
 			ExitCode:  -1,
 			Truncated: false,
+			Refused:   true,
 		})
 	}
 
@@ -426,6 +448,7 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			return marshalResult(callResult{
 				Stderr:   "secret resolution failed: " + subErr.Error(),
 				ExitCode: -1,
+				NotRun:   true,
 			})
 		}
 		commandLine = sub
@@ -467,6 +490,7 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		Cwd:            cwd,
 		Timeout:        timeout,
 		MaxOutputBytes: DefaultMaxOutputBytes,
+		Env:            t.childEnv(ctx),
 	})
 	exitCode := res.ExitCode
 	rawStderr := string(res.Stderr)
@@ -509,6 +533,17 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		Truncated: res.Truncated,
 		RunID:     runID,
 	})
+}
+
+// childEnv is the environment for a spawned process: nil (inherit) when
+// no EnvProvider is wired, else os.Environ() plus the provider's entries.
+// exec.Cmd keeps the LAST value of a duplicated key, so the provider's
+// markers win over any inherited KENAZ_ACTOR / KENAZ_SESSION.
+func (t *Tool) childEnv(ctx context.Context) []string {
+	if t.envProvider == nil {
+		return nil
+	}
+	return append(os.Environ(), t.envProvider(ctx)...)
 }
 
 // allocRunID returns a unique run-id for the cache. Falls back to a
@@ -568,6 +603,7 @@ func (t *Tool) cedarGate(ctx context.Context, argv []string, workingDir string) 
 		res, _ := marshalResult(callResult{
 			Stderr:   "cedar policy denied: " + dec.Reason,
 			ExitCode: -1,
+			Refused:  true,
 		})
 		return false, res
 
@@ -595,6 +631,7 @@ func (t *Tool) cedarGate(ctx context.Context, argv []string, workingDir string) 
 			res, _ := marshalResult(callResult{
 				Stderr:   "cedar policy requires confirmation but no prompt channel is available",
 				ExitCode: -1,
+				Refused:  true,
 			})
 			return false, res
 		}
@@ -608,6 +645,7 @@ func (t *Tool) cedarGate(ctx context.Context, argv []string, workingDir string) 
 		res, _ := marshalResult(callResult{
 			Stderr:   "cedar policy: unrecognised outcome",
 			ExitCode: -1,
+			Refused:  true,
 		})
 		return false, res
 	}
@@ -631,6 +669,7 @@ func (t *Tool) promptBashGate(ctx context.Context, pattern string, argv []string
 		res, _ := marshalResult(callResult{
 			Stderr:   "permission prompt error: " + err.Error(),
 			ExitCode: -1,
+			Refused:  true,
 		})
 		return false, res
 	}
@@ -641,6 +680,7 @@ func (t *Tool) promptBashGate(ctx context.Context, pattern string, argv []string
 		res, _ := marshalResult(callResult{
 			Stderr:   "permission denied by user: " + resolution.Reason,
 			ExitCode: -1,
+			Refused:  true,
 		})
 		return false, res
 

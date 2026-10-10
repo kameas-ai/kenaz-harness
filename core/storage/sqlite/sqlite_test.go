@@ -306,8 +306,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 01TCBUD01 WP01) one more, hence 68.
 	// sessions/0347-tool-exposure (tool-context-budget-01TCBUD01 WP02)
 	// one more, hence 69.
-	if count != 69 {
-		t.Errorf("ledger count = %d, want 69", count)
+	// ml-producer/1700-ml-outbox-and-tasks (ml-producer-01MLPRD01 WP02,
+	// its own owner block — no sessions pin moves) one more, hence 70.
+	if count != 70 {
+		t.Errorf("ledger count = %d, want 70", count)
 	}
 }
 

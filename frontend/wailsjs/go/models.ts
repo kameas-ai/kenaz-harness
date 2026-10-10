@@ -8028,6 +8028,114 @@ export namespace settings {
 	        this.reason = source["reason"];
 	    }
 	}
+	export class MLShippingStatusView {
+	    lastBatchAt: string;
+	    accepted: number;
+	    duplicates: number;
+	    rejected: number;
+	    stopReason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MLShippingStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.lastBatchAt = source["lastBatchAt"];
+	        this.accepted = source["accepted"];
+	        this.duplicates = source["duplicates"];
+	        this.rejected = source["rejected"];
+	        this.stopReason = source["stopReason"];
+	    }
+	}
+	export class MLStatusView {
+	    signedIn: boolean;
+	    entitled: boolean;
+	    orgPaused: boolean;
+	    pausedCategory?: string;
+	    loaded: boolean;
+	    orgOffloadEnabled: boolean;
+	    orgPolicy: string;
+	    userWorkflowEventsOptedIn: boolean;
+	    noticeAckRequired: boolean;
+	    effective: boolean;
+	    noticeVersion: number;
+	    noticeAckedAt: string;
+	    retentionDays: number;
+	    retainOnWithdrawal: boolean;
+	    orgName: string;
+	    noticeText: string;
+	    noticeChanged?: boolean;
+	    noticeTextRevision: number;
+	    ackedTextRevision: number;
+	    noticeNeedsDashboard: boolean;
+	    noticeDashboardUrl?: string;
+	    noticeFromHub: boolean;
+	    noticeItemId?: string;
+	    exclusionPaths: string[];
+	    exclusionCommands: string[];
+	    excludeBrowser: boolean;
+	    exclusionsVersion: number;
+	    legacyExclusionNotes: string[];
+	    fleetError?: string;
+	    shipping?: MLShippingStatusView;
+	
+	    static createFrom(source: any = {}) {
+	        return new MLStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.signedIn = source["signedIn"];
+	        this.entitled = source["entitled"];
+	        this.orgPaused = source["orgPaused"];
+	        this.pausedCategory = source["pausedCategory"];
+	        this.loaded = source["loaded"];
+	        this.orgOffloadEnabled = source["orgOffloadEnabled"];
+	        this.orgPolicy = source["orgPolicy"];
+	        this.userWorkflowEventsOptedIn = source["userWorkflowEventsOptedIn"];
+	        this.noticeAckRequired = source["noticeAckRequired"];
+	        this.effective = source["effective"];
+	        this.noticeVersion = source["noticeVersion"];
+	        this.noticeAckedAt = source["noticeAckedAt"];
+	        this.retentionDays = source["retentionDays"];
+	        this.retainOnWithdrawal = source["retainOnWithdrawal"];
+	        this.orgName = source["orgName"];
+	        this.noticeText = source["noticeText"];
+	        this.noticeChanged = source["noticeChanged"];
+	        this.noticeTextRevision = source["noticeTextRevision"];
+	        this.ackedTextRevision = source["ackedTextRevision"];
+	        this.noticeNeedsDashboard = source["noticeNeedsDashboard"];
+	        this.noticeDashboardUrl = source["noticeDashboardUrl"];
+	        this.noticeFromHub = source["noticeFromHub"];
+	        this.noticeItemId = source["noticeItemId"];
+	        this.exclusionPaths = source["exclusionPaths"];
+	        this.exclusionCommands = source["exclusionCommands"];
+	        this.excludeBrowser = source["excludeBrowser"];
+	        this.exclusionsVersion = source["exclusionsVersion"];
+	        this.legacyExclusionNotes = source["legacyExclusionNotes"];
+	        this.fleetError = source["fleetError"];
+	        this.shipping = this.convertValues(source["shipping"], MLShippingStatusView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MemorySyncStatusView {
 	    wired: boolean;
 	    entitled: boolean;
@@ -8070,6 +8178,78 @@ export namespace settings {
 	        this.lane = this.convertValues(source["lane"], FleetSyncLaneView);
 	        this.orgPaused = source["orgPaused"];
 	        this.pausedCategory = source["pausedCategory"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PendingApprovalView {
+	    id: string;
+	    kind: string;
+	    title: string;
+	    summary: string;
+	    bodyText: string;
+	    documentUrl: string;
+	    documentSha256: string;
+	    version: string;
+	    blocking: string;
+	    required: boolean;
+	    approveAllowed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingApprovalView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.summary = source["summary"];
+	        this.bodyText = source["bodyText"];
+	        this.documentUrl = source["documentUrl"];
+	        this.documentSha256 = source["documentSha256"];
+	        this.version = source["version"];
+	        this.blocking = source["blocking"];
+	        this.required = source["required"];
+	        this.approveAllowed = source["approveAllowed"];
+	    }
+	}
+	export class PendingApprovalsView {
+	    signedIn: boolean;
+	    available: boolean;
+	    items: PendingApprovalView[];
+	    requiredCount: number;
+	    changed?: boolean;
+	    fleetError?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingApprovalsView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.signedIn = source["signedIn"];
+	        this.available = source["available"];
+	        this.items = this.convertValues(source["items"], PendingApprovalView);
+	        this.requiredCount = source["requiredCount"];
+	        this.changed = source["changed"];
+	        this.fleetError = source["fleetError"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

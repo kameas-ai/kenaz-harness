@@ -59,6 +59,7 @@ func (t *Tool) spawnBackground(ctx context.Context, execCommand, logCommand, cwd
 		return marshalResult(callResult{
 			Stderr:   fmt.Sprintf("bash background: task registration failed: %v", err),
 			ExitCode: -1,
+			NotRun:   true,
 		})
 	}
 
@@ -68,6 +69,7 @@ func (t *Tool) spawnBackground(ctx context.Context, execCommand, logCommand, cwd
 	// real credential.
 	cmd := exec.Command(shell, "-l", "-c", execCommand)
 	cmd.Dir = cwd
+	cmd.Env = t.childEnv(ctx)
 
 	// Attach the registry's stdout/stderr writers BEFORE Start() so every
 	// byte the process writes reaches the ring buffer + log file +
@@ -90,6 +92,7 @@ func (t *Tool) spawnBackground(ctx context.Context, execCommand, logCommand, cwd
 		return marshalResult(callResult{
 			Stderr:   fmt.Sprintf("bash background: failed to start: %v", err),
 			ExitCode: -1,
+			NotRun:   true,
 		})
 	}
 

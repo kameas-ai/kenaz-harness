@@ -334,6 +334,12 @@ type ToolCall struct {
 type ToolResult struct {
 	Content string
 	IsError bool
+	// Outcome optionally states the call's result class more precisely
+	// than IsError can (a permission deny vs a tool failure). The zero
+	// value means "derive from IsError" — every registry that predates
+	// it is unaffected. omitempty keeps a serialised result byte-for-byte
+	// identical when it is unset. ml-producer-01MLPRD01 WP02.
+	Outcome ToolOutcome `json:",omitempty"`
 }
 
 // ToolRegistry is the agentgraph-side seam onto MCP tool dispatch.

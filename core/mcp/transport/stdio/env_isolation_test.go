@@ -46,7 +46,7 @@ func TestChildEnv_Isolated(t *testing.T) {
 		allowed[k] = true
 	}
 	for k := range got {
-		if !allowed[k] && k != "GDRIVE_TOKEN" {
+		if !allowed[k] && k != "GDRIVE_TOKEN" && k != "KENAZ_ACTOR" {
 			t.Errorf("unexpected inherited key %q in isolated env", k)
 		}
 	}

@@ -27,7 +27,7 @@ func TestNewLLMStack_ChatAdvisor_IsCaptureOverSidecarOverHeuristic(t *testing.T)
 	cedarEngine := buildCedarEngineOrNil(dataDir, nil)
 	stack := newLLMStack(c, NewStreamBroker(NewMultiEmitter()), newPersonalStore(c),
 		nil, nil, func() bool { return false }, nil, nil, nil, nil, nil, nil, nil,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, cedarEngine, nil, nil, nil, nil)
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, cedarEngine, nil, nil, nil, nil, nil)
 	if stack.compactionScheduler != nil {
 		t.Cleanup(stack.compactionScheduler.Stop)
 	}

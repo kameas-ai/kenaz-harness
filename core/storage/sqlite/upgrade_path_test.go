@@ -38,6 +38,7 @@ import (
 
 	advicelabels "github.com/kameas-ai/kenaz-harness/core/advice/labels"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
@@ -479,6 +480,10 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// the specific table by name rather than trusting only the generic
 	// per-table loop below. ----
 	assertAdviceLabelsTableMigrated(t, ctx, db)
+	// ---- ml-producer-01MLPRD01 WP02: ml_outbox + ml_tasks exist and
+	// accept a write through the production store on THIS upgraded
+	// install. Every committed snapshot predates ml-producer/1700. ----
+	assertMLProducerTablesMigrated(t, ctx, db)
 	assertUnitsTableSurvivesUntouched(t, ctx, db, tag)
 	assertArtifactsMigratedToUnits(t, ctx, db, rawPath, tag, preNonArtifactUnits, preArtifactIDs)
 
@@ -1176,6 +1181,44 @@ func assertAdviceLabelsTableMigrated(t *testing.T, ctx context.Context, db stora
 // generic loop. A no-op on any tag whose dump predates `units`
 // (pre-v0.60ish; units/1100 registered well after this snapshot chain
 // began) — SnapshotAll's map simply has no "units" key for those tags.
+// assertMLProducerTablesMigrated is the ml-producer/1700 existence probe:
+// both tables are queryable and empty after Open, and the production
+// mlstore writer can commit an event + task through them.
+func assertMLProducerTablesMigrated(t *testing.T, ctx context.Context, db storage.DB) {
+	t.Helper()
+	r := db.Reader()
+	for _, tbl := range []string{"ml_outbox", "ml_tasks"} {
+		var n int
+		if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM "+tbl).Scan(&n); err != nil {
+			t.Fatalf("%s not queryable after Open (ml-producer/1700-ml-outbox-and-tasks did not apply): %v", tbl, err)
+		}
+		if n != 0 {
+			t.Errorf("%s row count on a fresh upgrade = %d, want 0", tbl, n)
+		}
+	}
+	type sqlHandle interface{ SQL() *sql.DB }
+	h, ok := db.(sqlHandle)
+	if !ok || h.SQL() == nil {
+		t.Fatalf("storage.DB does not expose SQL() *sql.DB — cannot drive the production mlstore writer")
+	}
+	store := mlstore.New(h.SQL())
+	seqs, err := store.Commit(ctx, mlstore.Write{
+		Events: []mlstore.EventDraft{{CreatedAt: 1, Body: func(seq int64) ([]byte, error) {
+			return []byte(fmt.Sprintf(`{"id":%d}`, seq)), nil
+		}}},
+		Task: &mlstore.TaskRow{TaskID: "agent-upgradeprobe", SessionHash: "x", Phase: "idle", StartedAt: 1, LastActive: 1},
+	})
+	if err != nil || len(seqs) != 1 {
+		t.Fatalf("mlstore commit after Open on an upgraded install: seqs=%v err=%v", seqs, err)
+	}
+	if _, ok, err := store.LoadTask(ctx, "agent-upgradeprobe"); err != nil || !ok {
+		t.Fatalf("ml_tasks probe row not readable back: ok=%v err=%v", ok, err)
+	}
+	if err := store.Purge(ctx); err != nil {
+		t.Fatalf("mlstore purge: %v", err)
+	}
+}
+
 func assertUnitsTableSurvivesUntouched(t *testing.T, ctx context.Context, db storage.DB, tag string) {
 	t.Helper()
 	r := db.Reader()

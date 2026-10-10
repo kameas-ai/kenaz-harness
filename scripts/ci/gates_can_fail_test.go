@@ -182,6 +182,12 @@ var cwdSensitiveGates = []string{
 	// check-semver-lib.sh (release-infra hardening, 2026-10-07): sources
 	// lib/ci-gate.sh and then lib/semver.sh by repo-relative path.
 	"check-semver-lib.sh",
+
+	// check-ml-producer-minimisation.sh (ml-producer-01MLPRD01 WP04):
+	// sources lib/ci-gate.sh and delegates to a `go run` whose repoRoot()
+	// falls back to the cwd when git is unavailable — the class this
+	// list exists to catch.
+	"check-ml-producer-minimisation.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -5262,5 +5268,124 @@ func TestToolExposureGate_StructuralVerdictIsCWDIndependent(t *testing.T) {
 			t.Fatalf("check-tool-exposure-gate.sh from %s passed without listing the chat request builder — "+
 				"the scan looked at nothing:\n%s", dir, out)
 		}
+	}
+}
+
+// ── check-ml-producer-minimisation.sh (ml-producer-01MLPRD01 WP04) ──────
+//
+// Spec §7 / §12 A-10: the harness ML producer ships only six kinds, each
+// with exactly its payload keys, hashed paths, two-token commands and no
+// secrets. Each proof below mutates the REAL producer (the compiled
+// package the gate's dynamic half runs) by a content anchor, so the plant
+// compiles and the gate must catch it by the right rule — not by a build
+// failure. Every anchor is a whole statement; if one moves, plantReplace
+// fails loudly ("target text not found") rather than passing vacuously.
+
+func mlMinimisationPlant(t *testing.T, file, target, mutated string, want ...string) {
+	t.Helper()
+	root := repoRoot(t)
+	defer plantReplace(t, filepath.Join(root, "core", "mlproducer", file), target, mutated)()
+	code, out := runGate(t, "check-ml-producer-minimisation.sh", root)
+	if code == 0 {
+		t.Fatalf("check-ml-producer-minimisation.sh exited 0 with the violation planted in %s — "+
+			"the gate cannot fail.\noutput:\n%s", file, out)
+	}
+	if strings.Contains(out, "build failed") || strings.Contains(out, "# github.com/") {
+		t.Fatalf("the plant broke the build instead of being caught by a gate rule:\n%s", out)
+	}
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Fatalf("gate failed, but its output does not contain %q:\n%s", w, out)
+		}
+	}
+}
+
+// A daemon-only kind (`hyprland`) emitted for a bash call: the static
+// half sees the literal in the draft{} kind position, the dynamic half
+// sees the record.
+func TestMLMinimisationGate_PlantedDaemonKindFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"drafts = append(drafts, draft{KindTerminal, payload})",
+		`drafts = append(drafts, draft{"hyprland", payload})`,
+		`event kind "hyprland"`, `kind "hyprland" is outside the A-10 table`)
+}
+
+// An extra payload key on terminal events.
+func TestMLMinimisationGate_PlantedExtraPayloadKeyFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		`payload := map[string]any{"task": id, "cmd": r.min.cmdPrefix(cmd)}`,
+		`payload := map[string]any{"task": id, "cmd": r.min.cmdPrefix(cmd), "argv0": "zz-gate-probe"}`,
+		`terminal payload key "argv0" is not allowed`)
+}
+
+// A raw absolute path in a file event instead of h(abs)+ext.
+func TestMLMinimisationGate_PlantedRawPathFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		`payload["path"] = tok`,
+		`payload["path"] = abs`,
+		`file.path`, `is not h(abs)+ext`, `canary`)
+}
+
+// cmd truncated to three tokens instead of two.
+func TestMLMinimisationGate_PlantedThreeTokenCmdFires(t *testing.T) {
+	mlMinimisationPlant(t, "minimise.go",
+		"if len(toks) > 2 {\n\t\ttoks = toks[:2]",
+		"if len(toks) > 3 {\n\t\ttoks = toks[:3]",
+		`has 3 tokens`)
+}
+
+// The producer's credential redaction switched off: the gate's own,
+// independent detector must still see the token.
+func TestMLMinimisationGate_PlantedCredentialTokenFires(t *testing.T) {
+	mlMinimisationPlant(t, "minimise.go",
+		"case looksCredential(t):",
+		"case false && looksCredential(t):",
+		`looks like a credential`)
+}
+
+// The table drifts: a contract kind dropped from KindTable.
+func TestMLMinimisationGate_PlantedMissingKindFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		"\t{KindCommit, []string{\"task\"}},\n",
+		"",
+		`KindTable is missing A-10 kind "commit"`)
+}
+
+// WP07: the real branch name in tasks.branch instead of its "x"×len
+// placeholder. The gate's ^x*$ rule (and its canary scan) must fire.
+func TestMLMinimisationGate_PlantedRealBranchNameFires(t *testing.T) {
+	mlMinimisationPlant(t, "branch.go",
+		"length: branchPlaceholder(name)",
+		"length: name",
+		`does not match ^x*$`, `canary`)
+}
+
+// WP07: a read's `file` event carrying the raw absolute path instead of
+// h(abs)+ext.
+func TestMLMinimisationGate_PlantedRawReadPathFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"tok := r.min.pathToken(c.abs)",
+		"tok := c.abs",
+		`file.path`, `is not h(abs)+ext`)
+}
+
+// WP07: the background follow-up terminal carrying the full command line
+// remembered at spawn instead of its two-token prefix.
+func TestMLMinimisationGate_PlantedFullBackgroundCmdFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"bgSpawn = &bgPending{at: at, taskID: id, cmd: r.min.cmdPrefix(cmd),",
+		"bgSpawn = &bgPending{at: at, taskID: id, cmd: cmd,",
+		`terminal.cmd`, `has 4 tokens`, `canary`)
+}
+
+// Negative control: the unmutated tree is clean, and says what it looked at.
+func TestMLMinimisationGate_CleanOnUnmutatedTree(t *testing.T) {
+	root := repoRoot(t)
+	code, out := runGate(t, "check-ml-producer-minimisation.sh", root)
+	if code != 0 {
+		t.Fatalf("check-ml-producer-minimisation.sh exited %d on the unmutated tree:\n%s", code, out)
+	}
+	if !strings.Contains(out, "clean") || !strings.Contains(out, "through the real recorder") {
+		t.Fatalf("gate exited 0 without its clean summary:\n%s", out)
 	}
 }

@@ -130,7 +130,7 @@ func newExposureRig(t *testing.T, opts rigOptions) *exposureRig {
 	cedarEngine := buildCedarEngineOrNil(dataDir, nil)
 	memStore := openMemoryStore(c)
 	bashStore := corebash.NewStore()
-	graphMgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil)
+	graphMgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil, nil)
 	if graphMgr == nil {
 		t.Fatal("newGraphManagerWithDeps returned a nil manager")
 	}
@@ -179,7 +179,7 @@ func newExposureRig(t *testing.T, opts rigOptions) *exposureRig {
 	broker := NewStreamBroker(NewMultiEmitter())
 	stack := newLLMStack(c, broker, newPersonalStore(c), nil, nil, func() bool { return false },
 		nil, nil, settingsImpl, bashStore, nil, graphMgr, nil, nil, nil, nil,
-		nil, nil, nil, nil, confirmAuditEmitter{}, nil, cedarEngine, nil, nil, nil, nil)
+		nil, nil, nil, nil, confirmAuditEmitter{}, nil, cedarEngine, nil, nil, nil, nil, nil)
 	if stack.compactionScheduler != nil {
 		t.Cleanup(stack.compactionScheduler.Stop)
 	}

@@ -47,7 +47,7 @@ func TestTurnRunsWiring_RealTurnRecordedAndRunStatusReadable(t *testing.T) {
 		t.Fatal("openMemoryStore returned nil over a real DataDir")
 	}
 	bashStore := corebash.NewStore()
-	graphMgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil)
+	graphMgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil, nil)
 	if graphMgr == nil {
 		t.Fatal("newGraphManagerWithDeps returned a nil manager")
 	}
@@ -74,7 +74,7 @@ func TestTurnRunsWiring_RealTurnRecordedAndRunStatusReadable(t *testing.T) {
 	broker := NewStreamBroker(NewMultiEmitter())
 	stack := newLLMStack(c, broker, newPersonalStore(c), nil, nil, func() bool { return false },
 		nil, nil, nil, bashStore, nil, graphMgr, nil, nil, nil, nil,
-		nil, nil, nil, nil, confirmAuditEmitter{}, nil, cedarEngine, nil, nil, nil, nil)
+		nil, nil, nil, nil, confirmAuditEmitter{}, nil, cedarEngine, nil, nil, nil, nil, nil)
 	if stack.compactionScheduler != nil {
 		t.Cleanup(stack.compactionScheduler.Stop)
 	}
