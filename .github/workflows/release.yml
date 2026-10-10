@@ -233,15 +233,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT: ${{ github.event_name }}
           TAG: ${{ github.event.release.tag_name }}
-          ASSET_IDS: ${{ join(github.event.release.assets.*.id, ' ') }}
+          ASSET_NAMES: ${{ join(github.event.release.assets.*.name, ' ') }}
         run: |
           set -euo pipefail
           if [ "$EVENT" != release ]; then
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -n "${ASSET_IDS// /}" ]; then
-            echo "::notice::Release $TAG already has assets — not rebuilding (published from a completed draft)."
+          # manifest.json is uploaded last, so its presence means the build
+          # completed; a draft with only some platform assets is rebuilt.
+          if [[ " $ASSET_NAMES " == *" manifest.json "* ]]; then
+            echo "::notice::Release $TAG already has manifest.json — not rebuilding (published from a completed draft)."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -1099,6 +1101,18 @@ jobs:
           fi
           [ "$FAIL" -eq 0 ] || exit 1
           echo "macOS ${{ matrix.label }}: app + dmg signed by $TEAM, notarized, stapled."
+
+      # Trusted Signing chains to the Microsoft Identity Verification Root CA
+      # 2020, which Windows only fetches lazily (auto root update). Seed it so
+      # a valid signature can't read as UnknownError and fail closed.
+      - name: trust Microsoft Identity Verification root (prod only)
+        if: needs.resolve-env.outputs.target_env == 'prod' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $u = 'https://www.microsoft.com/pkiops/certs/Microsoft%20Identity%20Verification%20Root%20Certificate%20Authority%202020.crt'
+          $f = Join-Path $env:RUNNER_TEMP 'msidroot.crt'
+          Invoke-WebRequest -Uri $u -OutFile $f
+          Import-Certificate -FilePath $f -CertStoreLocation Cert:\LocalMachine\Root | Format-List Subject, Thumbprint
 
       - name: assert Windows artifacts signed (prod only)
         if: needs.resolve-env.outputs.target_env == 'prod' && runner.os == 'Windows'
