@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -95,9 +97,15 @@ type Recorder struct {
 	closeMu sync.RWMutex
 	closed  bool
 
-	// mu serialises the worker's store writes with Purge and guards tasks.
+	// mu serialises the worker's store writes with Purge and guards tasks
+	// and dirty.
 	mu    sync.Mutex
 	tasks map[string]*mlstore.TaskRow
+	// dirty: cached tasks whose state moved since their last upsert (the
+	// trailing-upsert candidates flushStale writes). The store's
+	// last_active > last_upsert_at test covers tasks not in the cache
+	// after a restart; this set covers same-millisecond activity.
+	dirty map[string]bool
 
 	linkMu sync.RWMutex
 	parent map[string]string // child session -> parent session
@@ -132,6 +140,7 @@ func NewRecorder(cfg Config) *Recorder {
 		done:   make(chan struct{}),
 		stop:   make(chan struct{}),
 		tasks:  map[string]*mlstore.TaskRow{},
+		dirty:  map[string]bool{},
 		parent: map[string]string{},
 	}
 	go r.run()
@@ -140,11 +149,16 @@ func NewRecorder(cfg Config) *Recorder {
 
 func (r *Recorder) run() {
 	defer close(r.done)
-	var tick <-chan time.Time
+	var tick, upsertTick <-chan time.Time
 	if r.cfg.SweepInterval > 0 {
 		t := time.NewTicker(r.cfg.SweepInterval)
 		defer t.Stop()
 		tick = t.C
+		// Trailing upserts ride the same switch: negative SweepInterval
+		// disables both background tickers (tests drive them directly).
+		u := time.NewTicker(r.cfg.UpsertEvery)
+		defer u.Stop()
+		upsertTick = u.C
 	}
 	for {
 		select {
@@ -155,6 +169,8 @@ func (r *Recorder) run() {
 			r.safe(fn)
 		case <-tick:
 			r.safe(func() { r.sweepIdle(context.Background()) })
+		case <-upsertTick:
+			r.safe(func() { r.flushStale(context.Background(), false) })
 		}
 	}
 }
@@ -371,6 +387,69 @@ func (r *Recorder) SweepIdle(ctx context.Context) error {
 	}
 }
 
+// FlushTasks writes a trailing task upsert now, ignoring the 60 s
+// throttle, for every task whose newest state has not been upserted, and
+// waits. The shutdown drain calls it so a session's final counters reach
+// the outbox before the last ship.
+func (r *Recorder) FlushTasks(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	ack := make(chan struct{})
+	if !r.enqueue(func() { r.flushStale(ctx, true); close(ack) }) {
+		return fmt.Errorf("mlproducer: recorder closed or queue full")
+	}
+	select {
+	case <-ack:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// flushStale is the trailing half of the upsert throttle (spec §3.1:
+// "at most once per 60 s while active"): the per-call throttle only
+// upserts when a call lands ≥ 60 s after the last upsert, so a session
+// that went quiet inside that window would otherwise leave its final
+// counters unshipped until completion (delete or the 7-day sweep). Run on
+// a UpsertEvery ticker, it upserts every task whose state moved since its
+// last upsert and whose last upsert is at least UpsertEvery old; force
+// ignores the age.
+func (r *Recorder) flushStale(ctx context.Context, force bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.recording() {
+		return
+	}
+	cutoff := r.nowMS() - r.cfg.UpsertEvery.Milliseconds()
+	if force {
+		cutoff = math.MaxInt64
+	}
+	rows, err := r.cfg.Store.StaleTasks(ctx, cutoff)
+	if err != nil {
+		logging.L().Warn("mlproducer.recorder.stale_tasks_failed", "err", err.Error())
+		return
+	}
+	due := map[string]mlstore.TaskRow{}
+	for _, t := range rows {
+		due[t.TaskID] = t
+	}
+	for id := range r.dirty {
+		if t, ok := r.tasks[id]; ok && t.LastUpsertAt <= cutoff {
+			due[id] = *t
+		}
+	}
+	ids := make([]string, 0, len(due))
+	for id := range due {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		task := cloneTask(due[id])
+		r.commit(ctx, &task, nil, true)
+	}
+}
+
 // Purge wipes the outbox and the task table and forgets cached task state
 // (spec §4: on effective true→false). Seqs are never reused afterwards.
 func (r *Recorder) Purge(ctx context.Context) error {
@@ -380,6 +459,7 @@ func (r *Recorder) Purge(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tasks = map[string]*mlstore.TaskRow{}
+	r.dirty = map[string]bool{}
 	return r.cfg.Store.Purge(ctx)
 }
 
@@ -659,6 +739,11 @@ func (r *Recorder) commit(ctx context.Context, task *mlstore.TaskRow, events []m
 	}
 	cp := cloneTask(*task)
 	r.tasks[task.TaskID] = &cp
+	if upsert {
+		delete(r.dirty, task.TaskID)
+	} else {
+		r.dirty[task.TaskID] = true
+	}
 }
 
 func taskWireBody(t mlstore.TaskRow) taskBody {

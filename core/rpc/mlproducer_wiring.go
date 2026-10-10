@@ -268,6 +268,9 @@ func (w *mlProducerWiring) shutdown() {
 	w.gate.Stop()
 	fctx, fcancel := context.WithTimeout(context.Background(), mlShutdownFlush)
 	_ = w.rec.Flush(fctx)
+	// Trailing upserts: a session whose last activity fell inside the 60 s
+	// throttle window still ships its final counters.
+	_ = w.rec.FlushTasks(fctx)
 	fcancel()
 	w.shipper.Stop()
 	if w.gate.Last().Open {

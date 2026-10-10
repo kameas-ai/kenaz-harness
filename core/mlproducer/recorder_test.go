@@ -662,3 +662,89 @@ func TestRecorder_FullQueueDropsNeverBlocks(t *testing.T) {
 		t.Error("a full queue dropped nothing")
 	}
 }
+
+// WP04 defect fix: the per-call throttle alone left a session that went
+// quiet inside the 60 s window with its final counters unshipped until
+// completion. FlushTasks (the shutdown drain) and the UpsertEvery ticker
+// (flushStale) write a trailing upsert — and only for tasks that moved.
+func TestRecorder_TrailingUpsertCarriesFinalCounters(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	h.call(ctx, "s1", "kenaz__write_file", `{"path":"a.go","content":"x"}`, coreag.ToolOutcomeOK, `{"bytes_written":1}`)
+	// Same millisecond as the first upsert, then a little later: neither
+	// call is ≥ 60 s after it, so neither upserts on its own.
+	h.call(ctx, "s1", "kenaz__write_file", `{"path":"b.go","content":"x"}`, coreag.ToolOutcomeOK, `{"bytes_written":1}`)
+	h.clock.advance(5 * time.Second)
+	h.call(ctx, "s1", "kenaz__bash", `{"command":"go test ./..."}`, coreag.ToolOutcomeOK, bashFail)
+	countTasks := func(recs []decoded) int {
+		n := 0
+		for _, r := range recs {
+			if r.Table == mlstore.TableTasks {
+				n++
+			}
+		}
+		return n
+	}
+	recs := h.outbox()
+	if n := countTasks(recs); n != 1 {
+		t.Fatalf("task upserts before the flush = %d, want 1 (throttled)", n)
+	}
+	if got := lastTask(t, recs); len(got.Files) != 1 || got.TestRuns != 0 {
+		t.Fatalf("first upsert = %+v, want the first-activity state", got)
+	}
+
+	// The ticker half: not yet due (last upsert 5 s old), then due.
+	h.rec.flushStaleForTest(t, false)
+	if n := countTasks(h.outbox()); n != 1 {
+		t.Fatalf("flushStale upserted a task whose last upsert is 5 s old")
+	}
+	h.clock.advance(60 * time.Second)
+	h.rec.flushStaleForTest(t, false)
+	recs = h.outbox()
+	if n := countTasks(recs); n != 2 {
+		t.Fatalf("task upserts after the 60 s trailing flush = %d, want 2", n)
+	}
+	if got := lastTask(t, recs); len(got.Files) != 2 || got.TestRuns != 1 || got.TestFails != 1 || got.Phase != "testing" {
+		t.Fatalf("trailing upsert = %+v, want the final counters", got)
+	}
+
+	// Nothing moved since: no further upsert.
+	if err := h.rec.FlushTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := countTasks(h.outbox()); n != 2 {
+		t.Fatalf("FlushTasks re-upserted an unchanged task (%d upserts)", n)
+	}
+
+	// The drain half ignores the age.
+	h.call(ctx, "s1", "kenaz__bash", `{"command":"git commit -m x"}`, coreag.ToolOutcomeOK, bashOK)
+	if err := h.rec.FlushTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recs = h.outbox()
+	if n := countTasks(recs); n != 3 || lastTask(t, recs).CommitCount != 1 {
+		t.Fatalf("FlushTasks after a commit: upserts=%d last=%+v", n, lastTask(t, recs))
+	}
+
+	// Gate closed: nothing.
+	h.call(ctx, "s1", "kenaz__glob", `{}`, coreag.ToolOutcomeOK, "{}")
+	h.flush()
+	h.gate.Store(false)
+	if err := h.rec.FlushTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.gate.Store(true)
+	if n := countTasks(h.outbox()); n != 3 {
+		t.Fatalf("FlushTasks wrote with the gate closed (%d upserts)", n)
+	}
+}
+
+func (r *Recorder) flushStaleForTest(t *testing.T, force bool) {
+	t.Helper()
+	ack := make(chan struct{})
+	if !r.enqueue(func() { r.flushStale(context.Background(), force); close(ack) }) {
+		t.Fatal("enqueue failed")
+	}
+	<-ack
+}

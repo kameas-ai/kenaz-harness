@@ -359,12 +359,36 @@ token's Zitadel resource-owner id (a different namespace; that one is what
 is still an open question for kenaz-fleet). **Owner:** ml-producer-01MLPRD01
 WP05, which deletes the constant, `orgAllowed` and this entry.
 
-Also recorded by WP03, for WP04 to carry: Fleet's OTLP receiver decodes an
-`application/json` body with `encoding/json` into the generated proto
-structs (kenaz-fleet `service/telemetry/receiver.go` `unmarshalOTLP`), so a
-standard OTLP-JSON request decodes to zero resource logs and is answered
-200 with nothing routed. The shipper therefore sends protobuf (the contract
-allows either). Fleet-side fix: `protojson.Unmarshal`. Owner: kenaz-fleet.
+**CLOSED 2026-10-09 (kenaz-fleet #218)** — recorded by WP03: Fleet's OTLP
+receiver decoded an `application/json` body with `encoding/json` into the
+generated proto structs (kenaz-fleet `service/telemetry/receiver.go`
+`unmarshalOTLP`), so a standard OTLP-JSON request decoded to zero resource
+logs and was answered 200 with nothing routed. Fleet #218 switched to
+`protojson` (DiscardUnknown; hex trace/span ids handled). The shipper keeps
+sending protobuf (the contract allows either); nothing changes here.
+
+### 2026-10-09 (ml-producer-01MLPRD01 WP04) · agent-process markers have no reader yet — dated
+
+The harness marks every process its agent spawns so the person-side daemon
+can skip it (spec §1 rule 3, §12 A-4), and nothing reads the marks yet:
+
+- `KENAZ_ACTOR=agent` on `kenaz__bash` foreground and background children
+  and on every MCP stdio server the pool spawns;
+- `KENAZ_SESSION=h(root session)` on `kenaz__bash` foreground and
+  background children;
+- `<dataDir>/fleet/agent_pids` (the harness pid, 0600, written by
+  `newMLProducerWiring`, removed on shutdown).
+
+This is not a lie in the harness — they are set, and pinned end to end by
+`TestMLAcceptance_8_4_BashForegroundAndBackgroundCarryMarkers`,
+`TestPoolOpen_SpawnedServerCarriesAgentActor` and
+`TestMLWiring_LifecycleAndAgentPIDs` — but the separation from the daemon
+they exist for does not hold until the reader ships: until then an agent's
+shell command can also appear as a person `terminal` row in sigild's data.
+**Blocker:** the sigil daemon change that skips processes with
+`KENAZ_ACTOR=agent` in their environment or ancestry, and writes by pids
+listed in `agent_pids` (spec §9). **Owner:** the sigil repo; this entry
+closes when that ships.
 
 ### 2026-10-09 (tool-context-budget-01TCBUD01, re-swept by WP08) · tool-exposure gaps still open
 

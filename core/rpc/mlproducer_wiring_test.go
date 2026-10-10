@@ -200,6 +200,14 @@ type mlWiringRig struct {
 // whose /me/ml is effective, with the real producer wiring over it.
 func newMLWiringRig(t *testing.T, enrollOrg string, beforeCore func(dataDir string)) *mlWiringRig {
 	t.Helper()
+	return newMLWiringRigWithStore(t, enrollOrg, beforeCore, nil)
+}
+
+// newMLWiringRigWithStore is newMLWiringRig over a settings API backed by
+// store (nil: the zero settings.API, as the WP03 tests use). WP04's
+// acceptance turn needs a real store so the fs write dial can be on.
+func newMLWiringRigWithStore(t *testing.T, enrollOrg string, beforeCore func(dataDir string), store settings.SettingsStore) *mlWiringRig {
+	t.Helper()
 	if corefleet.Disabled() {
 		t.Skip("HARNESS_FLEET_DISABLED=1: the rig needs fleet enabled")
 	}
@@ -218,6 +226,9 @@ func newMLWiringRig(t *testing.T, enrollOrg string, beforeCore func(dataDir stri
 		t.Fatalf("core.New: %v", err)
 	}
 	api := &settings.API{}
+	if store != nil {
+		api = settings.NewAPI(store)
+	}
 	api.SetFleetClient(corefleet.NewClientForTesting(f.srv.URL), dataDir)
 	t.Cleanup(api.StopFleetBackground)
 	ctx := context.Background()

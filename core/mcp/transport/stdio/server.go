@@ -1257,11 +1257,14 @@ func childEnv(spec SpawnSpec) []string {
 const agentActorEnv = "KENAZ_ACTOR=agent"
 
 // withAgentActor replaces any inherited or spec-supplied KENAZ_ACTOR with
-// the agent marker, on both the isolated and the merged path.
+// the agent marker, on both the isolated and the merged path. An
+// inherited KENAZ_SESSION is dropped too (WP04): the server is not any
+// one session's, and a value leaking in from the harness's own launch
+// environment would attribute the server to a session it is not part of.
 func withAgentActor(env []string) []string {
 	out := make([]string, 0, len(env)+1)
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "KENAZ_ACTOR=") {
+		if strings.HasPrefix(kv, "KENAZ_ACTOR=") || strings.HasPrefix(kv, "KENAZ_SESSION=") {
 			continue
 		}
 		out = append(out, kv)

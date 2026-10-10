@@ -265,6 +265,17 @@ jobs:
         # package doc.
         run: bash scripts/ci/check-advice-kinds.sh
 
+      - name: ml-producer minimisation guard
+        # ml-producer-01MLPRD01 WP04 (spec §7, §12 A-10). Static: the
+        # producer's KindTable is exactly the six contract kinds with
+        # exactly their payload keys, and no other kind literal exists in
+        # core/mlproducer. Dynamic: the real recorder over a fixture corpus
+        # (deep paths, secrets, env, URLs, a custom MCP server, git commit,
+        # tests, refusals) yields no raw path, no >2-token cmd, no
+        # credential-looking token and no fixture canary. Planted proofs:
+        # TestMLMinimisationGate_* in scripts/ci/gates_can_fail_test.go.
+        run: bash scripts/ci/check-ml-producer-minimisation.sh
+
       - name: install-provider-coverage guard
         # install-framework-01DOGF0B WP03. Every core/fleet CatalogItemKind
         # maps to an install.Kind; every install.Kind has a production

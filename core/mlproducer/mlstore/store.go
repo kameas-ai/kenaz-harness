@@ -212,6 +212,27 @@ func (s *Store) OpenTasksIdleSince(ctx context.Context, cutoff int64) ([]TaskRow
 	return out, rows.Err()
 }
 
+// StaleTasks returns tasks whose newest state has not been upserted yet
+// (last_active > last_upsert_at) and whose last upsert is at or before
+// cutoff (unix ms) — the recorder's trailing-upsert candidates.
+func (s *Store) StaleTasks(ctx context.Context, cutoff int64) ([]TaskRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+taskColumns+` FROM ml_tasks WHERE last_active > last_upsert_at AND last_upsert_at <= ? ORDER BY last_active`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("mlstore: stale tasks: %w", err)
+	}
+	defer rows.Close()
+	var out []TaskRow
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // ReadBatch returns up to limit outbox records with seq > afterSeq, in seq
 // order. The shipper's cursor is the table head: it reads from 0 and
 // deletes what it shipped.
