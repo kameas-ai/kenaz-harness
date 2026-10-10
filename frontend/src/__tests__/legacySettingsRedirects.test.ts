@@ -42,6 +42,11 @@ const LEGACY_CASES = [
   ['/settings?tab=tasks', '/workflows', 'tasks'],
   ['/settings?tab=scheduledchats', '/workflows', 'schedules'],
   ['/settings?tab=workflows', '/workflows', undefined],
+  // settings-cleanup-01SETUX01 WP01 (FR-2): retired developer tabs land on
+  // Settings › General, never on an empty pane.
+  ['/settings?tab=flags', '/settings', undefined],
+  ['/settings?tab=health', '/settings', undefined],
+  ['/settings?tab=logs', '/settings', undefined],
 ] as const;
 
 describe.each(['desktop', 'served'] as const)('legacy /settings?tab= redirects (%s)', (which) => {

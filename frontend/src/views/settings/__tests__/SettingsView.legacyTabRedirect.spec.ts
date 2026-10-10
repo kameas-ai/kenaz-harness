@@ -29,6 +29,10 @@ describe('SettingsView forwards moved tabs on a same-route query change', () => 
     ['tasks', { path: '/workflows', query: { tab: 'tasks' } }],
     ['scheduledchats', { path: '/workflows', query: { tab: 'schedules' } }],
     ['workflows', { path: '/workflows' }],
+    // settings-cleanup-01SETUX01 WP01 (FR-2): retired developer tabs.
+    ['flags', { path: '/settings' }],
+    ['health', { path: '/settings' }],
+    ['logs', { path: '/settings' }],
   ])('?tab=%s → %j', async (tab, want) => {
     route.query = {};
     replace.mockClear();

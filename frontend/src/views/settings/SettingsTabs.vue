@@ -29,11 +29,9 @@ import {
   AlertTriangle,
   Archive,
   CircleUser,
-  Code,
   Command,
   Download,
   FileText,
-  Flag,
   GitBranch,
   Globe,
   KeyRound,
@@ -95,8 +93,10 @@ const groups: ReadonlyArray<TabGroup> = [
       // fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab.
       { to: '/settings?tab=account', label: 'Account', query: 'account', icon: CircleUser },
       { to: '/settings?tab=updates', label: 'Updates', query: 'updates', icon: Download },
-      { to: '/settings?tab=flags', label: 'Flags', query: 'flags', icon: Flag },
-      { to: '/settings?tab=health', label: 'Health', query: 'health', icon: Activity },
+      // settings-cleanup-01SETUX01 WP01: Flags and Health (developer
+      // surfaces) were deleted by owner ruling; database problems now
+      // surface in SettingsIssuesBanner on every settings page. Their old
+      // ?tab= URLs redirect — see lib/legacyRoutes.ts.
     ],
   },
   {
@@ -156,8 +156,9 @@ const groups: ReadonlyArray<TabGroup> = [
       // nav-settings-ia-cleanup WP04: audit-log viewer promoted into Settings → Security.
       // Navigates directly to /audit (the viewer keeps its own CanvasHead layout).
       { to: '/audit', label: 'Audit Log', matchPrefix: '/audit', icon: Activity },
-      // mission 01NLOGS01 WP05: in-app runtime log ring buffer.
-      { to: '/settings?tab=logs', label: 'Logs', query: 'logs', icon: Code },
+      // settings-cleanup-01SETUX01 WP01: the Logs entry (runtime log ring
+      // viewer) was deleted by owner ruling. Recent warnings/errors now
+      // travel in the issue banner's Copy diagnostics text instead.
       // fleet-audit-archival-01NDFSEX13 WP06 — Compliance (Team+ tier gated)
       { to: '/settings?tab=compliance', label: 'Compliance', query: 'compliance', icon: Server },
     ],

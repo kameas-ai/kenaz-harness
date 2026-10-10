@@ -2504,8 +2504,10 @@ func (b *Bindings) Slashcmd_SkillRenameLocalTrigger(skillID, newTrigger string) 
 
 // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ────────────────
 
-// FeatureFlagInfo carries a single feature-flag name + enabled state
-// for the frontend FeatureFlagsView.
+// FeatureFlagInfo carries a single feature-flag name + enabled state.
+// Read by the frontend's gating checks (SettingsView.vue,
+// HooksSettingsView.vue, GeneratedImageBlock.vue); the Settings › Flags
+// tab that listed them was deleted by settings-cleanup-01SETUX01 WP01.
 type FeatureFlagInfo struct {
 	Name        string `json:"name"`
 	Enabled     bool   `json:"enabled"`
@@ -3172,8 +3174,9 @@ func (b *Bindings) Sessions_ResolveAutonomy(sessionID string) (sessions.Resolved
 
 // Storage_GetMigrationDriftReport reads the harness_migrations ledger and
 // the registered migration set, compares them, and returns every
-// discrepancy. Never modifies the database. Wired to the Settings → Health
-// panel's MigrationDriftPanel.vue component.
+// discrepancy. Never modifies the database. Read by the Settings issue
+// banner's database provider (frontend/src/lib/settingsIssues.ts, rendered
+// by SettingsIssuesBanner.vue on every settings page).
 func (b *Bindings) Storage_GetMigrationDriftReport() (storageview.DriftReport, error) {
 	defer sentry.WrapBinding("Storage_GetMigrationDriftReport")()
 	return b.api.Storage().GetMigrationDriftReport(b.ctx())

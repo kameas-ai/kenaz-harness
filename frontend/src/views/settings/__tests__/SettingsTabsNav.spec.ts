@@ -44,7 +44,11 @@ describe('SettingsTabs — vertical nav rail', () => {
     // Authoring › Workflows moved to the Workflows surface.
     // agentgraph-settings-linkage-01DOGF0D WP05: +1 — Agent graphs in
     // Authoring (moved from the top-level rail; desktop-only).
-    expect(items).toHaveLength(24);
+    // settings-cleanup-01SETUX01 WP01: -3 — Flags and Health (App) and Logs
+    // (Security) deleted by owner ruling.
+    // This is the desktop rail; both rails are pinned in
+    // SettingsTabsRetired.spec.ts.
+    expect(items).toHaveLength(21);
     for (const item of items) {
       // lucide-vue-next renders an <svg>; every row should carry one.
       expect(item.find('svg').exists()).toBe(true);
