@@ -4,26 +4,36 @@
  *
  * severity:"error" migration-ledger drift used to be visible ONLY at
  * /settings?tab=health — a query-param-gated tab a user has no reason to
- * know exists. This composable now subscribes to the
+ * know exists. That tab was deleted by settings-cleanup-01SETUX01 WP01;
+ * the toast's action now opens /settings, where SettingsIssuesBanner
+ * offers the repair (FR-5). This composable now subscribes to the
  * `storage.migration.drift-detected` broker topic (forwarded in served
  * mode via SERVED_STREAM_TOPICS, generated from core/serve/wsstream.go's
  * passthroughTopics — see frontend/src/lib/servedStreamTopics.gen.ts)
  * and surfaces a persistent toast when the payload's hasError is true.
  *
- * Tests run in served mode (no window.runtime) via dispatchServedEvent,
- * the same test-injection hook frontend/src/lib/__tests__/useEventStream.test.ts
- * uses — there is no window.runtime in vitest's jsdom environment by
- * default, so useEventStream already falls back to the served-event bus.
+ * Events are delivered via dispatchServedEvent, the same test-injection
+ * hook frontend/src/lib/__tests__/useEventStream.test.ts uses — there is no
+ * window.runtime in vitest's jsdom environment by default, so useEventStream
+ * already falls back to the served-event bus. Which BUILD the composable
+ * believes it is in is a separate question, controlled by the
+ * useServedMode mock below (desktop unless a test says otherwise).
  *
  * Only the migration-drift toast is covered here; the composable's other
  * toasts (cost threshold, retry-after-rotate, merge suggestion, update,
  * one-time migration-toast) are exercised indirectly by their own
  * consuming views today and are out of this WP's scope.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
-import { defineComponent, h } from 'vue';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { defineComponent, h, ref, readonly } from 'vue';
 import { mount } from '@vue/test-utils';
 import { createRouter, createMemoryHistory } from 'vue-router';
+const served = ref(false);
+vi.mock('@/lib/useServedMode', () => ({
+  isServedMode: () => served.value,
+  useServedMode: () => readonly(served),
+}));
+
 import { useEventToasts, _resetMigrationDriftToastState } from '@/composables/useEventToasts';
 import { useToastQueue, _resetToastQueue } from '@/composables/useToastQueue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
@@ -66,6 +76,22 @@ describe('useEventToasts — migration drift', () => {
   beforeEach(() => {
     _resetToastQueue();
     _resetMigrationDriftToastState();
+    served.value = false;
+  });
+
+  // Served Settings has no repair surface (the banner's database check is
+  // desktop-only), so the toast's "Open Settings to repair it" would be a
+  // promise the UI cannot keep there.
+  it.each([
+    ['desktop', false, 1],
+    ['served', true, 0],
+  ] as const)('%s mode: toasts %i time(s) for hasError drift', (_name, isServed, want) => {
+    served.value = isServed;
+    const w = mountHost();
+    dispatchServedEvent('storage.migration.drift-detected', driftPayload());
+    const { toasts } = useToastQueue();
+    expect(toasts.length).toBe(want);
+    w.unmount();
   });
 
   it('does NOT toast for code_only/ledger_only-only drift (hasError: false)', () => {
@@ -77,7 +103,7 @@ describe('useEventToasts — migration drift', () => {
     w.unmount();
   });
 
-  it('surfaces a persistent error toast with a Review action when hasError is true', () => {
+  it('surfaces a persistent error toast with an Open Settings action when hasError is true', () => {
     const w = mountHost();
     dispatchServedEvent('storage.migration.drift-detected', driftPayload());
 
@@ -85,12 +111,14 @@ describe('useEventToasts — migration drift', () => {
     expect(toasts.length).toBe(1);
     expect(toasts[0].level).toBe('error');
     expect(toasts[0].durationMs).toBe(0); // persistent — no auto-dismiss
-    expect(toasts[0].message).toContain('drift');
-    expect(toasts[0].actions?.map((a) => a.label)).toContain('Review');
+    expect(toasts[0].message).toContain('database');
+    // Plain language: no developer vocabulary in what the user reads.
+    expect(toasts[0].message).not.toMatch(/ledger|migration|drift/i);
+    expect(toasts[0].actions?.map((a) => a.label)).toEqual(['Open Settings']);
     w.unmount();
   });
 
-  it('the Review action navigates to /settings?tab=health', async () => {
+  it('the Open Settings action navigates to /settings (where the banner is)', async () => {
     const client = createFakeHarnessClient();
     const router = makeRouter();
     const Host = defineComponent({
@@ -108,11 +136,11 @@ describe('useEventToasts — migration drift', () => {
 
     dispatchServedEvent('storage.migration.drift-detected', driftPayload());
     const { toasts } = useToastQueue();
-    const action = toasts[0].actions?.find((a) => a.label === 'Review');
+    const action = toasts[0].actions?.find((a) => a.label === 'Open Settings');
     expect(action).toBeTruthy();
 
     await action!.perform();
-    expect(router.currentRoute.value.fullPath).toBe('/settings?tab=health');
+    expect(router.currentRoute.value.fullPath).toBe('/settings');
     w.unmount();
   });
 });

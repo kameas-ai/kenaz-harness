@@ -479,8 +479,7 @@ async function runTeamSearch() {
 const exportLoading = ref(false);
 const exportError = ref<string | null>(null);
 
-/** base64 → Blob → object URL → click a synthetic <a download>. Same
- *  pattern as LogsPanel.vue's exportJSONL. */
+/** base64 → Blob → object URL → click a synthetic <a download>. */
 async function onExportClick() {
   if (!teamCapEnabled.value) return;
   exportLoading.value = true;

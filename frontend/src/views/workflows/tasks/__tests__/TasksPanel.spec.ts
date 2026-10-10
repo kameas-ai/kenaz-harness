@@ -1,8 +1,8 @@
 /**
  * TasksPanel tests — background-task-monitor-01KZNP3C WP05
  *
- * Routes through the typed harnessClient (Tasks_List / Tasks_Abort) —
- * mirrors LogsPanel.spec.ts's HarnessClientKey provide pattern. Previously
+ * Routes through the typed harnessClient (Tasks_List / Tasks_Abort),
+ * provided via HarnessClientKey with createFakeHarnessClient. Previously
  * mocked `@/lib/tasks` directly; that module was deleted by
  * subagent-control-and-background-tasks-01PMZB11 UNIT-11 once TasksPanel
  * (and its sibling components) were the only consumers left and were

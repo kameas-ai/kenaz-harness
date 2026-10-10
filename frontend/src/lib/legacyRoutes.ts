@@ -1,5 +1,6 @@
 /**
- * legacyRoutes — redirects for Settings tabs that moved to other surfaces.
+ * legacyRoutes — redirects for Settings tabs that moved to other surfaces
+ * or were retired.
  *
  * nav-ia-sweep-01DOGF0F WP05 (FR-4). Settings › Runtime (Scheduled Chats,
  * Tasks) and Settings › Authoring › Workflows moved into the Workflows
@@ -12,7 +13,7 @@
  */
 import type { RouteLocationNormalized, RouteLocationRaw } from 'vue-router';
 
-/** Old `/settings?tab=<key>` → its new `/workflows` location. */
+/** Old `/settings?tab=<key>` → its new location. */
 const LEGACY_SETTINGS_TAB_REDIRECTS: Readonly<Record<string, RouteLocationRaw>> = {
   scheduledchats: { path: '/workflows', query: { tab: 'schedules' } },
   tasks: { path: '/workflows', query: { tab: 'tasks' } },
@@ -20,6 +21,14 @@ const LEGACY_SETTINGS_TAB_REDIRECTS: Readonly<Record<string, RouteLocationRaw>> 
   // default tab) plus the cron editor (now Schedules). The list is what the
   // panel opened on, so the bookmark lands on Library.
   workflows: { path: '/workflows' },
+  // settings-cleanup-01SETUX01 WP01 (FR-2): Flags, Health and Logs were
+  // developer surfaces, deleted by owner ruling. Their old URLs — bookmarks,
+  // a persisted lastRoute, and the pre-WP01 drift toast's "Review" action —
+  // land on Settings › General, where SettingsIssuesBanner shows any
+  // database problem Health used to list.
+  flags: { path: '/settings' },
+  health: { path: '/settings' },
+  logs: { path: '/settings' },
 };
 
 export function redirectLegacySettingsTab(

@@ -19,16 +19,12 @@ import SettingsShell from '@/views/settings/SettingsShell.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
 import UpdatesPanel from '@/views/settings/UpdatesPanel.vue';
-import MigrationDriftPanel from '@/views/settings/health/MigrationDriftPanel.vue';
 import CompactionStrategyPanel from '@/views/settings/compaction/CompactionStrategyPanel.vue';
 import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
-import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
 import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
 import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
-// mission 01NLOGS01 WP05 — Runtime Logs panel
-import LogsPanel from '@/views/settings/LogsPanel.vue';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
 import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
 import PeersPanel from '@/views/settings/PeersPanel.vue';
@@ -89,13 +85,6 @@ const showUpdatesTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'updates';
 });
 
-// v0.5.1 migration-doctor — Health sub-tab (same route disambiguation
-// as Updates; mount switch is in <template> below).
-const showHealthTab = computed<boolean>(() => {
-  const v = route?.query?.tab;
-  return typeof v === 'string' && v === 'health';
-});
-
 // compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring sub-tab.
 // Disambiguates via ?tab=compaction. Mount switch is in <template> below.
 const showCompactionTab = computed<boolean>(() => {
@@ -108,13 +97,6 @@ const showCompactionTab = computed<boolean>(() => {
 const showSlashCmdsTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'slashcmds';
-});
-
-// user-slash-commands-01KQ8TD9 WP09 — Feature Flags sub-tab.
-// Disambiguates via ?tab=flags. Mount switch is in <template> below.
-const showFlagsTab = computed<boolean>(() => {
-  const v = route?.query?.tab;
-  return typeof v === 'string' && v === 'flags';
 });
 
 // hooks-event-surface-expansion-01KZNP3A WP07d — Hooks sub-tab.
@@ -159,13 +141,6 @@ const showLLMRoutingTab = computed<boolean>(() => {
 const showAuditTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'audit';
-});
-
-// mission 01NLOGS01 WP05 — Runtime Logs sub-tab.
-// Disambiguates via ?tab=logs. Mount switch is in <template> below.
-const showLogsTab = computed<boolean>(() => {
-  const v = route?.query?.tab;
-  return typeof v === 'string' && v === 'logs';
 });
 
 // fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab.
@@ -230,10 +205,6 @@ const showRecommendationsTab = computed<boolean>(() => {
 const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   account: { title: 'Account', subtitle: 'Sign in to access fleet features like shared team context, org-level settings, and role-based capabilities.' },
   updates: { title: 'Updates', subtitle: 'Check for and install harness updates.' },
-  flags: { title: 'Feature flags', subtitle: 'Toggle experimental and environment-gated features.' },
-  // The pane renders MigrationDriftPanel only; MCP server health lives in
-  // Capabilities.
-  health: { title: 'Health', subtitle: 'Database migration drift on this install.' },
   compaction: { title: 'Compaction', subtitle: 'Authoring strategy for context compaction.' },
   slashcmds: { title: 'Slash commands', subtitle: 'Author and manage user slash commands.' },
   hooks: { title: 'Hooks', subtitle: 'Lifecycle hooks that fire on chat-pipeline events.' },
@@ -242,8 +213,6 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   // nav-settings-ia-cleanup WP04: renamed from 'Audit' to 'Audit Settings' to
   // distinguish from the separate 'Audit Log' viewer (reached via /audit).
   audit: { title: 'Audit Settings', subtitle: 'Audit-log retention settings.' },
-  // mission 01NLOGS01 WP05 — Runtime Logs section head.
-  logs: { title: 'Logs', subtitle: 'Runtime log ring-buffer — debug failed MCP recipes and harness subsystems in-app.' },
   peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
   sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
   compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },
@@ -1143,14 +1112,6 @@ onMounted(() => {
       <UpdatesPanel />
     </div>
 
-    <!-- v0.5.1 migration-doctor — Health sub-tab. -->
-    <div
-      v-else-if="showHealthTab"
-      data-testid="settings-health-pane"
-    >
-      <MigrationDriftPanel />
-    </div>
-
     <!-- compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring sub-tab. -->
     <div
       v-else-if="showCompactionTab"
@@ -1165,14 +1126,6 @@ onMounted(() => {
       data-testid="settings-slashcmds-pane"
     >
       <SlashCommandsView />
-    </div>
-
-    <!-- user-slash-commands-01KQ8TD9 WP09 — Feature Flags sub-tab. -->
-    <div
-      v-else-if="showFlagsTab"
-      data-testid="settings-flags-pane"
-    >
-      <FeatureFlagsView />
     </div>
 
     <!-- hooks-event-surface-expansion-01KZNP3A WP07d — Hooks sub-tab. -->
@@ -1207,15 +1160,6 @@ onMounted(() => {
       data-testid="settings-audit-pane"
     >
       <AuditSettingsPanel />
-    </div>
-
-    <!-- mission 01NLOGS01 WP05 — Runtime Logs tab. -->
-    <div
-      v-else-if="showLogsTab"
-      class="flex flex-col h-full"
-      data-testid="settings-logs-pane"
-    >
-      <LogsPanel />
     </div>
 
     <!-- fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab. -->
