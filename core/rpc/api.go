@@ -1030,6 +1030,13 @@ type API struct {
 	// which is called from AuditObserver when auditArchiver is wired.
 	auditTailBuf *auditTailBuffer
 
+	// mlProducer is the harness ML producer (ml-producer-01MLPRD01 WP03,
+	// mlproducer_wiring.go): recorder + consent gate + OTLP shipper. Built
+	// in New right after the fleet client and the merged recipe catalog
+	// exist; started in SetContext; drained in Shutdown. nil on the
+	// no-DataDir chassis (every accessor is nil-safe).
+	mlProducer *mlProducerWiring
+
 	// compactionScheduler is the soft-archive sweep scheduler (CK-09,
 	// chat-turn-integrity-01PMZ606 WP13). Held so Shutdown can call
 	// Stop() — before this field existed, newLLMStack's local
@@ -1234,6 +1241,10 @@ func (a *API) SetContext(ctx context.Context) {
 		a.auditSweeper.Start(ctx)
 		logging.L().Info("fleet.audit_sweeper.started")
 	}
+	// ml-producer-01MLPRD01 WP03: the ML producer's consent-gate refresher
+	// on the app context; the shipper runs while the gate is open.
+	// Idempotent, nil-safe.
+	a.mlProducer.start(ctx)
 	// audit-that-tells-the-truth-01PMZA10 UNIT-8: the local retention
 	// sweeper, unconditionally on every install with a real backend —
 	// no fleet-client gate (spec D-7), unlike auditSweeper above.
@@ -1540,6 +1551,12 @@ func (a *API) Shutdown() {
 	if a.unitSyncer != nil {
 		a.unitSyncer.Stop()
 	}
+	// ml-producer-01MLPRD01 WP03: drain the ML producer — flush the
+	// recorder, one final ship bounded to 5 s, remove agent_pids. BEFORE
+	// StopFleetBackground below, which clears the enrolled identity the
+	// consent gate needs for that last batch (and before the database
+	// closes: core/serve and main.go close it after Shutdown). Nil-safe.
+	a.mlProducer.shutdown()
 	// Fleet background goroutines (capability poller, config poller, lockdown
 	// watcher). StopFleetBackground is idempotent and nil-safe.
 	if a.settingsImpl != nil {
@@ -2237,6 +2254,13 @@ func New(c *core.Core, opts ...Option) *API {
 	// simply never invoked for it in that case.
 	settingsImpl.SetMCPCatalog(mergedCat)
 
+	// ml-producer-01MLPRD01 WP03: the harness ML producer. Here because it
+	// needs the fleet client (for its invalidation hooks) and the merged
+	// catalog (custom-MCP-server classification), and must exist before
+	// newGraphManagerWithDeps / newLLMStack below, which hand its observer
+	// halves to the kernel, the chat runner and the bash tool.
+	a.mlProducer = newMLProducerWiring(c, settingsImpl, mergedCat)
+
 	// Wire the lockdown broker so fleet:lockdown:changed events reach the
 	// frontend banner. Must be called after both a.broker and a.settingsImpl
 	// are assigned. SetLockdownBroker is idempotent; if SetFleetClient was
@@ -2537,7 +2561,7 @@ func New(c *core.Core, opts ...Option) *API {
 	}
 	var compactionPipeline *compaction.Pipeline
 	var graphPolicy *graphview.PolicyGateAdapter
-	a.graphMgr, compactionPipeline, a.branchSeam, graphPolicy = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner, a.auditImpl)
+	a.graphMgr, compactionPipeline, a.branchSeam, graphPolicy = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner, a.auditImpl, a.mlProducer)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -2590,7 +2614,7 @@ func New(c *core.Core, opts ...Option) *API {
 	blockedSink := newBlockedRequestSink(blockedRequestStore, &acpAuditBridge{impl: a.auditImpl},
 		func(ctx context.Context) { a.publishPendingBlockedRequests(ctx) })
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions, blockedSink, a.scheduledRunOrigins.Resolve)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions, blockedSink, a.scheduledRunOrigins.Resolve, a.mlProducer)
 	// model-harness-toolset-01MHTS001 WP02 (H-1): the scheduled-run tool
 	// allowlist arm. Bound into the SAME session arm every tool call's
 	// permission resolution already goes through (the merged resolver
@@ -2695,6 +2719,9 @@ func New(c *core.Core, opts ...Option) *API {
 			LLM:         a.llmAPI,
 			Bus:         a.eventBus,
 			Tasks:       taskReg,
+			// ml-producer-01MLPRD01 WP03: attended subagent children count
+			// toward their root's ML task (spec §12 A-3).
+			MLParent: a.mlProducer.parentLinker(),
 			// UNIT-7 (FR-007): the SAME process-singleton *hooks.Runner
 			// a.hookRunner already holds (set earlier in this function,
 			// above the background_task_complete SetHookFirer block) —
@@ -6203,6 +6230,10 @@ func newLLMStack(
 	// own fail-safe default).
 	blockedSink corefs.BlockedRequestSink,
 	originResolve corefs.OriginResolver,
+	// mlProducer is a.mlProducer (ml-producer-01MLPRD01 WP03): its turn
+	// observer joins chat.Config.TurnUsage and its bash env provider sets
+	// the KENAZ_ACTOR / KENAZ_SESSION markers. nil-safe.
+	mlProducer *mlProducerWiring,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -6535,7 +6566,7 @@ func newLLMStack(
 	if bashCedarEngine != nil {
 		secretGate = bashCedarEngine
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget, postureManager, taskReg)
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget, postureManager, taskReg, mlProducer)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
@@ -7095,7 +7126,7 @@ func newLLMStack(
 			},
 		}
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatExposure, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatRiskRater, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner, chatAdvisor, adviceDeps)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatExposure, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatRiskRater, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner, chatAdvisor, adviceDeps, mlProducer)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -7997,6 +8028,9 @@ func buildChatRunner(
 	// (StartStream's `if r.cfg.Advisor != nil` guard).
 	advisor advice.Advisor,
 	adviceDeps *chat.AdviceDeps,
+	// mlProducer's turn observer joins Config.TurnUsage beside the fleet
+	// usage observer (ml-producer-01MLPRD01 WP03). nil-safe.
+	mlProducer *mlProducerWiring,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -8394,7 +8428,7 @@ func buildChatRunner(
 		PartialPersister:   partialPersister,
 		StreamCheckpoints:  streamCheckpoints,
 		UsageHook:          usageHookFn,
-		TurnUsage:          turnUsageObserver(fleetUsage),
+		TurnUsage:          fanOutTurnUsage(turnUsageObserver(fleetUsage), mlProducer.turnObserver()),
 		PostSendHook:       postSendHookFn,
 		AutoTitle:          autoTitleDeps,
 		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
@@ -9531,7 +9565,7 @@ func (a *API) RefreshEmbedder() {
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	return mgr
 }
 
@@ -9752,6 +9786,9 @@ func newGraphManagerWithDeps(
 	// New()'s auditImpl construction failure path); wrapped nil-safely
 	// below.
 	auditImpl *audit.API,
+	// mlProducer is a.mlProducer (ml-producer-01MLPRD01 WP03): its
+	// recorder becomes EnvDeps.ToolCalls. nil-safe.
+	mlProducer *mlProducerWiring,
 ) (*graphview.Manager, *compaction.Pipeline, *graphview.BranchSeamAdapter, *graphview.PolicyGateAdapter) {
 	dataDir := ""
 	if c != nil {
@@ -9763,6 +9800,12 @@ func newGraphManagerWithDeps(
 		// alike): one report per completed tool invocation. Inert until the
 		// user consents and an account-attributed pipeline is active.
 		deps.ToolUsage = obs
+	}
+	// ml-producer-01MLPRD01 WP03: every exit of every model-emitted tool
+	// call, with its typed outcome, reaches the ML recorder (which writes
+	// nothing unless the consent gate is open).
+	if obs := mlProducer.toolCallObserver(); obs != nil {
+		deps.ToolCalls = obs
 	}
 	if hookRunner != nil {
 		// WP09 / UNIT-8: both production Env literals (chat_runner.go

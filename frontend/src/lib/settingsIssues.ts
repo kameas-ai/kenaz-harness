@@ -9,7 +9,8 @@
  *
  * The model is generic on purpose. An issue comes from a provider; the
  * banner asks every provider for its current issues and renders whatever
- * comes back. Migration drift is the first provider. A later issue (an MCP
+ * comes back. Migration drift was the first provider; Fleet's pending
+ * approvals (ml-producer-01MLPRD01 WP06) the second. A later issue (an MCP
  * server stuck in an error state, say) plugs in by adding a provider to
  * SETTINGS_ISSUE_PROVIDERS — the banner does not change.
  *
@@ -20,6 +21,7 @@
  */
 import type { HarnessClient, LogRow } from '@/lib/harnessClient';
 import type { DriftEntry, DriftReport } from '@/lib/types';
+import { openPendingApprovalsDialog } from '@/lib/pendingApprovalsDialog';
 
 export interface SettingsIssueFix {
   /** Button label, e.g. "Repair". */
@@ -208,8 +210,42 @@ const databaseIssues: SettingsIssueProvider = {
   },
 };
 
+// ── provider: Fleet pending approvals (ml-producer-01MLPRD01 WP06) ───────
+
+/**
+ * "N items need your approval" — Fleet's pending-approvals hub (legal
+ * re-acceptance, the hosted-inference notice, informational changes).
+ * Shown only when signed in and something is pending; an error when any
+ * item is required (something is paused until it is approved), a warning
+ * when everything is informational. The fix opens the step-through modal
+ * (PendingApprovalsModal, mounted by the banner) and resolves when it
+ * closes, so the banner re-reads the hub. Closing approves nothing.
+ * Fleet_* hub bindings have no served dispatch, hence desktopOnly.
+ */
+const pendingApprovalsIssues: SettingsIssueProvider = {
+  id: 'pending-approvals',
+  desktopOnly: true,
+  async collect(client) {
+    const v = await client.fleet.pendingApprovals();
+    const n = v.items?.length ?? 0;
+    if (!v.signedIn || n === 0) return [];
+    const required = v.items.some((it) => it.required);
+    return [
+      {
+        id: 'pending-approvals',
+        severity: required ? 'error' : 'warning',
+        title: n === 1 ? '1 item needs your approval' : `${n} items need your approval`,
+        body: required
+          ? 'Some things are paused until you review and approve them.'
+          : 'Your organization changed something you may want to review. Nothing is paused.',
+        fix: { label: 'Review', run: () => openPendingApprovalsDialog() },
+      },
+    ];
+  },
+};
+
 /** Every issue provider the banner consults, in display order. */
-const SETTINGS_ISSUE_PROVIDERS: readonly SettingsIssueProvider[] = [databaseIssues];
+const SETTINGS_ISSUE_PROVIDERS: readonly SettingsIssueProvider[] = [pendingApprovalsIssues, databaseIssues];
 
 /**
  * Runs every provider that can run in this build and concatenates their

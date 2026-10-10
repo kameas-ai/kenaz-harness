@@ -23,6 +23,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1244,9 +1245,31 @@ func mergeEnv(extra map[string]string) []string {
 // IsolateEnv is set (spec 091 D6).
 func childEnv(spec SpawnSpec) []string {
 	if spec.IsolateEnv {
-		return isolatedEnv(spec.Env)
+		return withAgentActor(isolatedEnv(spec.Env))
 	}
-	return mergeEnv(spec.Env)
+	return withAgentActor(mergeEnv(spec.Env))
+}
+
+// agentActorEnv marks every MCP stdio child as agent activity so the
+// person-side daemon can skip it (ml-producer-01MLPRD01 WP02, spec §1
+// rule 3). Only KENAZ_ACTOR: the stdio pool is process-global, a server is
+// not per-session, so there is no KENAZ_SESSION to give it (§12 A-4).
+const agentActorEnv = "KENAZ_ACTOR=agent"
+
+// withAgentActor replaces any inherited or spec-supplied KENAZ_ACTOR with
+// the agent marker, on both the isolated and the merged path. An
+// inherited KENAZ_SESSION is dropped too (WP04): the server is not any
+// one session's, and a value leaking in from the harness's own launch
+// environment would attribute the server to a session it is not part of.
+func withAgentActor(env []string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "KENAZ_ACTOR=") || strings.HasPrefix(kv, "KENAZ_SESSION=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, agentActorEnv)
 }
 
 // isolatedBaseEnvKeys is the minimal base a spawned server still needs to

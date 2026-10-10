@@ -719,7 +719,22 @@ type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind,
 type TurnUsageObserver interface {
 	TurnStarted(ctx context.Context, sessionID, providerKind string)
 	TurnFailed(ctx context.Context, sessionID, failureKind string, recoverable bool)
+	// TurnEnded is called once per run that reached TurnStarted, beside
+	// the terminal outcome switch in driveRun (ml-producer-01MLPRD01
+	// WP02). outcome is the closed set TurnEndCompleted / TurnEndStopped /
+	// TurnEndFailed; modelCalls and toolCalls are the run's
+	// RunCounters.Snapshot(); dur runs from the TurnStarted point. ctx is
+	// the run's own context (it carries runposture), possibly already
+	// cancelled — implementations must read values from it, not wait on it.
+	TurnEnded(ctx context.Context, sessionID, outcome string, modelCalls, toolCalls int, dur time.Duration)
 }
+
+// Turn-end outcomes handed to TurnUsageObserver.TurnEnded.
+const (
+	TurnEndCompleted = "completed"
+	TurnEndStopped   = "stopped"
+	TurnEndFailed    = "failed"
+)
 
 // PostSendHookFunc is the callback signature for the core/hooks
 // `post_send` event. userTurn is the user message that started this
@@ -930,6 +945,9 @@ type chatSub struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	bridge *StreamBridge
+	// turnStartedAt is stamped where TurnUsage.TurnStarted fires; the
+	// TurnEnded duration runs from here.
+	turnStartedAt time.Time
 	// providerKind is the adapter kind of the run's profile, resolved
 	// once at StartStream so the terminal path can classify a failure
 	// with the provider's name ("Out of credits with OpenRouter") even
@@ -1748,6 +1766,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		}
 	}()
 
+	sub.turnStartedAt = time.Now()
 	if r.cfg.TurnUsage != nil {
 		// The run is committed: everything that can refuse a turn (profile
 		// resolution, graph load, budget, lockdown) has already returned.
@@ -1907,6 +1926,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 					FailureCode:    corellm.FailureCodeUnknown,
 					FailureSummary: "Internal error",
 				})
+				r.fireTurnEnded(ctx, sub, env, TurnEndFailed)
 				sub.bridge.EmitClosed("backend-error", "internal error", "")
 			}
 		}
@@ -2477,10 +2497,13 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	switch {
 	case runTerminatedClean:
 		r.recordTurnOutcome(sub, session.TurnRunOutcome{Outcome: session.TurnOutcomeCompleted, Delivered: true})
+		r.fireTurnEnded(ctx, sub, env, TurnEndCompleted)
 	case reason == "stop-called":
 		r.recordTurnOutcome(sub, session.TurnRunOutcome{Outcome: session.TurnOutcomeStopped, Delivered: delivered})
+		r.fireTurnEnded(ctx, sub, env, TurnEndStopped)
 	default:
 		r.recordTurnOutcome(sub, failedOutcome(failure, delivered))
+		r.fireTurnEnded(ctx, sub, env, TurnEndFailed)
 	}
 	sub.bridge.EmitClosedFull(StreamClosed{
 		Reason:             reason,
@@ -2500,6 +2523,30 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		"reason", reason,
 		"err", message,
 	)
+}
+
+// fireTurnEnded reports the run's end to TurnUsage. Nil-safe and
+// panic-proof: an observer bug must never break the terminal path (it runs
+// before the stream-closed emission).
+func (r *ChatRunner) fireTurnEnded(ctx context.Context, sub *chatSub, env *coreag.Env, outcome string) {
+	if r.cfg.TurnUsage == nil || sub == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			logging.L().Error("chat.turn_usage.turn_ended_panic",
+				"session_id", sub.sessionID, "panic", fmt.Sprintf("%v", rec))
+		}
+	}()
+	var modelCalls, toolCalls int
+	if env != nil && env.Counters != nil {
+		_, modelCalls, toolCalls, _ = env.Counters.Snapshot()
+	}
+	var dur time.Duration
+	if !sub.turnStartedAt.IsZero() {
+		dur = time.Since(sub.turnStartedAt)
+	}
+	r.cfg.TurnUsage.TurnEnded(ctx, sub.sessionID, outcome, modelCalls, toolCalls, dur)
 }
 
 // failureCodeBudget is the run-failure code for a per-run budget cap. It

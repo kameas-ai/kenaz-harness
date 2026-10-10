@@ -31,6 +31,14 @@ type SessionExpiredPayload struct {
 // The access token bytes are fetched from the keychain inside this function
 // and are NOT passed as parameters.
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	return c.doWithContentType(ctx, method, path, "", body)
+}
+
+// doWithContentType is do with a Content-Type header on every attempt
+// ("" sends none, which is what do has always done). Post needs it:
+// Fleet's OTLP receiver picks protobuf vs JSON decoding from Content-Type
+// alone (ml-producer-01MLPRD01 WP03).
+func (c *Client) doWithContentType(ctx context.Context, method, path, contentType string, body io.Reader) (*http.Response, error) {
 	if c == nil || c.isNop {
 		return nil, ErrFleetDisabled
 	}
@@ -106,6 +114,9 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 				return nil, fmt.Errorf("fleet: build request: %w", err)
 			}
 			req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
+			if contentType != "" {
+				req.Header.Set("Content-Type", contentType)
+			}
 
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
@@ -274,9 +285,11 @@ func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
 	return c.do(ctx, http.MethodGet, path, nil)
 }
 
-// Post performs a POST with a raw body.
+// Post performs a POST with a raw body, sent with contentType as its
+// Content-Type ("" sends none). Until ml-producer-01MLPRD01 WP03 the
+// parameter was accepted and silently dropped.
 func (c *Client) Post(ctx context.Context, path string, contentType string, body io.Reader) (*http.Response, error) {
-	resp, err := c.do(ctx, http.MethodPost, path, body)
+	resp, err := c.doWithContentType(ctx, http.MethodPost, path, contentType, body)
 	if err != nil {
 		return nil, err
 	}

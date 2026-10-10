@@ -86,6 +86,12 @@ type EnvDeps struct {
 	// production Env literals (chat runs and library-graph runs) count tool
 	// calls identically. nil disables usage reporting.
 	ToolUsage coreag.ToolUsageObserver
+
+	// ToolCalls is told about every exit of a model-emitted tool call
+	// with a typed outcome (ml-producer-01MLPRD01: the harness ML
+	// producer's recorder, core/rpc/mlproducer_wiring.go). Set once here
+	// so chat and library-graph runs report identically. nil disables it.
+	ToolCalls coreag.ToolCallObserver
 }
 
 // WithEnvDeps installs production seams onto the Manager. The seams
@@ -207,6 +213,9 @@ func (d EnvDeps) applyTo(env *coreag.Env) {
 	}
 	if d.ToolUsage != nil {
 		env.ToolUsage = d.ToolUsage
+	}
+	if d.ToolCalls != nil {
+		env.ToolCalls = d.ToolCalls
 	}
 
 	// Arm the growth watermark for every graph-authored run that did not

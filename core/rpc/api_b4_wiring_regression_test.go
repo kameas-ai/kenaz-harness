@@ -265,7 +265,7 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 	if memStore == nil {
 		t.Fatal("openMemoryStore returned nil over a real DataDir")
 	}
-	graphMgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil)
+	graphMgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil, nil)
 	if graphMgr == nil {
 		t.Fatal("newGraphManagerWithDeps returned a nil manager")
 	}
@@ -322,7 +322,7 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 
 	stack := newLLMStack(c, broker, store, nil, nil, func() bool { return false },
 		nil, nil, nil, bashStore, nil, graphMgr, nil, nil, nil, nil,
-		exposureIdx, nil, nil, nil, confirmAuditEmitter{}, nil, cedarEngine, nil, nil, nil, nil)
+		exposureIdx, nil, nil, nil, confirmAuditEmitter{}, nil, cedarEngine, nil, nil, nil, nil, nil)
 	// Blocker 2 follow-up (found by core/rpc/blocker2_goroutine_leak_test.go
 	// under the full package's -race run, 2026-09-11): newLLMStack itself
 	// calls sweepScheduler.Start() when it builds a non-nil compaction
@@ -464,7 +464,7 @@ func TestB4_BackgroundSanitizerWiring_ResolvedSecretRedactedInTaskLog(t *testing
 		nil, // exposureIdx
 		nil, // budget
 		nil, // posture
-		taskReg,
+		taskReg, nil,
 	)
 	bashTool, ok := registry.Lookup(corebash.Name)
 	if !ok {

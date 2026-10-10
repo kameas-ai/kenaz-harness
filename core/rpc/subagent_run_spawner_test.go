@@ -68,7 +68,9 @@ func buildSubagentSpawnerTestStack(t *testing.T, responseText string) *subagentS
 // a coreag.LLMProvider shape fakeModel doesn't offer (e.g. one that
 // blocks on ctx.Done() to prove a stream was actually cancelled, not just
 // that the task row was marked cancelled — containment finding B2).
-func buildSubagentSpawnerTestStackWithLLM(t *testing.T, llm coreag.LLMProvider) *subagentSpawnerTestStack {
+// opts adjust the chat.Config before chat.New (ml-producer WP04 wires its
+// recorder in as ToolCalls / TurnUsage); existing callers pass none.
+func buildSubagentSpawnerTestStackWithLLM(t *testing.T, llm coreag.LLMProvider, opts ...func(*chat.Config)) *subagentSpawnerTestStack {
 	t.Helper()
 	dataDir := t.TempDir()
 	c, err := core.New(core.Options{DataDir: dataDir})
@@ -98,7 +100,7 @@ func buildSubagentSpawnerTestStackWithLLM(t *testing.T, llm coreag.LLMProvider) 
 
 	graph := loadChatDefaultGraph(t)
 
-	runner, err := chat.New(chat.Config{
+	cfg := chat.Config{
 		Kernel:        coreag.NewKernel(),
 		Registry:      dispatcherTestRegistry{},
 		Broker:        broker,
@@ -109,7 +111,11 @@ func buildSubagentSpawnerTestStackWithLLM(t *testing.T, llm coreag.LLMProvider) 
 		EnvDefaults: func(env *coreag.Env) {
 			env.LLM = llm
 		},
-	})
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	runner, err := chat.New(cfg)
 	if err != nil {
 		t.Fatalf("chat.New: %v", err)
 	}

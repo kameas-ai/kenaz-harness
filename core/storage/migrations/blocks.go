@@ -88,6 +88,12 @@ var CanonicalBlocks = map[string]VersionBlock{
 	// at the time this was reserved was 1500-1599, so 1600-1699 is the
 	// first free range; nothing else in this table touches it.
 	"laya-advisors": {Min: 1600, Max: 1699},
+	// ml-producer-01MLPRD01 WP02: 1700-1799. ml_outbox + ml_tasks for
+	// core/mlproducer/mlstore — the harness ML producer's durable outbox
+	// and per-session task state. Its own block (not the sessions block)
+	// so the sessions-family ledger pins do not move. 1700-1799 is the
+	// first free range above laya-advisors' 1600-1699.
+	"ml-producer": {Min: 1700, Max: 1799},
 }
 
 // LookupBlock returns the reserved block for the given owning-mission

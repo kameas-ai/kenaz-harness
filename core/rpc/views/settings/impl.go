@@ -1466,6 +1466,11 @@ type API struct {
 	// (memory-sync-01MEMSY01 WP08), installed by SetMemorySync after the
 	// lane is built. Atomic: boot installs it while the UI may read.
 	memorySync atomic.Pointer[fleet.MemorySync]
+	// mlShipping is the ML producer's shipping-status source
+	// (ml-producer-01MLPRD01; installed by WP03 via
+	// SetMLShippingStatusProvider). Atomic: boot installs it while the UI
+	// may read.
+	mlShipping atomic.Pointer[mlShippingHolder]
 
 	// exposureGuard vets SetToolExposure's user layer against the live
 	// catalog (spec FR-E3), installed by SetToolExposureGuard at boot.

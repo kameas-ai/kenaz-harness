@@ -351,7 +351,13 @@ export function Elicit_SubmitAnswer(arg1:string,arg2:json.RawMessage,arg3:boolea
 
 export function Elicit_SubmitWizardStep(arg1:string,arg2:string,arg3:json.RawMessage,arg4:boolean):Promise<void>;
 
+export function Fleet_ApproveItem(arg1:string):Promise<settings.PendingApprovalsView>;
+
 export function Fleet_GetTelemetryConsent():Promise<string>;
+
+export function Fleet_MLAckNotice(arg1:number):Promise<settings.MLStatusView>;
+
+export function Fleet_MLStatus():Promise<settings.MLStatusView>;
 
 export function Fleet_MemorySyncDisable(arg1:boolean,arg2:string):Promise<settings.MemorySyncStatusView>;
 
@@ -359,7 +365,11 @@ export function Fleet_MemorySyncEnable(arg1:Array<string>,arg2:string):Promise<s
 
 export function Fleet_MemorySyncStatus():Promise<settings.MemorySyncStatusView>;
 
+export function Fleet_PendingApprovals():Promise<settings.PendingApprovalsView>;
+
 export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
+
+export function Fleet_SetWorkflowEventsOptIn(arg1:boolean):Promise<settings.MLStatusView>;
 
 export function Fleet_TelemetryStatus():Promise<settings.FleetTelemetryStatusView>;
 

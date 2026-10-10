@@ -64,7 +64,7 @@ func TestToolExposureAcceptance_131kWindowScheduledChatUsesHarnessSelf(t *testin
 	t.Cleanup(func() { _ = c.Shutdown(context.Background()) })
 	cedarEngine := buildCedarEngineOrNil(dataDir, nil)
 	bashStore := corebash.NewStore()
-	graphMgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, openMemoryStore(c), nil, bashStore, nil, cedarEngine, nil, nil)
+	graphMgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, openMemoryStore(c), nil, bashStore, nil, cedarEngine, nil, nil, nil)
 	if graphMgr == nil {
 		t.Fatal("newGraphManagerWithDeps returned a nil manager")
 	}
@@ -157,7 +157,7 @@ func TestToolExposureAcceptance_131kWindowScheduledChatUsesHarnessSelf(t *testin
 	broker := NewStreamBroker(NewMultiEmitter(&busEmitter{bus: bus}))
 	stack := newLLMStack(c, broker, newPersonalStore(c), nil, nil, func() bool { return false },
 		nil, nil, settingsImpl, bashStore, nil, graphMgr, nil, nil, nil, nil,
-		nil, nil, nil, nil, confirmAuditEmitter{}, nil, cedarEngine, nil, nil, nil, nil)
+		nil, nil, nil, nil, confirmAuditEmitter{}, nil, cedarEngine, nil, nil, nil, nil, nil)
 	if stack.compactionScheduler != nil {
 		t.Cleanup(stack.compactionScheduler.Stop)
 	}
