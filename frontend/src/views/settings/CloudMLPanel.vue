@@ -11,7 +11,9 @@
  * (rendered by the backend: org, retention, retain_on_withdrawal variant)
  * is shown with an Acknowledge button that posts the version shown; a 409
  * policy_changed comes back as noticeChanged and the new notice is shown
- * again.
+ * again. When Fleet requires a newer notice TEXT revision than the one the
+ * backend renders (noticeNeedsDashboard), no notice and no Acknowledge are
+ * shown; the panel points the user to the Fleet dashboard's consent card.
  *
  * Hidden when signed out or without the hosted_inference capability.
  */
@@ -47,7 +49,24 @@ const loaded = computed(() => !!status.value?.loaded);
 const showOptIn = computed(
   () => loaded.value && !!status.value?.orgOffloadEnabled && status.value?.orgPolicy === 'member_choice',
 );
-const showNotice = computed(() => loaded.value && !!status.value?.noticeAckRequired);
+/**
+ * kenaz-fleet PR 225: an ack is owed for a notice text NEWER than the one this
+ * harness renders. The user never saw that text here, so it must not be
+ * acknowledged from this panel: no notice text, no Acknowledge button —
+ * route them to the Fleet dashboard's consent card instead.
+ */
+const DASHBOARD_NOTICE =
+  'An updated notice is waiting for your approval. Open your Kenaz Fleet dashboard to review and ' +
+  'approve it; uploads from this device stay off until you do.';
+const needsDashboard = computed(() => loaded.value && !!status.value?.noticeNeedsDashboard);
+const dashboardUrl = computed(() => status.value?.noticeDashboardUrl ?? '');
+const showNotice = computed(
+  () => loaded.value && !!status.value?.noticeAckRequired && !needsDashboard.value,
+);
+
+function openDashboard() {
+  if (dashboardUrl.value) client.openExternalURL(dashboardUrl.value);
+}
 
 /**
  * WP05: the org's exclusions, read-only. Paths and command prefixes are
@@ -194,7 +213,26 @@ function onOptInChange(ev: Event) {
         </button>
       </div>
 
-      <div v-if="showExclusions" class="space-y-1 text-[12px]" data-testid="cloud-ml-exclusions">
+      <div
+        v-if="needsDashboard"
+        class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+        data-testid="cloud-ml-notice-dashboard"
+      >
+        <p data-testid="cloud-ml-notice-dashboard-text">{{ DASHBOARD_NOTICE }}</p>
+        <template v-if="dashboardUrl">
+          <p class="break-all text-ink-muted" data-testid="cloud-ml-notice-dashboard-url">{{ dashboardUrl }}</p>
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+            data-testid="cloud-ml-notice-dashboard-open"
+            @click="openDashboard"
+          >
+            Open Fleet dashboard
+          </button>
+        </template>
+      </div>
+
+      <div v-if="showExclusions"class="space-y-1 text-[12px]" data-testid="cloud-ml-exclusions">
         <p>Your organization excludes:</p>
         <ul class="list-disc pl-5">
           <li v-for="p in exclusionPaths" :key="'p:' + p" data-testid="cloud-ml-exclusion-path">

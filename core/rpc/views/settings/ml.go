@@ -19,6 +19,7 @@ package settings
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,31 @@ const (
 	mlNoticeRetainSentence = "If it is turned off, uploads stop. Your organization has instructed that data already " +
 		"uploaded is kept until the {retention} days have passed."
 )
+
+// localNoticeTextRevision is the Fleet notice-text revision of
+// mlNoticeTemplate — the only notice text this harness can render. It
+// changes ONLY when the template text above changes (in lockstep with the
+// kenaz-fleet text revision that text corresponds to); never bump it for
+// any other reason. The harness acknowledges this revision and nothing
+// newer: when Fleet requires a higher notice_text_revision (kenaz-fleet
+// PR #225), the user has not seen that text here, so the panel routes them
+// to the Fleet dashboard instead of acknowledging it.
+const localNoticeTextRevision = 1
+
+// mlDashboardConsentPath is the Fleet dashboard's hosted-inference consent
+// card, relative to the active profile's FleetBaseURL (stable per Fleet).
+const mlDashboardConsentPath = "/settings#hosted-inference"
+
+// mlDashboardConsentURL builds the consent-card link from the active fleet
+// profile's base URL; "" when the base is unknown or not an http(s) URL.
+func mlDashboardConsentURL(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	u, err := url.Parse(base)
+	if base == "" || err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return ""
+	}
+	return base + mlDashboardConsentPath
+}
 
 // mlOrgFallback fills {org} when the cached identity has no org name.
 const mlOrgFallback = "Your organization"
@@ -167,6 +193,20 @@ type MLStatusView struct {
 	// 409 policy_changed: the state was re-read and the (new) notice must
 	// be shown again.
 	NoticeChanged bool `json:"noticeChanged,omitempty"`
+	// NoticeTextRevision is the notice-text revision Fleet requires (0 =
+	// an older Fleet that does not send it); AckedTextRevision is the one
+	// this member last acknowledged.
+	NoticeTextRevision int `json:"noticeTextRevision"`
+	AckedTextRevision  int `json:"ackedTextRevision"`
+	// NoticeNeedsDashboard: an ack is required for a notice text NEWER than
+	// the one this harness renders (localNoticeTextRevision). NoticeText is
+	// then left empty and the panel offers no Acknowledge button — the user
+	// must review and approve the new text on the Fleet dashboard.
+	NoticeNeedsDashboard bool `json:"noticeNeedsDashboard"`
+	// NoticeDashboardURL is the dashboard consent card
+	// (<fleet base>/settings#hosted-inference), set only while
+	// NoticeNeedsDashboard and the active profile's base URL is known.
+	NoticeDashboardURL string `json:"noticeDashboardUrl,omitempty"`
 
 	// Org exclusions (WP05; contract "Typed exclusions"), shown read-only:
 	// "Your organization excludes: …". The producer matches the paths and
@@ -194,8 +234,9 @@ type MLStatusView struct {
 // or the user is signed out.
 var ErrMLNotWired = errors.New("settings: cloud ML is not available (fleet not wired or signed out)")
 
-// mlFill copies a decoded MeML onto the view.
-func mlFill(v *MLStatusView, m fleet.MeML) {
+// mlFill copies a decoded MeML onto the view. fleetBaseURL is the active
+// fleet profile's base URL (for the dashboard link; may be "").
+func mlFill(v *MLStatusView, m fleet.MeML, fleetBaseURL string) {
 	v.Loaded = true
 	v.OrgOffloadEnabled = m.OrgOffloadEnabled
 	v.OrgPolicy = m.OrgPolicy
@@ -209,7 +250,17 @@ func mlFill(v *MLStatusView, m fleet.MeML) {
 	}
 	v.RetentionDays = m.RetentionDays
 	v.RetainOnWithdrawal = m.RetainOnWithdrawal
-	v.NoticeText = RenderMLNotice(v.OrgName, m.RetentionDays, m.RetainOnWithdrawal)
+	v.NoticeTextRevision = m.NoticeTextRevision
+	v.AckedTextRevision = m.AckedTextRevision
+	v.NoticeNeedsDashboard = m.NoticeAckRequired && m.NoticeTextRevision > localNoticeTextRevision
+	v.NoticeText = ""
+	v.NoticeDashboardURL = ""
+	if v.NoticeNeedsDashboard {
+		// Never show the local (older) text for a newer required revision.
+		v.NoticeDashboardURL = mlDashboardConsentURL(fleetBaseURL)
+	} else {
+		v.NoticeText = RenderMLNotice(v.OrgName, m.RetentionDays, m.RetainOnWithdrawal)
+	}
 	v.ExclusionPaths = append([]string{}, m.Exclusions.Paths...)
 	v.ExclusionCommands = append([]string{}, m.Exclusions.Commands...)
 	v.ExcludeBrowser = m.Exclusions.ExcludeBrowser
@@ -266,20 +317,39 @@ func (a *API) FleetMLStatus(ctx context.Context) (MLStatusView, error) {
 		v.FleetError = err.Error()
 		return v, nil
 	}
-	mlFill(&v, m)
+	mlFill(&v, m, c.Profile().FleetBaseURL)
 	return v, nil
 }
 
 // FleetMLAckNotice implements SettingsAPI: acknowledges the notice version
-// the panel showed. A 409 policy_changed is not an error to the caller: the
-// state is re-read and returned with NoticeChanged set, so the panel shows
-// the new notice again.
+// the panel showed, with the text revision this harness rendered
+// (localNoticeTextRevision). It first re-reads /me/ml: when Fleet requires
+// a NEWER notice text (NoticeNeedsDashboard) nothing is posted — that text
+// was never shown here — and the view is returned for the panel to route
+// the user to the dashboard. text_revision is sent only when Fleet reports
+// one (NoticeTextRevision > 0), so an older Fleet sees the original body.
+// A 409 policy_changed is not an error to the caller: the state is re-read
+// and returned with NoticeChanged set, so the panel shows the new notice
+// again.
 func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatusView, error) {
 	v, c, ok := a.mlBase(ctx)
 	if !ok {
 		return v, ErrMLNotWired
 	}
-	m, err := c.AckMLNotice(ctx, noticeVersion)
+	cur, err := c.GetMeML(ctx)
+	if err != nil {
+		return v, err
+	}
+	base := v
+	mlFill(&base, cur, c.Profile().FleetBaseURL)
+	if base.NoticeNeedsDashboard {
+		return base, nil
+	}
+	textRevision := 0
+	if cur.NoticeTextRevision > 0 {
+		textRevision = localNoticeTextRevision
+	}
+	m, err := c.AckMLNotice(ctx, noticeVersion, textRevision)
 	if errors.Is(err, fleet.ErrMLPolicyChanged) {
 		fresh, ferr := a.FleetMLStatus(ctx)
 		fresh.NoticeChanged = true
@@ -288,7 +358,7 @@ func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatus
 	if err != nil {
 		return v, err
 	}
-	mlFill(&v, m)
+	mlFill(&v, m, c.Profile().FleetBaseURL)
 	return v, nil
 }
 

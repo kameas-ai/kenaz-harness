@@ -33,6 +33,9 @@ function status(over: Partial<MLStatus> = {}): MLStatus {
     retainOnWithdrawal: false,
     orgName: 'Acme Corp',
     noticeText: '',
+    noticeTextRevision: 0,
+    ackedTextRevision: 0,
+    noticeNeedsDashboard: false,
     exclusionPaths: [],
     exclusionCommands: [],
     excludeBrowser: false,
@@ -60,7 +63,9 @@ function mountWith(
   const wrapper = mount(CloudMLPanel, {
     global: { provide: { [HarnessClientKey as symbol]: client } },
   });
-  return { wrapper, mlStatus, mlAckNotice, setWorkflowEventsOptIn };
+  const openExternalURL = vi.fn();
+  client.openExternalURL = openExternalURL;
+  return { wrapper, mlStatus, mlAckNotice, setWorkflowEventsOptIn, openExternalURL };
 }
 
 const q = (w: any, id: string) => w.find(`[data-testid="${id}"]`);
@@ -274,5 +279,58 @@ describe('CloudMLPanel', () => {
     expect(q(w2, 'cloud-ml-shipping-counts').text()).toContain('Accepted 5');
     expect(q(w2, 'cloud-ml-shipping-counts').text()).toContain('rejected 2');
     expect(q(w2, 'cloud-ml-shipping-stop').text()).toContain('ml_not_effective');
+  });
+
+  describe('newer notice text revision (kenaz-fleet PR 225)', () => {
+    const DASHBOARD_TEXT =
+      'An updated notice is waiting for your approval. Open your Kenaz Fleet dashboard to review and ' +
+      'approve it; uploads from this device stay off until you do.';
+    const URL = 'https://dev.fleet.kameas.ai/settings#hosted-inference';
+    const rev2 = (over: Partial<MLStatus> = {}) =>
+      status({
+        orgOffloadEnabled: true,
+        orgPolicy: 'on',
+        noticeAckRequired: true,
+        noticeVersion: 3,
+        noticeText: '',
+        noticeTextRevision: 2,
+        ackedTextRevision: 1,
+        noticeNeedsDashboard: true,
+        ...over,
+      });
+
+    it('routes to the dashboard: no notice, no Acknowledge, link opens in the system browser', async () => {
+      const { wrapper, mlAckNotice, openExternalURL } = mountWith(rev2({ noticeDashboardUrl: URL }));
+      await flushPromises();
+      expect(q(wrapper, 'cloud-ml-notice').exists()).toBe(false);
+      expect(q(wrapper, 'cloud-ml-notice-text').exists()).toBe(false);
+      expect(q(wrapper, 'cloud-ml-ack').exists()).toBe(false);
+      expect(q(wrapper, 'cloud-ml-notice-dashboard-text').text()).toBe(DASHBOARD_TEXT);
+      expect(q(wrapper, 'cloud-ml-notice-dashboard-url').text()).toBe(URL);
+      await q(wrapper, 'cloud-ml-notice-dashboard-open').trigger('click');
+      expect(openExternalURL).toHaveBeenCalledWith(URL);
+      expect(mlAckNotice).not.toHaveBeenCalled();
+    });
+
+    it('without a known dashboard base: the text only, no link or button', async () => {
+      const { wrapper, openExternalURL } = mountWith(rev2());
+      await flushPromises();
+      expect(q(wrapper, 'cloud-ml-notice-dashboard-text').text()).toBe(DASHBOARD_TEXT);
+      expect(q(wrapper, 'cloud-ml-notice-dashboard-url').exists()).toBe(false);
+      expect(q(wrapper, 'cloud-ml-notice-dashboard-open').exists()).toBe(false);
+      expect(q(wrapper, 'cloud-ml-ack').exists()).toBe(false);
+      expect(wrapper.findAll('[data-testid="cloud-ml-notice-dashboard"] button').length).toBe(0);
+      expect(openExternalURL).not.toHaveBeenCalled();
+    });
+
+    it('a rev-1 notice still shows the local notice and Acknowledge (no dashboard block)', async () => {
+      const { wrapper } = mountWith(
+        status({ noticeAckRequired: true, noticeVersion: 3, noticeText: NOTICE_V3, noticeTextRevision: 1 }),
+      );
+      await flushPromises();
+      expect(q(wrapper, 'cloud-ml-notice-dashboard').exists()).toBe(false);
+      expect(q(wrapper, 'cloud-ml-notice-text').text()).toBe(NOTICE_V3);
+      expect(q(wrapper, 'cloud-ml-ack').exists()).toBe(true);
+    });
   });
 });

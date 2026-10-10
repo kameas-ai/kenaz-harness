@@ -280,7 +280,7 @@ func TestGetMeML_OK(t *testing.T) {
 func TestAckMLNotice_PostsVersionAndReturnsFreshState(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 	c := newMLTestClient(t, f)
-	m, err := c.AckMLNotice(t.Context(), 3)
+	m, err := c.AckMLNotice(t.Context(), 3, 0)
 	if err != nil {
 		t.Fatalf("AckMLNotice: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestAckMLNotice_PostsVersionAndReturnsFreshState(t *testing.T) {
 func TestAckMLNotice_409PolicyChangedIsTyped(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 409, ackBody: `{"code":"policy_changed","message":"the org notice changed since it was fetched; re-read /api/v1/me/ml"}`}
 	c := newMLTestClient(t, f)
-	m, err := c.AckMLNotice(t.Context(), 1)
+	m, err := c.AckMLNotice(t.Context(), 1, 0)
 	if !errors.Is(err, ErrMLPolicyChanged) {
 		t.Fatalf("err = %v, want ErrMLPolicyChanged", err)
 	}
@@ -315,7 +315,7 @@ func TestAckMLNotice_409PolicyChangedIsTyped(t *testing.T) {
 	}
 	// A 409 with some other code is NOT policy_changed.
 	f.ackBody = `{"code":"something_else"}`
-	if _, err := c.AckMLNotice(t.Context(), 1); err == nil || errors.Is(err, ErrMLPolicyChanged) {
+	if _, err := c.AckMLNotice(t.Context(), 1, 0); err == nil || errors.Is(err, ErrMLPolicyChanged) {
 		t.Errorf("409 something_else: err = %v", err)
 	}
 }
@@ -323,7 +323,7 @@ func TestAckMLNotice_409PolicyChangedIsTyped(t *testing.T) {
 func TestAckMLNotice_RefusesVersionZeroWithoutRequest(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 	c := newMLTestClient(t, f)
-	if _, err := c.AckMLNotice(t.Context(), 0); err == nil {
+	if _, err := c.AckMLNotice(t.Context(), 0, 0); err == nil {
 		t.Fatal("version 0 accepted")
 	}
 	if len(f.acks) != 0 {
@@ -336,7 +336,7 @@ func TestML_NopClient(t *testing.T) {
 	if _, err := nop.GetMeML(t.Context()); !errors.Is(err, ErrFleetDisabled) {
 		t.Errorf("GetMeML: %v", err)
 	}
-	if _, err := nop.AckMLNotice(t.Context(), 1); !errors.Is(err, ErrFleetDisabled) {
+	if _, err := nop.AckMLNotice(t.Context(), 1, 0); !errors.Is(err, ErrFleetDisabled) {
 		t.Errorf("AckMLNotice: %v", err)
 	}
 	if err := nop.SetWorkflowEventsOptIn(t.Context(), true); !errors.Is(err, ErrFleetDisabled) {
@@ -397,4 +397,76 @@ func quotedN(prefix string, n int) string {
 		parts[i] = fmt.Sprintf("%q", fmt.Sprintf("%s%d/**", prefix, i))
 	}
 	return strings.Join(parts, ",")
+}
+
+// Fleet PR #225: notice_text_revision / acked_text_revision are OPTIONAL
+// (an older Fleet omits them → 0) and must be ≥ 0.
+func TestDecodeMeML_TextRevisions(t *testing.T) {
+	with := strings.Replace(contractExample, "{", `{"notice_text_revision": 2, "acked_text_revision": 1,`, 1)
+	m, err := DecodeMeML([]byte(with))
+	if err != nil {
+		t.Fatalf("decode with revisions: %v", err)
+	}
+	if m.NoticeTextRevision != 2 || m.AckedTextRevision != 1 {
+		t.Errorf("revisions = %d/%d, want 2/1", m.NoticeTextRevision, m.AckedTextRevision)
+	}
+	m, err = DecodeMeML([]byte(contractExample))
+	if err != nil {
+		t.Fatalf("decode without revisions: %v", err)
+	}
+	if m.NoticeTextRevision != 0 || m.AckedTextRevision != 0 {
+		t.Errorf("absent revisions decoded as %d/%d, want 0/0", m.NoticeTextRevision, m.AckedTextRevision)
+	}
+	for _, bad := range []string{`"notice_text_revision": -1,`, `"acked_text_revision": -1,`, `"notice_text_revision": "2",`} {
+		body := strings.Replace(contractExample, "{", "{"+bad, 1)
+		if _, err := DecodeMeML([]byte(body)); !errors.Is(err, ErrMLDecode) {
+			t.Errorf("%s: err = %v, want ErrMLDecode", bad, err)
+		}
+	}
+}
+
+func TestAckMLNotice_TextRevisionInBodyOnlyWhenPositive(t *testing.T) {
+	cases := []struct {
+		rev  int
+		want map[string]float64
+	}{
+		{0, map[string]float64{"notice_version": 3}},
+		{1, map[string]float64{"notice_version": 3, "text_revision": 1}},
+	}
+	for _, tc := range cases {
+		f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
+		c := newMLTestClient(t, f)
+		if _, err := c.AckMLNotice(t.Context(), 3, tc.rev); err != nil {
+			t.Fatalf("rev %d: AckMLNotice: %v", tc.rev, err)
+		}
+		f.mu.Lock()
+		acks := append([]string(nil), f.acks...)
+		f.mu.Unlock()
+		if len(acks) != 1 {
+			t.Fatalf("rev %d: acks = %d, want 1", tc.rev, len(acks))
+		}
+		var body map[string]float64
+		if err := json.Unmarshal([]byte(acks[0]), &body); err != nil {
+			t.Fatalf("ack body %q: %v", acks[0], err)
+		}
+		if len(body) != len(tc.want) {
+			t.Errorf("rev %d: body = %v, want %v", tc.rev, body, tc.want)
+		}
+		for k, v := range tc.want {
+			if body[k] != v {
+				t.Errorf("rev %d: body = %v, want %v", tc.rev, body, tc.want)
+			}
+		}
+	}
+}
+
+func TestAckMLNotice_RefusesNegativeTextRevisionWithoutRequest(t *testing.T) {
+	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
+	c := newMLTestClient(t, f)
+	if _, err := c.AckMLNotice(t.Context(), 1, -1); err == nil {
+		t.Fatal("text_revision -1 accepted")
+	}
+	if len(f.acks) != 0 {
+		t.Error("a request was sent for text_revision -1")
+	}
 }

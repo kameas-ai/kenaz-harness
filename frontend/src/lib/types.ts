@@ -4827,6 +4827,18 @@ export interface MLStatus {
   noticeText: string;
   /** Set on an ack Fleet refused with 409 policy_changed: show the notice again. */
   noticeChanged?: boolean;
+  /** Notice-text revision Fleet requires (0 = older Fleet without revisions). */
+  noticeTextRevision: number;
+  /** Notice-text revision this member last acknowledged (0 = none / older Fleet). */
+  ackedTextRevision: number;
+  /**
+   * An ack is required for a notice text NEWER than the one this harness
+   * renders: `noticeText` is "" and the panel routes the user to the Fleet
+   * dashboard instead of offering Acknowledge.
+   */
+  noticeNeedsDashboard: boolean;
+  /** `<fleet base>/settings#hosted-inference`; absent when the base is unknown. */
+  noticeDashboardUrl?: string;
   /**
    * Org exclusions (WP05), read-only. Path globs and command prefixes are
    * matched on this device before anything is hashed or queued. Always

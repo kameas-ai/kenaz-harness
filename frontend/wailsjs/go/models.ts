@@ -8066,6 +8066,10 @@ export namespace settings {
 	    orgName: string;
 	    noticeText: string;
 	    noticeChanged?: boolean;
+	    noticeTextRevision: number;
+	    ackedTextRevision: number;
+	    noticeNeedsDashboard: boolean;
+	    noticeDashboardUrl?: string;
 	    exclusionPaths: string[];
 	    exclusionCommands: string[];
 	    excludeBrowser: boolean;
@@ -8097,6 +8101,10 @@ export namespace settings {
 	        this.orgName = source["orgName"];
 	        this.noticeText = source["noticeText"];
 	        this.noticeChanged = source["noticeChanged"];
+	        this.noticeTextRevision = source["noticeTextRevision"];
+	        this.ackedTextRevision = source["ackedTextRevision"];
+	        this.noticeNeedsDashboard = source["noticeNeedsDashboard"];
+	        this.noticeDashboardUrl = source["noticeDashboardUrl"];
 	        this.exclusionPaths = source["exclusionPaths"];
 	        this.exclusionCommands = source["exclusionCommands"];
 	        this.excludeBrowser = source["excludeBrowser"];
