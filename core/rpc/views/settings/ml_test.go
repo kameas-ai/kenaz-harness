@@ -78,6 +78,7 @@ type mlFakeFleet struct {
 	ackBody   string
 	gets      int
 	acks      []int
+	ackRaw    []string // raw notice-ack request bodies
 	optIns    []string
 }
 
@@ -99,12 +100,14 @@ func newMLFakeFleet(t *testing.T) *mlFakeFleet {
 		_, _ = io.WriteString(w, body)
 	})
 	mux.HandleFunc("/api/v1/me/ml/notice-ack", func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
 		var req struct {
 			NoticeVersion int `json:"notice_version"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.Unmarshal(raw, &req)
 		f.mu.Lock()
 		f.acks = append(f.acks, req.NoticeVersion)
+		f.ackRaw = append(f.ackRaw, string(raw))
 		st, body := f.ackStatus, f.ackBody
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
@@ -128,6 +131,22 @@ func (f *mlFakeFleet) snapshot() (gets int, acks []int, optIns []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.gets, append([]int(nil), f.acks...), append([]string(nil), f.optIns...)
+}
+
+func (f *mlFakeFleet) ackBodies() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ackRaw...)
+}
+
+// withTextRevisions adds the Fleet PR #225 optional keys to an mlBody.
+func withTextRevisions(body string, notice, acked int) string {
+	var m map[string]any
+	_ = json.Unmarshal([]byte(body), &m)
+	m["notice_text_revision"] = notice
+	m["acked_text_revision"] = acked
+	b, _ := json.Marshal(m)
+	return string(b)
 }
 
 func mlBody(offload bool, policy string, optedIn, ackRequired, effective bool, version int, ackedAt string, days int, retain bool) string {
@@ -305,6 +324,7 @@ func TestFleetMLStatus_ErrorsFailClosed(t *testing.T) {
 func TestFleetMLAckNotice_PostsShownVersion(t *testing.T) {
 	r := newMLRig(t, true)
 	r.fleet.set(func(f *mlFakeFleet) {
+		f.state = mlBody(true, "on", false, true, false, 4, "", 90, false)
 		f.ackBody = mlBody(true, "on", false, false, true, 4, "2026-10-09T13:00:00Z", 90, false)
 	})
 	v, err := r.api.FleetMLAckNotice(context.Background(), 4)
@@ -316,6 +336,87 @@ func TestFleetMLAckNotice_PostsShownVersion(t *testing.T) {
 	}
 	if _, acks, _ := r.fleet.snapshot(); len(acks) != 1 || acks[0] != 4 {
 		t.Errorf("acks = %v, want [4]", acks)
+	}
+	// An older Fleet (no notice_text_revision) gets the original body.
+	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"notice_version":4}` {
+		t.Errorf("ack bodies = %v, want [{\"notice_version\":4}] (no text_revision)", bodies)
+	}
+}
+
+// Fleet PR #225 rev-1 server: the harness acks the text revision it
+// rendered (localNoticeTextRevision = 1).
+func TestFleetMLAckNotice_Rev1ServerSendsTextRevision(t *testing.T) {
+	r := newMLRig(t, true)
+	r.fleet.set(func(f *mlFakeFleet) {
+		f.state = withTextRevisions(mlBody(true, "on", false, true, false, 4, "", 90, false), 1, 0)
+		f.ackBody = withTextRevisions(mlBody(true, "on", false, false, true, 4, "2026-10-09T13:00:00Z", 90, false), 1, 1)
+	})
+	v, err := r.api.FleetMLAckNotice(context.Background(), 4)
+	if err != nil {
+		t.Fatalf("FleetMLAckNotice: %v", err)
+	}
+	if !v.Effective || v.NoticeNeedsDashboard || v.NoticeTextRevision != 1 || v.AckedTextRevision != 1 {
+		t.Errorf("view = %+v", v)
+	}
+	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"notice_version":4,"text_revision":1}` {
+		t.Errorf("ack bodies = %v, want [{\"notice_version\":4,\"text_revision\":1}]", bodies)
+	}
+}
+
+// Fleet PR #225 rev-2 server: the harness renders only rev 1, so it must
+// NOT acknowledge rev 2 — no POST, no local notice text, dashboard routing.
+func TestFleetMLAckNotice_Rev2ServerRoutesToDashboardWithoutPost(t *testing.T) {
+	r := newMLRig(t, true)
+	r.fleet.set(func(f *mlFakeFleet) {
+		f.state = withTextRevisions(mlBody(true, "on", false, true, false, 4, "", 90, false), 2, 1)
+		f.ackBody = mlBody(true, "on", false, false, true, 4, "2026-10-09T13:00:00Z", 90, false)
+	})
+	v, err := r.api.FleetMLAckNotice(context.Background(), 4)
+	if err != nil {
+		t.Fatalf("FleetMLAckNotice: %v", err)
+	}
+	if !v.NoticeNeedsDashboard || v.NoticeText != "" || v.Effective || !v.NoticeAckRequired || v.NoticeTextRevision != 2 {
+		t.Errorf("view = %+v, want NoticeNeedsDashboard, empty NoticeText, not effective", v)
+	}
+	if want := r.fleet.srv.URL + "/settings#hosted-inference"; v.NoticeDashboardURL != want {
+		t.Errorf("NoticeDashboardURL = %q, want %q", v.NoticeDashboardURL, want)
+	}
+	if _, acks, _ := r.fleet.snapshot(); len(acks) != 0 {
+		t.Errorf("acks = %v, want none (rev 2 was never shown)", acks)
+	}
+	// The status read reports the same routing.
+	s, err := r.api.FleetMLStatus(context.Background())
+	if err != nil || !s.NoticeNeedsDashboard || s.NoticeText != "" || s.NoticeDashboardURL == "" {
+		t.Errorf("status = %+v, %v", s, err)
+	}
+}
+
+// A rev-2 server whose notice is already acknowledged (no ack required)
+// needs no dashboard trip: NoticeNeedsDashboard is false.
+func TestFleetMLStatus_Rev2NoAckRequiredIsNotDashboard(t *testing.T) {
+	r := newMLRig(t, true)
+	r.fleet.set(func(f *mlFakeFleet) {
+		f.state = withTextRevisions(mlBody(true, "on", false, false, true, 4, "2026-10-09T13:00:00Z", 90, false), 2, 2)
+	})
+	v, err := r.api.FleetMLStatus(context.Background())
+	if err != nil || v.NoticeNeedsDashboard || v.NoticeDashboardURL != "" || !v.Effective {
+		t.Errorf("view = %+v, %v", v, err)
+	}
+}
+
+func TestMLDashboardConsentURL(t *testing.T) {
+	cases := map[string]string{
+		"https://dev.fleet.kameas.ai":  "https://dev.fleet.kameas.ai/settings#hosted-inference",
+		"https://dev.fleet.kameas.ai/": "https://dev.fleet.kameas.ai/settings#hosted-inference",
+		"":                             "",
+		"  ":                           "",
+		"dev.fleet.kameas.ai":          "",
+		"javascript:alert(1)":          "",
+	}
+	for in, want := range cases {
+		if got := mlDashboardConsentURL(in); got != want {
+			t.Errorf("mlDashboardConsentURL(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -338,8 +439,9 @@ func TestFleetMLAckNotice_409ReReadsAndReShows(t *testing.T) {
 	if v.NoticeText != RenderMLNotice("Acme Corp", 45, true) {
 		t.Errorf("re-shown notice = %q", v.NoticeText)
 	}
-	if gets, acks, _ := r.fleet.snapshot(); gets != 1 || len(acks) != 1 {
-		t.Errorf("gets=%d acks=%v, want one ack then one re-read", gets, acks)
+	// One pre-ack read (text-revision check), the ack, then the re-read.
+	if gets, acks, _ := r.fleet.snapshot(); gets != 2 || len(acks) != 1 {
+		t.Errorf("gets=%d acks=%v, want pre-read + one ack + one re-read", gets, acks)
 	}
 }
 

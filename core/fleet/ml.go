@@ -116,6 +116,15 @@ type MeML struct {
 	// display only, never patterns, never matched (contract: "Producers
 	// ignore them").
 	LegacyExclusionNotes []string `json:"legacy_exclusion_notes"`
+	// NoticeTextRevision is the revision of the notice TEXT Fleet currently
+	// requires (kenaz-fleet PR #225; env-wide, e.g. dev=2, stage/prod=1).
+	// OPTIONAL on the wire: an older Fleet omits it and it decodes as 0
+	// ("no text revisions"). A harness that renders an older revision
+	// locally must not acknowledge a newer one.
+	NoticeTextRevision int `json:"notice_text_revision"`
+	// AckedTextRevision is the text revision this member last acknowledged
+	// (0 = none, or an older Fleet that does not send it).
+	AckedTextRevision int `json:"acked_text_revision"`
 }
 
 // MLExclusions is /me/ml's `exclusions` object.
@@ -158,6 +167,9 @@ type mlWire struct {
 	Exclusions                json.RawMessage `json:"exclusions"`
 	ExclusionsVersion         *int            `json:"exclusions_version"`
 	LegacyExclusionNotes      json.RawMessage `json:"legacy_exclusion_notes"`
+	// Optional (PR #225): absent decodes as 0.
+	NoticeTextRevision *int `json:"notice_text_revision"`
+	AckedTextRevision  *int `json:"acked_text_revision"`
 }
 
 // mlExclusionsWire is the exclusions object, one pointer per key.
@@ -348,6 +360,18 @@ func DecodeMeML(raw []byte) (MeML, error) {
 		ExclusionsVersion:         *w.ExclusionsVersion,
 		LegacyExclusionNotes:      notes,
 	}
+	if w.NoticeTextRevision != nil {
+		if *w.NoticeTextRevision < 0 {
+			return MeML{}, fmt.Errorf("%w: notice_text_revision %d < 0", ErrMLDecode, *w.NoticeTextRevision)
+		}
+		m.NoticeTextRevision = *w.NoticeTextRevision
+	}
+	if w.AckedTextRevision != nil {
+		if *w.AckedTextRevision < 0 {
+			return MeML{}, fmt.Errorf("%w: acked_text_revision %d < 0", ErrMLDecode, *w.AckedTextRevision)
+		}
+		m.AckedTextRevision = *w.AckedTextRevision
+	}
 	switch m.OrgPolicy {
 	case MLPolicyOn, MLPolicyOff, MLPolicyMemberChoice:
 	default:
@@ -418,18 +442,30 @@ func (c *Client) GetMeML(ctx context.Context) (MeML, error) {
 	return readMLResponse(resp)
 }
 
-// AckMLNotice posts POST /api/v1/me/ml/notice-ack {notice_version} — the
-// version of the notice that was actually shown. A stale version answers
-// 409 policy_changed (errors.Is(err, ErrMLPolicyChanged)): re-read and show
-// the notice again. On success Fleet returns the fresh /me/ml object.
-func (c *Client) AckMLNotice(ctx context.Context, noticeVersion int) (MeML, error) {
+// AckMLNotice posts POST /api/v1/me/ml/notice-ack {notice_version,
+// text_revision} — the version of the notice that was actually shown and
+// the revision of the notice TEXT that was shown. text_revision is sent
+// only when textRevision > 0, so an older Fleet that does not know it sees
+// the original body; a Fleet that requires it (PR #225, dev rev 2) answers
+// 409 policy_changed when it is omitted or mismatched. A stale version
+// answers 409 policy_changed (errors.Is(err, ErrMLPolicyChanged)): re-read
+// and show the notice again. On success Fleet returns the fresh /me/ml
+// object.
+func (c *Client) AckMLNotice(ctx context.Context, noticeVersion, textRevision int) (MeML, error) {
 	if c == nil || c.isNop {
 		return MeML{}, ErrFleetDisabled
 	}
 	if noticeVersion < 1 {
 		return MeML{}, fmt.Errorf("fleet: ack ml notice: notice_version %d < 1", noticeVersion)
 	}
-	resp, err := c.PostJSON(ctx, "/api/v1/me/ml/notice-ack", map[string]int{"notice_version": noticeVersion})
+	if textRevision < 0 {
+		return MeML{}, fmt.Errorf("fleet: ack ml notice: text_revision %d < 0", textRevision)
+	}
+	body := map[string]int{"notice_version": noticeVersion}
+	if textRevision > 0 {
+		body["text_revision"] = textRevision
+	}
+	resp, err := c.PostJSON(ctx, "/api/v1/me/ml/notice-ack", body)
 	if err != nil {
 		return MeML{}, fmt.Errorf("fleet: ack ml notice: %w", err)
 	}
