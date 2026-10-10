@@ -56,7 +56,6 @@ func TestGeminiAdapter_GenAISpan_ExactAttributes(t *testing.T) {
 		"kenaz.llm.reasoning_tokens":            int64(5),
 		"kenaz.provider.tool_use_prompt_tokens": int64(4),
 		"gen_ai.response.finish_reasons":        []string{"stop"},
-		"gen_ai.response.id":                    "resp-GmN1",
 		"gen_ai.response.model":                 "gemini-2.5-flash-001",
 	}), spantest.Content...)
 }

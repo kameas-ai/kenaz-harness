@@ -55,9 +55,11 @@ const (
 // StoredRecord names the local model-call store (core/modelcalls, the
 // model_calls table) in an AttrSpec's Spans list (llm-call-telemetry-
 // 01LLMTEL01 WP02). Every gen_ai.chat attribute is also kept on the
-// call's stored record; a key whose Spans names ONLY StoredRecord comes
-// from the provider stats pull, which lands after the span has ended, so
-// it is never set on a span — attrSet refuses it on one.
+// call's stored record; a key whose Spans names ONLY StoredRecord is
+// never set on a span — attrSet refuses it on one. Those are the provider
+// stats-pull keys (they land after the span has ended) and
+// gen_ai.response.id (Fleet/counsel D32: never on any span; Instrument
+// hands it to the record directly).
 const StoredRecord = "stored record"
 
 // AttrType is the OTel attribute value type.
@@ -114,8 +116,9 @@ const maxInt = 1 << 40 // ~1.1e12: no token count, latency or index reaches it
 var (
 	chatOnly  = []string{SpanNameChat}
 	bothSpans = []string{SpanNameChat, SpanNameTurn}
-	// storedOnly keys come from the provider stats pull (WP02) and live
-	// on the stored record only.
+	// storedOnly keys live on the stored record only: the provider stats
+	// pull keys (WP02), and gen_ai.response.id, which Fleet/counsel (D32,
+	// 2026-10-10) ruled never goes on any span.
 	storedOnly = []string{StoredRecord}
 	// chatAndStored keys are set on the span and may be filled on the
 	// stored record later by the stats pull when the span lacked them.
@@ -154,8 +157,8 @@ var SpanAttributes = []AttrSpec{
 		Doc: "Sampling temperature, when the request set one"},
 	{Key: "gen_ai.response.finish_reasons", Type: TypeStringSlice, Class: ClassToken, Spans: chatOnly,
 		Doc: "Provider finish reason(s), e.g. stop, end_turn, tool_use, length"},
-	{Key: "gen_ai.response.id", Type: TypeString, Class: ClassID, Spans: chatOnly,
-		Doc: "Provider generation id (OpenRouter gen-…, Anthropic msg_…, OpenAI chatcmpl-…)"},
+	{Key: "gen_ai.response.id", Type: TypeString, Class: ClassID, Spans: storedOnly,
+		Doc: "Provider generation id (OpenRouter gen-…, Anthropic msg_…, OpenAI chatcmpl-…). Never on any span (Fleet/counsel D32: the provider's own traces carry it); kept locally for the OpenRouter generation-stats pull"},
 	{Key: "gen_ai.response.model", Type: TypeString, Class: ClassModel, Spans: chatOnly,
 		Doc: "Model the provider reports having served"},
 	{Key: "gen_ai.system", Type: TypeString, Class: ClassEnum, Enum: ProviderNames, Spans: chatOnly,
@@ -314,7 +317,7 @@ func RenderAttributeTable() string {
 	b.WriteString("No data travels in span events, links, tracestate or Status.Message: the spans set none of them (status is code-only).\n\n")
 	b.WriteString("## Attributes\n\n")
 	b.WriteString("Any key not listed here is never set. Content (prompts, completions, tool arguments, tool results, system prompt text) is never set, under any key.\n\n")
-	b.WriteString("Every `" + SpanNameChat + "` attribute is also kept on the call's record in the local model-call store (`model_calls`). A key whose span list is only `" + StoredRecord + "` comes from the provider stats pull (OpenRouter `/api/v1/generation`), which lands after the span has ended: it is never set on a span and never reaches Fleet.\n\n")
+	b.WriteString("Every `" + SpanNameChat + "` attribute is also kept on the call's record in the local model-call store (`model_calls`). A key whose span list is only `" + StoredRecord + "` is never set on any span and never reaches Fleet: the provider stats-pull keys (OpenRouter `/api/v1/generation`, which lands after the span has ended), and `gen_ai.response.id`, which counsel ruled must never be a span attribute because the provider's own traces carry the same id (D32, 2026-10-10). It stays in the on-device store, where the stats pull keys on it.\n\n")
 	b.WriteString("| Key | Type | Bound | Span(s) | Meaning |\n|---|---|---|---|---|\n")
 	for _, s := range SpanAttributes {
 		spans := "`" + strings.Join(s.Spans, "`, `") + "`"

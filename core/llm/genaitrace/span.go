@@ -33,7 +33,10 @@
 //
 // Every finished gen_ai.chat call is also handed, with the same
 // attributes, to the installed Recorder (record.go) — the durable local
-// model-call store, core/modelcalls (WP02).
+// model-call store, core/modelcalls (WP02) — plus the stored-record-only
+// values Instrument holds at call end (storedResponseAttrs): today the
+// provider response id, which never goes on any span (Fleet/counsel D32,
+// 2026-10-10).
 package genaitrace
 
 import (
@@ -74,7 +77,9 @@ func DroppedAttributes() int64 { return droppedAttrs.Load() }
 // attrSet accumulates validated attributes. scope, when set, names the
 // span (or StoredRecord) the attributes are for: a key whose Spans list
 // does not name it is refused, so a stats-pull-only key can never land on
-// a span and a chat-only key can never land on the turn span.
+// a span and a chat-only key can never land on the turn span. An unscoped
+// set is treated as span-bound: it refuses a key no span carries
+// (stored-record only, e.g. gen_ai.response.id).
 type attrSet struct {
 	kv    []attribute.KeyValue
 	scope string
@@ -82,7 +87,11 @@ type attrSet struct {
 
 func (a *attrSet) spec(key string, t AttrType) (AttrSpec, bool) {
 	s, ok := specByKey[key]
-	if !ok || s.Type != t || (a.scope != "" && !s.carriedOn(a.scope)) {
+	inScope := s.carriedOn(a.scope)
+	if a.scope == "" {
+		inScope = s.carriedOn(SpanNameChat) || s.carriedOn(SpanNameTurn)
+	}
+	if !ok || s.Type != t || !inScope {
 		droppedAttrs.Add(1)
 		return AttrSpec{}, false
 	}
@@ -425,14 +434,16 @@ func (c *callEnd) endWithError(err error) {
 	// Code only: Fleet drops Status.Message, and a provider message is
 	// text this span must not carry anyway.
 	c.span.SetStatus(codes.Error, "")
-	c.finish(a.kv, false)
+	c.finish(a.kv, nil, false)
 }
 
-// finish ends the span at one timestamp and records the call.
-func (c *callEnd) finish(endKV []attribute.KeyValue, ok bool) {
+// finish ends the span at one timestamp and records the call. endKV is
+// what the span got at its end; storedKV (scope StoredRecord) goes to the
+// local record only and never touches the span.
+func (c *callEnd) finish(endKV, storedKV []attribute.KeyValue, ok bool) {
 	end := time.Now()
 	c.span.End(trace.WithTimestamp(end))
-	recordCall(c, endKV, end, ok)
+	recordCall(c, endKV, storedKV, end, ok)
 }
 
 // tracedStream ends its gen_ai.chat span exactly once, at Final() or
@@ -496,7 +507,7 @@ func (s *tracedStream) Final() (llm.Response, error) {
 		}
 		kv := responseAttrs(resp, resp.Cost, s.ttftNS.Load()).kv
 		s.end.span.SetAttributes(kv...)
-		s.end.finish(kv, true)
+		s.end.finish(kv, storedResponseAttrs(resp).kv, true)
 	})
 	return resp, err
 }
@@ -524,12 +535,30 @@ func responseAttrs(resp llm.Response, cost llm.Cost, ttftNS int64) attrSet {
 		a.float("kenaz.llm.cost_usd", cost.Total)
 	}
 	if m := resp.Meta; m != nil {
-		a.str("gen_ai.response.id", m.ResponseID)
+		// No gen_ai.response.id here: it is stored-record only
+		// (storedResponseAttrs), and this attrSet's scope refuses it.
 		a.str("gen_ai.response.model", m.ResponseModel)
 		a.str("kenaz.provider.request_id", m.RequestID)
 		a.str("kenaz.provider.system_fingerprint", m.SystemFingerprint)
 		a.str("kenaz.provider.upstream", m.UpstreamProvider)
 		a.posInt("kenaz.provider.tool_use_prompt_tokens", m.ToolUsePromptTokens)
+	}
+	return a
+}
+
+// storedResponseAttrs maps the parts of a final response that go to the
+// local model-call record ONLY (scope StoredRecord), never onto a span.
+//
+// gen_ai.response.id lives here (Fleet/counsel D32, 2026-10-10): the
+// provider's generation id (OpenRouter "gen-…") also appears in the
+// provider's own traces, so on a member-attributed span it would allow a
+// join that needs legal review first. The local store keeps it — the
+// OpenRouter generation-stats pull (core/modelcalls/stats.go) keys on it,
+// and that store never leaves the device.
+func storedResponseAttrs(resp llm.Response) attrSet {
+	a := attrSet{scope: StoredRecord}
+	if m := resp.Meta; m != nil {
+		a.str("gen_ai.response.id", m.ResponseID)
 	}
 	return a
 }

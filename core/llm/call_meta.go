@@ -18,8 +18,11 @@ import "errors"
 // omits the attribute.
 type CallMeta struct {
 	// ResponseID is the provider's id for this generation: Anthropic
-	// "msg_…", OpenAI "chatcmpl-…", OpenRouter's generation id "gen-…"
-	// (the key Fleet joins provider-side traces on), Gemini responseId.
+	// "msg_…", OpenAI "chatcmpl-…", OpenRouter's generation id "gen-…",
+	// Gemini responseId. It is NEVER a span attribute (Fleet/counsel D32,
+	// 2026-10-10: the provider's own traces carry it, so it would join
+	// them to member-attributed spans); genaitrace hands it only to the
+	// local model-call store, where the OpenRouter stats pull keys on it.
 	ResponseID string
 	// ResponseModel is the model the provider reports having run, which
 	// can differ from the requested one (aliases, OpenRouter routing).

@@ -990,7 +990,8 @@ type chatStream struct {
 	// `llm.ToolUse` per index when the stream closes.
 	toolCalls map[int]*toolCallAccum
 	// meta is the provider-returned call metadata for the gen_ai.chat
-	// span: the generation id (respID above), the served model, the
+	// span and the local model-call record: the generation id (respID
+	// above; local record only, never the span), the served model, the
 	// upstream provider OpenRouter routed to, and the system fingerprint
 	// (llm-call-telemetry-01LLMTEL01 WP01).
 	meta llm.CallMeta
@@ -1084,9 +1085,9 @@ func (s *chatStream) pump() {
 				Usage:        s.usage,
 				Cost:         cost,
 			}
-			// gen_ai.response.id carries the generation id: it is the key
-			// that joins OpenRouter's own per-generation records to this
-			// call's span.
+			// The generation id goes to the local model-call store only
+			// (never a span, Fleet/counsel D32): the OpenRouter
+			// generation-stats pull keys on it.
 			s.meta.ResponseID = s.respID
 			if !s.meta.IsZero() {
 				meta := s.meta

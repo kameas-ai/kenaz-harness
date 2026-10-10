@@ -22,7 +22,7 @@ No data travels in span events, links, tracestate or Status.Message: the spans s
 
 Any key not listed here is never set. Content (prompts, completions, tool arguments, tool results, system prompt text) is never set, under any key.
 
-Every `gen_ai.chat` attribute is also kept on the call's record in the local model-call store (`model_calls`). A key whose span list is only `stored record` comes from the provider stats pull (OpenRouter `/api/v1/generation`), which lands after the span has ended: it is never set on a span and never reaches Fleet.
+Every `gen_ai.chat` attribute is also kept on the call's record in the local model-call store (`model_calls`). A key whose span list is only `stored record` is never set on any span and never reaches Fleet: the provider stats-pull keys (OpenRouter `/api/v1/generation`, which lands after the span has ended), and `gen_ai.response.id`, which counsel ruled must never be a span attribute because the provider's own traces carry the same id (D32, 2026-10-10). It stays in the on-device store, where the stats pull keys on it.
 
 | Key | Type | Bound | Span(s) | Meaning |
 |---|---|---|---|---|
@@ -33,7 +33,7 @@ Every `gen_ai.chat` attribute is also kept on the call's record in the local mod
 | `gen_ai.request.model` | string | model/provider id, ≤128 chars, `[A-Za-z0-9._:/@+=-]` | `gen_ai.chat` | Model id the request was dispatched with |
 | `gen_ai.request.temperature` | float | number 0..2 | `gen_ai.chat` | Sampling temperature, when the request set one |
 | `gen_ai.response.finish_reasons` | string[] | each element: provider enum token, lower-cased, ≤64 chars, `[a-z0-9._-]` | `gen_ai.chat` | Provider finish reason(s), e.g. stop, end_turn, tool_use, length |
-| `gen_ai.response.id` | string | provider id, ≤128 chars, `[A-Za-z0-9._:/@+=-]` | `gen_ai.chat` | Provider generation id (OpenRouter gen-…, Anthropic msg_…, OpenAI chatcmpl-…) |
+| `gen_ai.response.id` | string | provider id, ≤128 chars, `[A-Za-z0-9._:/@+=-]` | `stored record` | Provider generation id (OpenRouter gen-…, Anthropic msg_…, OpenAI chatcmpl-…). Never on any span (Fleet/counsel D32: the provider's own traces carry it); kept locally for the OpenRouter generation-stats pull |
 | `gen_ai.response.model` | string | model/provider id, ≤128 chars, `[A-Za-z0-9._:/@+=-]` | `gen_ai.chat` | Model the provider reports having served |
 | `gen_ai.system` | string | one of: `anthropic`, `aws.bedrock`, `azure.ai.openai`, `gcp.gemini`, `gcp.vertex_ai`, `ollama`, `openai`, `openai_compatible`, `openrouter`, `other` | `gen_ai.chat` | Pre-v1.37 name of gen_ai.provider.name, same value (OpenLLMetry dashboards) |
 | `gen_ai.usage.cache_creation.input_tokens` | int | integer 0..1099511627776 | `gen_ai.chat` | Prompt tokens written to the provider cache, when reported |

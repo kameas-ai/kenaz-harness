@@ -16,17 +16,24 @@ import (
 
 const optInPrompt = "SECRET-OPTIN-PROMPT-TEXT"
 
+// respIDPrefix prefixes every fixture provider response id. The id is
+// stored-record only (Fleet/counsel D32), so it must never reach Fleet:
+// assertNoResponseID checks the payload for the prefix and the key.
+const respIDPrefix = "respid-"
+
 // modelCall drives one real provider call through genaitrace.Instrument
 // and returns a func that finishes it (Final), so a test can start a call
-// on one side of a toggle and end it on the other.
-func modelCall(t *testing.T, genID string) (finish func()) {
+// on one side of a toggle and end it on the other. marker identifies the
+// call in the exported payload through its request model ("probe/"+marker);
+// the provider response id respIDPrefix+marker must never appear.
+func modelCall(t *testing.T, marker string) (finish func()) {
 	t.Helper()
 	call := genaitrace.CallFromRequest(llm.GenerationRequest{
 		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, optInPrompt)},
-	}, llm.ProviderProfile{ID: "p-or", Kind: "openrouter", Model: "openai/gpt-4o"})
+	}, llm.ProviderProfile{ID: "p-or", Kind: "openrouter", Model: "probe/" + marker})
 	s, err := genaitrace.Instrument(context.Background(), call, nil, func(context.Context) (llm.Stream, error) {
 		return &doneStream{resp: llm.Response{FinishReason: "stop", Usage: llm.Usage{InputTokens: 7, OutputTokens: 2},
-			Meta: &llm.CallMeta{ResponseID: genID}}}, nil
+			Meta: &llm.CallMeta{ResponseID: respIDPrefix + marker}}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +67,17 @@ func optInRig(t *testing.T, general bool) (*FleetOTLPPipeline, *sdktrace.TracerP
 	}
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
 	return p, tp, fake
+}
+
+// assertNoResponseID fails if the Fleet payload carries the provider
+// response id, under its key or as a value (Fleet/counsel D32).
+func assertNoResponseID(t *testing.T, body []byte) {
+	t.Helper()
+	for _, leak := range []string{"gen_ai.response.id", respIDPrefix} {
+		if bytes.Contains(body, []byte(leak)) {
+			t.Errorf("the provider response id (%q) reached Fleet — it is stored-record only (Fleet/counsel D32)", leak)
+		}
+	}
 }
 
 func flush(t *testing.T, tp *sdktrace.TracerProvider) {
@@ -123,6 +141,7 @@ func TestOTLPPipeline_ModelCallSharing_OffOnOff(t *testing.T) {
 	if bytes.Contains(body, []byte(optInPrompt)) {
 		t.Fatal("content reached Fleet")
 	}
+	assertNoResponseID(t, body)
 	st := p.Status()
 	if st.ModelCallsShared || st.ModelCallsExported != 1 || st.ModelCallsWithheld != 3 {
 		t.Fatalf("status = shared %v exported %d withheld %d, want false/1/3 (filter still in path)",
@@ -158,4 +177,5 @@ func TestOTLPPipeline_ModelCallSharing_SeparateFromGeneralConsent(t *testing.T) 
 	if bytes.Contains(fake.combinedBody(), []byte("gen-denied-0001")) {
 		t.Fatalf("Fleet's %s opt-out did not narrow model-call export", ModelCallTelemetryClass)
 	}
+	assertNoResponseID(t, fake.combinedBody())
 }

@@ -15,7 +15,7 @@ import (
 // lane, a gen_ai.chat span emitted through the process provider that
 // telemetry.Init installs lands in the real-sqlite telemetry_spans table —
 // the "local exporter always" half of llm-call-telemetry-01LLMTEL01 —
-// with its gen_ai.* attributes and no content.
+// with its gen_ai.* attributes, no content and no provider response id.
 //
 // Not parallel: telemetry.Init sets the OTel global provider, which
 // genaitrace emits through; sequential top-level tests finish before the
@@ -57,9 +57,16 @@ func TestInit_GenAISpanLandsInLocalStore(t *testing.T) {
 	if kind != "client" {
 		t.Errorf("kind = %q, want client", kind)
 	}
-	for _, want := range []string{"gen_ai.usage.input_tokens", "gen_ai.provider.name", "anthropic", "msg_local_1", "end_turn"} {
+	for _, want := range []string{"gen_ai.usage.input_tokens", "gen_ai.provider.name", "anthropic", "end_turn"} {
 		if !strings.Contains(attrs, want) {
 			t.Errorf("attributes_json lacks %q: %s", want, attrs)
+		}
+	}
+	// The provider response id is stored-record only (Fleet/counsel D32):
+	// not even the local span exporter sees it.
+	for _, leak := range []string{"gen_ai.response.id", "msg_local_1"} {
+		if strings.Contains(attrs, leak) {
+			t.Errorf("attributes_json carries the provider response id (%q): %s", leak, attrs)
 		}
 	}
 	if strings.Contains(attrs, prompt) {

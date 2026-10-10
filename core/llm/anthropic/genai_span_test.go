@@ -51,7 +51,6 @@ func TestAnthropicAdapter_GenAISpan_ExactAttributes(t *testing.T) {
 		"gen_ai.usage.cache_read.input_tokens":     int64(30),
 		"gen_ai.usage.cache_creation.input_tokens": int64(20),
 		"gen_ai.response.finish_reasons":           []string{"tool_use"},
-		"gen_ai.response.id":                       "msg_01XYZ",
 		"gen_ai.response.model":                    "claude-sonnet-4-5-20250929",
 		"kenaz.provider.request_id":                "req_011CAnthropic",
 	}), spantest.Content...)

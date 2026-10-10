@@ -46,7 +46,6 @@ func TestOllamaAdapter_GenAISpan_ExactAttributes(t *testing.T) {
 		"gen_ai.usage.input_tokens":         int64(100),
 		"gen_ai.usage.output_tokens":        int64(7),
 		"gen_ai.response.finish_reasons":    []string{"stop"},
-		"gen_ai.response.id":                "chatcmpl-412",
 		"gen_ai.response.model":             "llama3.1",
 		"kenaz.provider.system_fingerprint": "fp_ollama",
 	}), spantest.Content...)

@@ -38,19 +38,35 @@
 #        COLUMN) is structural (genaitrace.RecordStructuralColumns) or
 #        bound to an allowlisted key (genaitrace.RecordColumns); no column
 #        names content; no mapping is stale.
+#     7. SPAN SCOPE (Fleet/counsel D32, 2026-10-10): gen_ai.response.id —
+#        the provider generation id, which the provider's own traces also
+#        carry, so on a member-attributed span it would allow a join that
+#        needs legal review — is declared stored-record only and names no
+#        span; every attrSet in the instrumentation package names its
+#        scope and every literal-key write matches the key's Spans (a key
+#        whose scope excludes a span is never set on it); no raw
+#        attribute.String("gen_ai.…") bypasses attrSet; no semconv
+#        GenAIResponseID* selector anywhere under core/ or cmd/.
 # (b) RUNTIME: the per-adapter table tests drive a recorded, content-
 #     bearing request/response through the real choke point
 #     (genaitrace.Instrument) and assert the exact attribute set, that
-#     every key is allowlisted and that no content string appears; the
-#     chat-runner test does the same for a whole turn (retry + tool call);
-#     the attribute doc test fails when the Fleet-declarable table drifts.
-#     Each must report `--- PASS: <name>`; "no tests to run" fails.
+#     every key is allowlisted and that no content string appears — and,
+#     through spantest.Drive, that no span carries gen_ai.response.id while
+#     the model-call record does; the chat-runner test does the same for a
+#     whole turn (retry + tool call); the recorder test drives real sqlite
+#     (response_id set, stats pull queued, no span carries the id); the
+#     local-exporter and Fleet-exporter tests assert the id never reaches
+#     either; the attribute doc test fails when the Fleet-declarable table
+#     drifts. Each must report `--- PASS: <name>`; "no tests to run" fails.
 #
 # Planted-violation proofs: scripts/ci/gates_can_fail_test.go
 # TestGenAISpanGate_* (content key in the allowlist, free-text class,
 # a second emitter, an undeclared key in the package, a semconv content
 # key, a span event; WP02: a content column added to the store, an
-# unmapped store column, a store column mapped to a non-allowlisted key).
+# unmapped store column, a store column mapped to a non-allowlisted key;
+# D32: gen_ai.response.id declared on a span, set on the chat span, a
+# stored-only key on a span, an unscoped attrSet, a raw attribute and a
+# semconv GenAIResponseID selector).
 #
 # GENAI_SPAN_GATE_STRUCTURAL_ONLY=1 skips (b) — used only by the planted-
 # violation meta-tests. CI runs both halves.
@@ -124,5 +140,7 @@ run_named_test core/llm/genaitrace TestAttrSet_ScopeRefusesKeysOffTheirSpan
 run_named_test core/modelcalls TestRecorder_SpanToStore_NoContent
 run_named_test core/modelcalls TestStatsPuller_RetriesThenMapsAllowlistedFields
 run_named_test core/fleet TestOTLPPipeline_ModelCallSharing_OffOnOff
+# D32: the provider response id never reaches a span (local or Fleet exporter).
+run_named_test core/telemetry TestInit_GenAISpanLandsInLocalStore
 
 echo "${GATE} clean — model-call spans and the local model_calls store carry only allowlisted, bounded, content-free attributes, from one emitter."

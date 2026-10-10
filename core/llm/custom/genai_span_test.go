@@ -48,7 +48,6 @@ func TestCustomAdapter_GenAISpan_ExactAttributes(t *testing.T) {
 		"gen_ai.usage.input_tokens":      int64(100),
 		"gen_ai.usage.output_tokens":     int64(7),
 		"gen_ai.response.finish_reasons": []string{"length"},
-		"gen_ai.response.id":             "cmpl-vllm-7",
 		"gen_ai.response.model":          "meta-llama/Llama-3.1-8B-Instruct",
 		"kenaz.provider.request_id":      "vllm-req-7",
 	}), spantest.Content...)

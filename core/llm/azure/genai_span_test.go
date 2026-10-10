@@ -48,7 +48,6 @@ func TestAzureAdapter_GenAISpan_ExactAttributes(t *testing.T) {
 		"gen_ai.usage.output_tokens":           int64(7),
 		"gen_ai.usage.cache_read.input_tokens": int64(50),
 		"gen_ai.response.finish_reasons":       []string{"stop"},
-		"gen_ai.response.id":                   "chatcmpl-AZ9",
 		"gen_ai.response.model":                "gpt-4o-2024-11-20",
 		"kenaz.provider.system_fingerprint":    "fp_azure1",
 		"kenaz.provider.request_id":            "4b1e2d3c-apim",

@@ -60,8 +60,28 @@ func Named(rec *tracetest.SpanRecorder, name string) []sdktrace.ReadOnlySpan {
 // one gen_ai.chat span it produced.
 // cost stands in for the registry's cost readout; ProviderCost is the
 // readout with no price table.
+//
+// Every Drive also enforces the Fleet/counsel D32 rule (2026-10-10) for
+// the adapter's fixture: no ended span carries ResponseIDKey, and the
+// provider's response id (Response.Meta.ResponseID) reaches the local
+// model-call record instead. DriveRecorded also returns that record.
 func Drive(t testing.TB, rec *tracetest.SpanRecorder, a llm.ProviderAdapter, req llm.GenerationRequest, prof llm.ProviderProfile, cred []byte, cost genaitrace.CostFunc) (llm.Response, sdktrace.ReadOnlySpan) {
 	t.Helper()
+	resp, span, _ := DriveRecorded(t, rec, a, req, prof, cred, cost)
+	return resp, span
+}
+
+// ResponseIDKey is the provider response id key: stored-record only,
+// never on any span (Fleet/counsel D32).
+const ResponseIDKey = "gen_ai.response.id"
+
+// DriveRecorded is Drive plus the genaitrace.CallRecord the call handed to
+// the model-call recorder (the row core/modelcalls writes to model_calls).
+func DriveRecorded(t testing.TB, rec *tracetest.SpanRecorder, a llm.ProviderAdapter, req llm.GenerationRequest, prof llm.ProviderProfile, cred []byte, cost genaitrace.CostFunc) (llm.Response, sdktrace.ReadOnlySpan, genaitrace.CallRecord) {
+	t.Helper()
+	capt := &captureRecorder{}
+	restore := genaitrace.SetRecorder(capt)
+	defer restore()
 	before := len(Named(rec, genaitrace.SpanNameChat))
 	call := genaitrace.CallFromRequest(req, prof)
 	s, err := genaitrace.Instrument(context.Background(), call, cost, func(ctx context.Context) (llm.Stream, error) {
@@ -80,7 +100,50 @@ func Drive(t testing.TB, rec *tracetest.SpanRecorder, a llm.ProviderAdapter, req
 	if len(spans) != before+1 {
 		t.Fatalf("got %d new gen_ai.chat spans, want 1", len(spans)-before)
 	}
-	return resp, spans[len(spans)-1]
+	AssertNoResponseID(t, rec.Ended()...)
+	recs := capt.snapshot()
+	if len(recs) != 1 {
+		t.Fatalf("the call handed %d records to the model-call recorder, want 1", len(recs))
+	}
+	r := recs[0]
+	if resp.Meta == nil || resp.Meta.ResponseID == "" {
+		t.Fatalf("fixture returned no provider response id (Response.Meta = %+v) — the D32 check would prove nothing", resp.Meta)
+	}
+	if r.ResponseID != resp.Meta.ResponseID {
+		t.Errorf("model-call record ResponseID = %q, want the provider response id %q (it reaches the local store, never a span)", r.ResponseID, resp.Meta.ResponseID)
+	}
+	return resp, spans[len(spans)-1], r
+}
+
+// AssertNoResponseID fails if any span carries ResponseIDKey. (The id
+// under another key is caught by AssertExact, which pins every key.)
+func AssertNoResponseID(t testing.TB, spans ...sdktrace.ReadOnlySpan) {
+	t.Helper()
+	for _, s := range spans {
+		for _, kv := range s.Attributes() {
+			if string(kv.Key) == ResponseIDKey {
+				t.Errorf("span %s carries %s = %q — it must never be a span attribute (Fleet/counsel D32)", s.Name(), ResponseIDKey, kv.Value.Emit())
+			}
+		}
+	}
+}
+
+// captureRecorder collects the records the instrumentation hands over.
+type captureRecorder struct {
+	mu   sync.Mutex
+	recs []genaitrace.CallRecord
+}
+
+func (c *captureRecorder) RecordCall(r genaitrace.CallRecord) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recs = append(c.recs, r)
+}
+
+func (c *captureRecorder) snapshot() []genaitrace.CallRecord {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]genaitrace.CallRecord(nil), c.recs...)
 }
 
 // ProviderCost is the cost readout with no price table: the adapter's

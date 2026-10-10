@@ -34,6 +34,14 @@
 //     instructions / text / body / prompt(s) / completion(s) other than
 //     a *_tokens count); every mapped column exists in the DDL. The store
 //     can hold nothing the span allowlist would refuse.
+//  7. SPAN SCOPE (Fleet/counsel D32, 2026-10-10): a key whose Spans list
+//     excludes a span is never set on it. gen_ai.response.id (the
+//     provider generation id, which the provider's own traces also carry)
+//     is declared stored-record only and names no span; in the
+//     instrumentation package every attrSet literal names its scope and
+//     every literal-key write matches it; no attribute.String("gen_ai.…")
+//     bypasses attrSet; and no semconv GenAIResponseID* selector appears
+//     anywhere under core/ or cmd/.
 //
 // Exit 1 with one line per finding; exit 0 prints a summary.
 package main
@@ -100,6 +108,7 @@ func main() {
 	fset := token.NewFileSet()
 	declared, spanNames := checkAllowlist(fset)
 	pkgFiles := checkPackage(fset, declared, spanNames)
+	checkSpanScopes(fset, spanNames)
 	scanned := scanTree(fset)
 	storeCols := checkStore(fset, declared)
 
@@ -110,7 +119,7 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	fmt.Printf("[genai-span-no-content] allowlist: %d keys, all bounded, none content; instrumentation package: %d files; scanned %d files under core, cmd — one emitter, no semconv content keys, no side channels; local store %s: %d columns, every one structural or an allowlisted key.\n",
+	fmt.Printf("[genai-span-no-content] allowlist: %d keys, all bounded, none content; instrumentation package: %d files; scanned %d files under core, cmd — one emitter, no semconv content keys, no side channels, no key off its span scope (gen_ai.response.id: stored record only); local store %s: %d columns, every one structural or an allowlisted key.\n",
 		len(declared), pkgFiles, scanned, storeTable, storeCols)
 }
 
@@ -328,6 +337,9 @@ func scanTree(fset *token.FileSet) int {
 					if semconvContent.MatchString(v.Sel.Name) {
 						fail("%s: semconv content key %s — model-call spans never carry content", fset.Position(v.Pos()), v.Sel.Name)
 					}
+					if semconvNeverOnSpan.MatchString(v.Sel.Name) {
+						fail("%s: semconv %s — gen_ai.response.id is never a span attribute (Fleet/counsel D32); it reaches only the local model-call store, through genaitrace", fset.Position(v.Pos()), v.Sel.Name)
+					}
 				}
 				return true
 			})
@@ -523,4 +535,284 @@ func checkStore(fset *token.FileSet, declared map[string]bool) int {
 		}
 	}
 	return len(storeDDL)
+}
+
+// ── check 7: span scope (Fleet/counsel D32, 2026-10-10) ─────────────────────
+
+// neverOnSpan are keys that must never be an attribute of ANY span, only
+// of the local stored record. gen_ai.response.id is the provider's
+// generation id; the provider's own traces carry the same id, so on a
+// member-attributed span it would allow a join that needs legal review.
+var neverOnSpan = []string{"gen_ai.response.id"}
+
+// attrSetWriters are the attrSet methods that set a key.
+var attrSetWriters = map[string]bool{"str": true, "strs": true, "int": true, "posInt": true, "float": true, "bool": true}
+
+// semconvNeverOnSpan matches semconv selectors for a neverOnSpan key
+// (semconv.GenAIResponseID / GenAIResponseIDKey), which would set it on a
+// span without a string literal the other checks could see.
+var semconvNeverOnSpan = regexp.MustCompile(`^GenAIResponseID(Key)?$`)
+
+// keySpanScopes resolves every SpanAttributes entry's Spans list to the
+// scope strings it names (span names and/or StoredRecord's value), from
+// the attrs.go source. It also returns attrs.go's string constants.
+func keySpanScopes(fset *token.FileSet) (map[string][]string, map[string]string) {
+	f, err := parser.ParseFile(fset, attrsFile, nil, 0)
+	if err != nil {
+		fail("parse %s: %v", attrsFile, err)
+		return nil, nil
+	}
+	consts := map[string]string{}          // ident -> string value
+	vars := map[string]*ast.CompositeLit{} // ident -> literal
+	var lit *ast.CompositeLit
+	ast.Inspect(f, func(n ast.Node) bool {
+		vs, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		for i, name := range vs.Names {
+			if i >= len(vs.Values) {
+				continue
+			}
+			switch v := vs.Values[i].(type) {
+			case *ast.BasicLit:
+				if v.Kind == token.STRING {
+					s, _ := strconv.Unquote(v.Value)
+					consts[name.Name] = s
+				}
+			case *ast.CompositeLit:
+				vars[name.Name] = v
+				if name.Name == "SpanAttributes" {
+					lit = v
+				}
+			}
+		}
+		return true
+	})
+	resolveList := func(e ast.Expr) ([]string, bool) {
+		cl, ok := e.(*ast.CompositeLit)
+		if id, isID := e.(*ast.Ident); isID {
+			cl, ok = vars[id.Name]
+		}
+		if !ok {
+			return nil, false
+		}
+		var out []string
+		for _, el := range cl.Elts {
+			switch v := el.(type) {
+			case *ast.Ident:
+				s, ok := consts[v.Name]
+				if !ok {
+					return nil, false
+				}
+				out = append(out, s)
+			case *ast.BasicLit:
+				s, _ := strconv.Unquote(v.Value)
+				out = append(out, s)
+			default:
+				return nil, false
+			}
+		}
+		return out, true
+	}
+	keySpans := map[string][]string{}
+	if lit == nil {
+		return keySpans, consts // checkAllowlist reports the missing literal
+	}
+	for _, el := range lit.Elts {
+		cl, ok := el.(*ast.CompositeLit)
+		if !ok {
+			continue
+		}
+		var key string
+		var spans ast.Expr
+		for _, e := range cl.Elts {
+			kv, ok := e.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			id, _ := kv.Key.(*ast.Ident)
+			if id == nil {
+				continue
+			}
+			switch id.Name {
+			case "Key":
+				if bl, ok := kv.Value.(*ast.BasicLit); ok {
+					key, _ = strconv.Unquote(bl.Value)
+				}
+			case "Spans":
+				spans = kv.Value
+			}
+		}
+		if key == "" {
+			continue
+		}
+		list, ok := resolveList(spans)
+		if !ok {
+			fail("%s: key %s has a Spans list this gate cannot resolve statically (use a []string{SpanName…, StoredRecord} var or literal)", attrsFile, key)
+			continue
+		}
+		keySpans[key] = list
+	}
+	return keySpans, consts
+}
+
+// checkSpanScopes is check 7: a key whose Spans list excludes a span is
+// never set on that span.
+//
+//	7a. every neverOnSpan key is declared, and its Spans names no span;
+//	7b. in the instrumentation package every attrSet literal names its
+//	    scope, and every attrSet write with a literal key (a.str("k", …))
+//	    uses a key whose Spans include that attrSet's scope — so a
+//	    stored-record-only key is never written into a span's set;
+//	7c. the instrumentation package builds no attribute.KeyValue from a
+//	    model-call key literal outside attrSet (attribute.String("k", …)),
+//	    which would bypass the scope check;
+//	7d. (scanTree) no semconv selector for a neverOnSpan key anywhere
+//	    under core/ or cmd/.
+func checkSpanScopes(fset *token.FileSet, spanNames map[string]bool) {
+	keySpans, consts := keySpanScopes(fset)
+	if keySpans == nil {
+		return
+	}
+	for _, k := range neverOnSpan {
+		spans, ok := keySpans[k]
+		if !ok {
+			fail("%s: allowlist lacks %s — it must stay declared (stored record only) so the local store can keep it", attrsFile, k)
+			continue
+		}
+		for _, s := range spans {
+			if spanNames[s] {
+				fail("%s: key %s is carried on span %s — it must never be a span attribute (Fleet/counsel D32: the provider's own traces carry it); declare it Spans: storedOnly", attrsFile, k, s)
+			}
+		}
+	}
+	entries, err := os.ReadDir(pkgDir)
+	if err != nil {
+		return // checkPackage reports it
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(pkgDir, name)
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			continue
+		}
+		for _, d := range f.Decls {
+			checkScopesIn(fset, d, keySpans, consts, spanNames)
+		}
+	}
+}
+
+// checkScopesIn applies 7b and 7c to one top-level declaration.
+func checkScopesIn(fset *token.FileSet, decl ast.Node, keySpans map[string][]string, consts map[string]string, spanNames map[string]bool) {
+	scopeOf := map[string]string{} // attrSet variable -> scope value
+	attrSetLit := func(e ast.Expr) (*ast.CompositeLit, bool) {
+		if u, ok := e.(*ast.UnaryExpr); ok && u.Op == token.AND {
+			e = u.X
+		}
+		cl, ok := e.(*ast.CompositeLit)
+		if !ok {
+			return nil, false
+		}
+		if id, ok := cl.Type.(*ast.Ident); !ok || id.Name != "attrSet" {
+			return nil, false
+		}
+		return cl, true
+	}
+	litScope := func(cl *ast.CompositeLit) (string, bool) {
+		for _, e := range cl.Elts {
+			kv, ok := e.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			if id, ok := kv.Key.(*ast.Ident); !ok || id.Name != "scope" {
+				continue
+			}
+			switch v := kv.Value.(type) {
+			case *ast.Ident:
+				s, ok := consts[v.Name]
+				return s, ok
+			case *ast.BasicLit:
+				s, _ := strconv.Unquote(v.Value)
+				return s, true
+			}
+		}
+		return "", false
+	}
+	bind := func(lhs, rhs ast.Expr) {
+		id, ok := lhs.(*ast.Ident)
+		if !ok {
+			return
+		}
+		if cl, ok := attrSetLit(rhs); ok {
+			if s, ok := litScope(cl); ok {
+				scopeOf[id.Name] = s
+			}
+		}
+	}
+	ast.Inspect(decl, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.CompositeLit:
+			if _, ok := attrSetLit(v); ok {
+				if _, ok := litScope(v); !ok {
+					fail("%s: attrSet literal without a resolvable scope — every attribute set names the span (or StoredRecord) it is for, so a key off its span is refused", fset.Position(v.Pos()))
+				}
+			}
+		case *ast.AssignStmt:
+			for i := range v.Lhs {
+				if i < len(v.Rhs) {
+					bind(v.Lhs[i], v.Rhs[i])
+				}
+			}
+		case *ast.ValueSpec:
+			for i := range v.Names {
+				if i < len(v.Values) {
+					bind(v.Names[i], v.Values[i])
+				}
+			}
+		case *ast.CallExpr:
+			sel, ok := v.Fun.(*ast.SelectorExpr)
+			if !ok || len(v.Args) == 0 {
+				return true
+			}
+			bl, ok := v.Args[0].(*ast.BasicLit)
+			if !ok || bl.Kind != token.STRING {
+				return true
+			}
+			key, _ := strconv.Unquote(bl.Value)
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "attribute" {
+				if strings.HasPrefix(key, "gen_ai.") || strings.HasPrefix(key, "kenaz.") || key == "error.type" {
+					fail("%s: attribute.%s(%q, …) outside attrSet — model-call attributes are built only by attrSet, which enforces each key's span scope", fset.Position(v.Pos()), sel.Sel.Name, key)
+				}
+				return true
+			}
+			recv, ok := sel.X.(*ast.Ident)
+			if !ok || !attrSetWriters[sel.Sel.Name] {
+				return true
+			}
+			scope, ok := scopeOf[recv.Name]
+			if !ok {
+				return true
+			}
+			spans, declared := keySpans[key]
+			if !declared {
+				return true // check 2 reports an undeclared literal
+			}
+			for _, s := range spans {
+				if s == scope {
+					return true
+				}
+			}
+			what := "scope"
+			if spanNames[scope] {
+				what = "span"
+			}
+			fail("%s: key %s set on an attrSet scoped to %s %s, but its Spans (%s) exclude it — a key whose scope excludes a span is never set on that span", fset.Position(v.Pos()), key, what, scope, strings.Join(spans, ", "))
+		}
+		return true
+	})
 }

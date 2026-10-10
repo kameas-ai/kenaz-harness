@@ -84,7 +84,8 @@ func (s *spanFixtureStream) Final() (corellm.Response, error)   { return s.resp,
 //   - every gen_ai.chat span is a child of the turn span, in its trace;
 //   - the retry is attempt 1 of the first model request, with error.type
 //     on attempt 0; the second model request starts again at attempt 0;
-//   - no content anywhere.
+//   - no content anywhere, and no provider response id on any span
+//     (Fleet/counsel D32: gen_ai.response.id is stored-record only).
 func TestChatTurn_GenAISpans_NestedWithRetryAndToolCall(t *testing.T) {
 	rec := spantest.Record(t)
 
@@ -147,20 +148,21 @@ func TestChatTurn_GenAISpans_NestedWithRetryAndToolCall(t *testing.T) {
 		attempt  int64
 		errType  string
 		finish   []string
-		respID   string
 		inTokens int64
 	}
 	wants := []want{
 		{attempt: 0, errType: "provider_unavailable"},
-		{attempt: 1, finish: []string{"tool_calls"}, respID: "gen-turn-1", inTokens: 100},
-		{attempt: 0, finish: []string{"stop"}, respID: "gen-turn-2", inTokens: 140},
+		{attempt: 1, finish: []string{"tool_calls"}, inTokens: 100},
+		{attempt: 0, finish: []string{"stop"}, inTokens: 140},
 	}
+	spantest.AssertNoResponseID(t, rec.Ended()...)
+	noIDs := append(append([]string(nil), spantest.Content...), "gen-turn-1", "gen-turn-2")
 	for i, s := range calls {
 		w := wants[i]
 		if s.Parent().SpanID() != turn.SpanContext().SpanID() || s.SpanContext().TraceID() != turn.SpanContext().TraceID() {
 			t.Errorf("gen_ai.chat #%d is not a child of the turn span", i)
 		}
-		spantest.AssertAllowlisted(t, s, spantest.Content...)
+		spantest.AssertAllowlisted(t, s, noIDs...)
 		got := spantest.Attrs(s)
 		if got["kenaz.llm.attempt"] != w.attempt {
 			t.Errorf("gen_ai.chat #%d attempt = %v, want %d", i, got["kenaz.llm.attempt"], w.attempt)
@@ -181,7 +183,7 @@ func TestChatTurn_GenAISpans_NestedWithRetryAndToolCall(t *testing.T) {
 		if _, has := got["error.type"]; has {
 			t.Errorf("gen_ai.chat #%d has error.type %v", i, got["error.type"])
 		}
-		if got["gen_ai.response.id"] != w.respID || got["gen_ai.usage.input_tokens"] != w.inTokens {
+		if got["gen_ai.usage.input_tokens"] != w.inTokens {
 			t.Errorf("gen_ai.chat #%d response attrs = %v", i, got)
 		}
 		if fr, _ := got["gen_ai.response.finish_reasons"].([]string); len(fr) != 1 || fr[0] != w.finish[0] {

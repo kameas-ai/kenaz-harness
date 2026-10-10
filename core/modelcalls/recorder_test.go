@@ -8,6 +8,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
@@ -40,15 +41,23 @@ func (f *finished) Final() (llm.Response, error) { return f.resp, f.err }
 // Recorder installed, into real sqlite: the row carries the span's
 // allowlisted values (session as the keyed hash, not the raw id), a failed
 // call lands as an error row, and no content string appears in any column.
+// The provider response id lands in response_id while NO span carries it
+// (Fleet/counsel D32: gen_ai.response.id is stored-record only).
 //
 // Not parallel: SetRecorder and the OTel provider are process-global.
 func TestRecorder_SpanToStore_NoContent(t *testing.T) {
 	s, db := newStore(t)
 	rec := modelcalls.NewRecorder(s, nil)
+	// The stats pull still sees the generation id although no span does:
+	// an unstarted puller holds the job it would run.
+	puller := modelcalls.NewStatsPuller(modelcalls.StatsPullerOptions{Store: s})
+	defer puller.Stop()
+	rec.OnStored = puller.Consider
 	rec.Start()
 	restore := genaitrace.SetRecorder(rec)
 	defer restore()
-	tp := sdktrace.NewTracerProvider()
+	spans := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans))
 	prev := otel.GetTracerProvider()
 	otel.SetTracerProvider(tp)
 	defer func() { otel.SetTracerProvider(prev); _ = tp.Shutdown(context.Background()) }()
@@ -104,6 +113,19 @@ func TestRecorder_SpanToStore_NoContent(t *testing.T) {
 	}
 	if bad.ErrorType != "rate_limited" || bad.Attempt != 0 {
 		t.Errorf("error row: %+v", bad)
+	}
+	if n := puller.Pending(); n != 1 {
+		t.Errorf("stats pulls queued = %d, want 1 (the ok OpenRouter call, keyed on its generation id)", n)
+	}
+	if ended := spans.Ended(); len(ended) != 2 {
+		t.Fatalf("ended spans = %d, want 2", len(ended))
+	}
+	for _, sp := range spans.Ended() {
+		for _, kv := range sp.Attributes() {
+			if string(kv.Key) == "gen_ai.response.id" || strings.Contains(kv.Value.Emit(), "gen-rec-0001") {
+				t.Errorf("span %s carries the provider response id (%s = %q) — stored-record only", sp.Name(), kv.Key, kv.Value.Emit())
+			}
+		}
 	}
 	dump := dumpTable(t, db)
 	for _, c := range []string{recPrompt, recSystem, recCompletion, recSessionID, "slow down", "p-1"} {

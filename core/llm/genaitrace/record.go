@@ -5,8 +5,11 @@ package genaitrace
 // 2026-10-09: "the harness collects and stores locally").
 //
 // The record is built from exactly the attributes the span carries — the
-// attrSet output, already validated against SpanAttributes — so the store
-// can never hold a key or a value the span could not. The provider stats
+// attrSet output, already validated against SpanAttributes — plus the
+// stored-record-only values Instrument hands it directly at call end
+// (storedResponseAttrs: the provider response id, which never goes on a
+// span), validated through the same allowlist under scope StoredRecord.
+// The store can never hold a key or a value the allowlist does not admit. The provider stats
 // pull (ProviderStats) goes through the same attrSet, scoped to
 // StoredRecord. Mapping a key onto a typed field happens here, inside the
 // instrumentation package, because check-genai-span-no-content forbids
@@ -141,7 +144,9 @@ func SetRecorder(r Recorder) (restore func()) {
 }
 
 // recordCall hands the finished call to the installed recorder, if any.
-func recordCall(c *callEnd, endKV []attribute.KeyValue, end time.Time, ok bool) {
+// endKV is what the span got at its end; storedKV is the StoredRecord-
+// scoped set that never touched the span.
+func recordCall(c *callEnd, endKV, storedKV []attribute.KeyValue, end time.Time, ok bool) {
 	rp := recorder.Load()
 	if rp == nil || *rp == nil {
 		return
@@ -155,6 +160,9 @@ func recordCall(c *callEnd, endKV []attribute.KeyValue, end time.Time, ok bool) 
 		rec.apply(kv)
 	}
 	for _, kv := range endKV {
+		rec.apply(kv)
+	}
+	for _, kv := range storedKV {
 		rec.apply(kv)
 	}
 	(*rp).RecordCall(rec)

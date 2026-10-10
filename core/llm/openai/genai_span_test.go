@@ -46,7 +46,6 @@ func TestOpenAIAdapter_GenAISpan_ExactAttributes(t *testing.T) {
 		"gen_ai.usage.output_tokens":           int64(7),
 		"gen_ai.usage.cache_read.input_tokens": int64(64),
 		"gen_ai.response.finish_reasons":       []string{"tool_calls"},
-		"gen_ai.response.id":                   "chatcmpl-AB12",
 		"gen_ai.response.model":                "gpt-4o-2024-08-06",
 		"kenaz.provider.system_fingerprint":    "fp_abc123",
 		"kenaz.provider.request_id":            "req_openai_123",

@@ -12,25 +12,41 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
-// TestAttrSet_ScopeRefusesKeysOffTheirSpan: a stats-pull-only key can
-// never be set on a span, and a chat-only key never on the turn span.
+// TestAttrSet_ScopeRefusesKeysOffTheirSpan: a stored-record-only key can
+// never be set on a span — the stats-pull keys, and gen_ai.response.id
+// (Fleet/counsel D32), not even through an unscoped set — and a
+// chat-only key never on the turn span. The response id IS admitted on
+// the stored record.
 func TestAttrSet_ScopeRefusesKeysOffTheirSpan(t *testing.T) {
 	before := DroppedAttributes()
 	chat := attrSet{scope: SpanNameChat}
 	chat.int("kenaz.provider.latency_ms", 10)
 	chat.float("kenaz.provider.cost_usd", 0.1)
+	chat.str("gen_ai.response.id", "gen-1760000000-AbC")
 	turn := attrSet{scope: SpanNameTurn}
 	turn.int("gen_ai.usage.input_tokens", 3)
-	if len(chat.kv)+len(turn.kv) != 0 {
-		t.Fatalf("scoped attrSet kept %v / %v", chat.kv, turn.kv)
+	turn.str("gen_ai.response.id", "gen-1760000000-AbC")
+	var unscoped attrSet
+	unscoped.str("gen_ai.response.id", "gen-1760000000-AbC")
+	if len(chat.kv)+len(turn.kv)+len(unscoped.kv) != 0 {
+		t.Fatalf("attrSet kept %v / %v / %v", chat.kv, turn.kv, unscoped.kv)
 	}
-	if got := DroppedAttributes() - before; got != 3 {
-		t.Fatalf("dropped %d, want 3", got)
+	if got := DroppedAttributes() - before; got != 6 {
+		t.Fatalf("dropped %d, want 6", got)
+	}
+	stored := attrSet{scope: StoredRecord}
+	stored.str("gen_ai.response.id", "gen-1760000000-AbC")
+	if len(stored.kv) != 1 || stored.kv[0].Value.AsString() != "gen-1760000000-AbC" {
+		t.Fatalf("stored-record set refused the response id: %v", stored.kv)
 	}
 	for _, s := range SpanAttributes {
-		if s.carriedOn(StoredRecord) && !s.carriedOn(SpanNameChat) && !strings.HasPrefix(s.Key, "kenaz.provider.") {
-			t.Errorf("%s: stored-only keys come from the provider stats pull (kenaz.provider.*)", s.Key)
+		if s.carriedOn(StoredRecord) && !s.carriedOn(SpanNameChat) &&
+			!strings.HasPrefix(s.Key, "kenaz.provider.") && s.Key != "gen_ai.response.id" {
+			t.Errorf("%s: stored-only keys are the provider stats-pull keys (kenaz.provider.*) and gen_ai.response.id", s.Key)
 		}
+	}
+	if s := specByKey["gen_ai.response.id"]; s.carriedOn(SpanNameChat) || s.carriedOn(SpanNameTurn) || !s.carriedOn(StoredRecord) {
+		t.Fatalf("gen_ai.response.id Spans = %v, want stored record only (Fleet/counsel D32)", s.Spans)
 	}
 }
 
@@ -83,8 +99,9 @@ func (d *doneStream) Cancel() error                { return nil }
 func (d *doneStream) Final() (llm.Response, error) { return d.resp, nil }
 
 // TestRecordCall_MirrorsSpanAttributes: the recorder sees one record per
-// call with the span's values and the routing-only profile id; a nil
-// recorder costs nothing.
+// call with the span's values, the stored-record-only response id (handed
+// over directly, never via the span) and the routing-only profile id; a
+// nil recorder costs nothing.
 func TestRecordCall_MirrorsSpanAttributes(t *testing.T) {
 	cap := &captureRecorder{}
 	restore := SetRecorder(cap)
