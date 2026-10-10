@@ -77,7 +77,9 @@ permissions:
   packages: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  # Push-to-main runs that AUTO_RELEASE skips get their own group so a no-op
+  # run can never displace a queued run on main.
+  group: release-${{ github.ref }}${{ (github.event_name == 'push' && github.ref_type != 'tag' && vars.AUTO_RELEASE != 'true') && '-noop' || '' }}
   cancel-in-progress: false
 
 env:

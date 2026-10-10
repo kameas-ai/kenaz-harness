@@ -16,6 +16,13 @@ To restore per-merge releases (and the rolling dev build in
 `release.yml`), set the repository variable `AUTO_RELEASE=true`
 (Settings → Secrets and variables → Actions → Variables).
 
+With `AUTO_RELEASE` off nothing builds the signed cross-platform matrix
+between releases, so a manual release is the first full build of every
+merge since the last one. If it fails, the tag already exists: fix forward
+and re-dispatch `release.yml --ref <tag> -f version=<tag>` (release-integrity
+flags the tag until it ships). The run is a no-op if HEAD is already tagged;
+the warning prints the rebuild command.
+
 Every commit since the last `vX.Y.Z` tag is classified by its subject
 (= squashed PR title, since the `main` ruleset forces squash + `PR_TITLE`
 subject) and the highest bump wins (`bump=` on a manual run overrides it):
