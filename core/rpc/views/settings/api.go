@@ -1769,6 +1769,13 @@ type SettingsAPI interface {
 	// FleetSetWorkflowEventsOptIn writes the member's workflow_events
 	// opt-in (PUT /me/telemetry-opt-ins) and re-reads /me/ml.
 	FleetSetWorkflowEventsOptIn(ctx context.Context, optedIn bool) (MLStatusView, error)
+	// FleetPendingApprovals is a fresh GET /me/pending-approvals read
+	// (ml-producer-01MLPRD01 WP06): what the member must agree to.
+	FleetPendingApprovals(ctx context.Context) (PendingApprovalsView, error)
+	// FleetApproveItem approves the hub item with id. The approve action is
+	// looked up server-side from a fresh read and sent only when its method +
+	// path is in the harness allowlist.
+	FleetApproveItem(ctx context.Context, id string) (PendingApprovalsView, error)
 
 	// FleetProfile returns the active env profile for UI rendering.
 	// Does NOT expose ClientID, APIAudience, or any secret fields.

@@ -574,6 +574,10 @@ export function Elicit_SubmitWizardStep(arg1, arg2, arg3, arg4) {
   return window['go']['rpc']['Bindings']['Elicit_SubmitWizardStep'](arg1, arg2, arg3, arg4);
 }
 
+export function Fleet_ApproveItem(arg1) {
+  return window['go']['rpc']['Bindings']['Fleet_ApproveItem'](arg1);
+}
+
 export function Fleet_GetTelemetryConsent() {
   return window['go']['rpc']['Bindings']['Fleet_GetTelemetryConsent']();
 }
@@ -596,6 +600,10 @@ export function Fleet_MemorySyncEnable(arg1, arg2) {
 
 export function Fleet_MemorySyncStatus() {
   return window['go']['rpc']['Bindings']['Fleet_MemorySyncStatus']();
+}
+
+export function Fleet_PendingApprovals() {
+  return window['go']['rpc']['Bindings']['Fleet_PendingApprovals']();
 }
 
 export function Fleet_SetTelemetryConsent(arg1) {

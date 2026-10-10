@@ -6,7 +6,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import CloudMLPanel from '@/views/settings/CloudMLPanel.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { MLStatus } from '@/lib/types';
+import type { MLStatus, PendingApprovals } from '@/lib/types';
 
 const HARNESS_LINE =
   'From this app, Kenaz sends only what the agent does in your harness sessions (tool used, outcome, ' +
@@ -36,6 +36,7 @@ function status(over: Partial<MLStatus> = {}): MLStatus {
     noticeTextRevision: 0,
     ackedTextRevision: 0,
     noticeNeedsDashboard: false,
+    noticeFromHub: false,
     exclusionPaths: [],
     exclusionCommands: [],
     excludeBrowser: false,
@@ -51,21 +52,26 @@ function mountWith(
     ack?: (v: number) => Promise<MLStatus>;
     optIn?: (v: boolean) => Promise<MLStatus>;
     statuses?: MLStatus[];
+    approve?: (id: string) => Promise<PendingApprovals>;
   } = {},
 ) {
   const queue = [...(opts.statuses ?? [])];
   const mlStatus = vi.fn(async () => queue.shift() ?? initial);
   const mlAckNotice = vi.fn(opts.ack ?? (async () => status()));
   const setWorkflowEventsOptIn = vi.fn(opts.optIn ?? (async () => status()));
+  const approveItem = vi.fn(
+    opts.approve ??
+      (async (): Promise<PendingApprovals> => ({ signedIn: true, available: true, items: [], requiredCount: 0 })),
+  );
   const client = createFakeHarnessClient({
-    fleet: { mlStatus, mlAckNotice, setWorkflowEventsOptIn } as any,
+    fleet: { mlStatus, mlAckNotice, setWorkflowEventsOptIn, approveItem } as any,
   });
   const wrapper = mount(CloudMLPanel, {
     global: { provide: { [HarnessClientKey as symbol]: client } },
   });
   const openExternalURL = vi.fn();
   client.openExternalURL = openExternalURL;
-  return { wrapper, mlStatus, mlAckNotice, setWorkflowEventsOptIn, openExternalURL };
+  return { wrapper, mlStatus, mlAckNotice, setWorkflowEventsOptIn, openExternalURL, approveItem };
 }
 
 const q = (w: any, id: string) => w.find(`[data-testid="${id}"]`);
@@ -331,6 +337,64 @@ describe('CloudMLPanel', () => {
       expect(q(wrapper, 'cloud-ml-notice-dashboard').exists()).toBe(false);
       expect(q(wrapper, 'cloud-ml-notice-text').text()).toBe(NOTICE_V3);
       expect(q(wrapper, 'cloud-ml-ack').exists()).toBe(true);
+    });
+  });
+
+  describe('notice from the pending-approvals hub (WP06)', () => {
+    const HUB_TEXT =
+      'Acme Corp has turned on hosted inference. (rev 2 wording)\n\n' +
+      'Changed since you last approved:\n- no longer excluded: hr/**';
+    const hub = (over: Partial<MLStatus> = {}) =>
+      status({
+        orgOffloadEnabled: true,
+        orgPolicy: 'on',
+        noticeAckRequired: true,
+        noticeVersion: 4,
+        noticeTextRevision: 2,
+        ackedTextRevision: 1,
+        noticeText: HUB_TEXT,
+        noticeFromHub: true,
+        noticeItemId: 'ml_notice:o1:4',
+        ...over,
+      });
+
+    it('renders the hub body_text verbatim and approves the hub item, not the legacy ack', async () => {
+      const after = status({ orgOffloadEnabled: true, orgPolicy: 'on', effective: true, noticeVersion: 4 });
+      const { wrapper, approveItem, mlAckNotice, mlStatus } = mountWith(hub(), { statuses: [hub(), after] });
+      await flushPromises();
+      const text = q(wrapper, 'cloud-ml-notice-text');
+      expect(text.element.textContent).toBe(HUB_TEXT);
+      expect(text.classes()).toContain('whitespace-pre-wrap');
+      expect(q(wrapper, 'cloud-ml-notice-dashboard').exists()).toBe(false);
+      await q(wrapper, 'cloud-ml-ack').trigger('click');
+      await flushPromises();
+      expect(approveItem).toHaveBeenCalledWith('ml_notice:o1:4');
+      expect(mlAckNotice).not.toHaveBeenCalled();
+      expect(mlStatus).toHaveBeenCalledTimes(2);
+      expect(q(wrapper, 'cloud-ml-effective').text()).toContain('On');
+      expect(q(wrapper, 'cloud-ml-notice').exists()).toBe(false);
+    });
+
+    it('a stale hub item (changed) re-reads and shows the "changed" line', async () => {
+      const { wrapper, approveItem } = mountWith(hub(), {
+        approve: async () => ({ signedIn: true, available: true, items: [], requiredCount: 1, changed: true }),
+      });
+      await flushPromises();
+      await q(wrapper, 'cloud-ml-ack').trigger('click');
+      await flushPromises();
+      expect(approveItem).toHaveBeenCalledTimes(1);
+      expect(q(wrapper, 'cloud-ml-notice-changed').exists()).toBe(true);
+    });
+
+    it('fallback (hub unavailable): the local notice is acknowledged through the legacy path', async () => {
+      const { wrapper, approveItem, mlAckNotice } = mountWith(
+        status({ noticeAckRequired: true, noticeVersion: 3, noticeText: NOTICE_V3, noticeTextRevision: 1 }),
+      );
+      await flushPromises();
+      await q(wrapper, 'cloud-ml-ack').trigger('click');
+      await flushPromises();
+      expect(mlAckNotice).toHaveBeenCalledWith(3);
+      expect(approveItem).not.toHaveBeenCalled();
     });
   });
 });

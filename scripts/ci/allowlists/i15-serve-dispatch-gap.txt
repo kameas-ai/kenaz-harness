@@ -1309,6 +1309,22 @@
 "Fleet_MLStatus"
 "Fleet_SetWorkflowEventsOptIn"
 
+# CLASS: gated -- ml-producer-01MLPRD01 WP06, 2026-10-09.
+# 2 entries.
+#
+# The pending-approvals hub. Callers: lib/settingsIssues.ts's
+# `pending-approvals` issue provider, declared desktopOnly and skipped by
+# collectSettingsIssues() when isServedMode() is true (the same disposition
+# as the `database` provider's Storage_* entries above); the
+# PendingApprovalsModal it opens (reachable only from that provider's fix
+# button); and CloudMLPanel.vue's hub-notice Acknowledge, which sits in the
+# boundary-panelled Settings › Sync tab like the Fleet_ML* entries above. So
+# a served build never calls either. Spec §12 A-9: no served RPCs are added.
+#
+# Blocker: a served settings surface. Dated 2026-10-09. Owner: alec.
+"Fleet_ApproveItem"
+"Fleet_PendingApprovals"
+
 # CLASS: gated -- tool-context-budget-01TCBUD01 WP06, 2026-10-09.
 # 7 entries.
 #

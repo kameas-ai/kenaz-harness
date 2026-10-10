@@ -15,6 +15,14 @@
  * backend renders (noticeNeedsDashboard), no notice and no Acknowledge are
  * shown; the panel points the user to the Fleet dashboard's consent card.
  *
+ * WP06: when Fleet's pending-approvals hub lists an ml_notice
+ * (noticeFromHub), noticeText is the hub's server-rendered body_text, shown
+ * verbatim (line breaks kept, including any "Changed since you last
+ * approved" section), and Acknowledge approves that hub item by id — the
+ * harness acknowledges exactly the text it showed. The local template and
+ * the dashboard routing above are only the fallback for a Fleet without the
+ * hub.
+ *
  * Hidden when signed out or without the hosted_inference capability.
  */
 import { computed, onMounted, ref } from 'vue';
@@ -119,6 +127,14 @@ async function acknowledge() {
   busy.value = true;
   errorMsg.value = '';
   try {
+    if (s.noticeFromHub && s.noticeItemId) {
+      // The hub's approve action (looked up server-side by id) carries the
+      // notice_version and text_revision of the text shown here.
+      const res = await client.fleet.approveItem(s.noticeItemId);
+      noticeChanged.value = !!res.changed;
+      await refresh();
+      return;
+    }
     const next = await client.fleet.mlAckNotice(s.noticeVersion);
     status.value = next;
     noticeChanged.value = !!next.noticeChanged;
@@ -201,7 +217,7 @@ function onOptInChange(ev: Event) {
         <p v-if="noticeChanged" class="text-signal-warn" data-testid="cloud-ml-notice-changed">
           The notice changed since it was shown. Please read it again.
         </p>
-        <p data-testid="cloud-ml-notice-text">{{ status.noticeText }}</p>
+        <p class="whitespace-pre-wrap" data-testid="cloud-ml-notice-text">{{ status.noticeText }}</p>
         <button
           type="button"
           class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"

@@ -80,6 +80,15 @@ type mlFakeFleet struct {
 	acks      []int
 	ackRaw    []string // raw notice-ack request bodies
 	optIns    []string
+	// Pending-approvals hub (WP06). hubStatus 0 = 404 (an older Fleet).
+	hubStatus int
+	hubBody   string
+	hubGets   int
+	// hubPosts records every POST to a hub approve endpoint other than
+	// notice-ack (which is recorded in acks/ackRaw): "path body".
+	hubPosts   []string
+	hubPostSt  int
+	hubPostRes string
 }
 
 func newMLFakeFleet(t *testing.T) *mlFakeFleet {
@@ -114,6 +123,34 @@ func newMLFakeFleet(t *testing.T) *mlFakeFleet {
 		w.WriteHeader(st)
 		_, _ = io.WriteString(w, body)
 	})
+	mux.HandleFunc("/api/v1/me/pending-approvals", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.hubGets++
+		st, body := f.hubStatus, f.hubBody
+		f.mu.Unlock()
+		if st == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(st)
+		_, _ = io.WriteString(w, body)
+	})
+	hubPost := func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.hubPosts = append(f.hubPosts, r.URL.Path+" "+string(raw))
+		st, body := f.hubPostSt, f.hubPostRes
+		f.mu.Unlock()
+		if st == 0 {
+			st, body = 200, `{}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(st)
+		_, _ = io.WriteString(w, body)
+	}
+	mux.HandleFunc("/api/v1/me/legal-acceptances", hubPost)
+	mux.HandleFunc("/api/v1/me/ml/exclusions-seen", hubPost)
 	mux.HandleFunc("/api/v1/me/telemetry-opt-ins", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()

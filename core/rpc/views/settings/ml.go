@@ -7,6 +7,12 @@ package settings
 // retention, the required notice text (rendered here so it is pinned by a
 // golden test), and the producer's shipping status.
 //
+// Notice source (WP06): when Fleet's pending-approvals hub lists an
+// ml_notice, its server-rendered body_text replaces the local template and
+// the panel approves through the hub (approvals.go). The local template and
+// the dashboard routing remain only as the fallback for a Fleet without the
+// hub (404).
+//
 // Shipping status is filled by the ML shipper (WP03) through
 // SetMLShippingStatusProvider; until a provider is installed the view's
 // Shipping is nil and the panel's status block stays empty — it never shows
@@ -207,6 +213,14 @@ type MLStatusView struct {
 	// (<fleet base>/settings#hosted-inference), set only while
 	// NoticeNeedsDashboard and the active profile's base URL is known.
 	NoticeDashboardURL string `json:"noticeDashboardUrl,omitempty"`
+	// NoticeFromHub: NoticeText is the body_text of the pending-approvals
+	// hub's ml_notice item (WP06), verbatim, including any "Changed since you
+	// last approved" section. The panel then approves NoticeItemID through
+	// Fleet_ApproveItem, so the text acknowledged is exactly the text shown.
+	// False when the hub is unavailable (an older Fleet): NoticeText is the
+	// local template (or NoticeNeedsDashboard routes to the dashboard).
+	NoticeFromHub bool   `json:"noticeFromHub"`
+	NoticeItemID  string `json:"noticeItemId,omitempty"`
 
 	// Org exclusions (WP05; contract "Typed exclusions"), shown read-only:
 	// "Your organization excludes: …". The producer matches the paths and
@@ -318,7 +332,27 @@ func (a *API) FleetMLStatus(ctx context.Context) (MLStatusView, error) {
 		return v, nil
 	}
 	mlFill(&v, m, c.Profile().FleetBaseURL)
+	if m.NoticeAckRequired {
+		if item, ok := hubMLNotice(ctx, c); ok {
+			applyHubNotice(&v, item)
+		}
+	}
 	return v, nil
+}
+
+// applyHubNotice replaces the locally rendered notice (or the dashboard
+// routing) with the hub's ml_notice item (WP06): Fleet renders the text,
+// including the per-member "Changed since you last approved" section, and
+// the harness shows it verbatim and approves it through the hub. Without a
+// hub item (an older Fleet: 404) the view keeps the pre-hub fallback: the
+// local template at localNoticeTextRevision, or the dashboard link when Fleet
+// requires a newer revision.
+func applyHubNotice(v *MLStatusView, item PendingApprovalView) {
+	v.NoticeText = item.BodyText
+	v.NoticeFromHub = true
+	v.NoticeItemID = item.ID
+	v.NoticeNeedsDashboard = false
+	v.NoticeDashboardURL = ""
 }
 
 // FleetMLAckNotice implements SettingsAPI: acknowledges the notice version

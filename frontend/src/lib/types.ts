@@ -4840,6 +4840,14 @@ export interface MLStatus {
   /** `<fleet base>/settings#hosted-inference`; absent when the base is unknown. */
   noticeDashboardUrl?: string;
   /**
+   * WP06: `noticeText` is the pending-approvals hub's ml_notice body_text,
+   * verbatim (including any "Changed since you last approved" section).
+   * Approve it with fleet.approveItem(noticeItemId). False when the hub is
+   * unavailable (an older Fleet): the local-template / dashboard fallback.
+   */
+  noticeFromHub: boolean;
+  noticeItemId?: string;
+  /**
    * Org exclusions (WP05), read-only. Path globs and command prefixes are
    * matched on this device before anything is hashed or queued. Always
    * arrays ([] when none or not loaded).
@@ -4854,6 +4862,44 @@ export interface MLStatus {
   fleetError?: string;
   /** Absent until the ML shipper is wired. */
   shipping?: MLShippingStatus;
+}
+
+/**
+ * Mirrors settings.PendingApprovalView — one item of Fleet's
+ * pending-approvals hub (ml-producer-01MLPRD01 WP06; kenaz-fleet
+ * docs/contract-pending-approvals.md). The approve action never reaches the
+ * frontend: approve by `id` and the backend looks it up.
+ */
+export interface PendingApprovalItem {
+  id: string;
+  /** legal_acceptance | ml_notice | ml_exclusions_change | … (unknown kinds render generically). */
+  kind: string;
+  title: string;
+  summary: string;
+  /** Plain text: render as text, verbatim ("" when absent). */
+  bodyText: string;
+  /** Absolute http(s) URL of an external document ("" when absent). */
+  documentUrl: string;
+  documentSha256: string;
+  version: string;
+  /** What is paused until this is approved. */
+  blocking: string;
+  /** true = blocking; false = informational. */
+  required: boolean;
+  /** False when Fleet's action is outside the harness allowlist: not approvable here. */
+  approveAllowed: boolean;
+}
+
+/** Mirrors settings.PendingApprovalsView. */
+export interface PendingApprovals {
+  signedIn: boolean;
+  /** This Fleet serves the hub (false on an older Fleet). */
+  available: boolean;
+  items: PendingApprovalItem[];
+  requiredCount: number;
+  /** An approval was stale or its item gone: `items` is the fresh list. */
+  changed?: boolean;
+  fleetError?: string;
 }
 
 /** Mirrors settings.FleetSyncView. */

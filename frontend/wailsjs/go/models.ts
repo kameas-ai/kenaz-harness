@@ -8070,6 +8070,8 @@ export namespace settings {
 	    ackedTextRevision: number;
 	    noticeNeedsDashboard: boolean;
 	    noticeDashboardUrl?: string;
+	    noticeFromHub: boolean;
+	    noticeItemId?: string;
 	    exclusionPaths: string[];
 	    exclusionCommands: string[];
 	    excludeBrowser: boolean;
@@ -8105,6 +8107,8 @@ export namespace settings {
 	        this.ackedTextRevision = source["ackedTextRevision"];
 	        this.noticeNeedsDashboard = source["noticeNeedsDashboard"];
 	        this.noticeDashboardUrl = source["noticeDashboardUrl"];
+	        this.noticeFromHub = source["noticeFromHub"];
+	        this.noticeItemId = source["noticeItemId"];
 	        this.exclusionPaths = source["exclusionPaths"];
 	        this.exclusionCommands = source["exclusionCommands"];
 	        this.excludeBrowser = source["excludeBrowser"];
@@ -8174,6 +8178,78 @@ export namespace settings {
 	        this.lane = this.convertValues(source["lane"], FleetSyncLaneView);
 	        this.orgPaused = source["orgPaused"];
 	        this.pausedCategory = source["pausedCategory"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PendingApprovalView {
+	    id: string;
+	    kind: string;
+	    title: string;
+	    summary: string;
+	    bodyText: string;
+	    documentUrl: string;
+	    documentSha256: string;
+	    version: string;
+	    blocking: string;
+	    required: boolean;
+	    approveAllowed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingApprovalView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.summary = source["summary"];
+	        this.bodyText = source["bodyText"];
+	        this.documentUrl = source["documentUrl"];
+	        this.documentSha256 = source["documentSha256"];
+	        this.version = source["version"];
+	        this.blocking = source["blocking"];
+	        this.required = source["required"];
+	        this.approveAllowed = source["approveAllowed"];
+	    }
+	}
+	export class PendingApprovalsView {
+	    signedIn: boolean;
+	    available: boolean;
+	    items: PendingApprovalView[];
+	    requiredCount: number;
+	    changed?: boolean;
+	    fleetError?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingApprovalsView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.signedIn = source["signedIn"];
+	        this.available = source["available"];
+	        this.items = this.convertValues(source["items"], PendingApprovalView);
+	        this.requiredCount = source["requiredCount"];
+	        this.changed = source["changed"];
+	        this.fleetError = source["fleetError"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
