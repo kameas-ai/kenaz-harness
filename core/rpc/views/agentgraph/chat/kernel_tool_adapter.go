@@ -404,6 +404,9 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 		// The namespaced name, not call.Name: a bare-name call resolved
 		// to (server, tool) above must face the same exposure gate.
 		if res, stopped := a.exposure.gateCall(ctx, server+"__"+tool); stopped {
+			// Refused before the tool ran: a denied call, not a tool
+			// failure (ml-producer-01MLPRD01 WP02 typed outcome).
+			res.Outcome = coreag.ToolOutcomeDenied
 			return res, nil
 		}
 		ctx = loadtools.WithTurnView(ctx, a.exposure.willSend)
@@ -428,6 +431,7 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 			return coreag.ToolResult{
 				Content: fmt.Sprintf("tool %q denied: %s", call.Name, reason),
 				IsError: true,
+				Outcome: coreag.ToolOutcomeDenied,
 			}, nil
 
 		case string(toolloop.PolicyConfirmEach):
@@ -438,6 +442,9 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 				return coreag.ToolResult{}, err
 			}
 			if !proceed {
+				// Declined / denied confirmation (or a layer-3 deadline):
+				// the tool never ran.
+				res.Outcome = coreag.ToolOutcomeDenied
 				return res, nil
 			}
 
@@ -461,6 +468,7 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 			return coreag.ToolResult{
 				Content: fmt.Sprintf("tool %q denied: unrecognised permission policy %q", call.Name, v.Policy),
 				IsError: true,
+				Outcome: coreag.ToolOutcomeDenied,
 			}, nil
 		}
 	}
@@ -492,10 +500,15 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 		// WP02 (tool-error-legibility-01PMDL02): append a conservative
 		// environment-drift hint when the raw error signature-matches a
 		// well-known case. Never rewrites err.Error().
-		return coreag.ToolResult{
+		res := coreag.ToolResult{
 			Content: coreag.AppendEnvironmentDriftHint(err.Error()),
 			IsError: true,
-		}, nil
+		}
+		if ctx.Err() != nil {
+			// The run was stopped while the tool was in flight.
+			res.Outcome = coreag.ToolOutcomeCancelled
+		}
+		return res, nil
 	}
 	return coreag.ToolResult{
 		Content: string(out),

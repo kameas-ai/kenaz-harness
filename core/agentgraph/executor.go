@@ -333,6 +333,13 @@ type Env struct {
 	// identically.
 	ToolUsage ToolUsageObserver
 
+	// ToolCalls is told about EVERY exit of a model-emitted tool call in
+	// tool_dispatch — rejected, denied, cancelled or completed — with a
+	// typed outcome, the raw arguments and the pre-cap result
+	// (ml-producer-01MLPRD01 WP02; see ToolCallObserver). Independent of
+	// ToolUsage, whose behaviour is unchanged. nil disables it.
+	ToolCalls ToolCallObserver
+
 	// PendingContext receives additional system-context injected by hooks
 	// (additional_context from pre_tool_use / post_tool_use). Nil drops
 	// the context with an "agentgraph.hook_context.dropped" log line.

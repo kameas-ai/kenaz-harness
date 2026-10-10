@@ -209,6 +209,7 @@ func TestProductionResolver_AutoApproveFamiliesChangesWhichCallsPark(t *testing.
 		t.Fatalf("write call dispatched without confirmation despite AutoApproveFamilies=[read] only: %v", got)
 	}
 
+	awaitPublished(t, spy, 1) // Pending publishes after it registers
 	ev := spy.snapshot()[0]
 	if err := bus.Resolve("sess-write", ev.CallID, toolloop.ConfirmDecision{Approved: true}); err != nil {
 		t.Fatalf("Resolve: %v", err)

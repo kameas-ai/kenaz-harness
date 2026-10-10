@@ -64,7 +64,7 @@ func TestToolExposureHotSet_NamesRegisteredBuiltins(t *testing.T) {
 		t.Fatalf("toolexposure.BuiltinServer = %q, toolloop.BuiltinServerName = %q", toolexposure.BuiltinServer, toolloop.BuiltinServerName)
 	}
 	registry := toolloop.NewBuiltinRegistry()
-	registerBuiltinTools(nil, registry, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	registerBuiltinTools(nil, registry, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	registerFSBuiltinTools(registry, nil, nil, nil, "", nil, nil)
 
 	prefix := toolexposure.BuiltinServer + toolexposure.NameSeparator

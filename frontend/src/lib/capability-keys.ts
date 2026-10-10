@@ -34,6 +34,7 @@ export const CAPABILITY_KEYS = [
   'context_bootstrap',
   'org_graph_sharing',
   'memory_sync',
+  'hosted_inference',
 ] as const;
 
 export type Capability = (typeof CAPABILITY_KEYS)[number];

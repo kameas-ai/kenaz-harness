@@ -55,9 +55,10 @@ func TestIntegration_AllCapabilityKeys(t *testing.T) {
 	// 22 baseline + CapContextSync + CapTeamSessionHandoff
 	// + CapContextBootstrap + CapOrgGraphSharing), then v0.93.0 added
 	// CapCedarPresetPolicies + CapCedarCustomPolicies (cedar policy
-	// sharing) + CapMemorySync (memory-sync-01MEMSY01) = 29.
-	if len(all) != 29 {
-		t.Errorf("AllCapabilities() len = %d, want 29", len(all))
+	// sharing) + CapMemorySync (memory-sync-01MEMSY01) = 29, then
+	// CapHostedInference was re-added (ml-producer-01MLPRD01 WP01) = 30.
+	if len(all) != 30 {
+		t.Errorf("AllCapabilities() len = %d, want 30", len(all))
 	}
 }
 
