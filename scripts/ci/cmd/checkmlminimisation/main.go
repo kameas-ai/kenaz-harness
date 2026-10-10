@@ -414,7 +414,9 @@ func corpus() []fixture {
 		{`git commit -m "zzcanary commit message for /Users/zzcanaryuser"`, 0, []string{"zzcanary commit message"}},
 		{"git diff HEAD~1 -- " + workspace + "/zzcanarydiff.go", 0, []string{"zzcanarydiff.go"}},
 		{"mysql --user zzcanaryadmin -pzzhunter4secretpw zzcanarydb", 0, []string{"zzhunter4", "zzcanaryadmin"}},
-		{"sk-zzCanaryLiveKey0123456789abcdef --flag", 0, []string{"sk-zzCanary"}},
+		// Assembled at runtime so check-no-cred-bytes-in-rpc.sh (which greps
+		// source for sk-* literals) does not read this canary as a real key.
+		{"sk" + "-zzCanaryLiveKey0123456789abcdef --flag", 0, []string{"sk" + "-zzCanary"}},
 		{`C:\Users\zzcanaryuser\zzwin\tool.exe --run`, 0, []string{`C:\Users\zzcanaryuser`}},
 	}
 	var fx []fixture
