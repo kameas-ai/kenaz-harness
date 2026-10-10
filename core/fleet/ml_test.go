@@ -167,8 +167,6 @@ func TestDecodeMeML_Table(t *testing.T) {
 		{name: "bad timestamp refused", body: replace(`"notice_acked_at": null`, `"notice_acked_at": "yesterday"`), wantErr: true},
 		{name: "wrong type refused", body: replace(`"effective": false`, `"effective": "true"`), wantErr: true},
 		{name: "effective without ack refused", body: replace(`"effective": false`, `"effective": true`), wantErr: true},
-		{name: "effective while ack required refused", body: strings.Replace(effectiveBody,
-			`"notice_ack_required":false`, `"notice_ack_required":true`, 1), wantErr: true},
 		{name: "trailing data refused", body: contractExample + `{}`, wantErr: true},
 		{name: "not an object", body: `[]`, wantErr: true},
 	}
@@ -468,5 +466,23 @@ func TestAckMLNotice_RefusesNegativeTextRevisionWithoutRequest(t *testing.T) {
 	}
 	if len(f.acks) != 0 {
 		t.Error("a request was sent for text_revision -1")
+	}
+}
+
+// Fleet #225: a notice TEXT revision bump leaves effective=true and sets
+// notice_ack_required=true. That object is valid and still effective (rev-1
+// kinds keep flowing); only a notice_version bump turns effective false.
+func TestDecodeMeML_TextRevisionBumpStaysEffective(t *testing.T) {
+	body := strings.Replace(effectiveBody, `"notice_ack_required":false`, `"notice_ack_required":true`, 1)
+	body = strings.Replace(body, `{"org_offload_enabled"`, `{"notice_text_revision":2,"acked_text_revision":1,"org_offload_enabled"`, 1)
+	m, err := DecodeMeML([]byte(body))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !m.NoticeAckRequired || !m.IsEffective() {
+		t.Fatalf("want ack required AND effective, got %+v", m)
+	}
+	if m.NoticeTextRevision != 2 || m.AckedTextRevision != 1 {
+		t.Fatalf("revisions: %+v", m)
 	}
 }

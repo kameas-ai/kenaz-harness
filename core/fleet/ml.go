@@ -147,8 +147,15 @@ const (
 
 // IsEffective is the one predicate a sender may branch on: effective AND a
 // non-null ack (the contract says read both). A nil MeML is not effective.
+//
+// notice_ack_required is deliberately NOT part of it. Since Fleet #225 a
+// notice TEXT revision bump leaves effective=true (rev-1 kinds keep flowing
+// for rev-1-acked members) while setting notice_ack_required=true so the hub
+// nudges; only the rev-2 kinds are refused until AckedTextRevision >= 2. A
+// notice_VERSION bump (policy or exclusions broadening) still turns effective
+// false, which closes the gate here.
 func (m *MeML) IsEffective() bool {
-	return m != nil && m.Effective && m.NoticeAckedAt != nil && !m.NoticeAckRequired
+	return m != nil && m.Effective && m.NoticeAckedAt != nil
 }
 
 // mlWire has one pointer per key so a MISSING key is distinguishable from a
@@ -395,9 +402,11 @@ func DecodeMeML(raw []byte) (MeML, error) {
 		m.NoticeAckedAt = &t
 	}
 	// Self-consistency: effective = ships AND acked. An object claiming
-	// effective without an ack, or while an ack is still required, is not
-	// something a sender may trust.
-	if m.Effective && (m.NoticeAckedAt == nil || m.NoticeAckRequired) {
+	// effective without an ack is not something a sender may trust.
+	// effective=true with notice_ack_required=true IS consistent since Fleet
+	// #225: a text-revision bump nudges for a re-ack without pausing rev-1
+	// kinds (see IsEffective).
+	if m.Effective && m.NoticeAckedAt == nil {
 		return MeML{}, fmt.Errorf("%w: effective=true without a current notice ack", ErrMLDecode)
 	}
 	return m, nil
