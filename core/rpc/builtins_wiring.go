@@ -198,8 +198,14 @@ func registerBuiltinTools(
 		bgSetPID = func(taskID string, pid int) {
 			taskReg.SetPID(taskID, pid)
 		}
+		mlBgEnd := mlProducer.backgroundEnded()
 		bgEnd = func(ctx context.Context, taskID string, exitCode int) {
 			_ = taskReg.End(ctx, taskID, exitCode)
+			// ml-producer-01MLPRD01 WP07: the follow-up `terminal` with
+			// the job's exit code (and test_fails for a failing suite).
+			if mlBgEnd != nil {
+				mlBgEnd(ctx, taskID, exitCode)
+			}
 		}
 	}
 	bashTool := corebash.New(corebash.Options{

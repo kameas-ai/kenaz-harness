@@ -9,10 +9,13 @@ import "encoding/json"
 // task-id prefix and the KENAZ_ACTOR / KENAZ_SESSION process markers,
 // not on kind names. Names confirmed by kenaz-ml 2026-10-09.
 const (
-	// KindFile: kenaz__write_file / kenaz__edit_file with outcome ok.
+	// KindFile: kenaz__write_file / kenaz__edit_file with outcome ok, and
+	// (WP07, A-15) each file a successful read / grep / glob / list_dir
+	// touched, up to 20 per call, next to that call's agent.tool row.
 	KindFile = "file"
 	// KindTerminal: a kenaz__bash command that actually ran (outcome ok or
-	// error). bash's own gate refusals are agent.tool / denied instead.
+	// error), and (WP07, A-15) a background job's exit as a follow-up.
+	// bash's own gate refusals are agent.tool / denied instead.
 	KindTerminal = "terminal"
 	// KindCommit: an agent `git commit` that exited 0 (its terminal event
 	// ships as well).

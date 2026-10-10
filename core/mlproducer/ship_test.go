@@ -254,7 +254,7 @@ func TestShipper_CoalescesTaskUpserts(t *testing.T) {
 	r.gate.Refresh(ctx)
 	for i := 0; i < 3; i++ {
 		task := mlstore.TaskRow{TaskID: "agent-t1", Phase: "coding", Files: map[string]int{}, StartedAt: 1, LastActive: int64(10 + i)}
-		body, _ := json.Marshal(taskWireBody(task))
+		body, _ := json.Marshal(taskWireBody(task, ""))
 		if _, err := r.store.Commit(ctx, mlstore.Write{Task: &task, TaskUpsert: body}); err != nil {
 			t.Fatal(err)
 		}

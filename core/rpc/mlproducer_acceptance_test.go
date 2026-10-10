@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	collogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	"google.golang.org/protobuf/proto"
@@ -427,7 +428,13 @@ func TestMLAcceptance_8_1_ChatSessionShipsContractRecords(t *testing.T) {
 	}
 	task := tasks[0]
 	fileKeys, _ := task["files"].(map[string]any)
-	if task["id"] != taskID || task["repo_root"] != wantRepo || task["branch"] != "" ||
+	// WP07: the workspace is a fresh repository, so branch is "x" per rune
+	// of its (unborn) default branch, whatever git's default is here.
+	wantBranch := strings.Repeat("x", utf8.RuneCountInString(mlproducer.ReadGitBranch(ws)))
+	if wantBranch == "" {
+		t.Fatal("the test workspace has no branch; the branch half checks nothing")
+	}
+	if task["id"] != taskID || task["repo_root"] != wantRepo || task["branch"] != wantBranch ||
 		task["test_runs"] != float64(1) || task["test_fails"] != float64(1) || task["commit_count"] != float64(1) ||
 		len(fileKeys) != 3 || task["phase"] != "testing" {
 		t.Errorf("task = %v; want id %s, repo_root h(ws), test_runs 1, test_fails 1, commit_count 1, 3 files, phase testing", task, taskID)
@@ -457,6 +464,173 @@ func TestMLAcceptance_8_1_ChatSessionShipsContractRecords(t *testing.T) {
 		for _, k := range []string{"edit", "file_edit", "save", "git", "process", "hyprland", "browser", "power", "agent.commit", "agent.phase"} {
 			if strings.Contains(s, `"kind":"`+k+`"`) {
 				t.Errorf("post %d carries forbidden kind %q", i, k)
+			}
+		}
+	}
+}
+
+// §8.1, WP07 (spec §12 A-15), through the same real chat runner: a
+// read_file and a grep ship `file` events (in addition to their agent.tool
+// rows); a background `go test ./...` that exits 1 ships a follow-up
+// terminal {cmd, exit_code:1} and test_fails; the task carries "x" per
+// rune of the workspace's branch, never the name.
+func TestMLAcceptance_8_1_ReadsBackgroundExitAndBranch(t *testing.T) {
+	const bgCmd = "go test ./..."
+	const branch = "zz-wp07/feätüre" // 15 runes, 17 bytes
+	for _, bin := range []string{"go", "git"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not on PATH: %v", bin, err)
+		}
+	}
+	store := newTestStore(t)
+	if err := store.SaveFSReadEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveBash(true); err != nil {
+		t.Fatal(err)
+	}
+	r := newMLWiringRigWithStore(t, mlAcceptOrg, func(dataDir string) {
+		polDir := filepath.Join(dataDir, cedar.PolicyDir)
+		if err := os.MkdirAll(polDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		grants := cedarBashGrant(bgCmd) +
+			"permit(\n  principal,\n  action == Action::\"" + cedar.ActionReadFilesystem + "\",\n  resource\n);\n"
+		if err := os.WriteFile(filepath.Join(polDir, "zz_ml_wp07.cedar"), []byte(grants), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}, store)
+
+	ws := r.c.WorkspaceDir()
+	if ws == "" {
+		t.Fatal("no workspace dir")
+	}
+	// A repository on a known branch (unborn: no commit needed). No go.mod,
+	// so `go test ./...` exits 1.
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"symbolic-ref", "HEAD", "refs/heads/" + branch}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = ws
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	dir := filepath.Join(ws, "zzwp07read")
+	files := []string{filepath.Join(dir, "alpha.go"), filepath.Join(dir, "beta.py")}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if err := os.WriteFile(f, []byte("zz needle here\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	steps := []scriptedToolCall{
+		{corefsbuiltins.NameReadFile, map[string]any{"path": files[0]}},
+		{corefsbuiltins.NameGrep, map[string]any{"pattern": "needle", "path": dir}},
+		{corebash.Name, map[string]any{"command": bgCmd, "run_in_background": true}},
+	}
+	ctx := context.Background()
+	if !r.w.gate.Refresh(ctx).Open {
+		t.Fatalf("gate closed: %+v", r.w.gate.Last())
+	}
+	taskReg := coretasks.NewRegistry(coretasks.Options{})
+	mc := newMLChat(t, r, steps, taskReg)
+	sess := mc.start("zz-ml-wp07")
+	outs := mc.toolOutputs(sess.ID)
+	if len(outs) != 3 {
+		t.Fatalf("tool results = %d (%v), want 3", len(outs), outs)
+	}
+	for i, o := range outs[:2] {
+		if strings.Contains(o, `"is_error":true`) {
+			t.Fatalf("read step %d failed (the tool never read): %s", i, o)
+		}
+	}
+	// The background job's exit lands later, on a detached ctx.
+	waitForCond(t, func() bool {
+		for _, rec := range r.outbox() {
+			if strings.Contains(string(rec.Body), `"exit_code":1`) {
+				return true
+			}
+		}
+		return false
+	}, "the background exit's follow-up terminal in the outbox")
+	r.w.shutdown()
+
+	posts, _, _, _ := r.fleet.snapshot()
+	if len(posts) == 0 {
+		t.Fatal("nothing reached Fleet on the shutdown drain")
+	}
+	recs := wireRecords(t, posts)
+	hasher := mlproducer.NewHasher(r.dataDir)
+	h := func(x string) string {
+		v, err := hasher.H(x)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	taskID := mlproducer.TaskIDPrefix + h(sess.ID)
+
+	var filePaths, tools []string
+	var terms []map[string]any
+	var task map[string]any
+	for _, wr := range recs {
+		if wr.attrs["kameas.ml.table"] == "tasks" {
+			task = wr.body
+			continue
+		}
+		payload, _ := wr.body["payload"].(map[string]any)
+		if payload["task"] != taskID {
+			t.Errorf("event on task %v, want %s", payload["task"], taskID)
+		}
+		switch wr.body["kind"] {
+		case mlproducer.KindFile:
+			if payload["path"] != payload["file"] || len(payload) != 3 {
+				t.Errorf("file payload = %v", payload)
+			}
+			filePaths = append(filePaths, fmt.Sprint(payload["path"]))
+		case mlproducer.KindTool:
+			tools = append(tools, fmt.Sprint(payload["tool"]))
+		case mlproducer.KindTerminal:
+			terms = append(terms, payload)
+		}
+	}
+	a, b := h(files[0])+".go", h(files[1])+".py"
+	if want := []string{a, a, b}; fmt.Sprint(filePaths) != fmt.Sprint(want) {
+		t.Errorf("file events = %v, want read_file(alpha) then grep(alpha, beta) = %v", filePaths, want)
+	}
+	if want := []string{corefsbuiltins.NameReadFile, corefsbuiltins.NameGrep}; fmt.Sprint(tools) != fmt.Sprint(want) {
+		t.Errorf("agent.tool rows = %v, want %v (reads keep their row)", tools, want)
+	}
+	if len(terms) != 2 {
+		t.Fatalf("terminal events = %v, want spawn + follow-up", terms)
+	}
+	if _, has := terms[0]["exit_code"]; has || terms[0]["cmd"] != "go test" {
+		t.Errorf("spawn terminal = %v, want cmd go test, no exit_code", terms[0])
+	}
+	if terms[1]["cmd"] != "go test" || terms[1]["exit_code"] != float64(1) {
+		t.Errorf("follow-up terminal = %v, want cmd go test, exit_code 1", terms[1])
+	}
+	if task == nil {
+		t.Fatal("no task upsert on the wire")
+	}
+	fileKeys, _ := task["files"].(map[string]any)
+	if task["test_runs"] != float64(1) || task["test_fails"] != float64(1) || len(fileKeys) != 0 ||
+		task["branch"] != strings.Repeat("x", 15) {
+		t.Errorf("task = %v; want test_runs 1, test_fails 1, no files (reads), branch 15×x", task)
+	}
+	for i, p := range posts {
+		raw, err := proto.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, leak := range []string{branch, "zz-wp07", "feätüre", ws, "zzwp07read", "alpha.go", "beta.py", "needle", bgCmd, sess.ID} {
+			if strings.Contains(string(raw), leak) {
+				t.Errorf("post %d bytes contain %q", i, leak)
 			}
 		}
 	}
