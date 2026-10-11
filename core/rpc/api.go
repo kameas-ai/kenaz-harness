@@ -2276,7 +2276,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// catalog (custom-MCP-server classification), and must exist before
 	// newGraphManagerWithDeps / newLLMStack below, which hand its observer
 	// halves to the kernel, the chat runner and the bash tool.
-	a.mlProducer = newMLProducerWiring(c, settingsImpl, mergedCat)
+	a.mlProducer = newMLProducerWiring(c, settingsImpl)
 
 	// Wire the lockdown broker so fleet:lockdown:changed events reach the
 	// frontend banner. Must be called after both a.broker and a.settingsImpl

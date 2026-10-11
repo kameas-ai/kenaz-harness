@@ -30,6 +30,28 @@ type GateFunc func() bool
 // Recording implements Gate.
 func (f GateFunc) Recording() bool { return f() }
 
+// AIUsageGate is the per-kind (ship-outbox) half of the gate: a Gate that
+// also implements it may answer AIUsageAllowed() true, and only then do
+// the Rev2Kinds (record.go) enter the ship outbox. A Gate that does not
+// implement it never queues them (fail closed). Same contract as Recording: cheap, no I/O.
+// *ConsentGate implements it.
+type AIUsageGate interface {
+	AIUsageAllowed() bool
+}
+
+// KindGateFunc adapts two funcs to a Gate that is also an AIUsageGate.
+// A nil func answers false.
+type KindGateFunc struct {
+	Record  func() bool
+	AIUsage func() bool
+}
+
+// Recording implements Gate.
+func (f KindGateFunc) Recording() bool { return f.Record != nil && f.Record() }
+
+// AIUsageAllowed implements AIUsageGate.
+func (f KindGateFunc) AIUsageAllowed() bool { return f.AIUsage != nil && f.AIUsage() }
+
 // ParentLinker registers subagent child sessions against the session
 // that spawned them (spec §12 A-3). core/rpc's subagent spawner calls
 // LinkChild only when the spawn is attended — or when the parent is
@@ -57,8 +79,6 @@ type Config struct {
 	Hasher *Hasher
 	// Gate decides whether anything is written. nil = closed.
 	Gate Gate
-	// Servers classifies custom MCP servers. nil = none custom.
-	Servers ServerClassifier
 	// Workspace returns the process workspace root (Core.WorkspaceDir);
 	// repo_root = h(it) at a task's first tool call (spec §12 A-1), and
 	// relative tool paths resolve against it.
@@ -149,7 +169,7 @@ func NewRecorder(cfg Config) *Recorder {
 	}
 	r := &Recorder{
 		cfg:    cfg,
-		min:    minimiser{hasher: cfg.Hasher, servers: cfg.Servers},
+		min:    minimiser{hasher: cfg.Hasher},
 		queue:  make(chan func(), cfg.QueueSize),
 		done:   make(chan struct{}),
 		stop:   make(chan struct{}),
@@ -259,6 +279,21 @@ func (r *Recorder) Close() {
 
 func (r *Recorder) recording() bool {
 	return r.cfg.Gate != nil && r.cfg.Gate.Recording() && r.cfg.Store != nil && r.cfg.Hasher != nil
+}
+
+// shipEligible is the per-kind OUTBOX (ship) gate, checked after
+// recording(): it decides whether an event of kind may enter the ship
+// outbox, not whether the activity may be observed at all. A Rev2Kinds
+// event needs the gate's latest consent to carry AIUsageAllowed; every
+// other kind needs nothing more. (A future local-only activity store,
+// spec A-16 / WP11, can take the same event unconditionally; this gate
+// only governs what is queued for Fleet.)
+func (r *Recorder) shipEligible(kind string) bool {
+	if !IsRev2Kind(kind) {
+		return true
+	}
+	g, ok := r.cfg.Gate.(AIUsageGate)
+	return ok && g.AIUsageAllowed()
 }
 
 func (r *Recorder) nowMS() int64 { return r.cfg.Now().UnixMilli() }
@@ -390,7 +425,8 @@ func (r *Recorder) TurnStarted(context.Context, string, string) {}
 // reaches TurnEnded as outcome "failed".
 func (r *Recorder) TurnFailed(context.Context, string, string, bool) {}
 
-// TurnEnded records agent.turn (chat.TurnUsageObserver.TurnEnded).
+// TurnEnded records a turn end (chat.TurnUsageObserver.TurnEnded): the
+// idle phase change, and agent.turn when shipEligible.
 func (r *Recorder) TurnEnded(ctx context.Context, sessionID, outcome string, modelCalls, toolCalls int, dur time.Duration) {
 	if r == nil || !r.recording() {
 		return
@@ -724,9 +760,17 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 	}
 	task.LastActive = at
 
+	// The ship-outbox gate: agent.tool is a Rev2Kinds event and enters the
+	// outbox only with the org's AI-usage instruction (shipEligible). The
+	// task state above (phase, files, counters, last_active) never depends
+	// on it. Bounded values are clamped to PayloadBounds.
 	events := make([]mlstore.EventDraft, 0, len(drafts))
 	for _, d := range drafts {
 		d := d
+		if !r.shipEligible(d.kind) {
+			continue
+		}
+		ClampPayload(d.kind, d.payload)
 		events = append(events, mlstore.EventDraft{CreatedAt: at, Body: func(seq int64) ([]byte, error) {
 			return encodeEvent(seq, d.kind, at, d.payload)
 		}})
@@ -777,13 +821,20 @@ func (r *Recorder) handleTurn(sessionID string, unattended bool, outcome string,
 		task.Phase = string(PhaseIdle)
 		add(KindPhaseChange, map[string]any{"task": id, "phase": string(PhaseIdle)})
 	}
-	add(KindTurn, map[string]any{
-		"task":        id,
-		"dur_ms":      dur.Milliseconds(),
-		"model_calls": modelCalls,
-		"tool_calls":  toolCalls,
-		"outcome":     outcome,
-	})
+	// agent.turn is a Rev2Kinds event: without the org's AI-usage
+	// instruction it does not enter the ship outbox (shipEligible). The
+	// phase change above and the task's last_active below still record;
+	// agent.turn adds nothing to the task counters either way. Values are
+	// clamped to the bounds sent to Fleet (PayloadBounds).
+	if r.shipEligible(KindTurn) {
+		add(KindTurn, ClampPayload(KindTurn, map[string]any{
+			"task":        id,
+			"dur_ms":      dur.Milliseconds(),
+			"model_calls": modelCalls,
+			"tool_calls":  toolCalls,
+			"outcome":     outcome,
+		}))
+	}
 	task.LastActive = at
 	r.commit(ctx, &task, events, at-task.LastUpsertAt >= r.cfg.UpsertEvery.Milliseconds())
 }

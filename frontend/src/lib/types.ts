@@ -4854,6 +4854,26 @@ export interface MLShippingStatus {
   stopReason: string;
 }
 
+/** Mirrors settings.MLNoticeSection: one bold-labelled notice paragraph. */
+export interface MLNoticeSection {
+  /** The bold label, as written (with its colon). */
+  label: string;
+  text: string;
+}
+
+/** Mirrors settings.MLNoticeView: the fallback Cloud ML notice, structured. */
+export interface MLNotice {
+  heading: string;
+  intro: string;
+  sections: MLNoticeSection[];
+  /** The member-choice or required paragraph ("" for other policies). */
+  policyText: string;
+  /** The org_policy it was rendered for. */
+  policy: string;
+  /** Button labels: ["Turn on Offload", "Not now"] | ["I have read this"] | []. */
+  actions: string[];
+}
+
 /**
  * Mirrors settings.MLStatusView — the Cloud ML consent panel
  * (ml-producer-01MLPRD01 WP01, kenaz-fleet docs/contract-harness-ml.md).
@@ -4880,7 +4900,16 @@ export interface MLStatus {
   retentionDays: number;
   retainOnWithdrawal: boolean;
   orgName: string;
+  /** The notice as plain text: the hub's body_text, or the fallback `notice` joined. */
   noticeText: string;
+  /**
+   * The fallback notice (counsel's rev-1 text, verbatim) as structured
+   * fields, rendered for this org, retention and policy. Absent when the
+   * hub's notice is shown or the dashboard is needed.
+   */
+  notice?: MLNotice;
+  /** The hub ml_notice item's title: the heading above its body_text. */
+  noticeTitle?: string;
   /** Set on an ack Fleet refused with 409 policy_changed: show the notice again. */
   noticeChanged?: boolean;
   /** Notice-text revision Fleet requires (0 = older Fleet without revisions). */

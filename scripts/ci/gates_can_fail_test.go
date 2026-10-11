@@ -39,6 +39,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // repoRoot resolves the repository root from this test file's location.
@@ -3946,6 +3947,77 @@ func TestReleaseIntegrityGate_PlantedMissingReleaseFires(t *testing.T) {
 	}
 }
 
+// TestReleaseIntegrityGate_DraftGraceAndFailFast pins the draft-until-complete
+// semantics of check-release-integrity.sh (tag-on-merge creates each Release
+// as a draft; release.yml publishes it only after every asset is attached).
+// Both tags below are 10 minutes old — well inside the 90m grace — and both
+// are still unreleased (a draft):
+//
+//   - v77.7.8: its dispatched Release run is still in_progress, but a NEWER
+//     run for the same tag (the no-op a human "Publish release" click fires,
+//     which release.yml's guard skips) has completed/success. Grace must hold:
+//     ANY in-flight run keeps the tag pending, not just the newest one.
+//   - v77.7.9: a visible draft whose only Release run completed/failure.
+//     Grace must NOT protect it — a known-failed build is not in flight.
+//
+// Like the planted-missing-release proof above, this fakes `gh` (no network);
+// the fake ignores --jq and prints what the script's jq would have produced.
+func TestReleaseIntegrityGate_DraftGraceAndFailFast(t *testing.T) {
+	root := repoRoot(t)
+	now := time.Now().UTC()
+	tagDate := now.Add(-10 * time.Minute).Format("2006-01-02T15:04:05Z")
+	runOld := now.Add(-9 * time.Minute).Format("2006-01-02T15:04:05Z")
+	runNew := now.Add(-2 * time.Minute).Format("2006-01-02T15:04:05Z")
+
+	binDir := t.TempDir()
+	fakeGh := filepath.Join(binDir, "gh")
+	fakeGhScript := "#!/usr/bin/env bash\n" +
+		"[[ \"$1\" == api ]] || exit 1\n" +
+		"case \"$2\" in\n" +
+		"  repos/*/git/refs/tags)\n" +
+		"    printf 'refs/tags/v77.7.6\\nrefs/tags/v77.7.8\\nrefs/tags/v77.7.9\\n' ;;\n" +
+		"  repos/*/releases*)\n" +
+		"    # v77.7.8's draft is invisible to this token (omitted); v77.7.9's is visible.\n" +
+		"    printf 'v77.7.6\\tfalse\\t1\\nv77.7.9\\ttrue\\t0\\n' ;;\n" +
+		"  repos/*/git/ref/tags/*)\n" +
+		"    case \"$*\" in *.object.type*) echo commit ;; *) echo deadbeef ;; esac ;;\n" +
+		"  repos/*/commits/deadbeef)\n" +
+		"    echo '" + tagDate + "' ;;\n" +
+		"  repos/*/actions/workflows/*/runs*)\n" +
+		"    printf 'v77.7.8\\t" + runNew + "\\tcompleted\\tsuccess\\n'\n" +
+		"    printf 'v77.7.8\\t" + runOld + "\\tin_progress\\tnull\\n'\n" +
+		"    printf 'v77.7.9\\t" + runOld + "\\tcompleted\\tfailure\\n' ;;\n" +
+		"  *) exit 1 ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(fakeGh, []byte(fakeGhScript), 0o755); err != nil {
+		t.Fatalf("writing fake gh: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-release-integrity.sh", root, map[string]string{
+		"PATH":                binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"REPO":                "zzgateprobe/fake-repo",
+		"GRACE_MINUTES":       "90",
+		"GITHUB_STEP_SUMMARY": filepath.Join(t.TempDir(), "summary.md"),
+	})
+	if code != 1 {
+		t.Fatalf("check-release-integrity.sh exited %d, want 1 (v77.7.9's Release run failed).\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "::error title=Tag without a release::v77.7.9") || !strings.Contains(out, "DRAFT") {
+		t.Fatalf("v77.7.9 (draft, Release run completed/failure, inside grace) was not failed as a draft — "+
+			"grace must not protect a known-failed build.\noutput:\n%s", out)
+	}
+	if strings.Contains(out, "::error title=Tag without a release::v77.7.8") {
+		t.Fatalf("v77.7.8 was failed although an older Release run for it is still in_progress — "+
+			"a newer completed no-op run (guarded release:published) must not end its grace.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "v77.7.8 — release still in flight") {
+		t.Fatalf("v77.7.8 was not reported as in flight.\noutput:\n%s", out)
+	}
+	if strings.Contains(out, "::error title=Tag without a release::v77.7.6") {
+		t.Fatalf("healthy control tag v77.7.6 was reported as a gap.\noutput:\n%s", out)
+	}
+}
+
 // TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires is the
 // planted-violation proof for the 2026-09-12 extension of
 // check-hook-event-fire-sites.sh (finding #85,
@@ -5360,6 +5432,66 @@ func TestMLMinimisationGate_PlantedRealBranchNameFires(t *testing.T) {
 		"length: branchPlaceholder(name)",
 		"length: name",
 		`does not match ^x*$`, `canary`)
+}
+
+// The agent.turn clamp loses its upper bound: the corpus's out-of-range
+// turn (50 000 model calls, 72 h) reaches the outbox unclamped and the
+// dynamic half's bounds rule fires.
+func TestMLMinimisationGate_PlantedOutOfRangeTurnValueFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		"v = min(max(v, b.Min), b.Max)",
+		"v = max(v, b.Min)",
+		`agent.turn.model_calls = 50000 is outside the bounds sent to Fleet`,
+		`agent.turn.dur_ms = 259200000 is outside the bounds sent to Fleet`)
+}
+
+// A bound widened in PayloadBounds: the static half sees the drift from
+// the contract, and the dynamic half the out-of-range value it lets out.
+func TestMLMinimisationGate_PlantedWidenedTurnBoundFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		`"model_calls": {0, 10_000},`,
+		`"model_calls": {0, 100_000},`,
+		`PayloadBounds agent.turn.model_calls is 0..100000, the contract says 0..10000`,
+		`agent.turn.model_calls = 50000 is outside the bounds sent to Fleet`)
+}
+
+// Counsel D43/C3: agent.tool.tool carrying the MCP name in clear instead
+// of mcp:h(name). The closed-tool rule fires, and so does the canary scan
+// (the corpus's user-named and shipped-recipe MCP names).
+func TestMLMinimisationGate_PlantedClearMCPToolNameFires(t *testing.T) {
+	mlMinimisationPlant(t, "minimise.go",
+		"return MCPToolPrefix + m.h(name)",
+		"return name",
+		`agent.tool.tool = "github__create_issue" is neither a BuiltinToolNames entry nor mcp:<16 hex>`,
+		`canary "zzprivateserver"`)
+}
+
+// An MCP tool name smuggled into the clear list: the static half refuses
+// a non-first-party entry.
+func TestMLMinimisationGate_PlantedMCPNameInBuiltinListFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		"\t\"fleet-sites__sites_delete\",\n",
+		"\t\"fleet-sites__sites_delete\",\n\t\"github__create_issue\",\n",
+		`BuiltinToolNames has "github__create_issue", which is not a first-party tool`)
+}
+
+// agent.tool's dur_ms bound dropped: the corpus's 30-hour MCP call reaches
+// the outbox unclamped (and the static half sees the table drift).
+func TestMLMinimisationGate_PlantedAgentToolDurationUnboundedFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		"\tKindTool: {\n\t\t\"dur_ms\": {0, 86_400_000}, // one day\n\t},\n",
+		"",
+		`PayloadBounds has no bound for agent.tool.dur_ms`,
+		`agent.tool.dur_ms = 108000000 is outside the bounds sent to Fleet`)
+}
+
+// agent.tool dropped from Rev2Kinds: it would record and ship without the
+// org's AI-usage instruction.
+func TestMLMinimisationGate_PlantedRev2KindDroppedFires(t *testing.T) {
+	mlMinimisationPlant(t, "record.go",
+		"var Rev2Kinds = []string{KindTool, KindTurn}",
+		"var Rev2Kinds = []string{KindTurn}",
+		`Rev2Kinds is missing "agent.tool"`)
 }
 
 // WP07: a read's `file` event carrying the raw absolute path instead of

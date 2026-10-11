@@ -15,15 +15,8 @@ import (
 
 var testKey = []byte("0123456789abcdef0123456789abcdef")
 
-func testMinimiser(custom ...string) minimiser {
-	set := map[string]bool{}
-	for _, c := range custom {
-		set[c] = true
-	}
-	return minimiser{
-		hasher:  NewHasherWithKey(testKey),
-		servers: ServerClassifierFunc(func(s string) bool { return set[s] }),
-	}
+func testMinimiser() minimiser {
+	return minimiser{hasher: NewHasherWithKey(testKey)}
 }
 
 // The copied tool names must stay the real ones.
@@ -102,7 +95,7 @@ func TestHashKey_MalformedIsNeverOverwritten(t *testing.T) {
 }
 
 func TestMinimisation_Table(t *testing.T) {
-	m := testMinimiser("my-private-server")
+	m := testMinimiser()
 	h := func(x string) string { v, _ := m.hasher.H(x); return v }
 
 	t.Run("paths", func(t *testing.T) {
@@ -155,16 +148,26 @@ func TestMinimisation_Table(t *testing.T) {
 	})
 
 	t.Run("tool names", func(t *testing.T) {
+		// Counsel D43/C3: only BuiltinToolNames ship in clear; every other
+		// name — a shipped recipe's MCP tool included — is mcp:h(name).
 		cases := []struct{ in, want string }{
 			{"kenaz__bash", "kenaz__bash"},
-			{"github__create_issue", "github__create_issue"},
-			{"my-private-server__lookup", "custom__" + h("my-private-server") + "__lookup"},
-			{"bare_tool", "bare_tool"},
-			{"evil name /Users/alice", "invalid__" + h("evil name /Users/alice")},
+			{"harness-self__harness_read_list_models", "harness-self__harness_read_list_models"},
+			{"fleet-sites__sites_deploy", "fleet-sites__sites_deploy"},
+			{"github__create_issue", "mcp:" + h("github__create_issue")},
+			{"my-private-server__lookup", "mcp:" + h("my-private-server__lookup")},
+			{"bare_tool", "mcp:" + h("bare_tool")},
+			{"kenaz__not_a_builtin", "mcp:" + h("kenaz__not_a_builtin")},
+			{"evil name /Users/alice", "mcp:" + h("evil name /Users/alice")},
 		}
+		wire := regexp.MustCompile(`^mcp:[0-9a-f]{16}$`)
 		for _, c := range cases {
-			if got := m.toolName(c.in); got != c.want {
+			got := m.toolName(c.in)
+			if got != c.want {
 				t.Errorf("toolName(%q) = %q, want %q", c.in, got, c.want)
+			}
+			if !IsBuiltinToolName(c.in) && !wire.MatchString(got) {
+				t.Errorf("toolName(%q) = %q is not mcp:<16 hex>", c.in, got)
 			}
 		}
 	})
