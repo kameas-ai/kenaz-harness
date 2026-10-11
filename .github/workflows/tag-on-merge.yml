@@ -255,7 +255,15 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
+          # Created as a DRAFT on purpose. release.yml's `release` job flips it
+          # to published (and decides "latest") only after every platform
+          # asset + manifest.json is uploaded. A published-then-filled Release
+          # was visible ~10 min before it had any assets, and any build
+          # failure left a permanent zero-asset Release (see
+          # .github/release-integrity-ignore.txt). A failed build now leaves
+          # an invisible draft that a re-run of release.yml completes.
           gh release create "$TAG" \
+            --draft \
             --title "$TAG" \
             --notes-file notes.md \
             --target "$GITHUB_SHA"

@@ -207,12 +207,90 @@ jobs:
           echo "Resolved: trigger=$EVENT ref=$REF → env=$TARGET bucket=$BUCKET"
 
   # ────────────────────────────────────────────────────────────────────────────
+  # release-event-guard: `release: published` runs only.
+  #
+  # tag-on-merge creates each Release as a DRAFT and the `release` job below
+  # undrafts it with GITHUB_TOKEN (which fires no workflow event). But a human
+  # clicking "Publish release" on that draft in the UI DOES fire
+  # `release: published` — which, unguarded, would start a second full
+  # signed build of a tag whose dispatched build is in flight or done.
+  # Proceed only when the Release has no assets AND no Release run for the
+  # tag is in flight or has succeeded (a dispatch/push run; a release-event
+  # run that succeeded either uploaded assets or was itself a guarded no-op).
+  # Same-tag runs share the `release-<ref>` concurrency group, so this run
+  # queues behind an in-flight build and sees it completed.
+  # Every job needs derive-version, so proceed=false skips the whole run.
+  # Runs (trivially, proceed=true) on every other trigger too, rather than
+  # being skipped: a skipped ancestor would skip build/release/publish-s3
+  # transitively unless every one of them carried a status-function `if:`.
+  # ────────────────────────────────────────────────────────────────────────────
+  release-event-guard:
+    name: Guard release-published trigger
+    needs: [resolve-env]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+          ASSET_NAMES: ${{ join(github.event.release.assets.*.name, ' ') }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != release ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # manifest.json is uploaded last, so its presence means the build
+          # completed; a draft with only some platform assets is rebuilt.
+          if [[ " $ASSET_NAMES " == *" manifest.json "* ]]; then
+            echo "::notice::Release $TAG already has manifest.json — not rebuilding (published from a completed draft)."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # python3, not gh: the ci-fast runner image lacks the gh CLI.
+          VERDICT="$(python3 - <<'PY'
+          import json, os, sys, urllib.request
+          repo, tag, me = os.environ["GITHUB_REPOSITORY"], os.environ["TAG"], int(os.environ["GITHUB_RUN_ID"])
+          api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          req = urllib.request.Request(
+              f"{api}/repos/{repo}/actions/workflows/release.yml/runs?per_page=100",
+              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                       "Accept": "application/vnd.github+json"})
+          runs = json.load(urllib.request.urlopen(req, timeout=30))["workflow_runs"]
+          for r in runs:
+              if r["id"] == me or r["head_branch"] != tag:
+                  continue
+              if r["status"] != "completed":
+                  print(f"skip: run {r['id']} ({r['event']}) is {r['status']}"); sys.exit()
+              if r["conclusion"] == "success" and r["event"] != "release":
+                  print(f"skip: run {r['id']} ({r['event']}) already succeeded"); sys.exit()
+          print("proceed")
+          PY
+          )"
+          echo "$VERDICT"
+          if [ "$VERDICT" = proceed ]; then
+            echo "Release $TAG has no assets and no in-flight/succeeded build — building it."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Not rebuilding $TAG — ${VERDICT#skip: }."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ────────────────────────────────────────────────────────────────────────────
   # derive-version: resolves the semver string for this run.
   # ────────────────────────────────────────────────────────────────────────────
   derive-version:
     name: Derive version
     runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
-    needs: [resolve-env]
+    needs: [resolve-env, release-event-guard]
+    if: needs.release-event-guard.outputs.proceed == 'true'
     outputs:
       version: ${{ steps.set.outputs.version }}
     steps:
@@ -769,6 +847,7 @@ jobs:
       # Skips silently when the org secret isn't visible to this repo,
       # so future repos that opt out of signing still build.
       - name: import Apple signing certificate (macos only)
+        id: mac_cert
         if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -797,6 +876,7 @@ jobs:
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
       - name: codesign "Kenaz Harness.app" (macos only)
+        id: mac_sign_app
         if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -814,6 +894,7 @@ jobs:
           codesign -dv --verbose=4 "build/bin/Kenaz Harness.app"
 
       - name: notarize "Kenaz Harness.app" (macos only)
+        id: mac_notarize_app
         if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
@@ -863,6 +944,7 @@ jobs:
           echo "DMG produced: Kenaz-Harness.dmg ($(du -h Kenaz-Harness.dmg | cut -f1))"
 
       - name: codesign + notarize + staple the .dmg (macOS only)
+        id: mac_sign_dmg
         if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
@@ -935,6 +1017,7 @@ jobs:
       # continue-on-error, that failure would silently ship UNSIGNED Windows
       # binaries rather than failing loudly. Reference the new name explicitly.
       - name: artifact signing (windows .exe)
+        id: win_sign
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true' && steps.azure_login.outcome == 'success'
         continue-on-error: true
         uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
@@ -967,6 +1050,101 @@ jobs:
           echo "::notice::Windows binary not signed — AZURE_CLIENT_ID secret not set."
           echo "Add AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_TRUSTED_SIGNING_ENDPOINT,"
           echo "AZURE_TRUSTED_SIGNING_ACCOUNT, AZURE_TRUSTED_SIGNING_PROFILE to enable."
+
+      # ── Prod signing is FAIL-CLOSED ─────────────────────────────────────
+      # The signing steps above are deliberately lenient (secret-gated skips,
+      # continue-on-error on Azure) so dev/stage and secret-less forks still
+      # build. For prod that leniency meant an unsigned binary could ship
+      # behind a green run. These two steps make a prod build leg fail unless
+      # its artifacts are verifiably signed (+ notarized on macOS): every
+      # signing step must have actually run and succeeded, AND the artifacts
+      # on disk must verify. A failed leg fails `build`, which skips
+      # `release` (the Release stays a draft) and `publish-s3`.
+      # dev/stage keep the lenient behavior (these steps don't run there).
+      - name: assert macOS artifacts signed + notarized (prod only)
+        if: needs.resolve-env.outputs.target_env == 'prod' && runner.os == 'macOS'
+        shell: bash
+        env:
+          CERT_PRESENT: ${{ env.APPLE_CERT_P12_PRESENT }}
+          O_CERT: ${{ steps.mac_cert.outcome }}
+          O_APP_SIGN: ${{ steps.mac_sign_app.outcome }}
+          O_APP_NOTARIZE: ${{ steps.mac_notarize_app.outcome }}
+          O_DMG: ${{ steps.mac_sign_dmg.outcome }}
+        run: |
+          # No pipefail: `… | grep -q` closes the pipe early and SIGPIPEs the
+          # writer, which pipefail would misread as a verification failure.
+          set -u
+          FAIL=0
+          bad() { echo "::error title=Unsigned prod build (${{ matrix.label }})::$*"; FAIL=1; }
+          [ "$CERT_PRESENT" = true ] || bad "APPLE_CERT_P12 is not visible to this repo — prod macOS builds must be signed"
+          [ "$O_CERT" = success ]         || bad "certificate import outcome=$O_CERT"
+          [ "$O_APP_SIGN" = success ]     || bad "app codesign outcome=$O_APP_SIGN"
+          [ "$O_APP_NOTARIZE" = success ] || bad "app notarization outcome=$O_APP_NOTARIZE"
+          [ "$O_DMG" = success ]          || bad ".dmg sign/notarize outcome=$O_DMG"
+
+          APP="build/bin/Kenaz Harness.app"
+          DMG="build/bin/Kenaz-Harness.dmg"
+          TEAM="K54JDRHBA7"
+          if [ -d "$APP" ]; then
+            codesign --verify --deep --strict --verbose=2 "$APP" || bad "codesign --verify failed for $APP"
+            codesign -dv --verbose=4 "$APP" 2>&1 | grep -q "^TeamIdentifier=$TEAM\$" \
+              || bad "$APP is not signed by team $TEAM"
+            spctl -a -vv -t exec "$APP" 2>&1 | tee /dev/stderr | grep -q "source=Notarized Developer ID" \
+              || bad "Gatekeeper does not accept $APP as Notarized Developer ID"
+            xcrun stapler validate "$APP" || bad "no stapled notarization ticket on $APP"
+          else
+            bad "$APP not found"
+          fi
+          if [ -f "$DMG" ]; then
+            codesign --verify --strict --verbose=2 "$DMG" || bad "codesign --verify failed for $DMG"
+            codesign -dv --verbose=4 "$DMG" 2>&1 | grep -q "^TeamIdentifier=$TEAM\$" \
+              || bad "$DMG is not signed by team $TEAM"
+            spctl -a -vv -t open --context context:primary-signature "$DMG" 2>&1 | tee /dev/stderr \
+              | grep -q "source=Notarized Developer ID" \
+              || bad "Gatekeeper does not accept $DMG as Notarized Developer ID"
+            xcrun stapler validate "$DMG" || bad "no stapled notarization ticket on $DMG"
+          else
+            bad "$DMG not found"
+          fi
+          [ "$FAIL" -eq 0 ] || exit 1
+          echo "macOS ${{ matrix.label }}: app + dmg signed by $TEAM, notarized, stapled."
+
+      # Trusted Signing chains to the Microsoft Identity Verification Root CA
+      # 2020, which Windows only fetches lazily (auto root update). Seed it so
+      # a valid signature can't read as UnknownError and fail closed.
+      - name: trust Microsoft Identity Verification root (prod only)
+        if: needs.resolve-env.outputs.target_env == 'prod' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $u = 'https://www.microsoft.com/pkiops/certs/Microsoft%20Identity%20Verification%20Root%20Certificate%20Authority%202020.crt'
+          $f = Join-Path $env:RUNNER_TEMP 'msidroot.crt'
+          Invoke-WebRequest -Uri $u -OutFile $f
+          Import-Certificate -FilePath $f -CertStoreLocation Cert:\LocalMachine\Root | Format-List Subject, Thumbprint
+
+      - name: assert Windows artifacts signed (prod only)
+        if: needs.resolve-env.outputs.target_env == 'prod' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CLIENT_PRESENT: ${{ env.AZURE_CLIENT_ID_PRESENT }}
+          O_LOGIN: ${{ steps.azure_login.outcome }}
+          O_SIGN: ${{ steps.win_sign.outcome }}
+        run: |
+          $fail = $false
+          function Bad($msg) { Write-Output "::error title=Unsigned prod build (${{ matrix.label }})::$msg"; $script:fail = $true }
+          if ($env:CLIENT_PRESENT -ne 'true') { Bad "AZURE_CLIENT_ID is not set — prod Windows builds must be signed" }
+          if ($env:O_LOGIN -ne 'success') { Bad "azure login outcome=$($env:O_LOGIN)" }
+          if ($env:O_SIGN -ne 'success') { Bad "artifact signing outcome=$($env:O_SIGN)" }
+          $exes = @(Get-ChildItem -Path build/bin -Recurse -File -Filter *.exe)
+          if ($exes.Count -eq 0) { Bad "no .exe found under build/bin" }
+          foreach ($f in $exes) {
+            $sig = Get-AuthenticodeSignature -FilePath $f.FullName
+            $subj = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '<none>' }
+            Write-Output ("{0}: {1} ({2})" -f $f.Name, $sig.Status, $subj)
+            if ($sig.Status -ne 'Valid') { Bad "$($f.Name) signature status is $($sig.Status): $($sig.StatusMessage)" }
+            elseif (-not $sig.TimeStamperCertificate) { Bad "$($f.Name) is signed but not timestamped" }
+          }
+          if ($fail) { exit 1 }
+          Write-Output "Windows ${{ matrix.label }}: all $($exes.Count) .exe files carry a valid, timestamped Authenticode signature."
 
       - name: archive (linux/macos)
         if: runner.os != 'Windows'
@@ -1173,7 +1351,7 @@ jobs:
     runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     outputs:
       release_tag: ${{ steps.create.outputs.tag }}
-      release_url: ${{ steps.create.outputs.url }}
+      release_url: ${{ steps.publish.outputs.url }}
       asset_manifest: ${{ steps.manifest.outputs.json }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -1220,21 +1398,34 @@ jobs:
           set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
           TAG="$VERSION"
-          # release-please creates the Release before dispatching us, so
-          # `view` should always succeed. If a human runs this via
-          # workflow_dispatch against a tag that has no Release yet, fall
-          # back to creating one. Notes default to release-please's body
-          # when present.
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
+          # tag-on-merge creates the Release as a DRAFT before dispatching
+          # us; the `publish release` step below undrafts it once every
+          # asset + manifest.json is attached. Look it up through the LIST
+          # endpoint: `releases/tags/<tag>` 404s on drafts, and a lookup that
+          # misses a draft would create a second Release for the same tag
+          # (GitHub allows duplicate drafts per tag).
+          RELS="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | \"\(.id)\t\(.draft)\"")"
+          N="$(printf '%s' "$RELS" | grep -c . || true)"
+          if [ "$N" -gt 1 ]; then
+            echo "::error::$N Releases exist for $TAG — delete the stray draft(s) and re-run:"
+            echo "$RELS"
+            exit 1
+          fi
+          # No Release yet (a human dispatch against a bare tag): create one,
+          # also as a draft, so a failure below never leaves a published
+          # zero-asset Release behind.
+          if [ "$N" -eq 0 ]; then
             gh release create "$TAG" \
+              --draft \
               --title "$TAG" \
               --notes "Automated release for $TAG." \
               --target "$GITHUB_SHA"
           fi
+          # gh release upload resolves drafts by tag (it falls back to the
+          # draft lookup when releases/tags/<tag> 404s).
           gh release upload "$TAG" dist-flat/* --clobber
-          URL=$(gh release view "$TAG" --json url --jq .url)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: build asset manifest for docs site
         id: manifest
@@ -1332,6 +1523,66 @@ jobs:
           # Also upload the manifest as a release asset so the docs site
           # can fetch it without needing a token.
           gh release upload "${{ steps.create.outputs.tag }}" manifest.json --clobber
+
+      # Draft-until-complete: the Release becomes visible only here, after
+      # every platform asset AND manifest.json are attached. Any earlier
+      # failure leaves an invisible draft that a re-run completes (no more
+      # permanent zero-asset Releases). Undrafting with GITHUB_TOKEN does NOT
+      # fire `release: published`, so this does not re-trigger this workflow.
+      # A Release that is ALREADY published (legacy, or a human published the
+      # draft) is left as-is — its publish state and "latest" flag untouched.
+      - name: publish release (undraft + latest)
+        id: publish
+        env:
+          TAG: ${{ steps.create.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/lib/semver.sh
+          ALL="$RUNNER_TEMP/releases.tsv"
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate \
+            --jq '.[] | "\(.id)\t\(.tag_name)\t\(.draft)\t\(.prerelease)"' > "$ALL"
+          REL="$(awk -F'\t' -v t="$TAG" '$2 == t' "$ALL")"
+          if [ "$(printf '%s' "$REL" | grep -c . || true)" -ne 1 ]; then
+            echo "::error::expected exactly one Release for $TAG, found:"; echo "${REL:-<none>}"
+            exit 1
+          fi
+          ID="$(cut -f1 <<<"$REL")"
+          DRAFT="$(cut -f3 <<<"$REL")"
+
+          # Belt and braces: every artifact this run built, plus the
+          # manifest, must be attached before the Release goes public.
+          gh api "repos/$GITHUB_REPOSITORY/releases/$ID/assets?per_page=100" --paginate \
+            --jq '.[] | select(.state == "uploaded") | .name' | sort > "$RUNNER_TEMP/have.txt"
+          { (cd dist-flat && ls -1); echo manifest.json; } | sort -u > "$RUNNER_TEMP/want.txt"
+          MISSING="$(comm -23 "$RUNNER_TEMP/want.txt" "$RUNNER_TEMP/have.txt")"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Release $TAG is missing assets — leaving it as a draft:"; echo "$MISSING"
+            exit 1
+          fi
+
+          if [ "$DRAFT" = "true" ]; then
+            # "latest" only if no published, non-prerelease Release outranks
+            # this tag — re-running an OLD tag must not steal "latest" (same
+            # rule publish-s3 applies to the CDN pointer).
+            MAKE_LATEST=true
+            while IFS=$'\t' read -r _ t d pre; do
+              [ "$d" = false ] && [ "$pre" = false ] || continue
+              [ "$t" != "$TAG" ] || continue
+              if [ "$(semver_cmp "$t" "$TAG" 2>/dev/null || true)" = 1 ]; then
+                MAKE_LATEST=false
+                echo "Published $t outranks $TAG — not marking latest."
+                break
+              fi
+            done < "$ALL"
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ID" \
+              -F draft=false -f make_latest="$MAKE_LATEST" >/dev/null
+            echo "Published $TAG (make_latest=$MAKE_LATEST)."
+          else
+            echo "::notice::Release $TAG was already published — publish state and latest flag left unchanged."
+          fi
+          URL="$(gh api "repos/$GITHUB_REPOSITORY/releases/$ID" --jq .html_url)"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
   # ────────────────────────────────────────────────────────────────────────────
   # publish-s3: single parameterized job — publishes artifacts to the S3
