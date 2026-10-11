@@ -163,7 +163,7 @@ func TestRedactCredentials_ProbeBody(t *testing.T) {
 		"request had Authorization: Bearer " + fakeCred("sk", "-or-v1-fedcba9876543210fedcba98") + "; " +
 		"retry at https://generativelanguage.googleapis.com/v1/models?key=" + fakeCred("AI", "zaNOTAREALKEY12345") + "&alt=sse"
 	for _, out := range []string{RedactCredentials(body), SanitizeProviderMessage(body)} {
-		for _, leak := range []string{"0123456789abcdef0123", "fedcba9876543210", "AIzaNOTAREALKEY12345"} {
+		for _, leak := range []string{"0123456789abcdef0123", "fedcba9876543210", fakeCred("AI", "zaNOTAREALKEY12345")} {
 			if strings.Contains(out, leak) {
 				t.Fatalf("leaked %q: %q", leak, out)
 			}
