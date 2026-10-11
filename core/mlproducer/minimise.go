@@ -23,30 +23,9 @@ const (
 	toolWebSearch = "kenaz__web_search"
 )
 
-// builtinPrefix is the server segment reserved for built-in tools.
-const builtinPrefix = "kenaz__"
-
-// ServerClassifier says whether an MCP server name is user-chosen: a
-// custom recipe (recipes.Source user / imported). Such names are sent as
-// custom__h(server) so a person's private naming does not leave the
-// device (spec §3.2). WP03 implements it over core/mcp/recipes; nil
-// treats every server as a catalog server.
-type ServerClassifier interface {
-	IsCustomServer(server string) bool
-}
-
-// ServerClassifierFunc adapts a func to ServerClassifier.
-type ServerClassifierFunc func(server string) bool
-
-// IsCustomServer implements ServerClassifier.
-func (f ServerClassifierFunc) IsCustomServer(server string) bool { return f(server) }
-
-var safeToolName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
-
-// minimiser bundles the keyed hash and the server classifier.
+// minimiser bundles the keyed hash.
 type minimiser struct {
-	hasher  *Hasher
-	servers ServerClassifier
+	hasher *Hasher
 }
 
 // h is the hash or "" on a key error (callers check before recording).
@@ -58,25 +37,16 @@ func (m minimiser) h(x string) string {
 	return v
 }
 
-// toolName returns the exportable tool name: built-ins and catalog MCP
-// tools verbatim (server__tool), custom servers as custom__h(server)__tool,
-// and any name that is not a plain identifier (a model-invented string
-// that reached dispatch) as invalid__h(name).
+// toolName returns agent.tool's wire `tool` (counsel D43/C3): a
+// BuiltinToolNames entry by its exact name; everything else — every MCP
+// tool, shipped recipe or not, and any model-invented string that reached
+// dispatch — as "mcp:" + h(name). No server or tool name outside the
+// closed first-party list leaves the device in clear.
 func (m minimiser) toolName(name string) string {
-	if !safeToolName.MatchString(name) {
-		return "invalid__" + m.h(name)
-	}
-	if strings.HasPrefix(name, builtinPrefix) {
+	if IsBuiltinToolName(name) {
 		return name
 	}
-	server, tool, ok := strings.Cut(name, "__")
-	if !ok || server == "" || tool == "" {
-		return name
-	}
-	if m.servers != nil && m.servers.IsCustomServer(server) {
-		return "custom__" + m.h(server) + "__" + tool
-	}
-	return name
+	return MCPToolPrefix + m.h(name)
 }
 
 var safeExt = regexp.MustCompile(`^[A-Za-z0-9]{1,12}$`)

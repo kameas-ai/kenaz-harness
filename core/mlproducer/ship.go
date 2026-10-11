@@ -86,6 +86,9 @@ const (
 	codeOrgPaused           = "org_paused"
 	rejectionRecordTooLarge = "record_too_large"
 	rejectionLocalOversize  = "local_record_too_large"
+	// rejectionAIUsageWithheld counts Rev2Kinds records dropped unsent
+	// because the decision they would ship under lacks AIUsageAllowed.
+	rejectionAIUsageWithheld = "local_ai_usage_withheld"
 )
 
 // StopUpdateHarness is the stop reason for a batch Fleet refuses as
@@ -442,14 +445,15 @@ func (s *Shipper) ship(ctx context.Context, d Decision, recs []mlstore.Record) c
 	for {
 		window := recs[:n]
 		last := window[n-1].Seq
-		send, oversize := prepareBatch(window)
+		send, oversize, withheld := prepareBatch(window, d.AIUsageAllowed)
 		if len(send) == 0 {
-			// Every record in the window is over the per-record cap: drop
-			// them (they can never be accepted) and move on.
+			// Every record in the window is over the per-record cap or a
+			// withheld Rev2Kinds event: drop them (they can never be sent)
+			// and move on.
 			if err := s.settle(ctx, last); err != nil {
 				return cycleResult{backoff: true}
 			}
-			s.countLocal(oversize)
+			s.countLocal(oversize, withheld)
 			return cycleResult{progressed: true}
 		}
 		body, err := EncodeBatch(d.ResourceOrgID, d.NodeID, send)
@@ -476,7 +480,7 @@ func (s *Shipper) ship(ctx context.Context, d Decision, recs []mlstore.Record) c
 			if err := s.settle(ctx, last); err != nil {
 				return cycleResult{backoff: true}
 			}
-			s.countLocal(oversize)
+			s.countLocal(oversize, withheld)
 			s.countAccepted(res.Body, len(send))
 			s.setStop("")
 			return cycleResult{progressed: true}
@@ -515,7 +519,7 @@ func (s *Shipper) ship(ctx context.Context, d Decision, recs []mlstore.Record) c
 			if err := s.settle(ctx, last); err != nil {
 				return cycleResult{backoff: true}
 			}
-			s.countLocal(oversize)
+			s.countLocal(oversize, withheld)
 			s.countRejected(rejectionRecordTooLarge, 1)
 			return cycleResult{progressed: true}
 
@@ -598,19 +602,24 @@ func (s *Shipper) countRejected(reason string, n int) {
 	s.stMu.Unlock()
 }
 
-func (s *Shipper) countLocal(oversize int) {
+func (s *Shipper) countLocal(oversize, withheld int) {
 	if oversize > 0 {
 		s.countRejected(rejectionLocalOversize, oversize)
+	}
+	if withheld > 0 {
+		s.countRejected(rejectionAIUsageWithheld, withheld)
 	}
 }
 
 // ---- batch construction ----
 
-// prepareBatch drops records over MaxRecordBytes (never sent) and
-// coalesces task upserts to the newest per row id (task upserts are
-// separate outbox rows; Fleet ignores an update older than the stored
-// last_active anyway). Order is by seq.
-func prepareBatch(window []mlstore.Record) (send []mlstore.Record, oversize int) {
+// prepareBatch drops records over MaxRecordBytes (never sent), drops
+// Rev2Kinds events when aiUsage is false (the AI-usage instruction was
+// withdrawn, or never given, between record and ship: they settle with
+// the batch and are never sent), and coalesces task upserts to the newest
+// per row id (task upserts are separate outbox rows; Fleet ignores an
+// update older than the stored last_active anyway). Order is by seq.
+func prepareBatch(window []mlstore.Record, aiUsage bool) (send []mlstore.Record, oversize, withheld int) {
 	newestTask := map[string]int64{}
 	for _, r := range window {
 		if r.Table == mlstore.TableTasks {
@@ -625,9 +634,24 @@ func prepareBatch(window []mlstore.Record) (send []mlstore.Record, oversize int)
 		if r.Table == mlstore.TableTasks && newestTask[r.RowID] != r.Seq {
 			continue
 		}
+		if !aiUsage && r.Table == mlstore.TableEvents && IsRev2Kind(eventKind(r.Body)) {
+			withheld++
+			continue
+		}
 		send = append(send, r)
 	}
-	return send, oversize
+	return send, oversize, withheld
+}
+
+// eventKind reads an event body's kind ("" when unreadable).
+func eventKind(body []byte) string {
+	var ev struct {
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal(body, &ev) != nil {
+		return ""
+	}
+	return ev.Kind
 }
 
 func strKV(k, v string) *commonv1.KeyValue {

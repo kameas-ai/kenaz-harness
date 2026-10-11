@@ -20,49 +20,85 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
+// mlNoticeGoldenBody is counsel doc 08 §3 (Fleet notice text revision 1),
+// verbatim, for org "Acme Corp" and 45 retention days, as PlainText joins
+// it — WITHOUT the policy paragraph, which each case appends.
+const mlNoticeGoldenBody = "Your organization has enabled workflow data offload\n\n" +
+	"Acme Corp has turned on Offload for your account. Here is exactly what that means.\n\n" +
+	"What leaves your machine: a record of your workflow activity: file paths, the shell commands you run, " +
+	"git branch and repository names, which application or window is active, the domains of sites you visit, " +
+	"your device's power state, and timestamps; plus task summaries (start and end times, phase, test and " +
+	"commit counts) computed on your machine.\n\n" +
+	"What never leaves your machine: the contents of your files, your source code, your prompts or AI " +
+	"conversations, screenshots, and keystrokes. Anything that looks like a credential is redacted before " +
+	"sending.\n\n" +
+	"Where it goes: Kameas's cloud in Ohio, USA (AWS us-east-2), in a database area dedicated to your " +
+	"organization. Kameas processes it only on your organization's instructions.\n\n" +
+	"Who sees what: predictions about your work come back only to your own tools. Your organization's " +
+	"administrators do not see your individual predictions. Kameas engineers have no standing access; " +
+	"emergency access is logged.\n\n" +
+	"How long it is kept: workflow events and task summaries for 45 days, then deleted. Predictions and " +
+	"your organization's models for the subscription. If you leave the organization, sending stops " +
+	"immediately and your stored data is deleted within 72 hours unless your organization has chosen to " +
+	"keep it for the rest of the retention period. Backups expire within 30 days.\n\n" +
+	"Your rights: your organization is responsible for this data. To access, correct, export or delete it, " +
+	"contact your organization's administrator. You can also read Kameas's Privacy Policy, section 13."
+
+const (
+	mlNoticeGoldenMemberChoice = "You decide. Offload is off for you until you turn it on below. You can turn " +
+		"it off at any time in Settings → Offload."
+	mlNoticeGoldenRequired = "Your organization has made Offload required for all members. If you have " +
+		"questions about this, contact your organization's administrator."
+)
+
 func TestRenderMLNotice_Golden(t *testing.T) {
 	cases := []struct {
-		name   string
-		org    string
-		days   int
-		retain bool
-		want   string
+		name, policy string
+		wantText     string
+		wantPolicy   string
+		wantActions  []string
 	}{
-		{
-			name: "delete on withdrawal (default)",
-			org:  "Acme Corp", days: 90, retain: false,
-			want: "Acme Corp has turned on hosted inference. Kenaz will upload your activity on this device to " +
-				"Fleet: files you open and edit (paths, not contents), terminal commands, window titles, " +
-				"browser URLs, and summaries of your coding tasks (repo, branch, test and commit counts). " +
-				"It is kept for 90 days. Your organization controls this setting. If it is turned off, " +
-				"uploads stop and your uploaded data is deleted within 72 hours.",
-		},
-		{
-			name: "retain_on_withdrawal variant",
-			org:  "Acme Corp", days: 30, retain: true,
-			want: "Acme Corp has turned on hosted inference. Kenaz will upload your activity on this device to " +
-				"Fleet: files you open and edit (paths, not contents), terminal commands, window titles, " +
-				"browser URLs, and summaries of your coding tasks (repo, branch, test and commit counts). " +
-				"It is kept for 30 days. Your organization controls this setting. If it is turned off, " +
-				"uploads stop. Your organization has instructed that data already uploaded is kept until " +
-				"the 30 days have passed.",
-		},
-		{
-			name: "no org name falls back",
-			org:  "  ", days: 7, retain: false,
-			want: "Your organization has turned on hosted inference. Kenaz will upload your activity on this device to " +
-				"Fleet: files you open and edit (paths, not contents), terminal commands, window titles, " +
-				"browser URLs, and summaries of your coding tasks (repo, branch, test and commit counts). " +
-				"It is kept for 7 days. Your organization controls this setting. If it is turned off, " +
-				"uploads stop and your uploaded data is deleted within 72 hours.",
-		},
+		{"member choice", "member_choice", mlNoticeGoldenBody + "\n\n" + mlNoticeGoldenMemberChoice,
+			mlNoticeGoldenMemberChoice, []string{"Turn on Offload", "Not now"}},
+		{"required", "on", mlNoticeGoldenBody + "\n\n" + mlNoticeGoldenRequired,
+			mlNoticeGoldenRequired, []string{"I have read this"}},
+		{"off: no policy block, no buttons", "off", mlNoticeGoldenBody, "", []string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := RenderMLNotice(tc.org, tc.days, tc.retain); got != tc.want {
-				t.Errorf("notice mismatch\n got: %s\nwant: %s", got, tc.want)
+			n := RenderMLNotice("Acme Corp", 45, tc.policy)
+			if got := n.PlainText(); got != tc.wantText {
+				t.Errorf("notice mismatch\n got: %q\nwant: %q", got, tc.wantText)
+			}
+			if n.PolicyText != tc.wantPolicy || n.Policy != tc.policy || strings.Join(n.Actions, "|") != strings.Join(tc.wantActions, "|") {
+				t.Errorf("policy block = %q / %q / %v", n.PolicyText, n.Policy, n.Actions)
 			}
 		})
+	}
+
+	// Structure: the heading, the intro and six bold-labelled paragraphs,
+	// labels as written.
+	n := RenderMLNotice("Acme Corp", 45, "on")
+	if n.Heading != "Your organization has enabled workflow data offload" ||
+		n.Intro != "Acme Corp has turned on Offload for your account. Here is exactly what that means." {
+		t.Errorf("heading/intro = %q / %q", n.Heading, n.Intro)
+	}
+	wantLabels := []string{"What leaves your machine:", "What never leaves your machine:", "Where it goes:",
+		"Who sees what:", "How long it is kept:", "Your rights:"}
+	if len(n.Sections) != len(wantLabels) {
+		t.Fatalf("sections = %d, want %d", len(n.Sections), len(wantLabels))
+	}
+	for i, l := range wantLabels {
+		if n.Sections[i].Label != l || strings.HasPrefix(n.Sections[i].Text, " ") || n.Sections[i].Text == "" {
+			t.Errorf("section %d = %+v, want label %q", i, n.Sections[i], l)
+		}
+	}
+
+	// No org name falls back; no placeholder survives.
+	fb := RenderMLNotice("  ", 7, "member_choice").PlainText()
+	if !strings.HasPrefix(fb, "Your organization has enabled workflow data offload\n\nYour organization has turned on Offload") ||
+		!strings.Contains(fb, "for 7 days, then deleted") || strings.Contains(fb, "{") {
+		t.Errorf("fallback notice = %q", fb)
 	}
 }
 
@@ -289,7 +325,7 @@ func TestFleetMLStatus_States(t *testing.T) {
 			if v.Effective != tc.wantEffective || v.NoticeAckRequired != tc.wantNotice || v.OrgPolicy != tc.wantPolicy {
 				t.Errorf("view = %+v", v)
 			}
-			if v.OrgName != "Acme Corp" || v.NoticeText != RenderMLNotice("Acme Corp", v.RetentionDays, v.RetainOnWithdrawal) {
+			if v.OrgName != "Acme Corp" || v.NoticeText != RenderMLNotice("Acme Corp", v.RetentionDays, v.OrgPolicy).PlainText() || v.Notice == nil || v.Notice.Policy != v.OrgPolicy {
 				t.Errorf("notice/org = %q / %q", v.OrgName, v.NoticeText)
 			}
 		})
@@ -400,6 +436,70 @@ func TestFleetMLAckNotice_Rev1ServerSendsTextRevision(t *testing.T) {
 	}
 }
 
+// withAIUsage adds kenaz-fleet #235's optional AI-usage fields.
+func withAIUsage(body string, include bool, epoch int) string {
+	var m map[string]any
+	_ = json.Unmarshal([]byte(body), &m)
+	m["include_ai_usage"] = include
+	m["ai_usage_terms_ok"] = include
+	m["ai_usage_allowed"] = include
+	m["ai_usage_epoch"] = epoch
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// kenaz-fleet #235: the fallback ack echoes ai_usage_epoch from its own
+// fresh /me/ml read — only while include_ai_usage is true.
+func TestFleetMLAckNotice_AIUsageEpoch(t *testing.T) {
+	cases := []struct {
+		name     string
+		include  bool
+		epoch    int
+		wantBody string
+	}{
+		{"include_ai_usage false: no epoch", false, 7, `{"notice_version":4}`},
+		{"include_ai_usage true: epoch echoed", true, 7, `{"ai_usage_epoch":7,"notice_version":4}`},
+		{"include_ai_usage true, epoch 0: still echoed", true, 0, `{"ai_usage_epoch":0,"notice_version":4}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newMLRig(t, true)
+			r.fleet.set(func(f *mlFakeFleet) {
+				f.state = withAIUsage(mlBody(true, "on", false, true, false, 4, "", 90, false), tc.include, tc.epoch)
+				f.ackBody = withAIUsage(mlBody(true, "on", false, false, true, 4, "2026-10-09T13:00:00Z", 90, false), tc.include, tc.epoch)
+			})
+			v, err := r.api.FleetMLAckNotice(context.Background(), 4)
+			if err != nil || !v.Effective {
+				t.Fatalf("FleetMLAckNotice: %+v, %v", v, err)
+			}
+			if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != tc.wantBody {
+				t.Errorf("ack bodies = %v, want [%s]", bodies, tc.wantBody)
+			}
+		})
+	}
+}
+
+// A stale epoch (the org turned AI usage on again between read and ack)
+// is Fleet's 409 policy_changed: re-read and re-show, never an error.
+func TestFleetMLAckNotice_StaleAIUsageEpoch409ReShows(t *testing.T) {
+	r := newMLRig(t, true)
+	r.fleet.set(func(f *mlFakeFleet) {
+		f.state = withAIUsage(mlBody(true, "on", false, true, false, 4, "", 90, false), true, 3)
+		f.ackStatus = 409
+		f.ackBody = `{"code":"policy_changed","message":"ai_usage_epoch is stale"}`
+	})
+	v, err := r.api.FleetMLAckNotice(context.Background(), 4)
+	if err != nil {
+		t.Fatalf("FleetMLAckNotice: %v", err)
+	}
+	if !v.NoticeChanged || !v.NoticeAckRequired || v.Notice == nil || v.NoticeText == "" {
+		t.Errorf("view = %+v, want noticeChanged with the notice re-shown", v)
+	}
+	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"ai_usage_epoch":3,"notice_version":4}` {
+		t.Errorf("ack bodies = %v", bodies)
+	}
+}
+
 // Fleet PR #225 rev-2 server: the harness renders only rev 1, so it must
 // NOT acknowledge rev 2 — no POST, no local notice text, dashboard routing.
 func TestFleetMLAckNotice_Rev2ServerRoutesToDashboardWithoutPost(t *testing.T) {
@@ -473,7 +573,7 @@ func TestFleetMLAckNotice_409ReReadsAndReShows(t *testing.T) {
 	if !v.NoticeChanged || !v.NoticeAckRequired || v.Effective || v.NoticeVersion != 5 {
 		t.Errorf("view = %+v, want noticeChanged + required + version 5", v)
 	}
-	if v.NoticeText != RenderMLNotice("Acme Corp", 45, true) {
+	if v.NoticeText != RenderMLNotice("Acme Corp", 45, "on").PlainText() {
 		t.Errorf("re-shown notice = %q", v.NoticeText)
 	}
 	// One pre-ack read (text-revision check), the ack, then the re-read.

@@ -101,6 +101,45 @@ var contract = map[string][]string{
 	"agent.turn":   {"task", "dur_ms", "model_calls", "tool_calls", "outcome"},
 }
 
+// contractBounds are the value bounds sent to Fleet (owner decision
+// 2026-10-10), copied by hand like contract: mlproducer.PayloadBounds must
+// equal this exactly, and every recorded value of a bounded key must lie
+// inside it. Change it only with the contract.
+var contractBounds = map[string]map[string][2]int64{
+	"agent.tool": {
+		"dur_ms": {0, 86_400_000},
+	},
+	"agent.turn": {
+		"dur_ms":      {0, 86_400_000},
+		"model_calls": {0, 10_000},
+		"tool_calls":  {0, 10_000},
+	},
+}
+
+// contractRev2 are the kinds Fleet gates on ai_usage_allowed; each must be
+// in mlproducer.Rev2Kinds (the recorder's and shipper's per-kind gate).
+var contractRev2 = []string{"agent.tool", "agent.turn"}
+
+// firstPartyServers are the only servers whose tools may appear in clear
+// in mlproducer.BuiltinToolNames (counsel D43/C3): the harness's builtins
+// and its in-process first-party MCP servers. The list's exact content is
+// pinned against the registry by core/rpc/mlproducer_builtin_tools_test.go.
+var firstPartyServers = []string{"kenaz__", "harness-self__", "fleet-sites__"}
+
+// reToolName is agent.tool.tool's closed form:
+// ^(<BuiltinToolNames alternation>|mcp:[0-9a-f]{16})$. Built in
+// toolNameRule after the static half has vetted the list.
+var reToolName *regexp.Regexp
+
+func toolNameRule() *regexp.Regexp {
+	alts := make([]string, 0, len(mlproducer.BuiltinToolNames)+1)
+	for _, n := range mlproducer.BuiltinToolNames {
+		alts = append(alts, regexp.QuoteMeta(n))
+	}
+	alts = append(alts, `mcp:[0-9a-f]{16}`)
+	return regexp.MustCompile(`^(` + strings.Join(alts, "|") + `)$`)
+}
+
 // taskKeys is spec §3.1's task body.
 var taskKeys = map[string]bool{
 	"id": true, "repo_root": true, "branch": true, "phase": true, "files": true,
@@ -207,6 +246,52 @@ func staticHalf() ([]string, error) {
 			v = append(v, fmt.Sprintf("KindTable is missing A-10 kind %q (the table drifted from the contract)", k))
 		}
 	}
+
+	// 1b. PayloadBounds, as compiled, equals the contract's bounds.
+	for kind, keys := range contractBounds {
+		got := mlproducer.PayloadBounds[kind]
+		for key, b := range keys {
+			g, ok := got[key]
+			if !ok {
+				v = append(v, fmt.Sprintf("PayloadBounds has no bound for %s.%s (contract %d..%d)", kind, key, b[0], b[1]))
+				continue
+			}
+			if g.Min != b[0] || g.Max != b[1] {
+				v = append(v, fmt.Sprintf("PayloadBounds %s.%s is %d..%d, the contract says %d..%d", kind, key, g.Min, g.Max, b[0], b[1]))
+			}
+		}
+	}
+	for kind, keys := range mlproducer.PayloadBounds {
+		for key := range keys {
+			if _, ok := contractBounds[kind][key]; !ok {
+				v = append(v, fmt.Sprintf("PayloadBounds bounds %s.%s, which the contract does not", kind, key))
+			}
+		}
+	}
+	// 1c. Every contract rev-2 kind is gated as one.
+	for _, k := range contractRev2 {
+		if !mlproducer.IsRev2Kind(k) {
+			v = append(v, fmt.Sprintf("Rev2Kinds is missing %q: it would record and ship without ai_usage_allowed", k))
+		}
+	}
+
+	// 1d. BuiltinToolNames is first-party only: every entry is
+	// <first-party server>__<plain tool>, so no MCP tool name can be
+	// smuggled into the clear list.
+	reFirstParty := regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+	for _, n := range mlproducer.BuiltinToolNames {
+		ok := false
+		for _, p := range firstPartyServers {
+			if rest, cut := strings.CutPrefix(n, p); cut && reFirstParty.MatchString(rest) {
+				ok = true
+			}
+		}
+		if !ok {
+			v = append(v, fmt.Sprintf("BuiltinToolNames has %q, which is not a first-party tool (%s<tool>): "+
+				"it would ship an MCP name in clear", n, strings.Join(firstPartyServers, "|")))
+		}
+	}
+	reToolName = toolNameRule()
 
 	// 2. Kind literals in the source.
 	if fi, err := os.Stat(pkgDir); err != nil || !fi.IsDir() {
@@ -387,6 +472,7 @@ type fixture struct {
 	args       map[string]any
 	result     string
 	canaries   []string
+	dur        time.Duration // 0 = 42 ms
 }
 
 func bashArgs(cmd string) map[string]any { return map[string]any{"command": cmd} }
@@ -479,13 +565,17 @@ func corpus() []fixture {
 	// Background bash: records at spawn, no exit_code.
 	add(fixture{tool: "kenaz__bash", args: map[string]any{"command": "go test ./zzcanarybg/... -count=1", "run_in_background": true},
 		result: `{"task_id":"bg-zzcanary","status":"running"}`, canaries: []string{"zzcanarybg"}})
-	// MCP: a user-named (custom) server and a catalog one.
+	// MCP: a user-named server and a shipped-recipe one. Counsel D43/C3:
+	// neither name may ship in clear (agent.tool.tool = mcp:h(name)).
 	add(fixture{tool: privateServer + "__deploy", args: map[string]any{"target": "/srv/zzcanary/prod", "token": "zzhunter5"},
 		result: "zzcanary deployed", canaries: []string{privateServer, "zzhunter5"}})
-	add(fixture{tool: "github__create_issue", args: map[string]any{"title": "zzcanary issue title", "body": "zzcanary"},
+	add(fixture{tool: "github__create_issue", args: map[string]any{"title": "zzcanary issue title", "body": "zzcanary"}, canaries: []string{"create_issue", "github__"},
 		result: `{"url":"https://github.com/zzcanaryorg/zzcanaryrepo/issues/1"}`})
 	add(fixture{tool: "kenaz__web_fetch", args: map[string]any{"url": "https://zzcanary.internal/secret?k=zzhunter6"},
 		result: "zzcanary page", canaries: []string{"zzhunter6"}})
+	// An MCP call that ran 30 hours: agent.tool.dur_ms must arrive clamped.
+	add(fixture{tool: "zzcanarylong__wait", args: map[string]any{}, result: "{}", dur: 30 * time.Hour,
+		canaries: []string{"zzcanarylong"}})
 	// A model-invented tool name that reached dispatch.
 	add(fixture{tool: "../../zzcanaryinvented tool", outcome: coreag.ToolOutcomeError, args: map[string]any{}})
 	// A subagent child of the attended session, attributed to the root.
@@ -538,11 +628,11 @@ func dynamicHalf() ([]string, error) {
 
 	clock := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	now := func() time.Time { clock = clock.Add(90 * time.Second); return clock }
+	openGate := mlproducer.KindGateFunc{Record: func() bool { return true }, AIUsage: func() bool { return true }}
 	rec := mlproducer.NewRecorder(mlproducer.Config{
 		Store:         store,
 		Hasher:        mlproducer.NewHasherWithKey(fixedKey),
-		Gate:          mlproducer.GateFunc(func() bool { return true }),
-		Servers:       mlproducer.ServerClassifierFunc(func(s string) bool { return s == privateServer }),
+		Gate:          openGate, // ai_usage_allowed too: agent.turn records and is checked
 		Workspace:     func() string { return workspace },
 		GitBranch:     func(string) string { return mlproducer.ReadGitBranch(fakeRepo) },
 		Now:           now,
@@ -559,9 +649,13 @@ func dynamicHalf() ([]string, error) {
 			ctx = runposture.Unattended(ctx)
 		}
 		raw, _ := json.Marshal(f.args)
+		dur := f.dur
+		if dur == 0 {
+			dur = 42 * time.Millisecond
+		}
 		rec.ToolCallCompleted(coreag.ToolCallRecord{
 			Ctx: ctx, SessionID: f.session, ToolName: f.tool, Outcome: f.outcome,
-			Duration: 42 * time.Millisecond, RawArgs: string(raw), ResultContent: f.result,
+			Duration: dur, RawArgs: string(raw), ResultContent: f.result,
 		})
 		allCanaries = append(allCanaries, f.canaries...)
 		// Raw path args are canaries too.
@@ -575,6 +669,9 @@ func dynamicHalf() ([]string, error) {
 	rec.BackgroundEnded(runposture.Unattended(ctx), "bg-zzcanary", 1)
 	rec.TurnEnded(ctx, "zzcanary-session-attended", "completed", 3, 9, 1500*time.Millisecond)
 	rec.TurnEnded(runposture.Unattended(ctx), "zzcanary-child", "stopped", 1, 1, time.Second)
+	// Out-of-range turn values: each must arrive clamped into contractBounds.
+	rec.TurnEnded(ctx, "zzcanary-session-attended", "completed", 50_000, 20_000, 72*time.Hour)
+	rec.TurnEnded(ctx, "zzcanary-session-attended", "completed", -5, 2, -time.Second)
 	rec.TurnEnded(ctx, "zzcanary-session-attended", "failed", 1, 0, time.Second) // no tool call → idle
 	_ = rec.SessionDeleted(ctx, "zzcanary-session-attended")
 	fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -656,12 +753,10 @@ func hmacHex(x string) string {
 }
 
 var (
-	reTaskID   = regexp.MustCompile(`^agent-[0-9a-f]{16}$`)
-	reHash     = regexp.MustCompile(`^[0-9a-f]{16}$`)
-	rePathTok  = regexp.MustCompile(`^[0-9a-f]{16}(\.[a-z0-9]{1,12})?$`)
-	reToolName = regexp.MustCompile(`^(custom__[0-9a-f]{16}__[A-Za-z0-9_.-]{1,128}|invalid__[0-9a-f]{16}|[A-Za-z0-9_.-]{1,128})$`)
-	reHashPfx  = regexp.MustCompile(`^(custom__[0-9a-f]{16}__|invalid__[0-9a-f]{16})`)
-	reBranch   = regexp.MustCompile(`^x*$`)
+	reTaskID  = regexp.MustCompile(`^agent-[0-9a-f]{16}$`)
+	reHash    = regexp.MustCompile(`^[0-9a-f]{16}$`)
+	rePathTok = regexp.MustCompile(`^[0-9a-f]{16}(\.[a-z0-9]{1,12})?$`)
+	reBranch  = regexp.MustCompile(`^x*$`)
 )
 
 var toolOutcomes = map[string]bool{"ok": true, "error": true, "denied": true, "cancelled": true}
@@ -751,6 +846,13 @@ func checkValue(where, kind, key string, val any, v *[]string) {
 	case "exit_code", "dur_ms", "model_calls", "tool_calls":
 		if !isInt(val) {
 			bad("= %v is not an integer", val)
+			return
+		}
+		if b, ok := contractBounds[kind][key]; ok {
+			n, _ := val.(json.Number).Int64()
+			if n < b[0] || n > b[1] {
+				bad("= %d is outside the bounds sent to Fleet (%d..%d)", n, b[0], b[1])
+			}
 		}
 		return
 	case "phase":
@@ -765,13 +867,10 @@ func checkValue(where, kind, key string, val any, v *[]string) {
 		}
 		return
 	case "tool":
+		// Counsel D43/C3: a closed first-party name or mcp:<16 hex>, never
+		// an MCP server or tool name in clear.
 		if !isStr || !reToolName.MatchString(s) {
-			bad("= %q is not a plain tool name", val)
-			return
-		}
-		rest := reHashPfx.ReplaceAllString(s, "")
-		if rawPath(rest) || credential(rest) {
-			bad("= %q carries a path or credential", s)
+			bad("= %q is neither a BuiltinToolNames entry nor mcp:<16 hex> (an MCP tool name in clear)", val)
 		}
 		return
 	case "cmd":

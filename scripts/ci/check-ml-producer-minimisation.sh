@@ -9,14 +9,20 @@
 #            (file, terminal, commit, phase_change, agent.tool, agent.turn)
 #            with exactly their payload keys, and no string literal in an
 #            event-kind position under core/mlproducer may name any other
-#            kind (a daemon-only kind such as `hyprland`, or an invented one).
+#            kind (a daemon-only kind such as `hyprland`, or an invented one);
+#            mlproducer.PayloadBounds must equal the contract bounds
+#            (agent.tool dur_ms; agent.turn dur_ms / model_calls / tool_calls),
+#            every BuiltinToolNames entry must be a first-party tool, and every
+#            contract rev-2 kind must be in mlproducer.Rev2Kinds.
 #   dynamic  the REAL recorder, over a temp sqlite database with a fixed
 #            hash key, is fed a fixture corpus of tool calls (deep paths,
 #            long commands with secrets/env/URLs, a custom MCP server, git
 #            commit, tests, refused/denied calls) and every outbox record is
 #            checked: kind and payload keys against the contract, no raw
 #            path, cmd <= 2 tokens, no credential-looking token, no fixture
-#            canary verbatim, task files keys h+ext, repo_root hashed.
+#            canary verbatim, task files keys h+ext, repo_root hashed,
+#            bounded values inside the bounds sent to Fleet, and agent.tool.tool
+#            a BuiltinToolNames entry or mcp:<16 hex> (no MCP name in clear).
 #
 # Planted-violation proofs: scripts/ci/gates_can_fail_test.go
 # (TestMLMinimisationGate_*). See the tool's package doc for exit codes.

@@ -33,26 +33,91 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
-// mlNoticeTemplate is the required notice text from kenaz-fleet
-// docs/contract-harness-ml.md "Required notice and acknowledgement",
-// verbatim (the blockquote's line wraps joined with single spaces).
-// {Org} / {org} = org display name, {retention} = retention_days.
-const mlNoticeTemplate = "{Org} has turned on hosted inference. Kenaz will upload your activity on this device to " +
-	"Fleet: files you open and edit (paths, not contents), terminal commands, window titles, " +
-	"browser URLs, and summaries of your coding tasks (repo, branch, test and commit counts). " +
-	"It is kept for {retention} days. Your organization controls this setting. If it is turned " +
-	"off, uploads stop and your uploaded data is deleted within 72 hours."
-
-// mlNoticeDeleteSentence is the sentence the retain_on_withdrawal variant
-// replaces, and mlNoticeRetainSentence its replacement (contract, verbatim).
+// The fallback notice: counsel's approved rev-1 text (counsel doc 08 §3,
+// confirmed by Fleet as notice text revision 1), VERBATIM, split into the
+// structured fields the panel lays out. It is shown ONLY when Fleet's
+// approvals hub is unavailable and the required text revision is <=
+// localNoticeTextRevision; with the hub, its body_text wins.
+// Placeholders: {Organization name} = the org display name (mlOrgFallback
+// when unknown), {retention period} = retention_days. The text covers
+// withdrawal retention itself ("How long it is kept"), so there is no
+// retain_on_withdrawal variant.
 const (
-	mlNoticeDeleteSentence = "If it is turned off, uploads stop and your uploaded data is deleted within 72 hours."
-	mlNoticeRetainSentence = "If it is turned off, uploads stop. Your organization has instructed that data already " +
-		"uploaded is kept until the {retention} days have passed."
+	mlNoticeHeading = "Your organization has enabled workflow data offload"
+	mlNoticeIntro   = "{Organization name} has turned on Offload for your account. Here is exactly what that means."
+
+	// mlNoticeMemberChoice is the {If Member Choice:} paragraph
+	// (org_policy member_choice), mlNoticeRequired the {If Required:} one
+	// (org_policy on).
+	mlNoticeMemberChoice = "You decide. Offload is off for you until you turn it on below. You can turn it off " +
+		"at any time in Settings → Offload."
+	mlNoticeRequired = "Your organization has made Offload required for all members. If you have questions " +
+		"about this, contact your organization's administrator."
 )
 
-// localNoticeTextRevision is the Fleet notice-text revision of
-// mlNoticeTemplate — the only notice text this harness can render. It
+// mlNoticeSections are the bold-labelled paragraphs, in order; Label is
+// shown as written (with its colon), Text follows it.
+var mlNoticeSections = []MLNoticeSection{
+	{Label: "What leaves your machine:", Text: "a record of your workflow activity: file paths, the shell commands " +
+		"you run, git branch and repository names, which application or window is active, the domains of sites " +
+		"you visit, your device's power state, and timestamps; plus task summaries (start and end times, phase, " +
+		"test and commit counts) computed on your machine."},
+	{Label: "What never leaves your machine:", Text: "the contents of your files, your source code, your prompts " +
+		"or AI conversations, screenshots, and keystrokes. Anything that looks like a credential is redacted " +
+		"before sending."},
+	{Label: "Where it goes:", Text: "Kameas's cloud in Ohio, USA (AWS us-east-2), in a database area dedicated to " +
+		"your organization. Kameas processes it only on your organization's instructions."},
+	{Label: "Who sees what:", Text: "predictions about your work come back only to your own tools. Your " +
+		"organization's administrators do not see your individual predictions. Kameas engineers have no " +
+		"standing access; emergency access is logged."},
+	{Label: "How long it is kept:", Text: "workflow events and task summaries for {retention period} days, then " +
+		"deleted. Predictions and your organization's models for the subscription. If you leave the " +
+		"organization, sending stops immediately and your stored data is deleted within 72 hours unless your " +
+		"organization has chosen to keep it for the rest of the retention period. Backups expire within 30 days."},
+	{Label: "Your rights:", Text: "your organization is responsible for this data. To access, correct, export or " +
+		"delete it, contact your organization's administrator. You can also read Kameas's Privacy Policy, " +
+		"section 13."},
+}
+
+// Notice action buttons (the text's "Buttons:" line, verbatim).
+const (
+	// MLNoticeActionTurnOn: set the workflow_events opt-in AND acknowledge
+	// the notice (member_choice).
+	MLNoticeActionTurnOn = "Turn on Offload"
+	// MLNoticeActionNotNow: close the notice; no request (member_choice).
+	MLNoticeActionNotNow = "Not now"
+	// MLNoticeActionRead: acknowledge the notice (required: policy on).
+	MLNoticeActionRead = "I have read this"
+)
+
+// MLNoticeSection is one bold-labelled paragraph of the notice.
+type MLNoticeSection struct {
+	// Label is the bold label, as written (e.g. "Where it goes:").
+	Label string `json:"label"`
+	// Text is the rest of the paragraph.
+	Text string `json:"text"`
+}
+
+// MLNoticeView is the fallback notice, rendered for one org, retention
+// and policy, as structured fields (the panel lays them out; the words
+// are counsel's, verbatim).
+type MLNoticeView struct {
+	Heading  string            `json:"heading"`
+	Intro    string            `json:"intro"`
+	Sections []MLNoticeSection `json:"sections"`
+	// PolicyText is the {If Member Choice:} paragraph (policy
+	// member_choice) or the {If Required:} one (policy on); "" otherwise.
+	PolicyText string `json:"policyText"`
+	// Policy is the org_policy the notice was rendered for.
+	Policy string `json:"policy"`
+	// Actions are the button labels for that policy, in order:
+	// member_choice → [Turn on Offload, Not now]; on → [I have read this];
+	// none otherwise.
+	Actions []string `json:"actions"`
+}
+
+// localNoticeTextRevision is the Fleet notice-text revision of the
+// fallback notice above — the only notice text this harness can render. It
 // changes ONLY when the template text above changes (in lockstep with the
 // kenaz-fleet text revision that text corresponds to); never bump it for
 // any other reason. The harness acknowledges this revision and nothing
@@ -79,22 +144,49 @@ func mlDashboardConsentURL(base string) string {
 // mlOrgFallback fills {org} when the cached identity has no org name.
 const mlOrgFallback = "Your organization"
 
-// RenderMLNotice fills the contract notice for display. retainOnWithdrawal
-// selects the contract's retention variant of the last sentence.
-func RenderMLNotice(orgName string, retentionDays int, retainOnWithdrawal bool) string {
+// RenderMLNotice fills the fallback notice for display: the org name, the
+// retention period and the policy block (member_choice or on).
+func RenderMLNotice(orgName string, retentionDays int, policy string) MLNoticeView {
 	org := strings.TrimSpace(orgName)
 	if org == "" {
 		org = mlOrgFallback
 	}
-	text := mlNoticeTemplate
-	if retainOnWithdrawal {
-		text = strings.Replace(text, mlNoticeDeleteSentence, mlNoticeRetainSentence, 1)
+	fill := strings.NewReplacer(
+		"{Organization name}", org,
+		"{retention period}", strconv.Itoa(retentionDays),
+	).Replace
+	n := MLNoticeView{
+		Heading:  fill(mlNoticeHeading),
+		Intro:    fill(mlNoticeIntro),
+		Sections: make([]MLNoticeSection, len(mlNoticeSections)),
+		Policy:   policy,
+		Actions:  []string{},
 	}
-	return strings.NewReplacer(
-		"{Org}", org,
-		"{org}", org,
-		"{retention}", strconv.Itoa(retentionDays),
-	).Replace(text)
+	for i, s := range mlNoticeSections {
+		n.Sections[i] = MLNoticeSection{Label: s.Label, Text: fill(s.Text)}
+	}
+	switch policy {
+	case fleet.MLPolicyMemberChoice:
+		n.PolicyText = mlNoticeMemberChoice
+		n.Actions = []string{MLNoticeActionTurnOn, MLNoticeActionNotNow}
+	case fleet.MLPolicyOn:
+		n.PolicyText = mlNoticeRequired
+		n.Actions = []string{MLNoticeActionRead}
+	}
+	return n
+}
+
+// PlainText joins the notice into paragraphs separated by a blank line:
+// heading, intro, each "Label Text", then the policy paragraph.
+func (n MLNoticeView) PlainText() string {
+	parts := []string{n.Heading, n.Intro}
+	for _, s := range n.Sections {
+		parts = append(parts, s.Label+" "+s.Text)
+	}
+	if n.PolicyText != "" {
+		parts = append(parts, n.PolicyText)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // MLShippingStatusView is the producer's shipping health (spec §5 "shipping
@@ -192,9 +284,18 @@ type MLStatusView struct {
 
 	// OrgName is the org display name used for {org} in the notice.
 	OrgName string `json:"orgName"`
-	// NoticeText is the contract notice, rendered for this org, retention
-	// and retain_on_withdrawal ("" until /me/ml is loaded).
+	// NoticeText is the notice as plain text: the hub's body_text when
+	// NoticeFromHub, otherwise the fallback Notice joined into paragraphs
+	// (MLNoticeView.PlainText); "" until /me/ml is loaded.
 	NoticeText string `json:"noticeText"`
+	// Notice is the fallback notice (counsel's rev-1 text) as structured
+	// fields for the panel to lay out, rendered for this org, retention and
+	// policy. nil when the hub's notice is shown or NoticeNeedsDashboard.
+	Notice *MLNoticeView `json:"notice,omitempty"`
+	// NoticeTitle is the hub ml_notice item's title, shown as the heading
+	// above its verbatim body_text (Fleet's rev-2 notice keeps the heading
+	// out of body_text). "" unless NoticeFromHub.
+	NoticeTitle string `json:"noticeTitle,omitempty"`
 	// NoticeChanged is set on the answer to an ack that Fleet refused with
 	// 409 policy_changed: the state was re-read and the (new) notice must
 	// be shown again.
@@ -268,12 +369,16 @@ func mlFill(v *MLStatusView, m fleet.MeML, fleetBaseURL string) {
 	v.AckedTextRevision = m.AckedTextRevision
 	v.NoticeNeedsDashboard = m.NoticeAckRequired && m.NoticeTextRevision > localNoticeTextRevision
 	v.NoticeText = ""
+	v.Notice = nil
+	v.NoticeTitle = ""
 	v.NoticeDashboardURL = ""
 	if v.NoticeNeedsDashboard {
 		// Never show the local (older) text for a newer required revision.
 		v.NoticeDashboardURL = mlDashboardConsentURL(fleetBaseURL)
 	} else {
-		v.NoticeText = RenderMLNotice(v.OrgName, m.RetentionDays, m.RetainOnWithdrawal)
+		n := RenderMLNotice(v.OrgName, m.RetentionDays, m.OrgPolicy)
+		v.Notice = &n
+		v.NoticeText = n.PlainText()
 	}
 	v.ExclusionPaths = append([]string{}, m.Exclusions.Paths...)
 	v.ExclusionCommands = append([]string{}, m.Exclusions.Commands...)
@@ -349,6 +454,10 @@ func (a *API) FleetMLStatus(ctx context.Context) (MLStatusView, error) {
 // requires a newer revision.
 func applyHubNotice(v *MLStatusView, item PendingApprovalView) {
 	v.NoticeText = item.BodyText
+	// Fleet's rev-2 ml_notice carries its heading in the item title, not in
+	// body_text (which opens with a "What's new" panel).
+	v.NoticeTitle = item.Title
+	v.Notice = nil
 	v.NoticeFromHub = true
 	v.NoticeItemID = item.ID
 	v.NoticeNeedsDashboard = false
@@ -383,7 +492,9 @@ func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatus
 	if cur.NoticeTextRevision > 0 {
 		textRevision = localNoticeTextRevision
 	}
-	m, err := c.AckMLNotice(ctx, noticeVersion, textRevision)
+	// ai_usage_epoch from the same fresh read (sent only while
+	// include_ai_usage); a stale one is a 409, handled below.
+	m, err := c.AckMLNotice(ctx, noticeVersion, textRevision, cur.AckAIUsageEpoch())
 	if errors.Is(err, fleet.ErrMLPolicyChanged) {
 		fresh, ferr := a.FleetMLStatus(ctx)
 		fresh.NoticeChanged = true

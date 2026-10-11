@@ -278,7 +278,7 @@ func TestGetMeML_OK(t *testing.T) {
 func TestAckMLNotice_PostsVersionAndReturnsFreshState(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 	c := newMLTestClient(t, f)
-	m, err := c.AckMLNotice(t.Context(), 3, 0)
+	m, err := c.AckMLNotice(t.Context(), 3, 0, nil)
 	if err != nil {
 		t.Fatalf("AckMLNotice: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestAckMLNotice_PostsVersionAndReturnsFreshState(t *testing.T) {
 func TestAckMLNotice_409PolicyChangedIsTyped(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 409, ackBody: `{"code":"policy_changed","message":"the org notice changed since it was fetched; re-read /api/v1/me/ml"}`}
 	c := newMLTestClient(t, f)
-	m, err := c.AckMLNotice(t.Context(), 1, 0)
+	m, err := c.AckMLNotice(t.Context(), 1, 0, nil)
 	if !errors.Is(err, ErrMLPolicyChanged) {
 		t.Fatalf("err = %v, want ErrMLPolicyChanged", err)
 	}
@@ -313,7 +313,7 @@ func TestAckMLNotice_409PolicyChangedIsTyped(t *testing.T) {
 	}
 	// A 409 with some other code is NOT policy_changed.
 	f.ackBody = `{"code":"something_else"}`
-	if _, err := c.AckMLNotice(t.Context(), 1, 0); err == nil || errors.Is(err, ErrMLPolicyChanged) {
+	if _, err := c.AckMLNotice(t.Context(), 1, 0, nil); err == nil || errors.Is(err, ErrMLPolicyChanged) {
 		t.Errorf("409 something_else: err = %v", err)
 	}
 }
@@ -321,7 +321,7 @@ func TestAckMLNotice_409PolicyChangedIsTyped(t *testing.T) {
 func TestAckMLNotice_RefusesVersionZeroWithoutRequest(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 	c := newMLTestClient(t, f)
-	if _, err := c.AckMLNotice(t.Context(), 0, 0); err == nil {
+	if _, err := c.AckMLNotice(t.Context(), 0, 0, nil); err == nil {
 		t.Fatal("version 0 accepted")
 	}
 	if len(f.acks) != 0 {
@@ -334,7 +334,7 @@ func TestML_NopClient(t *testing.T) {
 	if _, err := nop.GetMeML(t.Context()); !errors.Is(err, ErrFleetDisabled) {
 		t.Errorf("GetMeML: %v", err)
 	}
-	if _, err := nop.AckMLNotice(t.Context(), 1, 0); !errors.Is(err, ErrFleetDisabled) {
+	if _, err := nop.AckMLNotice(t.Context(), 1, 0, nil); !errors.Is(err, ErrFleetDisabled) {
 		t.Errorf("AckMLNotice: %v", err)
 	}
 	if err := nop.SetWorkflowEventsOptIn(t.Context(), true); !errors.Is(err, ErrFleetDisabled) {
@@ -434,7 +434,7 @@ func TestAckMLNotice_TextRevisionInBodyOnlyWhenPositive(t *testing.T) {
 	for _, tc := range cases {
 		f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 		c := newMLTestClient(t, f)
-		if _, err := c.AckMLNotice(t.Context(), 3, tc.rev); err != nil {
+		if _, err := c.AckMLNotice(t.Context(), 3, tc.rev, nil); err != nil {
 			t.Fatalf("rev %d: AckMLNotice: %v", tc.rev, err)
 		}
 		f.mu.Lock()
@@ -458,10 +458,47 @@ func TestAckMLNotice_TextRevisionInBodyOnlyWhenPositive(t *testing.T) {
 	}
 }
 
+// kenaz-fleet #235: ai_usage_epoch is in the ack body only when given (the
+// caller passes MeML.AckAIUsageEpoch: non-nil only while
+// include_ai_usage), echoed exactly; a negative one is refused unsent.
+func TestAckMLNotice_AIUsageEpochOnlyWhenGiven(t *testing.T) {
+	seven, zero, neg := 7, 0, -1
+	cases := []struct {
+		name  string
+		epoch *int
+		want  string
+	}{
+		{"nil: no epoch", nil, `{"notice_version":3}`},
+		{"7 echoed", &seven, `{"ai_usage_epoch":7,"notice_version":3}`},
+		{"0 echoed", &zero, `{"ai_usage_epoch":0,"notice_version":3}`},
+	}
+	for _, tc := range cases {
+		f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
+		c := newMLTestClient(t, f)
+		if _, err := c.AckMLNotice(t.Context(), 3, 0, tc.epoch); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		f.mu.Lock()
+		acks := append([]string(nil), f.acks...)
+		f.mu.Unlock()
+		if len(acks) != 1 || acks[0] != tc.want {
+			t.Errorf("%s: ack bodies = %q, want %s", tc.name, acks, tc.want)
+		}
+	}
+	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
+	c := newMLTestClient(t, f)
+	if _, err := c.AckMLNotice(t.Context(), 3, 0, &neg); err == nil {
+		t.Error("ai_usage_epoch -1 accepted")
+	}
+	if len(f.acks) != 0 {
+		t.Error("a request was sent for ai_usage_epoch -1")
+	}
+}
+
 func TestAckMLNotice_RefusesNegativeTextRevisionWithoutRequest(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 	c := newMLTestClient(t, f)
-	if _, err := c.AckMLNotice(t.Context(), 1, -1); err == nil {
+	if _, err := c.AckMLNotice(t.Context(), 1, -1, nil); err == nil {
 		t.Fatal("text_revision -1 accepted")
 	}
 	if len(f.acks) != 0 {
@@ -484,5 +521,87 @@ func TestDecodeMeML_TextRevisionBumpStaysEffective(t *testing.T) {
 	}
 	if m.NoticeTextRevision != 2 || m.AckedTextRevision != 1 {
 		t.Fatalf("revisions: %+v", m)
+	}
+}
+
+// Fleet rev-2 gate (2026-10-10): include_ai_usage / ai_usage_allowed are
+// OPTIONAL. Absent (an older Fleet) or null decodes as false, so agent.turn
+// stays off; a non-bool is ErrMLDecode.
+func TestDecodeMeML_AIUsageFields(t *testing.T) {
+	m, err := DecodeMeML([]byte(effectiveBody))
+	if err != nil {
+		t.Fatalf("decode without ai usage: %v", err)
+	}
+	if m.IncludeAIUsage || m.AIUsageAllowed || m.AIUsageEffective() {
+		t.Errorf("absent ai usage fields decoded as %v/%v (effective %v), want false", m.IncludeAIUsage, m.AIUsageAllowed, m.AIUsageEffective())
+	}
+	if !m.IsEffective() {
+		t.Error("absent ai usage fields must not affect IsEffective")
+	}
+
+	with := strings.Replace(effectiveBody, "{", `{"include_ai_usage": true, "ai_usage_allowed": true,`, 1)
+	m, err = DecodeMeML([]byte(with))
+	if err != nil {
+		t.Fatalf("decode with ai usage: %v", err)
+	}
+	if !m.IncludeAIUsage || !m.AIUsageAllowed || !m.AIUsageEffective() {
+		t.Errorf("ai usage = %v/%v (effective %v), want true", m.IncludeAIUsage, m.AIUsageAllowed, m.AIUsageEffective())
+	}
+
+	// Instructed but not (yet) allowed: e.g. the member has not acked text rev 2.
+	instructed := strings.Replace(effectiveBody, "{", `{"include_ai_usage": true, "ai_usage_allowed": false,`, 1)
+	m, err = DecodeMeML([]byte(instructed))
+	if err != nil {
+		t.Fatalf("decode instructed: %v", err)
+	}
+	if !m.IncludeAIUsage || m.AIUsageAllowed || m.AIUsageEffective() {
+		t.Errorf("instructed-not-allowed decoded as %v/%v (effective %v)", m.IncludeAIUsage, m.AIUsageAllowed, m.AIUsageEffective())
+	}
+
+	// ai_usage_allowed alone never makes a non-effective body ship.
+	notEff := strings.Replace(contractExample, "{", `{"include_ai_usage": true, "ai_usage_allowed": true,`, 1)
+	m, err = DecodeMeML([]byte(notEff))
+	if err != nil {
+		t.Fatalf("decode not effective: %v", err)
+	}
+	if m.AIUsageEffective() {
+		t.Error("ai_usage_allowed on a non-effective body read as AIUsageEffective")
+	}
+	var nilM *MeML
+	if nilM.AIUsageEffective() {
+		t.Error("nil MeML is AIUsageEffective")
+	}
+
+	nulls := strings.Replace(effectiveBody, "{", `{"include_ai_usage": null, "ai_usage_allowed": null,`, 1)
+	m, err = DecodeMeML([]byte(nulls))
+	if err != nil || m.IncludeAIUsage || m.AIUsageAllowed {
+		t.Errorf("null ai usage fields: %+v, %v; want false, nil", m, err)
+	}
+
+	// kenaz-fleet #235: terms_ok and epoch decode; absent = false / 0.
+	full := strings.Replace(effectiveBody, "{", `{"include_ai_usage": true, "ai_usage_terms_ok": true, "ai_usage_allowed": true, "ai_usage_epoch": 3,`, 1)
+	m, err = DecodeMeML([]byte(full))
+	if err != nil || !m.AIUsageTermsOK || m.AIUsageEpoch != 3 {
+		t.Errorf("full ai usage = %+v, %v", m, err)
+	}
+	if e := m.AckAIUsageEpoch(); e == nil || *e != 3 {
+		t.Errorf("AckAIUsageEpoch = %v, want 3", e)
+	}
+	m, _ = DecodeMeML([]byte(effectiveBody))
+	if m.AIUsageTermsOK || m.AIUsageEpoch != 0 || m.AckAIUsageEpoch() != nil {
+		t.Errorf("absent terms/epoch = %+v (ack epoch %v)", m, m.AckAIUsageEpoch())
+	}
+	// include_ai_usage false: no epoch is echoed even when one is present.
+	m, _ = DecodeMeML([]byte(strings.Replace(effectiveBody, "{", `{"include_ai_usage": false, "ai_usage_epoch": 5,`, 1)))
+	if m.AckAIUsageEpoch() != nil {
+		t.Error("AckAIUsageEpoch non-nil with include_ai_usage false")
+	}
+
+	for _, bad := range []string{`"ai_usage_allowed": "true",`, `"ai_usage_allowed": 1,`, `"include_ai_usage": "yes",`, `"include_ai_usage": {},`,
+		`"ai_usage_terms_ok": "true",`, `"ai_usage_epoch": "1",`, `"ai_usage_epoch": 1.5,`, `"ai_usage_epoch": -1,`, `"ai_usage_epoch": true,`} {
+		body := strings.Replace(effectiveBody, "{", "{"+bad, 1)
+		if _, err := DecodeMeML([]byte(body)); !errors.Is(err, ErrMLDecode) {
+			t.Errorf("%s: err = %v, want ErrMLDecode", bad, err)
+		}
 	}
 }

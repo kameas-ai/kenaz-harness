@@ -173,6 +173,31 @@ func TestFleetApproveItem_MLNoticeSendsVerbatimBody(t *testing.T) {
 	}
 }
 
+// kenaz-fleet #235: the rev-2 ml_notice approve body carries
+// ai_usage_epoch. The hub path forwards Fleet's body byte for byte (key
+// order and all) — the harness never rebuilds it, so the epoch it echoes
+// is exactly the one Fleet put there.
+func TestFleetApproveItem_MLNoticeForwardsHubBodyByteForByte(t *testing.T) {
+	const approveBody = `{"notice_version":4,"text_revision":2,"ai_usage_epoch":9}`
+	item, _ := json.Marshal(map[string]any{
+		"id": "ml_notice:o1:4", "kind": "ml_notice", "title": "Your organization has enabled workflow data offload",
+		"summary": "Read how your activity is uploaded.", "body_text": "What's new\n\nAI usage is now included.",
+		"version": "4", "blocking": "Offload for Acme Corp", "required": true,
+		"approve": map[string]any{"method": "POST", "path": "/api/v1/me/ml/notice-ack", "body": json.RawMessage(approveBody)},
+	})
+	r := newMLRig(t, true)
+	r.fleet.set(func(f *mlFakeFleet) {
+		f.hubStatus, f.hubBody = 200, `{"items":[`+string(item)+`],"count":1}`
+		f.ackBody = withAIUsage(mlBody(true, "on", false, false, true, 4, "2026-10-09T13:00:00Z", 90, false), true, 9)
+	})
+	if _, err := r.api.FleetApproveItem(context.Background(), "ml_notice:o1:4"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if _, _, acks := r.fleet.hubSnapshot(); len(acks) != 1 || acks[0] != approveBody {
+		t.Errorf("notice-ack bodies = %q, want exactly %q", acks, approveBody)
+	}
+}
+
 func TestFleetApproveItem_LegalSendsVerbatimBody(t *testing.T) {
 	r := newMLRig(t, true)
 	r.fleet.set(func(f *mlFakeFleet) { f.hubStatus, f.hubBody = 200, hubBody(hubLegal()) })
@@ -230,6 +255,10 @@ func TestFleetMLStatus_HubNoticeReplacesLocalTemplate(t *testing.T) {
 		v.NoticeNeedsDashboard || v.NoticeDashboardURL != "" {
 		t.Errorf("view = %+v, want the hub notice verbatim", v)
 	}
+	// Fleet's rev-2 ml_notice keeps its heading in the item title.
+	if v.NoticeTitle != "Hosted inference notice" || v.Notice != nil {
+		t.Errorf("noticeTitle = %q, notice = %+v; want the hub title and no local notice", v.NoticeTitle, v.Notice)
+	}
 }
 
 func TestFleetMLStatus_FallbackWhenHubUnavailable(t *testing.T) {
@@ -239,7 +268,7 @@ func TestFleetMLStatus_FallbackWhenHubUnavailable(t *testing.T) {
 			f.state = withTextRevisions(mlBody(true, "on", false, true, false, 4, "", 90, false), 1, 0)
 		})
 		v, _ := r.api.FleetMLStatus(context.Background())
-		if v.NoticeFromHub || v.NoticeItemID != "" || v.NoticeText != RenderMLNotice("Acme Corp", 90, false) {
+		if v.NoticeFromHub || v.NoticeItemID != "" || v.NoticeText != RenderMLNotice("Acme Corp", 90, "on").PlainText() {
 			t.Errorf("view = %+v", v)
 		}
 	})
@@ -260,7 +289,7 @@ func TestFleetMLStatus_FallbackWhenHubUnavailable(t *testing.T) {
 			f.hubStatus, f.hubBody = 200, hubBody(hubLegal())
 		})
 		v, _ := r.api.FleetMLStatus(context.Background())
-		if v.NoticeFromHub || v.NoticeText != RenderMLNotice("Acme Corp", 90, false) {
+		if v.NoticeFromHub || v.NoticeText != RenderMLNotice("Acme Corp", 90, "on").PlainText() {
 			t.Errorf("view = %+v", v)
 		}
 	})
