@@ -4,14 +4,34 @@ Four workflows live in this directory.
 
 ## `tag-on-merge.yml` — semantic versioning
 
-Runs on every push to `main`. Parses the commit subject (= squashed PR
-title, since the `main` ruleset forces squash + `PR_TITLE` subject):
+**Release on merge is opt-in.** By default a push to `main` neither tags
+nor builds. Cut a release manually — Actions → `tag-on-merge` → *Run
+workflow* on `main`, or:
+
+```sh
+gh workflow run tag-on-merge.yml -R kameas-ai/kenaz-harness --ref main [-f bump=auto|patch|minor|major]
+```
+
+To restore per-merge releases (and the rolling dev build in
+`release.yml`), set the repository variable `AUTO_RELEASE=true`
+(Settings → Secrets and variables → Actions → Variables).
+
+With `AUTO_RELEASE` off nothing builds the signed cross-platform matrix
+between releases, so a manual release is the first full build of every
+merge since the last one. If it fails, the tag already exists: fix forward
+and re-dispatch `release.yml --ref <tag> -f version=<tag>` (release-integrity
+flags the tag until it ships). The run is a no-op if HEAD is already tagged;
+the warning prints the rebuild command.
+
+Every commit since the last `vX.Y.Z` tag is classified by its subject
+(= squashed PR title, since the `main` ruleset forces squash + `PR_TITLE`
+subject) and the highest bump wins (`bump=` on a manual run overrides it):
 
 | Conventional prefix | Bump | Release? |
 |---|---|---|
-| `feat:` (or `feat(scope):`) | minor (`0.x.0`) | yes — instant |
-| `fix:` `perf:` `revert:` `deps:` | patch (`0.x.y`) | yes — instant |
-| `feat!:` / `BREAKING CHANGE:` in body | major, **capped to minor while `< 1.0.0`** | yes — instant |
+| `feat:` (or `feat(scope):`) | minor (`0.x.0`) | yes |
+| `fix:` `perf:` `revert:` `deps:` | patch (`0.x.y`) | yes |
+| `feat!:` / `BREAKING CHANGE:` in body | major, **capped to minor while `< 1.0.0`** | yes |
 | `docs:` `chore:` `ci:` `style:` `refactor:` `test:` `build:` | none | no |
 | Anything that isn't a conventional commit | none | no |
 
