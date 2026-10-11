@@ -989,6 +989,12 @@ type chatStream struct {
 	// across many subsequent deltas. We splice them back into a single
 	// `llm.ToolUse` per index when the stream closes.
 	toolCalls map[int]*toolCallAccum
+	// meta is the provider-returned call metadata for the gen_ai.chat
+	// span and the local model-call record: the generation id (respID
+	// above; local record only, never the span), the served model, the
+	// upstream provider OpenRouter routed to, and the system fingerprint
+	// (llm-call-telemetry-01LLMTEL01 WP01).
+	meta llm.CallMeta
 }
 
 // toolCallAccum accumulates the streamed fragments of a single tool
@@ -1078,6 +1084,14 @@ func (s *chatStream) pump() {
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
 				Cost:         cost,
+			}
+			// The generation id goes to the local model-call store only
+			// (never a span, Fleet/counsel D32): the OpenRouter
+			// generation-stats pull keys on it.
+			s.meta.ResponseID = s.respID
+			if !s.meta.IsZero() {
+				meta := s.meta
+				s.final.Meta = &meta
 			}
 		}
 		s.mu.Unlock()
@@ -1180,8 +1194,13 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		"head", truncForLog(trimmed, 512),
 	)
 	var env struct {
-		ID      string `json:"id"`
-		Choices []struct {
+		ID string `json:"id"`
+		// Model, Provider and SystemFingerprint repeat on every chunk;
+		// Provider is the upstream OpenRouter routed the call to.
+		Model             string `json:"model"`
+		Provider          string `json:"provider"`
+		SystemFingerprint string `json:"system_fingerprint"`
+		Choices           []struct {
 			Delta struct {
 				Content   string `json:"content"`
 				Role      string `json:"role"`
@@ -1230,6 +1249,19 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		s.mu.Lock()
 		if s.respID == "" {
 			s.respID = env.ID
+		}
+		s.mu.Unlock()
+	}
+	if env.Model != "" || env.Provider != "" || env.SystemFingerprint != "" {
+		s.mu.Lock()
+		if s.meta.ResponseModel == "" {
+			s.meta.ResponseModel = env.Model
+		}
+		if s.meta.UpstreamProvider == "" {
+			s.meta.UpstreamProvider = env.Provider
+		}
+		if s.meta.SystemFingerprint == "" {
+			s.meta.SystemFingerprint = env.SystemFingerprint
 		}
 		s.mu.Unlock()
 	}

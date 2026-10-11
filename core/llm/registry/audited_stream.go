@@ -9,6 +9,24 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/llm/events"
 )
 
+// deriveCost is the cost readout for one final response: a provider-
+// sourced cost wins over the reducer's table estimate; with neither, the
+// cost is indeterminate. Shared by auditedStream.Final and the gen_ai.chat
+// span (kenaz.llm.cost_usd), so the span reports the same number the chat
+// surface shows.
+func deriveCost(resp llm.Response, reducer CostReducer, prof llm.ProviderProfile) llm.Cost {
+	switch {
+	case resp.Cost.Source == "provider":
+		// Already populated by the adapter itself; leave it.
+		return resp.Cost
+	case reducer != nil:
+		return reducer.Derive(resp.Usage, prof.Kind, prof.Model)
+	case resp.Cost.Currency == "":
+		return llm.Cost{Indeterminate: true}
+	}
+	return resp.Cost
+}
+
 // auditedStream wraps an adapter Stream with the connector's terminal
 // emit logic (response_final, cancelled, error) and CostReducer
 // integration. It also relays per-chunk audit events.
@@ -17,7 +35,6 @@ type auditedStream struct {
 	req      llm.GenerationRequest
 	prof     llm.ProviderProfile
 	emitter  *events.Emitter
-	reducer  CostReducer
 	started  time.Time
 	attempts int
 	credBuf  []byte
@@ -83,14 +100,11 @@ func (s *auditedStream) Final() (llm.Response, error) {
 	// every turn. That would have been a brand-new defect introduced by
 	// wiring the reducer at all, in the same class this mission exists to
 	// end.
-	switch {
-	case resp.Cost.Source == "provider":
-		// Already populated by the adapter itself; leave it.
-	case s.reducer != nil:
-		resp.Cost = s.reducer.Derive(resp.Usage, s.prof.Kind, s.prof.Model)
-	case resp.Cost.Currency == "":
-		resp.Cost = llm.Cost{Indeterminate: true}
-	}
+	//
+	// The reducer half now runs once per provider call at the gen_ai.chat
+	// choke point, which stamps its result onto resp (registry.Stream's
+	// spanCost); here only an unpriced response is normalised.
+	resp.Cost = deriveCost(resp, nil, s.prof)
 	if resp.SnapshotID == "" {
 		// Best-effort: snapshot id might not be available on response;
 		// the request_submitted payload retains it for replay.

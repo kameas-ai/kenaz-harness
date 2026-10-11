@@ -700,6 +700,36 @@ entries:
     adapter: custom-openai
     unsupported: "eval system field; never returned by the adapter"
 
+  # Meta — provider-returned call metadata (ids, served model, request-id
+  # header, provider extras) read off the adapter's own response for the
+  # gen_ai.chat span (llm-call-telemetry-01LLMTEL01 WP01). Each test drives
+  # a recorded response through genaitrace.Instrument and pins the exact
+  # span attribute set, content-free.
+  - struct: Response
+    field: Meta
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_GenAISpan_ExactAttributes]
+  - struct: Response
+    field: Meta
+    adapter: openai
+    tests: [TestOpenAIAdapter_GenAISpan_ExactAttributes]
+  - struct: Response
+    field: Meta
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_GenAISpan_ExactAttributes]
+  - struct: Response
+    field: Meta
+    adapter: azure-openai
+    tests: [TestAzureAdapter_GenAISpan_ExactAttributes]
+  - struct: Response
+    field: Meta
+    adapter: custom-openai
+    tests: [TestCustomAdapter_GenAISpan_ExactAttributes]
+  - struct: Response
+    field: Meta
+    adapter: bedrock
+    unsupported: "WP01 maps no Bedrock extras: the Converse stream's metadata event (latency, usage) and the x-amzn-requestid header are not yet read into llm.CallMeta. The call still gets its gen_ai.chat span (usage, finish reason, cost) from the registry choke point. Owner: llm-call-telemetry follow-up."
+
   # Composition — set by the chat adapter that built the request, after
   # the stream ends; never returned by a provider adapter
   - struct: Response

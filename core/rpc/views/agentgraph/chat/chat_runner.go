@@ -19,6 +19,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 	"github.com/kameas-ai/kenaz-harness/core/event"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
@@ -1902,6 +1903,11 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	// Registered first so it runs last: the run is not "done" for Drain
 	// until its whole exit path (checkpoint delete, close(sub.done)) is.
 	defer r.runs.done()
+	// The turn's span: every gen_ai.chat span of the run nests under it
+	// (llm-call-telemetry-01LLMTEL01 WP01). Ended after the exit path
+	// below, before the run is released to Drain.
+	ctx, turnSpan := genaitrace.StartTurn(ctx, sub.sessionID)
+	defer turnSpan.End()
 	log := logging.L()
 	// flushDone is closed when the periodic checkpoint flusher exits (nil
 	// when none was started).

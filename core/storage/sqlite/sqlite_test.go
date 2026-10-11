@@ -307,9 +307,12 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// sessions/0347-tool-exposure (tool-context-budget-01TCBUD01 WP02)
 	// one more, hence 69.
 	// ml-producer/1700-ml-outbox-and-tasks (ml-producer-01MLPRD01 WP02,
-	// its own owner block — no sessions pin moves) one more, hence 70.
-	if count != 70 {
-		t.Errorf("ledger count = %d, want 70", count)
+	// its own owner block — no sessions pin moves) one more (70), and
+	// model-calls/1800-model-calls (llm-call-telemetry-01LLMTEL01 WP02: the
+	// local model_calls store) one more, hence 71 — summed by hand at the
+	// 2026-10-10 merge of the two branches.
+	if count != 71 {
+		t.Errorf("ledger count = %d, want 71", count)
 	}
 }
 

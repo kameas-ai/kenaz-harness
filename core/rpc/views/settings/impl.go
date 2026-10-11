@@ -28,6 +28,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
@@ -126,9 +127,24 @@ func (s *FileStore) SaveAll(in Settings) error {
 	if err := in.toolExposureSettings().Validate(); err != nil {
 		return err
 	}
+	if err := validateModelCallFields(in); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveLocked(in)
+}
+
+// ErrInvalidModelCallRetentionDays is returned when the model-call
+// retention window is negative or above modelcalls.MaxRetentionDays. Zero
+// is valid (the 30-day default).
+var ErrInvalidModelCallRetentionDays = fmt.Errorf("settings: invalid modelCallRetentionDays — must be 0 (default) or in [1, %d]", modelcalls.MaxRetentionDays)
+
+func validateModelCallFields(in Settings) error {
+	if in.ModelCallRetentionDays < 0 || in.ModelCallRetentionDays > modelcalls.MaxRetentionDays {
+		return ErrInvalidModelCallRetentionDays
+	}
+	return nil
 }
 
 // ErrInvalidCompactionAggressiveness is the typed error Save returns
@@ -1584,6 +1600,10 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 	if err := a.store.SaveAll(s); err != nil {
 		return err
 	}
+	// A whole-settings save can flip "Share model-call telemetry with
+	// Fleet": apply it to the live pipeline, exactly as
+	// SetModelCallTelemetry does.
+	a.applyModelCallSharing(s.ShareModelCallTelemetryWithFleet)
 	// Schedule a debounced push of the ui_theme category (the credential-free
 	// surface this full-settings save can affect). The Syncer no-ops when the
 	// category is disabled (harness-fleet-sync-activation-01NSYNC01 gap #1).
@@ -1591,6 +1611,70 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 	// core/fleet import to keep the OSS-first boundary clean.
 	a.notifySync("ui_theme")
 	return nil
+}
+
+// GetModelCallTelemetry returns the model-call telemetry settings
+// (llm-call-telemetry-01LLMTEL01 WP02).
+func (a *API) GetModelCallTelemetry(_ context.Context) (ModelCallTelemetrySettings, error) {
+	s, err := a.store.LoadAll()
+	if err != nil {
+		return ModelCallTelemetrySettings{}, err
+	}
+	return s.modelCallTelemetry(), nil
+}
+
+// SetModelCallTelemetry validates and persists the three model-call
+// telemetry settings (EffectiveRetentionDays is ignored) and applies the
+// Fleet-sharing opt-in to the live pipeline at once.
+func (a *API) SetModelCallTelemetry(_ context.Context, mc ModelCallTelemetrySettings) error {
+	s, err := a.store.LoadAll()
+	if err != nil {
+		return err
+	}
+	s.ModelCallStatsPullDisabled = !mc.StatsPullEnabled
+	s.ModelCallRetentionDays = mc.RetentionDays
+	s.ShareModelCallTelemetryWithFleet = mc.ShareWithFleet
+	if err := a.store.SaveAll(s); err != nil {
+		return err
+	}
+	a.applyModelCallSharing(s.ShareModelCallTelemetryWithFleet)
+	return nil
+}
+
+func (s Settings) modelCallTelemetry() ModelCallTelemetrySettings {
+	return ModelCallTelemetrySettings{
+		StatsPullEnabled:       !s.ModelCallStatsPullDisabled,
+		RetentionDays:          s.ModelCallRetentionDays,
+		EffectiveRetentionDays: modelcalls.EffectiveRetentionDays(s.ModelCallRetentionDays),
+		ShareWithFleet:         s.ShareModelCallTelemetryWithFleet,
+	}
+}
+
+// ModelCallStatsPullEnabled reads "Fetch OpenRouter generation stats"
+// fresh from the store (the StatsPuller's Enabled closure). A read error
+// keeps the default (on).
+func (a *API) ModelCallStatsPullEnabled() bool {
+	if a == nil || a.store == nil {
+		return true
+	}
+	s, err := a.store.LoadAll()
+	if err != nil {
+		return true
+	}
+	return !s.ModelCallStatsPullDisabled
+}
+
+// ModelCallRetentionDays reads the stored retention setting fresh (the
+// Pruner's closure; 0 = default). A read error yields 0 (the default).
+func (a *API) ModelCallRetentionDays() int {
+	if a == nil || a.store == nil {
+		return 0
+	}
+	s, err := a.store.LoadAll()
+	if err != nil {
+		return 0
+	}
+	return s.ModelCallRetentionDays
 }
 
 // LoadAutonomyProfile delegates to the store. Returns the empty Layer

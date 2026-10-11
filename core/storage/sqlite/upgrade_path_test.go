@@ -38,7 +38,9 @@ import (
 
 	advicelabels "github.com/kameas-ai/kenaz-harness/core/advice/labels"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
+	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
@@ -484,6 +486,14 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// accept a write through the production store on THIS upgraded
 	// install. Every committed snapshot predates ml-producer/1700. ----
 	assertMLProducerTablesMigrated(t, ctx, db)
+
+	// ---- llm-call-telemetry-01LLMTEL01 WP02: model_calls exists on THIS
+	// upgraded install and round-trips a call through the production
+	// store (modelcalls.Store over the storage.DB Open hands out). Every
+	// tag under testdata/upgrade/ predates model-calls/1800, so this is
+	// the "first migration to land below/above an install's high-water
+	// mark" case, same shape as advice_labels above. ----
+	assertModelCallsTableMigrated(t, ctx, db)
 	assertUnitsTableSurvivesUntouched(t, ctx, db, tag)
 	assertArtifactsMigratedToUnits(t, ctx, db, rawPath, tag, preNonArtifactUnits, preArtifactIDs)
 
@@ -566,7 +576,11 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// contains the 1601 cursor table, so the probe's production
 	// SaveCursor write (proving the push source works on an upgraded
 	// install) now appears as a 0->1 pre-vs-post change on replay.
-	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true, "tasks": true, "advice_labels": true, "advice_label_push_cursor": true}
+	// model_calls added 2026-10-09 (llm-call-telemetry-01LLMTEL01 WP02),
+	// ahead of the first snapshot that contains it: assertModelCallsTable
+	// Migrated's probe insert is this test's own write (the advice_labels
+	// precedent), and the row count is asserted exactly there.
+	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true, "tasks": true, "advice_labels": true, "advice_label_push_cursor": true, "model_calls": true}
 	for _, tbl := range expectedChangedTables[tag] {
 		changed[tbl] = true
 	}
@@ -1061,6 +1075,52 @@ func openRawSQLiteAt(t *testing.T, path string) *sql.DB {
 	}
 	db.SetMaxOpenConns(1)
 	return db
+}
+
+// assertModelCallsTableMigrated is llm-call-telemetry-01LLMTEL01 WP02's
+// upgrade evidence, run against every snapshot in the chain: the
+// model-calls/1800 ledger row exists, model_calls is queryable and empty,
+// and a call written through the production store (modelcalls.NewStore
+// over this upgraded DB — the same call core/rpc/model_calls_wiring.go
+// makes) reads back by its session hash. Not a memory fixture (CLAUDE.md
+// blind spot #2), not an empty database (blind spot #3).
+func assertModelCallsTableMigrated(t *testing.T, ctx context.Context, db storage.DB) {
+	t.Helper()
+	r := db.Reader()
+	var n int
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM harness_migrations WHERE id = 'model-calls/1800-model-calls' AND action = 'applied'").Scan(&n); err != nil {
+		t.Fatalf("ledger query: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("model-calls/1800-model-calls applied rows = %d, want 1", n)
+	}
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM model_calls").Scan(&n); err != nil {
+		t.Fatalf("model_calls not queryable after Open (model-calls/1800 did not apply): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("model_calls row count on a fresh upgrade = %d, want 0 (no snapshot seeds a call)", n)
+	}
+	store, err := modelcalls.NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost := 0.001
+	probe := genaitrace.CallRecord{
+		SpanID: "upgrade-path-model-call-probe", TraceID: "t", Start: fixedProbeTime,
+		End: fixedProbeTime.Add(time.Second), OK: true, SessionHash: "00112233445566aa",
+		Provider: "openrouter", RequestModel: "openai/gpt-4o", ResponseID: "gen-upgrade-probe",
+		FinishReasons: []string{"stop"}, InputTokens: 10, OutputTokens: 2, CostUSD: &cost,
+	}
+	if err := store.Insert(ctx, []genaitrace.CallRecord{probe}); err != nil {
+		t.Fatalf("model_calls insert after Open on an upgraded install failed: %v", err)
+	}
+	got, err := store.ListBySessionHash(ctx, probe.SessionHash, 10)
+	if err != nil || len(got) != 1 || got[0].ResponseID != "gen-upgrade-probe" || got[0].DurationMS != 1000 {
+		t.Fatalf("model_calls round trip on an upgraded install: %+v, %v", got, err)
+	}
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM model_calls").Scan(&n); err != nil || n != 1 {
+		t.Fatalf("model_calls row count after the probe = %d, %v; want exactly 1", n, err)
+	}
 }
 
 // assertAdviceLabelsTableMigrated is laya-advisors-01LAYA001 WP08's

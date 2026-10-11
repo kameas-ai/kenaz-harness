@@ -19,6 +19,7 @@ import (
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
+	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
@@ -203,6 +204,17 @@ func Open(cfg storage.Config) (storage.DB, error) {
 	if err := mlstore.RegisterMigrations(registry); err != nil {
 		db.closeOnError()
 		return nil, fmt.Errorf("storage: register ml-producer migrations: %w", err)
+	}
+	// model-calls: llm-call-telemetry-01LLMTEL01 WP02. Creates model_calls
+	// (version 1800), the durable local store of every LLM provider call
+	// (allowlisted gen_ai.* / kenaz.* attributes only, never content —
+	// check-genai-span-no-content.sh covers its columns). Registered here
+	// so it applies on every install, including upgraded ones whose ledger
+	// high-water mark already sits below or above the 1800-1899 block —
+	// see core/storage/sqlite/upgrade_path_test.go.
+	if err := modelcalls.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register model-calls migrations: %w", err)
 	}
 	db.registry = registry
 

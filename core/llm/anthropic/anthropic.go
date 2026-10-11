@@ -390,6 +390,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		events:            make(chan llm.StreamEvent, 16),
 		done:              make(chan struct{}),
 		syntheticToolName: syntheticName,
+		meta:              llm.CallMeta{RequestID: resp.Header.Get("request-id")},
 	}
 	go s.pump()
 	return s, nil
@@ -937,6 +938,10 @@ type stream struct {
 	// ContentBlock instead of a ToolUse call, hiding the implementation
 	// detail from callers. (multimodal-io-extended-01KQ8TD2 WP04)
 	syntheticToolName string
+
+	// meta collects the provider-returned call metadata (message id,
+	// served model, request-id header) for the gen_ai.chat span.
+	meta llm.CallMeta
 }
 
 type toolPartialState struct {
@@ -1005,6 +1010,10 @@ func (s *stream) pump() {
 				ToolCalls:    realToolCalls,
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
+			}
+			if !s.meta.IsZero() {
+				meta := s.meta
+				s.final.Meta = &meta
 			}
 		}
 		s.mu.Unlock()
@@ -1110,6 +1119,8 @@ func (s *stream) handleSSEData(_ string, raw []byte) {
 		// message_delta.
 		if env.Message != nil {
 			var ms struct {
+				ID    string `json:"id"`
+				Model string `json:"model"`
 				Usage *struct {
 					InputTokens        int `json:"input_tokens"`
 					OutputTokens       int `json:"output_tokens"`
@@ -1117,7 +1128,14 @@ func (s *stream) handleSSEData(_ string, raw []byte) {
 					CacheReadInput     int `json:"cache_read_input_tokens"`
 				} `json:"usage"`
 			}
-			if err := json.Unmarshal(env.Message, &ms); err == nil && ms.Usage != nil {
+			msErr := json.Unmarshal(env.Message, &ms)
+			if msErr == nil && (ms.ID != "" || ms.Model != "") {
+				s.mu.Lock()
+				s.meta.ResponseID = ms.ID
+				s.meta.ResponseModel = ms.Model
+				s.mu.Unlock()
+			}
+			if msErr == nil && ms.Usage != nil {
 				s.mu.Lock()
 				s.usage.InputTokens = ms.Usage.InputTokens
 				if s.usage.OutputTokens == 0 {

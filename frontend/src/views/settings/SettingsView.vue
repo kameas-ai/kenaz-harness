@@ -29,6 +29,7 @@ import AccountPanel from '@/views/settings/AccountPanel.vue';
 import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
 import PeersPanel from '@/views/settings/PeersPanel.vue';
 import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
+import ModelCallTelemetryPanel from '@/views/settings/ModelCallTelemetryPanel.vue';
 // fix/served-agent-profiles-sep17: served workbenches had no route to
 // AgentsView at all (contracts/agents-served-rpc.md) — a served-mode user
 // could not configure named Sonnet/Opus/Fable delegation profiles.
@@ -1175,6 +1176,15 @@ onMounted(() => {
           Fleet Telemetry
         </h2>
         <FleetTelemetryPanel />
+      </section>
+      <!-- llm-call-telemetry-01LLMTEL01 WP02: the local model-call record's
+           stats pull + retention, and the default-off "Share model-call
+           telemetry with Fleet" opt-in, next to the Fleet sharing controls. -->
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+          Model-call telemetry
+        </h2>
+        <ModelCallTelemetryPanel />
       </section>
       <!-- fleet-integrity-observability WP08: unit-sync conflict + error surface. -->
       <section>

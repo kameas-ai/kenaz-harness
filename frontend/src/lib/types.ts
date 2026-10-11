@@ -158,6 +158,62 @@ export interface UsageComposition {
   hotOverBudgetBy?: number;
 }
 
+/**
+ * One stored model provider call (llm-call-telemetry-01LLMTEL01 WP02):
+ * the wire shape of Go modelcalls.CallView, read through
+ * Sessions_ModelCalls. Every string is a bounded allowlist value (ids,
+ * model ids, provider tokens, enums) — never content. Pointer fields are
+ * null when the provider did not report them; provider* / native* fields
+ * come from the OpenRouter generation-stats pull and stay null until it
+ * lands (statsState 'fetched').
+ */
+export interface ModelCall {
+  spanId: string;
+  startedAtMs: number;
+  durationMs: number;
+  status: 'ok' | 'error';
+  provider: string;
+  requestModel: string;
+  responseModel: string;
+  responseId: string;
+  upstream: string;
+  finishReasons: string[];
+  errorType: string;
+  attempt: number;
+  fallback: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  ttftMs: number;
+  costUsd: number | null;
+  statsState: '' | 'fetched' | 'gave_up';
+  providerLatencyMs: number | null;
+  providerGenerationTimeMs: number | null;
+  providerCostUsd: number | null;
+  nativeInputTokens: number | null;
+  nativeOutputTokens: number | null;
+  nativeReasoningTokens: number | null;
+  nativeCachedTokens: number | null;
+  nativeFinishReason: string;
+}
+
+/**
+ * The three model-call telemetry settings (Go
+ * settings.ModelCallTelemetrySettings).
+ */
+export interface ModelCallTelemetrySettings {
+  /** "Fetch OpenRouter generation stats" — default true. */
+  statsPullEnabled: boolean;
+  /** Retention as stored; 0 = the 30-day default. */
+  retentionDays: number;
+  /** Read-only: the window the pruner applies. Ignored on write. */
+  effectiveRetentionDays: number;
+  /** "Share model-call telemetry with Fleet" — default false. */
+  shareWithFleet: boolean;
+}
+
 export interface SessionUsage {
   /** Sum of all input tokens for the session. */
   promptTokens: number;

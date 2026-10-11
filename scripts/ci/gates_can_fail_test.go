@@ -4134,8 +4134,10 @@ func TestKnobCoverageGate_UnregisteredSettingsFieldFires(t *testing.T) {
 	// be re-anchored to the real last field whenever a later WP appends
 	// one, the same maintenance TestServedModeTopicForwardingGate_Planted*
 	// documents for passthroughTopics' own terminator-anchored proof.
-	const target = "\tAdviceLabelCaptureDisabled bool `json:\"adviceLabelCaptureDisabled,omitempty\"`\n}"
-	const mutated = "\tAdviceLabelCaptureDisabled bool `json:\"adviceLabelCaptureDisabled,omitempty\"`\n\n" +
+	// Re-anchored 2026-10-09 to ShareModelCallTelemetryWithFleet
+	// (llm-call-telemetry-01LLMTEL01 WP02 appended the model-call fields).
+	const target = "\tShareModelCallTelemetryWithFleet bool `json:\"shareModelCallTelemetryWithFleet,omitempty\"`\n}"
+	const mutated = "\tShareModelCallTelemetryWithFleet bool `json:\"shareModelCallTelemetryWithFleet,omitempty\"`\n\n" +
 		"\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
 		"\t// to prove check-knob-coverage.sh's real settings.Settings guard\n" +
 		"\t// (TestKnobCoverage_Settings) fails when a field has no\n" +
@@ -5519,5 +5521,223 @@ func TestMLMinimisationGate_CleanOnUnmutatedTree(t *testing.T) {
 	}
 	if !strings.Contains(out, "clean") || !strings.Contains(out, "through the real recorder") {
 		t.Fatalf("gate exited 0 without its clean summary:\n%s", out)
+	}
+}
+
+// ── check-genai-span-no-content.sh (llm-call-telemetry-01LLMTEL01 WP01) ──
+
+// genaiSpanStructuralOnly runs only the structural half of
+// check-genai-span-no-content.sh; the planted cases below exercise it, and
+// the runtime half (eleven go test runs) would only slow them down.
+var genaiSpanStructuralOnly = map[string]string{"GENAI_SPAN_GATE_STRUCTURAL_ONLY": "1"}
+
+const genaiAllowlistAnchor = "var SpanAttributes = []AttrSpec{\n"
+
+func genaiGateMustFail(t *testing.T, root, wantSubstr, what string) {
+	t.Helper()
+	code, out := runGateEnv(t, "check-genai-span-no-content.sh", root, genaiSpanStructuralOnly)
+	if code == 0 {
+		t.Fatalf("check-genai-span-no-content.sh exited 0 with %s planted — the gate cannot fail.\n%s", what, out)
+	}
+	if !strings.Contains(out, wantSubstr) {
+		t.Fatalf("gate failed, but its output does not name the planted %s (%q):\n%s", what, wantSubstr, out)
+	}
+}
+
+// TestGenAISpanGate_PlantedContentKeyFires: an OpenLLMetry content key
+// (gen_ai.prompt.0.content) added to the allowlist fails the build, as do
+// the semconv message shape and a tool call's arguments / result.
+func TestGenAISpanGate_PlantedContentKeyFires(t *testing.T) {
+	root := repoRoot(t)
+	attrs := filepath.Join(root, "core", "llm", "genaitrace", "attrs.go")
+	for _, key := range []string{"gen_ai.prompt.0.content", "gen_ai.completion", "gen_ai.input.messages", "kenaz.llm.tool.arguments", "kenaz.llm.tool.result"} {
+		t.Run(key, func(t *testing.T) {
+			cleanup := plantReplace(t, attrs, genaiAllowlistAnchor, genaiAllowlistAnchor+
+				"\t{Key: \""+key+"\", Type: TypeString, Class: ClassID, Spans: chatOnly, Doc: \"probe\"},\n")
+			defer cleanup()
+			genaiGateMustFail(t, root, "key "+key+" is a content key", "content key "+key)
+		})
+	}
+}
+
+// TestGenAISpanGate_PlantedFreeTextAttributeFires: a string attribute with
+// no bounded class — the shape an "error message" attribute would take —
+// fails the build even though its key is innocent.
+func TestGenAISpanGate_PlantedFreeTextAttributeFires(t *testing.T) {
+	root := repoRoot(t)
+	attrs := filepath.Join(root, "core", "llm", "genaitrace", "attrs.go")
+	cleanup := plantReplace(t, attrs, genaiAllowlistAnchor, genaiAllowlistAnchor+
+		"\t{Key: \"kenaz.llm.error_detail\", Type: TypeString, Class: ValueClass(\"text\"), Spans: chatOnly, Doc: \"probe\"},\n")
+	defer cleanup()
+	genaiGateMustFail(t, root, "string key kenaz.llm.error_detail has Class", "free-text attribute")
+}
+
+// TestGenAISpanGate_PlantedSecondEmitterFires: a gen_ai.* attribute set
+// anywhere but the allowlist-enforcing instrumentation package fails.
+func TestGenAISpanGate_PlantedSecondEmitterFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "rpc", "views", "agentgraph", "chat", "zz_gate_probe_genai.go")
+	cleanup := plant(t, probe, "package chat\n\nimport \"go.opentelemetry.io/otel/attribute\"\n\n"+
+		"var zzGateProbeGenAI = attribute.String(\"gen_ai.completion\", \"text\")\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "model-call span key literal \"gen_ai.completion\" outside", "second emitter")
+}
+
+// TestGenAISpanGate_PlantedUndeclaredKeyInPackageFires: a key literal in
+// the instrumentation package that is not on the allowlist fails
+// statically (attrSet would also drop it at runtime).
+func TestGenAISpanGate_PlantedUndeclaredKeyInPackageFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "llm", "genaitrace", "zz_gate_probe.go")
+	cleanup := plant(t, probe, "package genaitrace\n\nvar zzGateProbeKey = \"kenaz.llm.system_prompt\"\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "literal \"kenaz.llm.system_prompt\" is not a declared attribute key", "undeclared key")
+}
+
+// TestGenAISpanGate_PlantedSemconvContentKeyFires: referencing a semconv
+// content key (gen_ai.input.messages) anywhere fails.
+func TestGenAISpanGate_PlantedSemconvContentKeyFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "llm", "zz_gate_probe_semconv.go")
+	cleanup := plant(t, probe, "package llm\n\nimport semconv \"go.opentelemetry.io/otel/semconv/v1.40.0\"\n\n"+
+		"var zzGateProbeSemconv = semconv.GenAIInputMessagesKey\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "semconv content key GenAIInputMessagesKey", "semconv content key")
+}
+
+// TestGenAISpanGate_PlantedSpanEventFires: data in a span event (which
+// Fleet drops, and which bypasses the allowlist) fails.
+func TestGenAISpanGate_PlantedSpanEventFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "llm", "genaitrace", "zz_gate_probe_event.go")
+	cleanup := plant(t, probe, "package genaitrace\n\nimport \"go.opentelemetry.io/otel/trace\"\n\n"+
+		"func zzGateProbeEvent(s trace.Span) { s.AddEvent(\"prompt\") }\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "AddEvent", "span event")
+}
+
+// TestGenAISpanGate_PlantedContentStoreColumnFires (WP02): a column added
+// to the local model_calls store by a migration anywhere under core/ —
+// here a prompt_text column in a new file — fails the build: it is
+// neither structural nor bound to an allowlisted key, and it names
+// content.
+func TestGenAISpanGate_PlantedContentStoreColumnFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "modelcalls", "zz_gate_probe_column.go")
+	cleanup := plant(t, probe, "package modelcalls\n\nconst zzGateProbeColumn = `ALTER TABLE model_calls ADD COLUMN prompt_text TEXT`\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "model_calls column prompt_text is neither structural nor bound", "content store column")
+	genaiGateMustFail(t, root, "model_calls column prompt_text is a content column", "content store column")
+}
+
+// TestGenAISpanGate_PlantedUnmappedStoreColumnFires (WP02): an innocently
+// named column in the CREATE TABLE itself, with no allowlisted key behind
+// it, fails — a free-text column cannot hide behind a harmless name.
+func TestGenAISpanGate_PlantedUnmappedStoreColumnFires(t *testing.T) {
+	root := repoRoot(t)
+	mig := filepath.Join(root, "core", "modelcalls", "migrations.go")
+	const anchor = "\t  span_id                     TEXT NOT NULL,\n"
+	cleanup := plantReplace(t, mig, anchor, anchor+"\t  provider_note               TEXT NOT NULL DEFAULT '',\n")
+	defer cleanup()
+	genaiGateMustFail(t, root, "model_calls column provider_note is neither structural nor bound", "unmapped store column")
+}
+
+// TestGenAISpanGate_PlantedStoreMappingToUndeclaredKeyFires (WP02): a
+// store column bound to a key the span allowlist does not declare fails.
+func TestGenAISpanGate_PlantedStoreMappingToUndeclaredKeyFires(t *testing.T) {
+	root := repoRoot(t)
+	rec := filepath.Join(root, "core", "llm", "genaitrace", "record.go")
+	const anchor = "var RecordColumns = []RecordColumn{\n"
+	cleanup := plantReplace(t, rec, anchor, anchor+"\t{Column: \"system_text\", Key: \"gen_ai.system_instructions\"},\n")
+	defer cleanup()
+	genaiGateMustFail(t, root, "column system_text maps to gen_ai.system_instructions, which is not an allowlisted attribute key", "store mapping to an undeclared key")
+}
+
+// ── check 7: span scope (Fleet/counsel D32, 2026-10-10) ──
+//
+// gen_ai.response.id (the provider generation id, which the provider's
+// own traces also carry) must never be an attribute of any span, and no
+// key whose Spans list excludes a span may be set on that span.
+
+// TestGenAISpanGate_PlantedResponseIDOnSpanAllowlistFires: re-declaring
+// gen_ai.response.id as a gen_ai.chat attribute in the allowlist fails.
+func TestGenAISpanGate_PlantedResponseIDOnSpanAllowlistFires(t *testing.T) {
+	root := repoRoot(t)
+	attrs := filepath.Join(root, "core", "llm", "genaitrace", "attrs.go")
+	const anchor = `{Key: "gen_ai.response.id", Type: TypeString, Class: ClassID, Spans: storedOnly,`
+	cleanup := plantReplace(t, attrs, anchor, `{Key: "gen_ai.response.id", Type: TypeString, Class: ClassID, Spans: chatAndStored,`)
+	defer cleanup()
+	genaiGateMustFail(t, root, "key gen_ai.response.id is carried on span gen_ai.chat", "gen_ai.response.id declared on a span")
+}
+
+// TestGenAISpanGate_PlantedResponseIDSetOnSpanFires: setting
+// gen_ai.response.id in the gen_ai.chat span's attribute set (the exact
+// line this rule removed from responseAttrs) fails, though the allowlist
+// is untouched and attrSet would refuse it at runtime.
+func TestGenAISpanGate_PlantedResponseIDSetOnSpanFires(t *testing.T) {
+	root := repoRoot(t)
+	span := filepath.Join(root, "core", "llm", "genaitrace", "span.go")
+	const anchor = "\t\ta.str(\"gen_ai.response.model\", m.ResponseModel)\n"
+	cleanup := plantReplace(t, span, anchor, "\t\ta.str(\"gen_ai.response.id\", m.ResponseID)\n"+anchor)
+	defer cleanup()
+	genaiGateMustFail(t, root, "key gen_ai.response.id set on an attrSet scoped to span gen_ai.chat", "gen_ai.response.id set on the chat span")
+}
+
+// TestGenAISpanGate_PlantedStoredOnlyKeyOnSpanFires: the general class —
+// any key whose scope excludes spans (here a stats-pull key) written into
+// a span-scoped set fails.
+func TestGenAISpanGate_PlantedStoredOnlyKeyOnSpanFires(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "core", "llm", "genaitrace", "zz_gate_probe_scope.go")
+	cleanup := plant(t, probe, "package genaitrace\n\nfunc zzGateProbeScope() []any {\n"+
+		"\ta := attrSet{scope: SpanNameTurn}\n\ta.int(\"kenaz.provider.latency_ms\", 1)\n\treturn nil\n}\n", "")
+	defer cleanup()
+	genaiGateMustFail(t, root, "key kenaz.provider.latency_ms set on an attrSet scoped to span kenaz.chat.turn", "stored-only key on a span")
+}
+
+// TestGenAISpanGate_PlantedScopeBypassFires: an unscoped attrSet, a raw
+// attribute.String("gen_ai.response.id", …) in the instrumentation
+// package, and a semconv GenAIResponseID selector anywhere else each
+// fail — the three ways around the scoped write.
+func TestGenAISpanGate_PlantedScopeBypassFires(t *testing.T) {
+	root := repoRoot(t)
+	cases := []struct {
+		name, file, src, want string
+	}{
+		{"unscoped attrSet", filepath.Join(root, "core", "llm", "genaitrace", "zz_gate_probe_unscoped.go"),
+			"package genaitrace\n\nfunc zzGateProbeUnscoped() int { a := attrSet{}; return len(a.kv) }\n",
+			"attrSet literal without a resolvable scope"},
+		{"raw attribute", filepath.Join(root, "core", "llm", "genaitrace", "zz_gate_probe_raw.go"),
+			"package genaitrace\n\nimport \"go.opentelemetry.io/otel/attribute\"\n\n" +
+				"var zzGateProbeRaw = attribute.String(\"gen_ai.response.id\", \"gen-x\")\n",
+			`attribute.String("gen_ai.response.id", …) outside attrSet`},
+		{"semconv selector", filepath.Join(root, "core", "llm", "zz_gate_probe_respid.go"),
+			"package llm\n\nimport semconv \"go.opentelemetry.io/otel/semconv/v1.40.0\"\n\n" +
+				"var zzGateProbeRespID = semconv.GenAIResponseIDKey\n",
+			"semconv GenAIResponseIDKey — gen_ai.response.id is never a span attribute"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cleanup := plant(t, c.file, c.src, "")
+			defer cleanup()
+			genaiGateMustFail(t, root, c.want, c.name)
+		})
+	}
+}
+
+// TestGenAISpanGate_StructuralVerdictIsCWDIndependent: the clean tree
+// passes from the repo root and from a foreign cwd, and the scan is
+// non-vacuous.
+func TestGenAISpanGate_StructuralVerdictIsCWDIndependent(t *testing.T) {
+	root := repoRoot(t)
+	for _, dir := range []string{root, t.TempDir()} {
+		code, out := runGateEnv(t, "check-genai-span-no-content.sh", dir, genaiSpanStructuralOnly)
+		if code != 0 {
+			t.Fatalf("check-genai-span-no-content.sh from %s exited %d on the clean tree:\n%s", dir, code, out)
+		}
+		if !strings.Contains(out, "keys, all bounded, none content") || !strings.Contains(out, "under core, cmd") ||
+			!strings.Contains(out, "local store model_calls: 42 columns") {
+			t.Fatalf("check-genai-span-no-content.sh from %s passed without reporting its scan:\n%s", dir, out)
+		}
 	}
 }

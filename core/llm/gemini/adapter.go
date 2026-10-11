@@ -324,6 +324,10 @@ type geminiStream struct {
 	finishStop  string
 	toolCalls   []llm.ToolUse
 	toolCounter int
+
+	// meta is the provider-returned call metadata for the gen_ai.chat
+	// span (llm-call-telemetry-01LLMTEL01 WP01).
+	meta llm.CallMeta
 }
 
 func (s *geminiStream) Events() <-chan llm.StreamEvent { return s.events }
@@ -374,6 +378,10 @@ func (s *geminiStream) pump() {
 				ToolCalls:    s.toolCalls,
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
+			}
+			if !s.meta.IsZero() {
+				meta := s.meta
+				s.final.Meta = &meta
 			}
 		}
 		s.mu.Unlock()
@@ -452,9 +460,21 @@ func (s *geminiStream) handleFrame(raw []byte) {
 		return
 	}
 
+	if gr.ResponseID != "" || gr.ModelVersion != "" {
+		s.mu.Lock()
+		if s.meta.ResponseID == "" {
+			s.meta.ResponseID = gr.ResponseID
+		}
+		if s.meta.ResponseModel == "" {
+			s.meta.ResponseModel = gr.ModelVersion
+		}
+		s.mu.Unlock()
+	}
+
 	// Update usage from every frame; last frame wins (Gemini accumulates).
 	if gr.UsageMetadata != nil {
 		s.mu.Lock()
+		s.meta.ToolUsePromptTokens = gr.UsageMetadata.ToolUsePromptTokenCount
 		s.usage = llm.Usage{
 			InputTokens:     gr.UsageMetadata.PromptTokenCount,
 			OutputTokens:    gr.UsageMetadata.CandidatesTokenCount,

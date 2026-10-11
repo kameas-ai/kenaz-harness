@@ -156,6 +156,8 @@ import type {
   PermissionRequest,
   PermissionMode,
   SessionUsage,
+  ModelCall,
+  ModelCallTelemetrySettings,
   TurnRun,
   DriftReport,
   PolicyFileDetail,
@@ -303,6 +305,10 @@ interface WailsBindingsLike {
   ): Promise<ResumeMessageResult>;
   /** Returns the cumulative token + cost aggregate (token-cost-telemetry WP03). */
   Sessions_GetUsage(id: string): Promise<SessionUsage>;
+  // ── llm-call-telemetry-01LLMTEL01 WP02 ──────────────────────────────
+  Sessions_ModelCalls(id: string, limit: number): Promise<ModelCall[] | null>;
+  Settings_GetModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
+  Settings_SetModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
   /** Turn -> run links (agentgraph-settings-linkage-01DOGF0D WP03). Desktop-only. */
   Sessions_TurnRuns(sessionID: string): Promise<TurnRun[]>;
   Sessions_SaveAsArtifact(
@@ -1674,6 +1680,13 @@ export interface SessionsClient {
    */
   getUsage(id: string): Promise<SessionUsage>;
   /**
+   * modelCalls lists the session's most recent stored model provider
+   * calls, newest first (llm-call-telemetry-01LLMTEL01 WP02) — the
+   * read-only "Model calls" disclosure under the cost readout. limit <= 0
+   * means 50 (max 500). Never content. Desktop-only.
+   */
+  modelCalls(id: string, limit?: number): Promise<ModelCall[]>;
+  /**
    * turnRuns returns the session's recorded chat turn -> agent-graph run
    * links, oldest first (agentgraph-settings-linkage-01DOGF0D WP03). Turns
    * that predate the mapping have no entry. Desktop-only: served mode
@@ -2490,6 +2503,14 @@ export interface SettingsClient {
    * ping failures. Default: true.
    */
   getMCPAutoRestart(): Promise<boolean>;
+  /**
+   * Model-call telemetry settings (llm-call-telemetry-01LLMTEL01 WP02):
+   * the OpenRouter stats pull, retention, and the default-off "Share
+   * model-call telemetry with Fleet" opt-in.
+   */
+  getModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
+  /** Persist them; turning sharing on exports only calls that start afterwards. */
+  setModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
   /** Persist the MCP auto-restart dial. */
   setMCPAutoRestart(enabled: boolean): Promise<void>;
 
@@ -3924,6 +3945,10 @@ export interface FleetTelemetryStatus {
     exports_failed: number;
     exports_unauthorized: number;
     exports_identity_mismatch: number;
+    /** "Share model-call telemetry with Fleet" is on (llm-call-telemetry WP02). */
+    model_calls_shared?: boolean;
+    model_calls_exported?: number;
+    model_calls_withheld?: number;
   };
   /** Served mode only: the enroll supervisor. */
   enroll?: {
@@ -4435,6 +4460,8 @@ export function createHarnessClient(): HarnessClient {
         b().Sessions_ResumeMessage(sessionId, messageId),
       getUsage: (id: string): Promise<SessionUsage> =>
         b().Sessions_GetUsage(id),
+      modelCalls: async (id: string, limit = 0): Promise<ModelCall[]> =>
+        (await b().Sessions_ModelCalls(id, limit)) ?? [],
       turnRuns: (sessionId: string): Promise<TurnRun[]> =>
         b().Sessions_TurnRuns(sessionId),
       saveAsArtifact: (sessionId, messageId, title, rangeStart, rangeEnd) =>
@@ -4707,6 +4734,8 @@ export function createHarnessClient(): HarnessClient {
       getAutonomy: () => b().Settings_GetAutonomy(),
       setAutonomy: (layer) => b().Settings_SetAutonomy(layer),
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
+      getModelCallTelemetry: () => b().Settings_GetModelCallTelemetry(),
+      setModelCallTelemetry: (mc) => b().Settings_SetModelCallTelemetry(mc),
       setMCPAutoRestart: (enabled) => b().Settings_SetMCPAutoRestart(enabled),
       getToolExposure: () => b().Settings_GetToolExposure(),
       setToolExposure: (settings) => b().Settings_SetToolExposure(settings),
@@ -5828,6 +5857,7 @@ export function createFakeHarnessClient(
         originalMessageId: messageId,
       }),
       turnRuns: async () => [],
+      modelCalls: async () => [],
       getUsage: async () => ({
         promptTokens: 0,
         completionTokens: 0,
@@ -6237,6 +6267,13 @@ export function createFakeHarnessClient(
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: noop,
       getMCPAutoRestart: async () => true,
+      getModelCallTelemetry: async () => ({
+        statsPullEnabled: true,
+        retentionDays: 0,
+        effectiveRetentionDays: 30,
+        shareWithFleet: false,
+      }),
+      setModelCallTelemetry: noop,
       setMCPAutoRestart: noop,
       getToolExposure: async () => ({
         exposure: {},

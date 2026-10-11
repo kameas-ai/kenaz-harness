@@ -19,6 +19,7 @@ import (
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
@@ -357,6 +358,17 @@ func (b *Bindings) Sessions_SuggestTitle(id string) (string, error) {
 func (b *Bindings) Sessions_GetUsage(id string) (sessions.SessionUsage, error) {
 	defer sentry.WrapBinding("Sessions_GetUsage")()
 	return b.api.Sessions().GetUsage(b.ctx(), id)
+}
+
+// Sessions_ModelCalls returns the session's most recent stored model
+// provider calls, newest first, for the read-only "Model calls" view
+// under the session cost readout (llm-call-telemetry-01LLMTEL01 WP02).
+// limit <= 0 means 50; it is capped at 500. Allowlisted, bounded fields
+// only — ids, models, counts, latencies, cost, finish reasons, error
+// class; never content.
+func (b *Bindings) Sessions_ModelCalls(id string, limit int) ([]modelcalls.CallView, error) {
+	defer sentry.WrapBinding("Sessions_ModelCalls")()
+	return b.api.ModelCallsForSession(b.ctx(), id, limit)
 }
 
 // Sessions_TurnRuns returns the session's recorded chat turn ->
@@ -1470,6 +1482,23 @@ func (b *Bindings) Settings_SetShortcuts(m map[string]string) error {
 func (b *Bindings) Settings_GetMCPAutoRestart() (bool, error) {
 	defer sentry.WrapBinding("Settings_GetMCPAutoRestart")()
 	return b.api.Settings().GetMCPAutoRestart(b.ctx())
+}
+
+// Settings_GetModelCallTelemetry returns the model-call telemetry
+// settings: "Fetch OpenRouter generation stats" (default on), retention
+// days (0 = 30) and "Share model-call telemetry with Fleet" (default
+// off). llm-call-telemetry-01LLMTEL01 WP02.
+func (b *Bindings) Settings_GetModelCallTelemetry() (settings.ModelCallTelemetrySettings, error) {
+	defer sentry.WrapBinding("Settings_GetModelCallTelemetry")()
+	return b.api.Settings().GetModelCallTelemetry(b.ctx())
+}
+
+// Settings_SetModelCallTelemetry persists the model-call telemetry
+// settings and applies the Fleet-sharing opt-in to the live span lane
+// at once (turning it on exports only calls that start afterwards).
+func (b *Bindings) Settings_SetModelCallTelemetry(mc settings.ModelCallTelemetrySettings) error {
+	defer sentry.WrapBinding("Settings_SetModelCallTelemetry")()
+	return b.api.Settings().SetModelCallTelemetry(b.ctx(), mc)
 }
 
 // Settings_SetMCPAutoRestart persists the MCP auto-restart dial.

@@ -15,6 +15,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/fallback"
+	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
 	"github.com/kameas-ai/kenaz-harness/core/llm/retry"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
@@ -968,6 +969,11 @@ func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest
 	// operator-saved chain matches. When FallbackChainId is empty the
 	// streamFn closure is byte-for-byte the pre-WP07 call — no Runner is
 	// constructed and behaviour is unchanged.
+	// One attempt sequence for this whole model request: every provider
+	// call it makes — registry retries, the RetryStream retries below,
+	// fallback hops — numbers its gen_ai.chat span's kenaz.llm.attempt
+	// from the same counter (llm-call-telemetry-01LLMTEL01 WP01).
+	ctx = genaitrace.WithCallSequence(ctx)
 	streamFn := func() (corellm.Stream, error) {
 		return a.reg.Stream(ctx, gen)
 	}
