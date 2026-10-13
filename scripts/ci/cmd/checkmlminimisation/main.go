@@ -88,6 +88,12 @@ import (
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
+// fake joins parts of a deliberately fake credential at runtime, so the
+// source holds no literal a public-repo secret scanner (GitGuardian, GitHub)
+// reads as a leaked secret. The joined value is identical to the old literal;
+// every one of these is an invented canary that proves redaction.
+func fake(parts ...string) string { return strings.Join(parts, "") }
+
 const tag = "[ml-minimisation]"
 
 // contract is spec §12 A-10's table, copied by hand. Change it only with
@@ -490,19 +496,17 @@ func corpus() []fixture {
 		extras []string
 	}{
 		{"go test ./internal/zzcanarydeep/... -run TestZZCanary", 1, nil},
-		{"GITHUB_TOKEN=ghp_zzCanary1234567890abcdefABCDEF git push https://zzcanaryuser:zzhunter2@github.com/zzcanaryorg/zzcanaryrepo.git", 0,
-			[]string{"ghp_zzCanary", "zzhunter2", "github.com/zzcanaryorg"}},
-		{"export AWS_SECRET_ACCESS_KEY=zzCanarySecret9876543210abcdXYZ", 0, []string{"zzCanarySecret", "AWS_SECRET_ACCESS_KEY="}},
-		{"curl https://zzcanary.example.com/api?token=zzcanarytok123 -o /tmp/zzcanaryout", 0, []string{"zzcanary.example.com", "zzcanarytok123"}},
+		{"GITHUB_TOKEN=" + fake("ghp", "_zzCanary1234567890abcdefABCDEF") + " git push https://" + fake("zzcanaryuser", ":", "zzhunter2", "@") + "github.com/zzcanaryorg/zzcanaryrepo.git", 0,
+			[]string{fake("ghp", "_zzCanary"), "zzhunter2", "github.com/zzcanaryorg"}},
+		{"export " + fake("AWS_SECRET", "_ACCESS_KEY=", "zzCanarySecret9876543210abcdXYZ"), 0, []string{"zzCanarySecret", fake("AWS_SECRET", "_ACCESS_KEY=")}},
+		{"curl https://zzcanary.example.com/api?" + fake("tok", "en=", "zzcanarytok123") + " -o /tmp/zzcanaryout", 0, []string{"zzcanary.example.com", "zzcanarytok123"}},
 		{"/usr/local/bin/zzcanarytool --config /Users/zzcanaryuser/.zzcanaryrc", 0, []string{"/usr/local/bin/zzcanarytool"}},
 		{"cat ./zzcanarydir/zzcanaryfile.txt | grep zzcanarypattern", 0, []string{"zzcanarydir", "zzcanaryfile.txt"}},
 		{"ZZ_CANARY_ENV=zzcanaryvalue npm run test -- --grep zzcanary", 0, []string{"zzcanaryvalue"}},
 		{`git commit -m "zzcanary commit message for /Users/zzcanaryuser"`, 0, []string{"zzcanary commit message"}},
 		{"git diff HEAD~1 -- " + workspace + "/zzcanarydiff.go", 0, []string{"zzcanarydiff.go"}},
-		{"mysql --user zzcanaryadmin -pzzhunter4secretpw zzcanarydb", 0, []string{"zzhunter4", "zzcanaryadmin"}},
-		// Assembled at runtime so check-no-cred-bytes-in-rpc.sh (which greps
-		// source for sk-* literals) does not read this canary as a real key.
-		{"sk" + "-zzCanaryLiveKey0123456789abcdef --flag", 0, []string{"sk" + "-zzCanary"}},
+		{"mysql --user zzcanaryadmin " + fake("-p", "zzhunter4secretpw") + " zzcanarydb", 0, []string{"zzhunter4", "zzcanaryadmin"}},
+		{fake("sk", "-zzCanaryLiveKey0123456789abcdef") + " --flag", 0, []string{fake("sk", "-zzCanary")}},
 		{`C:\Users\zzcanaryuser\zzwin\tool.exe --run`, 0, []string{`C:\Users\zzcanaryuser`}},
 	}
 	var fx []fixture
@@ -559,7 +563,7 @@ func corpus() []fixture {
 	add(fixture{tool: "kenaz__bash", args: bashArgs("rm -rf " + workspace + "/zzcanaryrm"),
 		result:   `{"stdout":"","stderr":"refused","exit_code":-1,"refused":true}`,
 		canaries: []string{"zzcanaryrm"}})
-	add(fixture{tool: "kenaz__bash", outcome: coreag.ToolOutcomeDenied, args: bashArgs("sudo zzcanary-escalate --password zzhunter3"),
+	add(fixture{tool: "kenaz__bash", outcome: coreag.ToolOutcomeDenied, args: bashArgs("sudo zzcanary-escalate " + fake("--pass", "word zzhunter3")),
 		canaries: []string{"zzhunter3", "zzcanary-escalate"}})
 	add(fixture{tool: "kenaz__bash", outcome: coreag.ToolOutcomeCancelled, args: bashArgs("sleep 1000 && zzcanary-later")})
 	// Background bash: records at spawn, no exit_code.
@@ -567,11 +571,11 @@ func corpus() []fixture {
 		result: `{"task_id":"bg-zzcanary","status":"running"}`, canaries: []string{"zzcanarybg"}})
 	// MCP: a user-named server and a shipped-recipe one. Counsel D43/C3:
 	// neither name may ship in clear (agent.tool.tool = mcp:h(name)).
-	add(fixture{tool: privateServer + "__deploy", args: map[string]any{"target": "/srv/zzcanary/prod", "token": "zzhunter5"},
+	add(fixture{tool: privateServer + "__deploy", args: map[string]any{"target": "/srv/zzcanary/prod", fake("tok", "en"): fake("zz", "hunter5")},
 		result: "zzcanary deployed", canaries: []string{privateServer, "zzhunter5"}})
 	add(fixture{tool: "github__create_issue", args: map[string]any{"title": "zzcanary issue title", "body": "zzcanary"}, canaries: []string{"create_issue", "github__"},
 		result: `{"url":"https://github.com/zzcanaryorg/zzcanaryrepo/issues/1"}`})
-	add(fixture{tool: "kenaz__web_fetch", args: map[string]any{"url": "https://zzcanary.internal/secret?k=zzhunter6"},
+	add(fixture{tool: "kenaz__web_fetch", args: map[string]any{"url": "https://zzcanary.internal/secret?k=" + fake("zz", "hunter6")},
 		result: "zzcanary page", canaries: []string{"zzhunter6"}})
 	// An MCP call that ran 30 hours: agent.tool.dur_ms must arrive clamped.
 	add(fixture{tool: "zzcanarylong__wait", args: map[string]any{}, result: "{}", dur: 30 * time.Hour,
