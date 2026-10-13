@@ -249,6 +249,27 @@ describe('PendingApprovalsModal', () => {
     );
   });
 
+  it('several deferrable legal items: each shows its own date', async () => {
+    const sa = new Date(Date.now() + 10 * 86_400_000);
+    const privacy = new Date(Date.now() + 20 * 86_400_000);
+    const { client, approveItem } = makeClient([
+      view([
+        { ...LEGAL, id: 'legal:sa:v1.2', deferrableUntil: sa.toISOString() },
+        { ...LEGAL, id: 'legal:privacy:v2.2', title: 'Privacy Policy', deferrableUntil: privacy.toISOString() },
+      ]),
+    ]);
+    approveItem.mockImplementation(async () =>
+      view([{ ...LEGAL, id: 'legal:privacy:v2.2', title: 'Privacy Policy', deferrableUntil: privacy.toISOString() }]),
+    );
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approval-deferrable').text()).toContain(`Accept by ${formatAcceptByDate(sa)}.`);
+    await q(w, 'pending-approval-accept-box').setValue(true);
+    await q(w, 'pending-approval-approve').trigger('click');
+    await flushPromises();
+    expect(q(w, 'pending-approval-title').text()).toBe('Privacy Policy');
+    expect(q(w, 'pending-approval-deferrable').text()).toContain(`Accept by ${formatAcceptByDate(privacy)}.`);
+  });
+
   it('legal, deferral passed: back to "Paused until you approve"', async () => {
     const { client } = makeClient([view([{ ...LEGAL, deferrableUntil: new Date(Date.now() - 60_000).toISOString() }])]);
     const w = await mountModal(client);
