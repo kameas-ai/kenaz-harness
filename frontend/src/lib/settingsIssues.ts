@@ -21,6 +21,7 @@
  */
 import type { HarnessClient, LogRow } from '@/lib/harnessClient';
 import type { DriftEntry, DriftReport } from '@/lib/types';
+import { deferredUntil, formatAcceptByDate } from '@/lib/approvalDeferral';
 import { openPendingApprovalsDialog } from '@/lib/pendingApprovalsDialog';
 
 export interface SettingsIssueFix {
@@ -215,12 +216,17 @@ const databaseIssues: SettingsIssueProvider = {
 /**
  * "N items need your approval" — Fleet's pending-approvals hub (legal
  * re-acceptance, the hosted-inference notice, informational changes).
- * Shown only when signed in and something is pending; an error when any
- * item is required (something is paused until it is approved), a warning
- * when everything is informational. The fix opens the step-through modal
- * (PendingApprovalsModal, mounted by the banner) and resolves when it
- * closes, so the banner re-reads the hub. Closing approves nothing.
- * Fleet_* hub bindings have no served dispatch, hence desktopOnly.
+ * Shown only when signed in and something is pending. Severity:
+ *   error   — a required item is blocking now (something is paused);
+ *   warning — every required item is still deferrable ("Accept by <date>",
+ *             the earliest deferral), or everything is informational.
+ * A deferral that has passed counts as blocking now, so the banner turns to
+ * an error on its own once the date goes by. The harness itself pauses
+ * nothing on a legal item; Fleet enforces it.
+ * The fix opens the step-through modal (PendingApprovalsModal, mounted by
+ * the banner) and resolves when it closes, so the banner re-reads the hub.
+ * Closing approves nothing. Fleet_* hub bindings have no served dispatch,
+ * hence desktopOnly.
  */
 const pendingApprovalsIssues: SettingsIssueProvider = {
   id: 'pending-approvals',
@@ -229,16 +235,42 @@ const pendingApprovalsIssues: SettingsIssueProvider = {
     const v = await client.fleet.pendingApprovals();
     const n = v.items?.length ?? 0;
     if (!v.signedIn || n === 0) return [];
-    const required = v.items.some((it) => it.required);
+    const now = new Date();
+    const required = v.items.filter((it) => it.required);
+    const deferrals = required.map((it) => deferredUntil(it, now));
+    const blockingNow = deferrals.some((d) => d === null);
+    const title = n === 1 ? '1 item needs your approval' : `${n} items need your approval`;
+    const review = { label: 'Review', run: () => openPendingApprovalsDialog() };
+    if (required.length > 0 && blockingNow) {
+      return [
+        {
+          id: 'pending-approvals',
+          severity: 'error',
+          title,
+          body: 'Some things are paused until you review and approve them.',
+          fix: review,
+        },
+      ];
+    }
+    if (required.length > 0) {
+      const earliest = new Date(Math.min(...deferrals.map((d) => (d as Date).getTime())));
+      return [
+        {
+          id: 'pending-approvals',
+          severity: 'warning',
+          title,
+          body: `Accept by ${formatAcceptByDate(earliest)} to keep using Fleet. Nothing is paused yet.`,
+          fix: review,
+        },
+      ];
+    }
     return [
       {
         id: 'pending-approvals',
-        severity: required ? 'error' : 'warning',
-        title: n === 1 ? '1 item needs your approval' : `${n} items need your approval`,
-        body: required
-          ? 'Some things are paused until you review and approve them.'
-          : 'Your organization changed something you may want to review. Nothing is paused.',
-        fix: { label: 'Review', run: () => openPendingApprovalsDialog() },
+        severity: 'warning',
+        title,
+        body: 'Your organization changed something you may want to review. Nothing is paused.',
+        fix: review,
       },
     ];
   },

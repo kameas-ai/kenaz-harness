@@ -8364,6 +8364,7 @@ export namespace settings {
 	    version: string;
 	    blocking: string;
 	    required: boolean;
+	    deferrableUntil: string;
 	    approveAllowed: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -8382,6 +8383,7 @@ export namespace settings {
 	        this.version = source["version"];
 	        this.blocking = source["blocking"];
 	        this.required = source["required"];
+	        this.deferrableUntil = source["deferrableUntil"];
 	        this.approveAllowed = source["approveAllowed"];
 	    }
 	}

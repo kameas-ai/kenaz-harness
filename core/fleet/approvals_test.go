@@ -112,6 +112,23 @@ func TestDecodePendingApprovals_Table(t *testing.T) {
 					t.Errorf("%+v", p)
 				}
 			}},
+		{name: "deferrable_until decoded as a UTC instant",
+			body: hubItem(minimalItemFields + `,"deferrable_until":"2026-11-21T03:00:00-05:00"`),
+			check: func(t *testing.T, p PendingApprovals) {
+				want := time.Date(2026, 11, 21, 8, 0, 0, 0, time.UTC)
+				if got := p.Items[0].DeferrableUntil; !got.Equal(want) || got.Location() != time.UTC {
+					t.Errorf("deferrable_until = %v, want %v", got, want)
+				}
+			}},
+		{name: "deferrable_until absent = zero (blocking now)", body: hubContractExample, check: func(t *testing.T, p PendingApprovals) {
+			for _, it := range p.Items {
+				if !it.DeferrableUntil.IsZero() {
+					t.Errorf("%s: deferrable_until = %v, want zero", it.ID, it.DeferrableUntil)
+				}
+			}
+		}},
+		{name: "deferrable_until not RFC 3339 refused", body: hubItem(minimalItemFields + `,"deferrable_until":"2026-11-21"`), wantErr: true},
+		{name: "deferrable_until as number refused", body: hubItem(minimalItemFields + `,"deferrable_until":1795248000`), wantErr: true},
 		{name: "items missing", body: `{"count":0}`, wantErr: true},
 		{name: "items null", body: `{"items":null,"count":0}`, wantErr: true},
 		{name: "count missing", body: `{"items":[]}`, wantErr: true},
