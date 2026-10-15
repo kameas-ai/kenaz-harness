@@ -127,8 +127,15 @@ func TestDecodePendingApprovals_Table(t *testing.T) {
 				}
 			}
 		}},
-		{name: "deferrable_until not RFC 3339 refused", body: hubItem(minimalItemFields + `,"deferrable_until":"2026-11-21"`), wantErr: true},
-		{name: "deferrable_until as number refused", body: hubItem(minimalItemFields + `,"deferrable_until":1795248000`), wantErr: true},
+		{name: "deferrable_until not RFC 3339: dropped, item blocks now, hub still decodes",
+			body: `{"items":[{` + minimalItemFields + `,"deferrable_until":"2026-11-21"},{` +
+				strings.Replace(minimalItemFields, `"id":"x:1"`, `"id":"x:2"`, 1) + `}],"count":2}`,
+			check: func(t *testing.T, p PendingApprovals) {
+				if len(p.Items) != 2 || !p.Items[0].DeferrableUntil.IsZero() {
+					t.Errorf("%+v", p)
+				}
+			}},
+		{name: "deferrable_until as number refused (mistyped key)", body: hubItem(minimalItemFields + `,"deferrable_until":1795248000`), wantErr: true},
 		{name: "items missing", body: `{"count":0}`, wantErr: true},
 		{name: "items null", body: `{"items":null,"count":0}`, wantErr: true},
 		{name: "count missing", body: `{"items":[]}`, wantErr: true},

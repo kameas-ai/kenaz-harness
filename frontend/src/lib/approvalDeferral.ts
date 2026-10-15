@@ -20,20 +20,23 @@ export function deferredUntil(it: PendingApprovalItem, now: Date = new Date()): 
 }
 
 /**
- * The last full calendar day, in the user's own time zone, that ends at or
- * before the deadline `d`. That day is shown as "Accept by <day>".
- *
- * Fleet's instants are 08:00Z, i.e. midnight at the start of the next
- * US-Pacific day, so the instant's own date is one day late for everyone
- * west of UTC+8 and later still further east. The day before the local day
- * that contains the instant always ends by the deadline: Pacific/Eastern
- * 2026-11-21T08:00Z → November 20; Tokyo → November 20 (conservative).
+ * The "Accept by" day for the deadline `d`: the UTC calendar date of
+ * (deadline − 24 h). This is exactly Fleet's legal.DeferralDisplayDate
+ * (kenaz-fleet service/legal/versions.go), which also renders the item's
+ * own text ("Nothing is paused until November 20, 2026"), so every client
+ * shows the same legal date in every zone. For a 2026-11-21T08:00Z deadline
+ * that is November 20.
  */
 export function acceptByDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+  return new Date(d.getTime() - 24 * 60 * 60 * 1000);
 }
 
-/** "November 20, 2026" for the deadline `d`, in the user's locale and zone. */
+/** "November 20, 2026" for the deadline `d`, in the user's locale; the date is Fleet's UTC one. */
 export function formatAcceptByDate(d: Date): string {
-  return acceptByDay(d).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+  return acceptByDay(d).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
 }

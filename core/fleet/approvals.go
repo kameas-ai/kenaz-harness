@@ -193,8 +193,8 @@ type approveWire struct {
 // kind, title, summary, version, blocking (string), required (bool) and
 // approve {method, path, body (object)}. body_text and document_url are each
 // optional; a document_url must be an absolute http(s) URL and comes with a
-// 64-hex document_sha256. deferrable_until is optional; when present it must
-// be an RFC 3339 instant. Unknown keys are ignored; unknown kinds are kept.
+// 64-hex document_sha256. deferrable_until is optional; a value that is not an
+// RFC 3339 instant is dropped (the item reads as blocking now). Unknown keys are ignored; unknown kinds are kept.
 func DecodePendingApprovals(raw []byte) (PendingApprovals, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	var w pendingApprovalsWire
@@ -272,11 +272,15 @@ func decodePendingApproval(raw json.RawMessage) (PendingApproval, error) {
 		it.DocumentURL, it.DocumentSHA256 = *w.DocumentURL, strings.ToLower(*w.DocumentSHA256)
 	}
 	if w.DeferrableUntil != nil && *w.DeferrableUntil != "" {
-		t, err := time.Parse(time.RFC3339, *w.DeferrableUntil)
-		if err != nil {
-			return PendingApproval{}, fmt.Errorf("%w: deferrable_until is not an RFC 3339 instant", ErrPendingApprovalsDecode)
+		// A malformed deadline must not hide the whole hub (every other
+		// item, blocking ones included), so it is dropped, not refused: the
+		// item then reads as blocking now, the conservative interpretation.
+		if t, err := time.Parse(time.RFC3339, *w.DeferrableUntil); err == nil {
+			it.DeferrableUntil = t.UTC()
+		} else {
+			slog.Warn("fleet: pending approval deferrable_until is not RFC 3339; treating the item as blocking now",
+				"kind", it.Kind)
 		}
-		it.DeferrableUntil = t.UTC()
 	}
 	act, err := decodeApproveAction(w.Approve)
 	if err != nil {

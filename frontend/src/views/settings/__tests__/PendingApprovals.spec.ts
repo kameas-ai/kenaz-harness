@@ -239,14 +239,32 @@ describe('PendingApprovalsModal', () => {
     expect(approveItem).toHaveBeenCalledWith('legal:terms:v1.1');
   });
 
-  it('legal, still deferrable: "Accept by <date>" replaces "Paused until you approve"', async () => {
+  it('legal, still deferrable: "Accept by <date>" only; Fleet\'s present-tense blocking text is not appended', async () => {
     const until = new Date(Date.now() + 10 * 86_400_000);
-    const { client } = makeClient([view([{ ...LEGAL, deferrableUntil: until.toISOString() }])]);
+    // What Fleet actually sends for a deferrable item (pending_approvals.go).
+    const blocking = `Nothing is paused until ${formatAcceptByDate(until)}`;
+    const { client } = makeClient([view([{ ...LEGAL, blocking, deferrableUntil: until.toISOString() }])]);
     const w = await mountModal(client);
     expect(q(w, 'pending-approval-blocking').exists()).toBe(false);
-    expect(q(w, 'pending-approval-deferrable').text()).toBe(
-      `Accept by ${formatAcceptByDate(until)}. After that, paused until you approve: Continued use of Fleet`,
-    );
+    expect(q(w, 'pending-approval-deferrable').text()).toBe(`Accept by ${formatAcceptByDate(until)}.`);
+    expect(w.text()).not.toContain('paused until you approve: Nothing is paused');
+  });
+
+  it('an open dialog flips to "Paused until you approve" when the deadline passes', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    try {
+      const until = new Date(Date.now() + 90_000);
+      const { client } = makeClient([view([{ ...LEGAL, deferrableUntil: until.toISOString() }])]);
+      const w = await mountModal(client);
+      expect(q(w, 'pending-approval-deferrable').exists()).toBe(true);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await flushPromises();
+      expect(q(w, 'pending-approval-deferrable').exists()).toBe(false);
+      expect(q(w, 'pending-approval-blocking').text()).toContain('Continued use of Fleet');
+      w.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('several deferrable legal items: each shows its own date', async () => {
