@@ -65,8 +65,13 @@ type quarantinedContent struct {
 var secretPatterns = []*regexp.Regexp{
 	// Anthropic keys: sk-ant-api03-...
 	regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{16,}`),
+	// OpenAI project / service-account / admin keys and OpenRouter keys,
+	// whose bodies contain '-' and '_' the bare shape below cannot match.
+	regexp.MustCompile(`sk-(proj|svcacct|admin|or-v1)-[A-Za-z0-9_-]{20,}`),
 	// OpenAI-style keys: sk-...
 	regexp.MustCompile(`sk-[A-Za-z0-9]{20,}`),
+	// GitHub tokens: classic gh?_ prefixes and fine-grained PATs.
+	regexp.MustCompile(`\b(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,})`),
 	// Bearer tokens in headers
 	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9\-._~+/]+=*`),
 	// Generic "token": "..." patterns in JSON

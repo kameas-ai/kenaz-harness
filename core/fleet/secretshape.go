@@ -39,12 +39,21 @@ import (
 	"strings"
 )
 
-// apiKeyShapePattern mirrors scripts/ci/check-no-cred-bytes-in-rpc.sh's
-// Check 2 regexes (Anthropic + generic OpenAI-style key prefixes) so the
-// runtime gate and the static source-code gate agree on what "looks like
-// an API key" means. The CI script only scans .go source; this scans the
-// actual wire payload at collect/apply time.
-var apiKeyShapePattern = regexp.MustCompile(`sk-ant-[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{20,}`)
+// apiKeyShapePattern is the two sk- value shapes Fleet's server-side sync
+// scanner refuses with 422 (kenaz-fleet service/sync_schema.go, the
+// value-scanner table). The client refuses exactly what the server would,
+// before anything is sent. It is a catch-all on purpose: current keys put
+// '-' and '_' after the prefix (sk-ant-api03-, sk-proj-, sk-svcacct-,
+// sk-or-v1-), and a per-provider list misses the next new prefix. The
+// pre-2026-10-14 pattern (alphanumerics only) matched none of them.
+//
+// scripts/ci/check-no-cred-bytes-in-rpc.sh check 2 is deliberately
+// narrower (provider prefixes only): in Go source, `sk-` + 16 kebab-case
+// characters is an ordinary identifier. In a sync payload it is refused by
+// Fleet anyway, so refusing it here first loses nothing.
+var apiKeyShapePattern = regexp.MustCompile(apiKeyShapeRegex)
+
+const apiKeyShapeRegex = `sk-ant-[A-Za-z0-9_-]{8,}|\bsk-[A-Za-z0-9_-]{16,}`
 
 // secretReferenceMarker is the @secret:<owner>:<locator> scheme
 // core/tools/listsecrets and core/tools/bash resolve at tool-call time
@@ -115,6 +124,79 @@ func SecretShapeReason(payload []byte) string {
 	if err := json.Unmarshal(payload, &v); err == nil {
 		if field, ok := findSecretShapedField(v, ""); ok {
 			return fmt.Sprintf("field %q looks like a credential", field)
+		}
+		// The raw-bytes match above misses a key that follows a JSON escape
+		// ("line1\nsk-…": the escape's 'n' defeats \b). Fleet decodes first
+		// and scans each string, so do the same and agree with its 422.
+		if reason := findSecretShapedValue(v); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+// secretValuePatterns mirrors kenaz-fleet service/sync_schema.go
+// secretValuePatterns (origin/main, 2026-10-15) entry for entry, so the
+// client refuses exactly what Fleet's sync scanner would 422. Keep in step
+// with that table. Reasons are fixed strings; matched text is never surfaced.
+var secretValuePatterns = []struct {
+	re     *regexp.Regexp
+	reason string
+}{
+	{regexp.MustCompile(`@secret:`), "contains an @secret: credential reference"},
+	{regexp.MustCompile(`-----BEGIN[ A-Z0-9]*PRIVATE KEY-----`), "contains a PEM private key"},
+	{regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`), "contains a Bearer credential"},
+	{regexp.MustCompile(`(?i)\bbasic\s+[A-Za-z0-9+/]{12,}={0,2}`), "contains a Basic auth credential"},
+	{regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{8,}`), "contains an Anthropic API key"},
+	{regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{16,}`), "contains an sk- API key"},
+	{regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{16,}`), "contains a GitHub token"},
+	{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{16,}`), "contains a GitHub fine-grained PAT"},
+	{regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{16,}`), "contains a GitLab token"},
+	{regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}`), "contains a Slack token"},
+	{regexp.MustCompile(`hooks\.slack\.com/services/[A-Za-z0-9/]+`), "contains a Slack webhook URL"},
+	{regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{30,}`), "contains a Google API key"},
+	{regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`), "contains an AWS access key ID"},
+	{regexp.MustCompile(`\b[rs]k_(?:live|test)_[A-Za-z0-9]{10,}`), "contains a Stripe key"},
+	{regexp.MustCompile(`\bnpm_[A-Za-z0-9]{30,}`), "contains an npm token"},
+	{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), "contains a JWT"},
+	{regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^/\s@]*:[^/\s@]*@`), "contains a URL with embedded credentials"},
+	{regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^/\s@:]{20,}@`), "contains a URL with an embedded token"},
+	{regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(?:password|passwd|pwd|passphrase|token|access[_-]?token|refresh[_-]?token|auth[_-]?token|secret|client[_-]?secret|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credentials?)\s*[=:]\s*[^\s&;,"']{3,}`), "contains a credential key=value pair"},
+}
+
+// scanSecretValue is Fleet's scanSecretValue: a fixed reason, or "".
+func scanSecretValue(s string) string {
+	if len(s) < 8 {
+		return ""
+	}
+	for _, p := range secretValuePatterns {
+		if p.re.MatchString(s) {
+			return p.reason
+		}
+	}
+	return ""
+}
+
+// findSecretShapedValue scans every decoded string value AND every object
+// key (free-form maps carry user-chosen keys) with scanSecretValue.
+func findSecretShapedValue(v any) string {
+	switch t := v.(type) {
+	case string:
+		return scanSecretValue(t)
+	case map[string]any:
+		for k, val := range t {
+			if r := scanSecretValue(k); r != "" {
+				return r
+			}
+			if r := findSecretShapedValue(val); r != "" {
+				return r
+			}
+		}
+	case []any:
+		for _, val := range t {
+			if r := findSecretShapedValue(val); r != "" {
+				return r
+			}
 		}
 	}
 	return ""

@@ -316,8 +316,16 @@ var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9\-._~+/]+=*`),
 	// @secret:// credential references (should not appear in logs, but guard it)
 	regexp.MustCompile(`@secret://[^\s"']+`),
+	// Provider keys whose bodies hold '-' / '_': Anthropic sk-ant-api03-…,
+	// OpenAI sk-proj- / sk-svcacct- / sk-admin-, OpenRouter sk-or-v1-.
+	// The bare rule below stops at the first '-', so before 2026-10-15
+	// these were stored whole in the Logs view (slog rows and MCP stderr).
+	regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{16,}`),
+	regexp.MustCompile(`\bsk-(?:proj|svcacct|admin|or-v1)-[A-Za-z0-9_-]{20,}`),
 	// OpenAI-style keys: sk-<alphanumeric>
 	regexp.MustCompile(`\bsk-[A-Za-z0-9]{20,}`),
+	// GitHub tokens: classic gh?_ prefixes and fine-grained PATs.
+	regexp.MustCompile(`\b(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,})`),
 	// Long hex strings (>= 32 chars) that look like tokens/secrets
 	regexp.MustCompile(`\b[0-9a-f]{32,}\b`),
 }
