@@ -10,7 +10,9 @@
  * The model is generic on purpose. An issue comes from a provider; the
  * banner asks every provider for its current issues and renders whatever
  * comes back. Migration drift was the first provider; Fleet's pending
- * approvals (ml-producer-01MLPRD01 WP06) the second. A later issue (an MCP
+ * approvals (ml-producer-01MLPRD01 WP06) the second; settings sync waiting
+ * for its one-time confirmation (provider-credentials-client-01PCCLI01 A2)
+ * the third. A later issue (an MCP
  * server stuck in an error state, say) plugs in by adding a provider to
  * SETTINGS_ISSUE_PROVIDERS — the banner does not change.
  *
@@ -50,6 +52,12 @@ export interface SettingsIssue {
   instructions?: string[];
   /** Builds the text the "Copy diagnostics" button puts on the clipboard. */
   diagnostics?: () => Promise<string>;
+  /**
+   * A secondary path, shown beside the fix: an in-app route (hash-router
+   * path, e.g. "/settings?tab=sync") where the user can make a different
+   * choice than the fix makes for them.
+   */
+  link?: { label: string; to: string };
 }
 
 export interface SettingsIssueProvider {
@@ -244,8 +252,61 @@ const pendingApprovalsIssues: SettingsIssueProvider = {
   },
 };
 
+// ── provider: settings sync waiting for confirmation (01PCCLI01 A2, H1) ──
+
+/** Plain-language names for the sync categories, as the Sync panel shows them. */
+const SYNC_CATEGORY_NAMES: Record<string, string> = {
+  provider_profiles: 'provider profiles',
+  model_prefs: 'model preferences',
+  mcp_recipes: 'MCP recipes',
+  installed_mcp: 'installed MCP servers',
+  ui_theme: 'UI theme',
+  slash_commands: 'slash commands',
+};
+
+function syncCategoryName(id: string): string {
+  return SYNC_CATEGORY_NAMES[id] ?? id.split('_').filter(Boolean).join(' ');
+}
+
+/**
+ * Owner ruling H1 (provider-credentials-client-01PCCLI01 §7a): settings sync
+ * never reached Fleet before the A2 wire fix, so a category the user turned
+ * on had never left the machine. Before the first upload, ask once. The
+ * backend holds every upload until Sync_ConfirmUploads saves the answer
+ * (Settings.SettingsSyncUploadsConfirmed); Sync_Status marks the held rows
+ * `awaiting_confirmation`. Downloads from Fleet are not held.
+ * Sync_* has no served dispatch, hence desktopOnly.
+ */
+const settingsSyncConfirmIssues: SettingsIssueProvider = {
+  id: 'settings-sync-confirm',
+  desktopOnly: true,
+  async collect(client) {
+    const rows = await client.sync.status();
+    const held = rows.filter((r) => r.awaiting_confirmation).map((r) => syncCategoryName(r.category));
+    if (held.length === 0) return [];
+    return [
+      {
+        id: 'settings-sync-confirm',
+        severity: 'warning',
+        title: 'Start syncing your settings?',
+        body:
+          `You turned on sync for: ${held.join(', ')}. ` +
+          'Until now, none of these settings has left this device. ' +
+          'When you choose Start syncing, Kenaz uploads them so your other signed-in devices can use them. ' +
+          'API keys and other credentials are not included.',
+        fix: { label: 'Start syncing', run: () => client.sync.confirmUploads() },
+        link: { label: 'Change what syncs', to: '/settings?tab=sync' },
+      },
+    ];
+  },
+};
+
 /** Every issue provider the banner consults, in display order. */
-const SETTINGS_ISSUE_PROVIDERS: readonly SettingsIssueProvider[] = [pendingApprovalsIssues, databaseIssues];
+const SETTINGS_ISSUE_PROVIDERS: readonly SettingsIssueProvider[] = [
+  pendingApprovalsIssues,
+  settingsSyncConfirmIssues,
+  databaseIssues,
+];
 
 /**
  * Runs every provider that can run in this build and concatenates their

@@ -89,8 +89,10 @@ function buildClient(overrides: {
   statuses?: SyncStatusView[];
   pending?: PendingMCPSecret[];
   toggleFn?: ReturnType<typeof vi.fn>;
+  confirmFn?: ReturnType<typeof vi.fn>;
 } = {}) {
   const toggleFn = overrides.toggleFn ?? vi.fn(async () => {});
+  const confirmFn = overrides.confirmFn ?? vi.fn(async () => {});
   return {
     client: createFakeHarnessClient({
       sync: {
@@ -99,9 +101,11 @@ function buildClient(overrides: {
         forcePush: async () => {},
         forcePull: async () => {},
         pendingMCPSecrets: async () => overrides.pending ?? [],
+        confirmUploads: confirmFn,
       },
     }),
     toggleFn,
+    confirmFn,
   };
 }
 
@@ -338,5 +342,42 @@ describe('SyncPanel', () => {
 
     expect(wrapper.find('[data-testid="sync-managed-mcp_recipes"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="sync-toggle-mcp_recipes"]').exists()).toBe(true);
+  });
+
+  // provider-credentials-client-01PCCLI01 A2 / owner ruling H1.
+  it('shows the one-time Start syncing notice for held categories and confirms', async () => {
+    const statuses: SyncStatusView[] = [
+      { category: 'ui_theme', enabled: true, awaiting_confirmation: true },
+      { category: 'model_prefs', enabled: false },
+    ];
+    const { client, confirmFn } = buildClient({ statuses });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+    const notice = wrapper.find('[data-testid="sync-confirm-uploads-notice"]');
+    expect(notice.exists()).toBe(true);
+    expect(notice.text()).toContain('UI theme');
+    expect(notice.text()).not.toContain('Model preferences');
+    await wrapper.find('[data-testid="sync-confirm-uploads-btn"]').trigger('click');
+    await flushPromises();
+    expect(confirmFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a local-only category as not syncing and offers no push/pull', async () => {
+    const statuses: SyncStatusView[] = [
+      { category: 'slash_commands', enabled: true, local_only: true },
+    ];
+    const { client } = buildClient({ statuses });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="sync-local-only-slash_commands"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="sync-force-push-slash_commands"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="sync-confirm-uploads-notice"]').exists()).toBe(false);
+  });
+
+  it('header copy no longer claims every change pushes within 5s', async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('Changes push within 5s');
+    expect(wrapper.text()).toContain('Nothing is uploaded until you confirm once');
   });
 });

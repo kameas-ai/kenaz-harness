@@ -1834,6 +1834,10 @@ export function Subagent_Steer(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Subagent_Steer'](arg1, arg2);
 }
 
+export function Sync_ConfirmUploads() {
+  return window['go']['rpc']['Bindings']['Sync_ConfirmUploads']();
+}
+
 export function Sync_ForcePull(arg1) {
   return window['go']['rpc']['Bindings']['Sync_ForcePull'](arg1);
 }

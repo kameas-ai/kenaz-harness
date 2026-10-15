@@ -932,6 +932,18 @@ type Settings struct {
 	// at pipeline wiring; the consumer is fleet.closableSpanExporter's
 	// model-call filter. Never content.
 	ShareModelCallTelemetryWithFleet bool `json:"shareModelCallTelemetryWithFleet,omitempty"`
+
+	// SettingsSyncUploadsConfirmed records the user's one-time confirmation
+	// that the settings categories they enable under Settings › Sync may be
+	// uploaded to Fleet (owner ruling H1, provider-credentials-client-
+	// 01PCCLI01 §7a). Settings sync never reached Fleet before that
+	// mission's wire fix, so categories a user had opted into had never
+	// left the machine; the first upload waits for this. Default false.
+	// Consumer: fleet.Syncer.Push via the upload gate wired in
+	// core/rpc/sync_upload_consent.go. Written true only by
+	// Sync_ConfirmUploads; Set never clears it (one-way, so a stale
+	// whole-settings save cannot re-arm the prompt).
+	SettingsSyncUploadsConfirmed bool `json:"settingsSyncUploadsConfirmed,omitempty"`
 }
 
 // ModelCallTelemetrySettings is the wire shape of the three model-call

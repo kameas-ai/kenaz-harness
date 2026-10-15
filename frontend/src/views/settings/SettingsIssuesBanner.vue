@@ -12,6 +12,7 @@
  *     fixed issue disappears). On failure the error is shown, followed by
  *     the manual instructions and Copy diagnostics.
  *   - without a fix: the instructions and Copy diagnostics straight away.
+ *   - with a link: a secondary "go change it yourself" route beside the fix.
  *
  * Desktop-only providers are skipped in a served build (their RPCs have no
  * serve dispatch), so in practice the banner is silent there today.
@@ -138,8 +139,12 @@ onBeforeUnmount(() => {
         {{ issue.body }}
       </p>
 
-      <div v-if="issue.fix && !fixError[issue.id]" class="mt-3">
+      <div
+        v-if="(issue.fix && !fixError[issue.id]) || issue.link"
+        class="mt-3 flex items-center gap-3"
+      >
         <button
+          v-if="issue.fix && !fixError[issue.id]"
           type="button"
           class="rounded px-3 py-1.5 text-[12px] font-ui bg-accent text-on-accent
                  hover:bg-accent-hover disabled:opacity-50 disabled:cursor-wait"
@@ -149,6 +154,15 @@ onBeforeUnmount(() => {
         >
           {{ fixBusy[issue.id] ? 'Working…' : issue.fix.label }}
         </button>
+        <!-- Secondary path (SettingsIssue.link). A plain hash link, not
+             RouterLink: the banner must render in view tests that mount no
+             router, and the app uses createWebHashHistory. -->
+        <a
+          v-if="issue.link"
+          :href="`#${issue.link.to}`"
+          class="text-[12px] font-ui text-accent underline hover:no-underline"
+          data-testid="settings-issue-link"
+        >{{ issue.link.label }}</a>
       </div>
 
       <p

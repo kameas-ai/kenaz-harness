@@ -1597,6 +1597,14 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 			}
 		}
 	}
+	// SettingsSyncUploadsConfirmed is one-way: only Sync_ConfirmUploads
+	// sets it, and a whole-settings save from a copy loaded before the
+	// confirmation must not clear it again.
+	if !s.SettingsSyncUploadsConfirmed {
+		if cur, err := a.store.LoadAll(); err == nil && cur.SettingsSyncUploadsConfirmed {
+			s.SettingsSyncUploadsConfirmed = true
+		}
+	}
 	if err := a.store.SaveAll(s); err != nil {
 		return err
 	}

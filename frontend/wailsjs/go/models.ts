@@ -8548,6 +8548,7 @@ export namespace settings {
 	    modelCallStatsPullDisabled?: boolean;
 	    modelCallRetentionDays?: number;
 	    shareModelCallTelemetryWithFleet?: boolean;
+	    settingsSyncUploadsConfirmed?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8649,6 +8650,7 @@ export namespace settings {
 	        this.modelCallStatsPullDisabled = source["modelCallStatsPullDisabled"];
 	        this.modelCallRetentionDays = source["modelCallRetentionDays"];
 	        this.shareModelCallTelemetryWithFleet = source["shareModelCallTelemetryWithFleet"];
+	        this.settingsSyncUploadsConfirmed = source["settingsSyncUploadsConfirmed"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -9154,6 +9156,8 @@ export namespace sync {
 	    last_error?: string;
 	    scopes?: string[];
 	    org_applied_at?: string;
+	    awaiting_confirmation?: boolean;
+	    local_only?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SyncStatusView(source);
@@ -9168,6 +9172,8 @@ export namespace sync {
 	        this.last_error = source["last_error"];
 	        this.scopes = source["scopes"];
 	        this.org_applied_at = source["org_applied_at"];
+	        this.awaiting_confirmation = source["awaiting_confirmation"];
+	        this.local_only = source["local_only"];
 	    }
 	}
 

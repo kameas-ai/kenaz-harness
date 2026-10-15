@@ -16,6 +16,50 @@ type API struct {
 
 	mu       sync.RWMutex
 	registry *corefleet.KindRegistry
+	consent  UploadConsent
+}
+
+// SetUploadConsent wires the persisted upload confirmation
+// (Settings.SettingsSyncUploadsConfirmed) and installs it as the syncer's
+// upload gate, so Push holds every category until the user confirms.
+// Called once from rpc.New(). A nil consent keeps uploads closed (the Syncer default).
+func (a *API) SetUploadConsent(c UploadConsent) {
+	a.mu.Lock()
+	a.consent = c
+	a.mu.Unlock()
+	if a.syncer == nil {
+		return
+	}
+	if c == nil {
+		a.syncer.SetUploadGate(nil)
+		return
+	}
+	a.syncer.SetUploadGate(c.UploadsConfirmed)
+}
+
+func (a *API) uploadConsent() UploadConsent {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.consent
+}
+
+// Sync_ConfirmUploads implements SyncAPI.
+func (a *API) Sync_ConfirmUploads(ctx context.Context) error {
+	c := a.uploadConsent()
+	if c == nil {
+		return ErrUploadConsentUnavailable
+	}
+	if err := c.ConfirmUploads(); err != nil {
+		return err
+	}
+	if a.syncer == nil {
+		return nil
+	}
+	// Best effort: the confirmation is saved; an upload that fails now
+	// (offline, signed out) shows in that category's Sync_Status error and
+	// retries on the next change or Push.
+	_ = a.syncer.PushHeld(ctx)
+	return nil
 }
 
 var _ SyncAPI = (*API)(nil)
@@ -87,7 +131,10 @@ func (a *API) Sync_Status(_ context.Context) ([]SyncStatusView, error) {
 		}
 		out := make([]SyncStatusView, len(cats))
 		for i, cat := range cats {
-			out[i] = enrichWithRegistry(SyncStatusView{Category: cat}, registry, cat)
+			out[i] = enrichWithRegistry(SyncStatusView{
+				Category:  cat,
+				LocalOnly: !corefleet.FleetAcceptsSyncCategory(corefleet.SyncCategory(cat)),
+			}, registry, cat)
 		}
 		return out, nil
 	}
@@ -157,9 +204,11 @@ func (a *API) Sync_PendingMCPSecrets(_ context.Context) ([]PendingMCPSecret, err
 
 func syncStatusToView(s corefleet.SyncStatus) SyncStatusView {
 	v := SyncStatusView{
-		Category:  string(s.Category),
-		Enabled:   s.Enabled,
-		LastError: s.LastError,
+		Category:             string(s.Category),
+		Enabled:              s.Enabled,
+		LastError:            s.LastError,
+		AwaitingConfirmation: s.AwaitingConfirmation,
+		LocalOnly:            s.LocalOnly,
 	}
 	if !s.LastPushAt.IsZero() {
 		v.LastPushAt = s.LastPushAt.UTC().Format(time.RFC3339)

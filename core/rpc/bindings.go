@@ -3920,6 +3920,14 @@ func (b *Bindings) Sync_ForcePull(category string) error {
 	return b.api.Sync().Sync_ForcePull(b.ctx(), category)
 }
 
+// Sync_ConfirmUploads records the user's one-time confirmation that enabled
+// settings categories may upload to Fleet, then uploads the held ones
+// (provider-credentials-client-01PCCLI01 A2, owner ruling H1).
+func (b *Bindings) Sync_ConfirmUploads() error {
+	defer sentry.WrapBinding("Sync_ConfirmUploads")()
+	return b.api.Sync().Sync_ConfirmUploads(b.ctx())
+}
+
 // Sync_PendingMCPSecrets returns MCPs that arrived via sync but need credentials
 // from the user before they can start. Shown in the SyncPanel "Provide credentials" banner.
 func (b *Bindings) Sync_PendingMCPSecrets() ([]syncview.PendingMCPSecret, error) {

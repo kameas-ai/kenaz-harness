@@ -5235,6 +5235,13 @@ export interface SyncStatusView {
    * device. The WP03 generic org-provenance signal.
    */
   org_applied_at?: string;
+  /**
+   * True when the category is enabled but its upload waits for the user's
+   * one-time confirmation (Sync_ConfirmUploads). Pulls still run.
+   */
+  awaiting_confirmation?: boolean;
+  /** True when Fleet does not accept this category; it stays on this device. */
+  local_only?: boolean;
 }
 
 /**

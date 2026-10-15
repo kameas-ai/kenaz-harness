@@ -1082,6 +1082,12 @@ interface WailsBindingsLike {
   Sync_ForcePull(category: string): Promise<void>;
   /** MCPs that arrived via sync but need credentials before they can start. */
   Sync_PendingMCPSecrets(): Promise<PendingMCPSecret[]>;
+  /**
+   * Record the one-time confirmation that enabled settings categories may
+   * upload to Fleet, then upload the held ones (provider-credentials-client-
+   * 01PCCLI01 A2, owner ruling H1).
+   */
+  Sync_ConfirmUploads(): Promise<void>;
 
   // ── Cedar team publish (fleet-share-and-sync-01NDFSEX14 WP07) ────────────
   /** Publish a Cedar rule to the team via fleet. Requires policy_admin role. */
@@ -4060,6 +4066,8 @@ export interface SyncClient {
   forcePull(category: string): Promise<void>;
   /** MCPs that arrived via sync but need credentials. */
   pendingMCPSecrets(): Promise<PendingMCPSecret[]>;
+  /** Confirm once that enabled categories may upload, then upload them. */
+  confirmUploads(): Promise<void>;
 }
 
 // ── CedarPublish client (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
@@ -5126,6 +5134,7 @@ export function createHarnessClient(): HarnessClient {
       forcePush: (category) => b().Sync_ForcePush(category),
       forcePull: (category) => b().Sync_ForcePull(category),
       pendingMCPSecrets: () => b().Sync_PendingMCPSecrets(),
+      confirmUploads: () => b().Sync_ConfirmUploads(),
     },
     // ── CedarPublish (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
     cedarPublish: {
@@ -7117,6 +7126,7 @@ export function createFakeHarnessClient(
       forcePush: noop,
       forcePull: noop,
       pendingMCPSecrets: async () => [],
+      confirmUploads: noop,
     },
     cedarPublish: {
       publishToTeam: noop,

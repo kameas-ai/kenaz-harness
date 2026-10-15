@@ -4324,6 +4324,11 @@ func New(c *core.Core, opts ...Option) *API {
 		// the concrete setter.
 		if syncAPI, ok := a.syncAPI.(*syncview.API); ok {
 			syncAPI.SetSyncKindRegistry(a.syncKindRegistry)
+			// provider-credentials-client-01PCCLI01 A2 / owner ruling H1:
+			// uploads wait for the one-time confirmation persisted in
+			// Settings.SettingsSyncUploadsConfirmed. Fails closed when
+			// syncStore is nil (no store, no upload).
+			syncAPI.SetUploadConsent(settingsUploadConsent{store: syncStore})
 		}
 
 		// Connect settings mutations to the Syncer's debounced push so a theme

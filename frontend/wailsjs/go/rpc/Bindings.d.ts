@@ -982,6 +982,8 @@ export function Subagent_Resume(arg1:string):Promise<void>;
 
 export function Subagent_Steer(arg1:string,arg2:string):Promise<void>;
 
+export function Sync_ConfirmUploads():Promise<void>;
+
 export function Sync_ForcePull(arg1:string):Promise<void>;
 
 export function Sync_ForcePush(arg1:string):Promise<void>;

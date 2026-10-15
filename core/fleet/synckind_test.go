@@ -291,7 +291,7 @@ func TestKindRegistry_OrgProvenance_ClearRemovesEverything(t *testing.T) {
 // — once registered, because RegisterCategory now lazily creates its
 // CategoryState instead of relying on NewSyncer's fixed pre-population.
 func TestSyncer_RegisterCategory_UnknownCategoryIsGeneric(t *testing.T) {
-	fake := newFakeSyncServerSimple()
+	fake := newFakeFleetSync(t)
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
@@ -327,17 +327,21 @@ func TestSyncer_RegisterCategory_UnknownCategoryIsGeneric(t *testing.T) {
 		},
 	})
 
-	// SetEnabled triggers an immediate push — must not error with "unknown
-	// category" the way it would have before the RegisterCategory fix.
+	// SetEnabled must not error with "unknown category" the way it would
+	// have before the RegisterCategory fix.
 	if err := syncer.SetEnabled(context.Background(), customCat, true); err != nil {
 		t.Fatalf("SetEnabled(%q): %v", customCat, err)
 	}
-	stored, ok := fake.get(customCat)
-	if !ok {
-		t.Fatal("expected server to have received the push for the custom category")
+	// provider-credentials-client-01PCCLI01 A2: Fleet's sync_schema.go
+	// does not accept slash_commands (PUT 422 unknown_category), so the
+	// enable-time push is skipped and nothing reaches the server. The
+	// registration machinery is still generic: state, Status and enable
+	// all work for a non-built-in category.
+	if _, ok := fake.get(customCat); ok {
+		t.Fatal("slash_commands reached Fleet; it must stay on this device")
 	}
-	if string(stored.Payload) != string(payload) {
-		t.Errorf("pushed payload = %s, want %s", stored.Payload, payload)
+	if n := len(fake.snapshot()); n != 0 {
+		t.Fatalf("%d requests sent for a local-only category", n)
 	}
 
 	// Status must include the custom category too.
@@ -347,6 +351,9 @@ func TestSyncer_RegisterCategory_UnknownCategoryIsGeneric(t *testing.T) {
 			found = true
 			if !st.Enabled {
 				t.Error("expected custom category to report Enabled=true in Status()")
+			}
+			if !st.LocalOnly {
+				t.Error("expected slash_commands to report LocalOnly in Status()")
 			}
 		}
 	}
