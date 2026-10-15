@@ -43,6 +43,8 @@ const PATTERNS: Array<[RegExp, string]> = [
   [/sk-(proj|svcacct|admin)-[A-Za-z0-9_-]{20,}/g, '[REDACTED:openai-key]'],
   // OpenRouter (sk-or-v1-<hex>): the bare shape below stops at the '-' after 'or'.
   [/sk-or-v1-[A-Za-z0-9_-]{20,}/g, '[REDACTED:openrouter-key]'],
+  // GitHub tokens: classic gh?_ prefixes and fine-grained PATs.
+  [/\b(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,})/g, '[REDACTED:github-token]'],
   [/sk-[A-Za-z0-9]{20,}/g, '[REDACTED:openai-key]'],
   // Gemini / Google AI Studio API keys (F-004 parity): 39-char keys
   // starting with "AIzaSy" followed by 33 alphanumeric/hyphen/underscore.

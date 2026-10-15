@@ -54,6 +54,15 @@ func TestSecretShapeReason_DetectsAPIKeyLiteral(t *testing.T) {
 		`{"note":"` + fakeKey("or-v1-") + `"}`,
 		// A provider prefix nobody has listed yet.
 		`{"note":"` + fakeKey("future-v9-") + `"}`,
+		// After a JSON escape: the raw bytes read `\nsk-…`, whose 'n' defeats
+		// \b. Only the decoded-value scan catches it (Fleet decodes first).
+		`{"note":"line1\n` + fakeKey("proj-") + `"}`,
+		// Shapes Fleet's sync scanner refuses beyond sk- keys.
+		`{"note":"` + "gh" + "p_" + strings.Repeat("A1b2", 10) + `"}`,
+		`{"note":"` + "github" + "_pat_" + strings.Repeat("A1_b", 8) + `"}`,
+		`{"url":"https://user:` + "hunter" + `2pw@example.com/repo.git"}`,
+		// A credential in a free-form map KEY.
+		`{"env":{"` + fakeKey("proj-") + `":"x"}}`,
 		// Inside a larger string, as a pasted header would be.
 		`{"headers":{"note":"Bearer ` + fakeKey("or-v1-") + `"}}`,
 	}

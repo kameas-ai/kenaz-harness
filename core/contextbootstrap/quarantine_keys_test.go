@@ -15,6 +15,8 @@ func TestStripSecrets_CurrentProviderKeyShapes(t *testing.T) {
 		"sk" + "-proj-" + body,
 		"sk" + "-svcacct-" + body,
 		"sk" + "-admin-" + body,
+		"gh" + "p_" + strings.Repeat("A1b2", 10),
+		"github" + "_pat_" + strings.Repeat("A1_b", 8),
 	} {
 		got := stripSecrets("OPENAI_API_KEY=" + key + "\n")
 		if strings.Contains(got, key[8:20]) || !strings.Contains(got, redactedPlaceholder) {

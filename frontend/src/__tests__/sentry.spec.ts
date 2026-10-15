@@ -38,6 +38,8 @@ describe('sentry-redactor', () => {
       ['sk' + '-or-v1-' + '0123456789abcdef'.repeat(4), '[REDACTED:openrouter-key]'],
       ['sk' + '-svcacct-' + body, '[REDACTED:openai-key]'],
       ['sk' + '-admin-' + body, '[REDACTED:openai-key]'],
+      ['gh' + 'p_' + 'A1b2'.repeat(10), '[REDACTED:github-token]'],
+      ['github' + '_pat_' + 'A1_b'.repeat(8), '[REDACTED:github-token]'],
     ];
     for (const [key, marker] of cases) {
       const got = redactString('key=' + key);

@@ -13,9 +13,11 @@ func providerKeyCorpus() map[string]string {
 	body := strings.Repeat("0a1B-_", 8)
 	return map[string]string{
 		"sk" + "-or-v1-" + strings.Repeat("0123456789abcdef", 4): "[REDACTED:openrouter-key]",
-		"sk" + "-svcacct-" + body:                                 "[REDACTED:openai-key]",
-		"sk" + "-admin-" + body:                                   "[REDACTED:openai-key]",
-		"sk" + "-proj-" + body:                                    "[REDACTED:openai-key]",
+		"sk" + "-svcacct-" + body:                                "[REDACTED:openai-key]",
+		"sk" + "-admin-" + body:                                  "[REDACTED:openai-key]",
+		"sk" + "-proj-" + body:                                   "[REDACTED:openai-key]",
+		"gh" + "p_" + strings.Repeat("A1b2", 10):                 "[REDACTED:github-token]",
+		"github" + "_pat_" + strings.Repeat("A1_b", 8):           "[REDACTED:github-token]",
 	}
 }
 
