@@ -198,6 +198,32 @@ func TestStoreContextSeed_UnreadableKeychainNeverOverwrites(t *testing.T) {
 	}
 }
 
+// TestContextSeedsForDecrypt_UnreadableRetainedSlotDegradesToCurrent: a
+// retained slot the keychain cannot read must not block decrypting data
+// written under the current seed.
+func TestContextSeedsForDecrypt_UnreadableRetainedSlotDegradesToCurrent(t *testing.T) {
+	clearSeedSlots(t)
+	a, b := testSeed(0x81), testSeed(0x82)
+	mustStore(t, a)
+	mustStore(t, b) // a is now retained in slot 1
+	og := seedKeyringGet
+	seedKeyringGet = func(service, account string) (string, error) {
+		if account == retainedSeedAccount(1) {
+			return "", errors.New("user interaction is not allowed")
+		}
+		return og(service, account)
+	}
+	t.Cleanup(func() { seedKeyringGet = og })
+
+	seeds, err := ContextSeedsForDecrypt()
+	if err != nil {
+		t.Fatalf("ContextSeedsForDecrypt: %v, want current-only, not an error", err)
+	}
+	if len(seeds) != 1 || !bytes.Equal(seeds[0], b) {
+		t.Fatalf("seeds = %d, want exactly the current seed", len(seeds))
+	}
+}
+
 // recordingStreamServer stores every appended wire event and serves them
 // all back on replay — a minimal fleet context-stream fake.
 func recordingStreamServer(t *testing.T) (*httptest.Server, func() []wireEvent) {

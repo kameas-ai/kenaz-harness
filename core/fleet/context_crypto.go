@@ -317,11 +317,15 @@ func ContextSeedsForDecrypt() ([][]byte, error) {
 	if cur == nil {
 		return nil, ErrContextSeedNotFound
 	}
+	out := [][]byte{cur}
 	slots, err := readRetainedSlotsLocked()
 	if err != nil {
-		return nil, err
+		// Retained seeds only rescue data written before an import. An
+		// unreadable slot must not also block decrypting everything written
+		// under the current seed, so degrade to current-only, not an error.
+		logging.L().Warn("fleet.context_crypto.retained_seeds_unreadable", "err", err)
+		return out, nil
 	}
-	out := [][]byte{cur}
 next:
 	for i, v := range slots {
 		if v == "" {
