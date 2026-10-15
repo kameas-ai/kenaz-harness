@@ -224,6 +224,55 @@ func TestContextSeedsForDecrypt_UnreadableRetainedSlotDegradesToCurrent(t *testi
 	}
 }
 
+// Review fix (kameas-ai-fd, #418): re-importing a seed that is already
+// retained MOVES it to slot 1. Before the fix it stayed put, so A,B,A,C,D,E,F
+// evicted A (current four imports ago) while keeping the older B.
+func TestStoreContextSeed_ReimportedSeedMovesToFront(t *testing.T) {
+	clearSeedSlots(t)
+	a, b, c, d, e, f := testSeed(0x91), testSeed(0x92), testSeed(0x93), testSeed(0x94), testSeed(0x95), testSeed(0x96)
+	for _, s := range [][]byte{a, b, a, c, d, e, f} {
+		mustStore(t, s)
+	}
+	assertSeeds(t, mustSeeds(t), f, e, d, c, a) // b (oldest) evicted, a kept
+}
+
+// The incoming seed becomes current, so it must not also sit in a retained
+// slot (no duplicate after an A↔B toggle).
+func TestStoreContextSeed_ToggleLeavesNoDuplicateOfCurrent(t *testing.T) {
+	clearSeedSlots(t)
+	a, b := testSeed(0xA1), testSeed(0xA2)
+	for _, s := range [][]byte{a, b, a, b, a} {
+		mustStore(t, s)
+	}
+	svc := paths.FleetKeychainService()
+	enc := base64.StdEncoding.EncodeToString
+	for i := 1; i <= maxRetainedSeeds; i++ {
+		v, err := keyring.Get(svc, retainedSeedAccount(i))
+		if err == nil && v == enc(a) {
+			t.Fatalf("current seed duplicated in retained slot %d", i)
+		}
+	}
+	assertSeeds(t, mustSeeds(t), a, b)
+}
+
+// Review fix: one unreadable slot costs only that slot's seed.
+func TestContextSeedsForDecrypt_SkipsOnlyTheBadSlot(t *testing.T) {
+	clearSeedSlots(t)
+	a, b, c, d := testSeed(0xB1), testSeed(0xB2), testSeed(0xB3), testSeed(0xB4)
+	for _, s := range [][]byte{a, b, c, d} {
+		mustStore(t, s) // retained [c, b, a]
+	}
+	og := seedKeyringGet
+	seedKeyringGet = func(service, account string) (string, error) {
+		if account == retainedSeedAccount(2) {
+			return "", errors.New("user interaction is not allowed")
+		}
+		return og(service, account)
+	}
+	t.Cleanup(func() { seedKeyringGet = og })
+	assertSeeds(t, mustSeeds(t), d, c, a)
+}
+
 // recordingStreamServer stores every appended wire event and serves them
 // all back on replay — a minimal fleet context-stream fake.
 func recordingStreamServer(t *testing.T) (*httptest.Server, func() []wireEvent) {

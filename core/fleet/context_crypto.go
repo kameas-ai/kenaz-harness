@@ -209,51 +209,106 @@ func retainedSeedAccount(i int) string {
 
 // readRetainedSlotsLocked returns the raw (base64) value of every retained
 // slot, index 0 = slot 1; "" marks an empty slot. A keychain error other
-// than ErrNotFound is ErrKeychainUnavailable. Caller holds seedMu.
+// than ErrNotFound is ErrKeychainUnavailable (the write path must not
+// reshuffle slots it cannot see). Caller holds seedMu.
 func readRetainedSlotsLocked() ([]string, error) {
-	slots := make([]string, maxRetainedSeeds)
+	slots, bad := readRetainedSlotsTolerantLocked()
+	if len(bad) > 0 {
+		return nil, fmt.Errorf("%w: retained seed slot %d unreadable", ErrKeychainUnavailable, bad[0])
+	}
+	return slots, nil
+}
+
+// readRetainedSlotsTolerantLocked reads every retained slot, leaving an
+// unreadable one "" and reporting its 1-based index in bad. The decrypt path
+// uses it so one bad slot costs only that slot's seed. Caller holds seedMu.
+func readRetainedSlotsTolerantLocked() (slots []string, bad []int) {
+	slots = make([]string, maxRetainedSeeds)
 	for i := range slots {
 		v, err := seedKeyringGet(paths.FleetKeychainService(), retainedSeedAccount(i+1))
 		switch {
 		case errors.Is(err, keyring.ErrNotFound):
 			continue
 		case err != nil:
-			return nil, fmt.Errorf("%w: retained seed slot %d: %v", ErrKeychainUnavailable, i+1, err)
+			bad = append(bad, i+1)
+			continue
 		}
 		slots[i] = v
 	}
-	return slots, nil
+	return slots, bad
 }
 
-// retainSeedLocked saves oldEncoded (the seed about to be replaced) to
-// retained slot 1, shifting older slots down and dropping the one beyond
-// maxRetainedSeeds. A seed already retained is not duplicated. The shift
-// writes from the highest slot downward, so every write overwrites a value
-// that already has a copy one slot further down (or is the one being
-// dropped): a failure part-way never loses a retained seed. Any error
+// retainSeedLocked records oldEncoded (the seed about to be replaced by
+// newEncoded) as the most recent retained seed. The target list is
+// oldEncoded, then the existing slots in order with oldEncoded and
+// newEncoded removed (newEncoded becomes current, so a retained copy would
+// be a duplicate), truncated to maxRetainedSeeds. A seed that is already
+// retained therefore MOVES to slot 1 instead of staying where it was, so
+// re-importing an older seed never lets it be evicted ahead of seeds that
+// were current before it.
+//
+// Crash safety: a slot is overwritten only when the value it holds is
+// recoverable elsewhere at that moment. That means it is empty, being
+// dropped deliberately (the duplicate of newEncoded, or the one past the
+// cap), equal to oldEncoded (still the current seed until the caller's
+// final write), or present in another slot. Writes repeat until every slot
+// matches. The surviving seeds keep their relative order, so the moves can
+// never form a cycle and the loop always finishes. Any keychain error
 // aborts the caller's overwrite. Caller holds seedMu.
-func retainSeedLocked(oldEncoded string) error {
+func retainSeedLocked(oldEncoded, newEncoded string) error {
 	slots, err := readRetainedSlotsLocked()
 	if err != nil {
 		return err
 	}
+	desired := make([]string, 0, maxRetainedSeeds)
+	desired = append(desired, oldEncoded)
 	for _, v := range slots {
-		if v == oldEncoded {
-			return nil // already retained; nothing to move
-		}
-	}
-	svc := paths.FleetKeychainService()
-	for k := maxRetainedSeeds; k >= 2; k-- {
-		prev := slots[k-2]
-		if prev == "" {
+		if v == "" || v == oldEncoded || v == newEncoded {
 			continue
 		}
-		if err := seedKeyringSet(svc, retainedSeedAccount(k), prev); err != nil {
-			return fmt.Errorf("fleet: retain previous context seed (slot %d): %w", k, err)
+		if len(desired) == maxRetainedSeeds {
+			break
+		}
+		desired = append(desired, v)
+	}
+	target := make([]string, maxRetainedSeeds)
+	copy(target, desired)
+	inTarget := func(v string) bool {
+		for _, t := range target {
+			if t == v {
+				return true
+			}
+		}
+		return false
+	}
+	svc := paths.FleetKeychainService()
+	for progressed := true; progressed; {
+		progressed = false
+		for k := range slots {
+			if slots[k] == target[k] {
+				continue
+			}
+			held := slots[k]
+			safe := held == "" || held == oldEncoded || !inTarget(held)
+			for j := range slots {
+				if j != k && slots[j] == held {
+					safe = true
+				}
+			}
+			if !safe {
+				continue
+			}
+			if err := seedKeyringSet(svc, retainedSeedAccount(k+1), target[k]); err != nil {
+				return fmt.Errorf("fleet: retain previous context seed (slot %d): %w", k+1, err)
+			}
+			slots[k] = target[k]
+			progressed = true
 		}
 	}
-	if err := seedKeyringSet(svc, retainedSeedAccount(1), oldEncoded); err != nil {
-		return fmt.Errorf("fleet: retain previous context seed (slot 1): %w", err)
+	for k := range slots {
+		if slots[k] != target[k] {
+			return fmt.Errorf("fleet: retain previous context seed: slot %d could not be reordered safely", k+1)
+		}
 	}
 	return nil
 }
@@ -288,7 +343,7 @@ func StoreContextSeed(seed []byte) error {
 		return nil // same seed: nothing to retain, nothing to write
 	}
 	if existing != nil {
-		if err := retainSeedLocked(base64.StdEncoding.EncodeToString(existing)); err != nil {
+		if err := retainSeedLocked(base64.StdEncoding.EncodeToString(existing), base64.StdEncoding.EncodeToString(seed)); err != nil {
 			return err
 		}
 	}
@@ -318,13 +373,12 @@ func ContextSeedsForDecrypt() ([][]byte, error) {
 		return nil, ErrContextSeedNotFound
 	}
 	out := [][]byte{cur}
-	slots, err := readRetainedSlotsLocked()
-	if err != nil {
-		// Retained seeds only rescue data written before an import. An
-		// unreadable slot must not also block decrypting everything written
-		// under the current seed, so degrade to current-only, not an error.
-		logging.L().Warn("fleet.context_crypto.retained_seeds_unreadable", "err", err)
-		return out, nil
+	// Retained seeds only rescue data written before an import, so an
+	// unreadable slot costs just that slot's seed. It never blocks the
+	// current seed or the other retained ones.
+	slots, bad := readRetainedSlotsTolerantLocked()
+	for _, i := range bad {
+		logging.L().Warn("fleet.context_crypto.retained_seed_unreadable", "slot", i)
 	}
 next:
 	for i, v := range slots {
@@ -433,6 +487,34 @@ func LoadOwnHandoffPrivKey(dataDir string) (*ecdh.PrivateKey, error) {
 		return nil, fmt.Errorf("fleet: load own handoff priv key: node id: %w", err)
 	}
 	return DeriveHandoffPrivKey(seed, nodeID)
+}
+
+// LoadOwnHandoffPrivKeysForReceive returns this device's handoff private
+// key under the current seed first, then under each retained seed. A share
+// wrapped to the key this device had before a recovery-code import, or
+// sent while re-registration after an import had not yet succeeded, still
+// opens. Sending and registration use LoadOwnHandoffPrivKey (current only).
+func LoadOwnHandoffPrivKeysForReceive(dataDir string) ([]*ecdh.PrivateKey, error) {
+	if strings.TrimSpace(dataDir) == "" {
+		return nil, ErrHandoffIdentityUnavailable
+	}
+	seeds, err := ContextSeedsForDecrypt()
+	if err != nil {
+		return nil, fmt.Errorf("fleet: load own handoff priv keys: %w", err)
+	}
+	nodeID, err := NodeID(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: load own handoff priv keys: node id: %w", err)
+	}
+	out := make([]*ecdh.PrivateKey, 0, len(seeds))
+	for _, seed := range seeds {
+		k, err := DeriveHandoffPrivKey(seed, nodeID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, nil
 }
 
 // KeyFingerprint is "sha256:<hex>" of a raw public key — the format fleet
