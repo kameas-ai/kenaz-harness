@@ -1,6 +1,9 @@
 package fleet
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestSecretShapeReason_CleanPayloadPasses is the mutation-proof
 // counterpart to every rejection test below: a rejector that refuses
@@ -38,13 +41,46 @@ func TestSecretShapeReason_DetectsSecretReference(t *testing.T) {
 // static check-no-cred-bytes-in-rpc.sh CI gate also looks for, so the
 // runtime and static gates agree on what "looks like an API key" means.
 func TestSecretShapeReason_DetectsAPIKeyLiteral(t *testing.T) {
+	// Current key shapes are assembled at runtime (fakeKey) so the repo
+	// holds no literal a secret scanner would flag (#413).
 	cases := []string{
 		`{"note":"sk-ant-abcdef0123456789abcdef"}`,
 		`{"note":"sk-abcdefghij0123456789abcdef"}`,
+		`{"note":"` + fakeKey("ant-api03-") + `"}`,
+		`{"note":"` + fakeKey("ant-admin01-") + `"}`,
+		`{"note":"` + fakeKey("proj-") + `"}`,
+		`{"note":"` + fakeKey("svcacct-") + `"}`,
+		`{"note":"` + fakeKey("admin-") + `"}`,
+		`{"note":"` + fakeKey("or-v1-") + `"}`,
+		// Inside a larger string, as a pasted header would be.
+		`{"headers":{"note":"Bearer ` + fakeKey("or-v1-") + `"}}`,
 	}
 	for _, payload := range cases {
 		if reason := SecretShapeReason([]byte(payload)); reason == "" {
 			t.Errorf("SecretShapeReason(%q) = \"\", want a non-empty reason", payload)
+		}
+	}
+}
+
+// fakeKey returns "sk-" + kind + a 48-char body with '-' and '_' in it,
+// the shape current provider keys take.
+func fakeKey(kind string) string {
+	return "sk" + "-" + kind + strings.Repeat("zZ09-_", 8)
+}
+
+// TestSecretShapeReason_AllowsKeyLikeIdentifiers keeps the widened pattern
+// from refusing ordinary metadata: short sk- names and hyphenated ids that
+// carry no known provider prefix.
+func TestSecretShapeReason_AllowsKeyLikeIdentifiers(t *testing.T) {
+	for _, payload := range []string{
+		`{"name":"sk-learn"}`,
+		`{"name":"sk-learn-mcp-server-for-notebooks"}`,
+		`{"model":"sk-proj"}`,
+		`{"id":"sk-or-v1"}`,
+		`{"desk":"task-ant-api03-notes"}`,
+	} {
+		if reason := SecretShapeReason([]byte(payload)); reason != "" {
+			t.Errorf("SecretShapeReason(%q) = %q, want \"\"", payload, reason)
 		}
 	}
 }

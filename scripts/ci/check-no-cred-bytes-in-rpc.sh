@@ -19,10 +19,13 @@
 #     _test.go           — test files (any package)
 #
 # Check 2 — hard-coded API key prefixes
-#   Matches Anthropic (sk-ant-…) and generic OpenAI-style (sk-…) keys.
-#   Regexes:
-#     sk-ant-[A-Za-z0-9]{16,}   — Anthropic API key prefix + ≥16 alphanum chars
-#     sk-[A-Za-z0-9]{20,}       — generic sk- key prefix + ≥20 alphanum chars
+#   Same regex as core/fleet/secretshape.go apiKeyShapeRegex (the runtime
+#   sync backstop); keep the two identical.
+#     sk-(ant-(api|admin)NN|proj|svcacct|admin|or-v1)-[A-Za-z0-9_-]{20,}
+#                               — current Anthropic / OpenAI / OpenRouter
+#                                  keys, whose bodies contain '-' and '_'
+#     sk-ant-[A-Za-z0-9]{16,}   — legacy Anthropic key prefix + ≥16 alphanum
+#     sk-[A-Za-z0-9]{20,}       — legacy sk- key prefix + ≥20 alphanum chars
 #                                  (20-char floor avoids false positives on
 #                                  short identifiers like sk-learn, sk-schema)
 #   Allowlisted paths (grep -v):
@@ -75,9 +78,11 @@ fi
 echo "[cred-hygiene] Checking for hard-coded API key literals (sk-ant-*, sk-*)..."
 
 # Combined grep: match either key pattern in .go files, then filter allowlisted paths.
+APIKEY_RE='sk-(ant-(api|admin)[0-9]{2}|proj|svcacct|admin|or-v1)-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{20,}'
 apikey_hits=$(
-  grep -rEn 'sk-ant-[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{20,}' --include='*.go' . 2>/dev/null \
+  grep -rEn "$APIKEY_RE" --include='*.go' . 2>/dev/null \
     | grep -v '_test\.go' \
+    | grep -v '/\.claude/worktrees/' \
     | grep -v 'kitty-specs/' \
     | grep -v '/testdata/' \
     | grep -v '/vendor/' \
@@ -87,7 +92,7 @@ apikey_hits=$(
 if [[ -n "$apikey_hits" ]]; then
   echo "" >&2
   echo "[cred-hygiene] FAIL: hard-coded API key literal found." >&2
-  echo "  Regex: sk-ant-[A-Za-z0-9]{16,} | sk-[A-Za-z0-9]{20,}" >&2
+  echo "  Regex: $APIKEY_RE" >&2
   echo "  Allowlist: *_test.go, kitty-specs/, testdata/, vendor/" >&2
   echo "  Load credentials at runtime via credstore.Use or environment variables." >&2
   echo "" >&2

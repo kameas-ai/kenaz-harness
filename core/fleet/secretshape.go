@@ -40,11 +40,23 @@ import (
 )
 
 // apiKeyShapePattern mirrors scripts/ci/check-no-cred-bytes-in-rpc.sh's
-// Check 2 regexes (Anthropic + generic OpenAI-style key prefixes) so the
-// runtime gate and the static source-code gate agree on what "looks like
-// an API key" means. The CI script only scans .go source; this scans the
-// actual wire payload at collect/apply time.
-var apiKeyShapePattern = regexp.MustCompile(`sk-ant-[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{20,}`)
+// Check 2 regex so the runtime gate and the static source-code gate agree
+// on what "looks like an API key" means. The CI script only scans .go
+// source; this scans the actual wire payload at collect/apply time.
+//
+// Three alternatives:
+//   - current hyphenated provider prefixes, whose bodies contain '-' and
+//     '_': Anthropic sk-ant-api03- / sk-ant-admin01-, OpenAI sk-proj- /
+//     sk-svcacct- / sk-admin-, OpenRouter sk-or-v1-;
+//   - legacy Anthropic sk-ant-<alnum>;
+//   - legacy OpenAI-style sk-<alnum> (the 20-char floor keeps short
+//     identifiers like sk-learn out).
+//
+// Written without (?:) or \d so the same text works as a grep -E ERE.
+var apiKeyShapePattern = regexp.MustCompile(apiKeyShapeRegex)
+
+const apiKeyShapeRegex = `sk-(ant-(api|admin)[0-9]{2}|proj|svcacct|admin|or-v1)-[A-Za-z0-9_-]{20,}` +
+	`|sk-ant-[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{20,}`
 
 // secretReferenceMarker is the @secret:<owner>:<locator> scheme
 // core/tools/listsecrets and core/tools/bash resolve at tool-call time
