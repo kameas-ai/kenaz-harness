@@ -254,13 +254,15 @@ describe('PendingApprovalsModal', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     try {
       const until = new Date(Date.now() + 90_000);
-      const { client } = makeClient([view([{ ...LEGAL, deferrableUntil: until.toISOString() }])]);
+      const blocking = `Nothing is paused until ${formatAcceptByDate(until)}`;
+      const { client } = makeClient([view([{ ...LEGAL, blocking, deferrableUntil: until.toISOString() }])]);
       const w = await mountModal(client);
       expect(q(w, 'pending-approval-deferrable').exists()).toBe(true);
       await vi.advanceTimersByTimeAsync(120_000);
       await flushPromises();
       expect(q(w, 'pending-approval-deferrable').exists()).toBe(false);
-      expect(q(w, 'pending-approval-blocking').text()).toContain('Continued use of Fleet');
+      // Fleet's stale pre-deadline text is not shown after the flip.
+      expect(q(w, 'pending-approval-blocking').text()).toBe('Paused until you approve.');
       w.unmount();
     } finally {
       vi.useRealTimers();
@@ -288,11 +290,13 @@ describe('PendingApprovalsModal', () => {
     expect(q(w, 'pending-approval-deferrable').text()).toContain(`Accept by ${formatAcceptByDate(privacy)}.`);
   });
 
-  it('legal, deferral passed: back to "Paused until you approve"', async () => {
-    const { client } = makeClient([view([{ ...LEGAL, deferrableUntil: new Date(Date.now() - 60_000).toISOString() }])]);
+  it('legal, deferral passed on a stale copy: "Paused until you approve." without the stale text', async () => {
+    const past = new Date(Date.now() - 60_000);
+    const blocking = `Nothing is paused until ${formatAcceptByDate(past)}`;
+    const { client } = makeClient([view([{ ...LEGAL, blocking, deferrableUntil: past.toISOString() }])]);
     const w = await mountModal(client);
     expect(q(w, 'pending-approval-deferrable').exists()).toBe(false);
-    expect(q(w, 'pending-approval-blocking').text()).toContain('Continued use of Fleet');
+    expect(q(w, 'pending-approval-blocking').text()).toBe('Paused until you approve.');
   });
 
   it('ml_notice: body_text rendered verbatim as text; I agree approves by id', async () => {

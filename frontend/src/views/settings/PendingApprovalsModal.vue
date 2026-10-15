@@ -180,6 +180,12 @@ function next() {
         <p v-if="currentDeferral" class="text-signal-warn" data-testid="pending-approval-deferrable">
           Accept by {{ formatAcceptByDate(currentDeferral) }}.
         </p>
+        <p v-else-if="current.required && current.deferrableUntil" class="text-signal-warn" data-testid="pending-approval-blocking">
+          <!-- The deadline passed while this copy of the item was loaded: Fleet's
+               blocking text still describes the deferral ("Nothing is paused
+               until …"), so it is not shown. -->
+          Paused until you approve.
+        </p>
         <p v-else-if="current.required && current.blocking" class="text-signal-warn" data-testid="pending-approval-blocking">
           Paused until you approve: {{ current.blocking }}
         </p>
