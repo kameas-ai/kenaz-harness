@@ -52,6 +52,8 @@ func TestSecretShapeReason_DetectsAPIKeyLiteral(t *testing.T) {
 		`{"note":"` + fakeKey("svcacct-") + `"}`,
 		`{"note":"` + fakeKey("admin-") + `"}`,
 		`{"note":"` + fakeKey("or-v1-") + `"}`,
+		// A provider prefix nobody has listed yet.
+		`{"note":"` + fakeKey("future-v9-") + `"}`,
 		// Inside a larger string, as a pasted header would be.
 		`{"headers":{"note":"Bearer ` + fakeKey("or-v1-") + `"}}`,
 	}
@@ -68,16 +70,17 @@ func fakeKey(kind string) string {
 	return "sk" + "-" + kind + strings.Repeat("zZ09-_", 8)
 }
 
-// TestSecretShapeReason_AllowsKeyLikeIdentifiers keeps the widened pattern
-// from refusing ordinary metadata: short sk- names and hyphenated ids that
-// carry no known provider prefix.
+// TestSecretShapeReason_AllowsKeyLikeIdentifiers keeps the pattern from
+// refusing ordinary metadata: short sk- names, bare provider prefixes, and
+// "sk-" inside a word (the \b). Anything longer is refused by Fleet's
+// server-side scanner too, so the client matches it on purpose.
 func TestSecretShapeReason_AllowsKeyLikeIdentifiers(t *testing.T) {
 	for _, payload := range []string{
 		`{"name":"sk-learn"}`,
-		`{"name":"sk-learn-mcp-server-for-notebooks"}`,
+		`{"name":"sk-learn-plugin"}`,
 		`{"model":"sk-proj"}`,
 		`{"id":"sk-or-v1"}`,
-		`{"desk":"task-ant-api03-notes"}`,
+		`{"desk":"task-runner-for-notebooks"}`,
 	} {
 		if reason := SecretShapeReason([]byte(payload)); reason != "" {
 			t.Errorf("SecretShapeReason(%q) = %q, want \"\"", payload, reason)

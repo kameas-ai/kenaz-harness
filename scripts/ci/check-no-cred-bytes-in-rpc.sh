@@ -19,11 +19,13 @@
 #     _test.go           — test files (any package)
 #
 # Check 2 — hard-coded API key prefixes
-#   Same regex as core/fleet/secretshape.go apiKeyShapeRegex (the runtime
-#   sync backstop); keep the two identical.
+#   Provider-PREFIXED shapes, deliberately narrower than the runtime sync
+#   backstop (core/fleet/secretshape.go, Fleet's catch-all
+#   \bsk-[A-Za-z0-9_-]{16,}). In Go source, `sk-` + 16 kebab-case chars is
+#   an ordinary identifier (core/sessions/export/redact.go documents
+#   `sk-button-primary-…`), so only known prefixes take the permissive body:
 #     sk-(ant-(api|admin)NN|proj|svcacct|admin|or-v1)-[A-Za-z0-9_-]{20,}
 #                               — current Anthropic / OpenAI / OpenRouter
-#                                  keys, whose bodies contain '-' and '_'
 #     sk-ant-[A-Za-z0-9]{16,}   — legacy Anthropic key prefix + ≥16 alphanum
 #     sk-[A-Za-z0-9]{20,}       — legacy sk- key prefix + ≥20 alphanum chars
 #                                  (20-char floor avoids false positives on

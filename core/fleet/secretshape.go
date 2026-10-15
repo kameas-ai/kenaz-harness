@@ -39,24 +39,21 @@ import (
 	"strings"
 )
 
-// apiKeyShapePattern mirrors scripts/ci/check-no-cred-bytes-in-rpc.sh's
-// Check 2 regex so the runtime gate and the static source-code gate agree
-// on what "looks like an API key" means. The CI script only scans .go
-// source; this scans the actual wire payload at collect/apply time.
+// apiKeyShapePattern is the two sk- value shapes Fleet's server-side sync
+// scanner refuses with 422 (kenaz-fleet service/sync_schema.go, the
+// value-scanner table). The client refuses exactly what the server would,
+// before anything is sent. It is a catch-all on purpose: current keys put
+// '-' and '_' after the prefix (sk-ant-api03-, sk-proj-, sk-svcacct-,
+// sk-or-v1-), and a per-provider list misses the next new prefix. The
+// pre-2026-10-14 pattern (alphanumerics only) matched none of them.
 //
-// Three alternatives:
-//   - current hyphenated provider prefixes, whose bodies contain '-' and
-//     '_': Anthropic sk-ant-api03- / sk-ant-admin01-, OpenAI sk-proj- /
-//     sk-svcacct- / sk-admin-, OpenRouter sk-or-v1-;
-//   - legacy Anthropic sk-ant-<alnum>;
-//   - legacy OpenAI-style sk-<alnum> (the 20-char floor keeps short
-//     identifiers like sk-learn out).
-//
-// Written without (?:) or \d so the same text works as a grep -E ERE.
+// scripts/ci/check-no-cred-bytes-in-rpc.sh check 2 is deliberately
+// narrower (provider prefixes only): in Go source, `sk-` + 16 kebab-case
+// characters is an ordinary identifier. In a sync payload it is refused by
+// Fleet anyway, so refusing it here first loses nothing.
 var apiKeyShapePattern = regexp.MustCompile(apiKeyShapeRegex)
 
-const apiKeyShapeRegex = `sk-(ant-(api|admin)[0-9]{2}|proj|svcacct|admin|or-v1)-[A-Za-z0-9_-]{20,}` +
-	`|sk-ant-[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{20,}`
+const apiKeyShapeRegex = `sk-ant-[A-Za-z0-9_-]{8,}|\bsk-[A-Za-z0-9_-]{16,}`
 
 // secretReferenceMarker is the @secret:<owner>:<locator> scheme
 // core/tools/listsecrets and core/tools/bash resolve at tool-call time

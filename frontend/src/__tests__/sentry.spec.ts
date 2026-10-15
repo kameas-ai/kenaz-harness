@@ -30,6 +30,22 @@ describe('sentry-redactor', () => {
     expect(got).toContain('[REDACTED:anthropic-key]');
   });
 
+  it('redacts current provider key shapes (OpenRouter, OpenAI service-account / admin)', () => {
+    // Assembled at runtime so the repo holds no scanner-flaggable literal.
+    // OpenRouter keys reached crash reports whole until 2026-10-14.
+    const body = '0a1B-_'.repeat(8);
+    const cases: Array<[string, string]> = [
+      ['sk' + '-or-v1-' + '0123456789abcdef'.repeat(4), '[REDACTED:openrouter-key]'],
+      ['sk' + '-svcacct-' + body, '[REDACTED:openai-key]'],
+      ['sk' + '-admin-' + body, '[REDACTED:openai-key]'],
+    ];
+    for (const [key, marker] of cases) {
+      const got = redactString('key=' + key);
+      expect(got).not.toContain(key.slice(8, 20));
+      expect(got).toContain(marker);
+    }
+  });
+
   it('redacts OpenAI project keys', () => {
     const got = redactString('sk-proj-realprojectkey1234567890abc');
     expect(got).not.toContain('sk-proj-');

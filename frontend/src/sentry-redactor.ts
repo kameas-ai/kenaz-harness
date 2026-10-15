@@ -13,7 +13,8 @@
  * where this header claimed to mirror the Go set and did not):
  *  1. @secret:<locator> syntactic shapes
  *  2. Anthropic API keys (sk-ant-...)
- *  3. OpenAI project keys (sk-proj-...)
+ *  3. OpenAI project / service-account / admin keys (sk-proj-, sk-svcacct-, sk-admin-)
+ *     and OpenRouter keys (sk-or-v1-...)
  *  4. Generic OpenAI keys (sk-...)
  *  5. Gemini / Google AI Studio API keys (AIzaSy...)
  *  6. Azure OpenAI api-key header values
@@ -39,7 +40,9 @@
 const PATTERNS: Array<[RegExp, string]> = [
   [/@secret:[A-Za-z0-9_/.@:-]+/g, '[REDACTED:secret-ref]'],
   [/sk-ant-[A-Za-z0-9_-]{20,}/g, '[REDACTED:anthropic-key]'],
-  [/sk-proj-[A-Za-z0-9_-]{20,}/g, '[REDACTED:openai-key]'],
+  [/sk-(proj|svcacct|admin)-[A-Za-z0-9_-]{20,}/g, '[REDACTED:openai-key]'],
+  // OpenRouter (sk-or-v1-<hex>): the bare shape below stops at the '-' after 'or'.
+  [/sk-or-v1-[A-Za-z0-9_-]{20,}/g, '[REDACTED:openrouter-key]'],
   [/sk-[A-Za-z0-9]{20,}/g, '[REDACTED:openai-key]'],
   // Gemini / Google AI Studio API keys (F-004 parity): 39-char keys
   // starting with "AIzaSy" followed by 33 alphanumeric/hyphen/underscore.
