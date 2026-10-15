@@ -121,6 +121,27 @@ func TestFleetPendingApprovals_ListAndKinds(t *testing.T) {
 	}
 }
 
+func TestFleetPendingApprovals_DeferrableUntilReachesTheView(t *testing.T) {
+	r := newMLRig(t, true)
+	deferred := hubLegal()
+	deferred["deferrable_until"] = "2026-11-21T08:00:00Z"
+	r.fleet.set(func(f *mlFakeFleet) { f.hubStatus, f.hubBody = 200, hubBody(deferred, hubNotice()) })
+	v, err := r.api.FleetPendingApprovals(context.Background())
+	if err != nil || len(v.Items) != 2 {
+		t.Fatalf("view = %+v, %v", v, err)
+	}
+	if got := v.Items[0].DeferrableUntil; got != "2026-11-21T08:00:00Z" {
+		t.Errorf("legal deferrableUntil = %q", got)
+	}
+	// Still required: deferral changes when it blocks, not whether.
+	if !v.Items[0].Required || v.RequiredCount != 2 {
+		t.Errorf("deferred item must stay required: %+v", v)
+	}
+	if got := v.Items[1].DeferrableUntil; got != "" {
+		t.Errorf("notice deferrableUntil = %q, want \"\"", got)
+	}
+}
+
 func TestFleetPendingApprovals_ExclusionsChangeOnlyWhenNothingRequired(t *testing.T) {
 	r := newMLRig(t, true)
 	r.fleet.set(func(f *mlFakeFleet) { f.hubStatus, f.hubBody = 200, hubBody(hubLegal(), hubExclusionsChange()) })

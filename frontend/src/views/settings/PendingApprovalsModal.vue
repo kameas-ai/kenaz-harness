@@ -5,7 +5,8 @@
  * "Client behaviour").
  *
  * Opened from the settings banner's "N items need your approval" issue.
- * Per item: title, summary, what is paused (when required), then the body
+ * Per item: title, summary, what is paused (when required; while Fleet
+ * still lets it be deferred, the "Accept by <date>" instead), then the body
  * text VERBATIM as plain text, or a link to the external document.
  *
  *   - legal (any item with a document): Approve stays disabled until the
@@ -23,10 +24,11 @@
  * shown without an approve button. Nothing is ever auto-approved, and
  * closing approves nothing (the banner keeps showing the count).
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import BaseDialog from '@/components/ui/BaseDialog.vue';
 import type { HarnessClient } from '@/lib/harnessClient';
 import type { PendingApprovalItem } from '@/lib/types';
+import { deferredUntil, formatAcceptByDate } from '@/lib/approvalDeferral';
 
 const props = defineProps<{ client: HarnessClient }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -80,6 +82,25 @@ function needsCheckbox(it: PendingApprovalItem): boolean {
 function checkboxLabel(it: PendingApprovalItem): string {
   return `I have read and accept ${it.title} (${it.version})`;
 }
+
+/**
+ * The date the current item starts blocking, while it is still deferrable.
+ * `now` ticks once a minute so an open dialog flips to "Paused until you
+ * approve" when the deadline passes. While deferrable, Fleet's `blocking`
+ * text describes the present ("Nothing is paused until …"), so it is not
+ * shown next to "Accept by".
+ */
+const now = ref(new Date());
+let nowTimer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  nowTimer = setInterval(() => {
+    now.value = new Date();
+  }, 60_000);
+});
+onUnmounted(() => {
+  if (nowTimer) clearInterval(nowTimer);
+});
+const currentDeferral = computed(() => (current.value ? deferredUntil(current.value, now.value) : null));
 
 function approveLabel(it: PendingApprovalItem): string {
   if (it.kind === 'ml_exclusions_change') return 'Dismiss';
@@ -156,7 +177,16 @@ function next() {
       <section v-if="current" class="space-y-2 text-[12px]" :data-testid="`pending-approval-${current.kind}`">
         <h3 class="text-[13px] font-medium" data-testid="pending-approval-title">{{ current.title }}</h3>
         <p class="text-ink-muted" data-testid="pending-approval-summary">{{ current.summary }}</p>
-        <p v-if="current.required && current.blocking" class="text-signal-warn" data-testid="pending-approval-blocking">
+        <p v-if="currentDeferral" class="text-signal-warn" data-testid="pending-approval-deferrable">
+          Accept by {{ formatAcceptByDate(currentDeferral) }}.
+        </p>
+        <p v-else-if="current.required && current.deferrableUntil" class="text-signal-warn" data-testid="pending-approval-blocking">
+          <!-- The deadline passed while this copy of the item was loaded: Fleet's
+               blocking text still describes the deferral ("Nothing is paused
+               until …"), so it is not shown. -->
+          Paused until you approve.
+        </p>
+        <p v-else-if="current.required && current.blocking" class="text-signal-warn" data-testid="pending-approval-blocking">
           Paused until you approve: {{ current.blocking }}
         </p>
         <p v-if="changed" class="text-signal-warn" data-testid="pending-approval-changed">
