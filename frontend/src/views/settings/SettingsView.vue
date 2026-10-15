@@ -43,6 +43,7 @@ import CompliancePanel from '@/views/settings/CompliancePanel.vue';
 // nav-settings-ia-cleanup WP02 — Crash Reporting panel (PRIVACY group)
 import CrashReportingPanel from '@/views/settings/CrashReportingPanel.vue';
 import RecommendationsPanel from '@/views/settings/RecommendationsPanel.vue';
+import MCPHealthSettingsPanel from '@/views/settings/MCPHealthSettingsPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import BranchAdvisorSettings from '@/components/settings/BranchAdvisorSettings.vue';
 import RiskRaterModelPicker from '@/components/settings/RiskRaterModelPicker.vue';
@@ -199,6 +200,15 @@ const showRecommendationsTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'recommendations';
 });
 
+// MCP Servers sub-tab — the MCP auto-restart dial (MCPHealthSettingsPanel).
+// Disambiguates via ?tab=mcp-servers. Mount switch is in <template> below.
+// Its Go knob gates the stdio healthPinger's ping-failure restart trip
+// (core/mcp/transport/stdio/health.go), so this is not an inert toggle.
+const showMCPServersTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'mcp-servers';
+});
+
 // CanvasHead title/subtitle per active query-param sub-tab. The settings
 // sub-panels no longer render their own breadcrumb header (SettingsShell
 // owns it), so the header text has to reflect the current section. General
@@ -214,6 +224,7 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   // nav-settings-ia-cleanup WP04: renamed from 'Audit' to 'Audit Settings' to
   // distinguish from the separate 'Audit Log' viewer (reached via /audit).
   audit: { title: 'Audit Settings', subtitle: 'Audit-log retention settings.' },
+  'mcp-servers': { title: 'MCP servers', subtitle: 'Health behaviour for local MCP servers.' },
   peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
   sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
   compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },
@@ -1193,6 +1204,15 @@ onMounted(() => {
         </h2>
         <UnitConflictsPanel />
       </section>
+    </div>
+
+    <!-- MCP Servers sub-tab — MCP auto-restart dial. -->
+    <div
+      v-else-if="showMCPServersTab"
+      class="max-w-3xl"
+      data-testid="settings-mcp-servers-pane"
+    >
+      <MCPHealthSettingsPanel />
     </div>
 
     <!-- acp-orchestration-integration-01NDFSEX06 WP05 — Peers sub-tab. -->
