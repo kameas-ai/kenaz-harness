@@ -12,7 +12,11 @@ package fleet
 //
 // Recovery flow: MintRecoveryCode encodes the seed as a BIP-39-style mnemonic.
 // UseRecoveryCode decodes it back to seed bytes. Import the seed on a second
-// device to decrypt fleet-stored sessions from the first device.
+// device to decrypt fleet-stored sessions from the first device. The import
+// keeps the replaced seed in credstore[fleet:<env>:context_seed_prev.<n>]
+// (n = 1..maxRetainedSeeds, most recent first) so decrypt paths
+// (ContextSeedsForDecrypt / DeriveDecryptKeys) still open what this device
+// wrote before the import. Encrypt paths always use the current seed.
 //
 // Privacy invariant: no plaintext context bytes appear in slog or in the wire
 // layer. Raw key material never leaves this file.
@@ -21,11 +25,13 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -190,21 +196,169 @@ func LoadContextSeed() ([]byte, error) {
 	return seed, nil
 }
 
-// StoreContextSeed writes a raw seed to the OS keychain, overwriting any
-// existing value. Used by UseRecoveryCode to import a seed from another
-// device — an explicit user action, the only sanctioned overwrite.
+// maxRetainedSeeds bounds how many previous seeds StoreContextSeed keeps
+// for decryption (provider-credentials-client-01PCCLI01 A3). Slot 1 is the
+// most recently replaced seed; the oldest beyond the bound is dropped.
+const maxRetainedSeeds = 4
+
+// retainedSeedAccount is the keychain account of retained slot i (1-based):
+// fleet:<env>:context_seed_prev.<i>, same service as the current seed.
+func retainedSeedAccount(i int) string {
+	return contextSeedAccount + "_prev." + strconv.Itoa(i)
+}
+
+// readRetainedSlotsLocked returns the raw (base64) value of every retained
+// slot, index 0 = slot 1; "" marks an empty slot. A keychain error other
+// than ErrNotFound is ErrKeychainUnavailable. Caller holds seedMu.
+func readRetainedSlotsLocked() ([]string, error) {
+	slots := make([]string, maxRetainedSeeds)
+	for i := range slots {
+		v, err := seedKeyringGet(paths.FleetKeychainService(), retainedSeedAccount(i+1))
+		switch {
+		case errors.Is(err, keyring.ErrNotFound):
+			continue
+		case err != nil:
+			return nil, fmt.Errorf("%w: retained seed slot %d: %v", ErrKeychainUnavailable, i+1, err)
+		}
+		slots[i] = v
+	}
+	return slots, nil
+}
+
+// retainSeedLocked saves oldEncoded (the seed about to be replaced) to
+// retained slot 1, shifting older slots down and dropping the one beyond
+// maxRetainedSeeds. A seed already retained is not duplicated. The shift
+// writes from the highest slot downward, so every write overwrites a value
+// that already has a copy one slot further down (or is the one being
+// dropped): a failure part-way never loses a retained seed. Any error
+// aborts the caller's overwrite. Caller holds seedMu.
+func retainSeedLocked(oldEncoded string) error {
+	slots, err := readRetainedSlotsLocked()
+	if err != nil {
+		return err
+	}
+	for _, v := range slots {
+		if v == oldEncoded {
+			return nil // already retained; nothing to move
+		}
+	}
+	svc := paths.FleetKeychainService()
+	for k := maxRetainedSeeds; k >= 2; k-- {
+		prev := slots[k-2]
+		if prev == "" {
+			continue
+		}
+		if err := seedKeyringSet(svc, retainedSeedAccount(k), prev); err != nil {
+			return fmt.Errorf("fleet: retain previous context seed (slot %d): %w", k, err)
+		}
+	}
+	if err := seedKeyringSet(svc, retainedSeedAccount(1), oldEncoded); err != nil {
+		return fmt.Errorf("fleet: retain previous context seed (slot 1): %w", err)
+	}
+	return nil
+}
+
+// StoreContextSeed writes a raw seed to the OS keychain as the current
+// seed. Used by UseRecoveryCode to import a seed from another device — an
+// explicit user action, the only sanctioned overwrite.
+//
+// The import is lossless (A3): when a DIFFERENT seed is already stored it
+// is first saved to a retained slot (retainSeedLocked), so everything this
+// device encrypted under it stays decryptable via ContextSeedsForDecrypt.
+// Storing the seed that is already current is a no-op. If the current seed
+// cannot be read (ErrKeychainUnavailable) or retention fails, nothing is
+// overwritten and the error is returned — a root secret is never lost. A
+// stored value that is unreadable as a seed (bad base64 / length) cannot
+// decrypt anything, so it is replaced without being retained.
 func StoreContextSeed(seed []byte) error {
 	if len(seed) != seedSize {
 		return fmt.Errorf("fleet: seed must be %d bytes, got %d", seedSize, len(seed))
 	}
 	seedMu.Lock()
 	defer seedMu.Unlock()
+	existing, err := readSeedLocked()
+	switch {
+	case errors.Is(err, ErrKeychainUnavailable):
+		return fmt.Errorf("fleet: import context seed: read current seed: %w", err)
+	case err != nil:
+		logging.L().Warn("fleet.context_crypto.seed_unreadable_replaced", "err", err.Error())
+		existing = nil
+	}
+	if existing != nil && subtle.ConstantTimeCompare(existing, seed) == 1 {
+		return nil // same seed: nothing to retain, nothing to write
+	}
+	if existing != nil {
+		if err := retainSeedLocked(base64.StdEncoding.EncodeToString(existing)); err != nil {
+			return err
+		}
+	}
 	encoded := base64.StdEncoding.EncodeToString(seed)
 	if err := seedKeyringSet(paths.FleetKeychainService(), contextSeedAccount, encoded); err != nil {
 		return fmt.Errorf("fleet: persist imported context seed: %w", err)
 	}
-	logging.L().Info("fleet.context_crypto.seed_imported")
+	logging.L().Info("fleet.context_crypto.seed_imported", "previous_retained", existing != nil)
 	return nil
+}
+
+// ContextSeedsForDecrypt returns the current seed followed by the retained
+// previous seeds, most recent first, with duplicates of an earlier entry
+// removed. It is READ-ONLY and for DECRYPT paths only: encrypt/write paths
+// and the handoff identity must use the current seed (LoadContextSeed /
+// SeedKey). Returns ErrContextSeedNotFound when no current seed exists and
+// ErrKeychainUnavailable (wrapped) when the keychain could not be read. A
+// retained slot whose value is not a valid seed is skipped with a warning.
+func ContextSeedsForDecrypt() ([][]byte, error) {
+	seedMu.Lock()
+	defer seedMu.Unlock()
+	cur, err := readSeedLocked()
+	if err != nil {
+		return nil, err
+	}
+	if cur == nil {
+		return nil, ErrContextSeedNotFound
+	}
+	slots, err := readRetainedSlotsLocked()
+	if err != nil {
+		return nil, err
+	}
+	out := [][]byte{cur}
+next:
+	for i, v := range slots {
+		if v == "" {
+			continue
+		}
+		s, decErr := base64.StdEncoding.DecodeString(v)
+		if decErr != nil || len(s) != seedSize {
+			logging.L().Warn("fleet.context_crypto.retained_seed_invalid", "slot", i+1)
+			continue
+		}
+		for _, have := range out {
+			if subtle.ConstantTimeCompare(have, s) == 1 {
+				continue next
+			}
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// DeriveDecryptKeys derives the label's stream key from every seed in
+// ContextSeedsForDecrypt order: index 0 is the current seed's key (the
+// only one an encrypt path may use), the rest are decrypt fallbacks.
+func DeriveDecryptKeys(label DeriveLabel) ([][]byte, error) {
+	seeds, err := ContextSeedsForDecrypt()
+	if err != nil {
+		return nil, err
+	}
+	keys := make([][]byte, 0, len(seeds))
+	for _, s := range seeds {
+		k, err := DeriveKey(s, label)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
 }
 
 // DeriveKey derives a 32-byte symmetric key from seed using HKDF-SHA256 with
@@ -256,6 +410,10 @@ func DeriveHandoffPrivKey(seed []byte, nodeID string) (*ecdh.PrivateKey, error) 
 // keychain seed and the persistent node id under dataDir. Returns
 // ErrContextSeedNotFound (wrapped) when no seed exists yet — enroll mints
 // one (OQ-4), so a signed-in device normally has it.
+//
+// Deliberately CURRENT-seed only, never ContextSeedsForDecrypt: the
+// identity must match the public key this device has registered with
+// fleet, which a recovery-code import re-registers from the new seed.
 //
 // Privacy invariant: the private key bytes are never logged.
 func LoadOwnHandoffPrivKey(dataDir string) (*ecdh.PrivateKey, error) {

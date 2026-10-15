@@ -45,9 +45,9 @@ type SessionEventRecord struct {
 // SessionSyncer bridges session events to an EventStream.
 // Nil client means fleet is disabled; all operations become no-ops.
 type SessionSyncer struct {
-	client   *Client
-	emitter  contextaudit.Emitter // may be nil
-	caps     *Capabilities     // may be nil
+	client  *Client
+	emitter contextaudit.Emitter // may be nil
+	caps    *Capabilities        // may be nil
 }
 
 // NewSessionSyncer constructs a SessionSyncer.
@@ -148,17 +148,15 @@ func (ss *SessionSyncer) Resume(ctx context.Context, sessionID string, sinceSeq 
 		return ErrFleetDisabled
 	}
 
-	seed, err := LoadContextSeed()
+	// Decrypt path: current seed first, then seeds retained by a
+	// recovery-code import (A3), so pre-import events still open.
+	keys, err := DeriveDecryptKeys(LabelSessionEvents)
 	if err != nil {
-		return fmt.Errorf("fleet: session resume: load seed: %w", err)
-	}
-	key, err := DeriveKey(seed, LabelSessionEvents)
-	if err != nil {
-		return fmt.Errorf("fleet: session resume: derive key: %w", err)
+		return fmt.Errorf("fleet: session resume: derive keys: %w", err)
 	}
 
 	streamID := sessionStreamID(sessionID)
-	es, err := NewEventStream(ss.client, streamID, key)
+	es, err := newDecryptStream(ss.client, streamID, keys)
 	if err != nil {
 		return fmt.Errorf("fleet: session resume: stream: %w", err)
 	}
