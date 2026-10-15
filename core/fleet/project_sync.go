@@ -206,17 +206,15 @@ func (ps *ProjectSyncer) Resume(ctx context.Context, projectID string, sinceSeq 
 		return ErrFleetDisabled
 	}
 
-	seed, err := LoadContextSeed()
+	// Decrypt path: current seed first, then seeds retained by a
+	// recovery-code import (A3), so pre-import events still open.
+	keys, err := DeriveDecryptKeys(LabelProjectEvents)
 	if err != nil {
-		return fmt.Errorf("fleet: project resume: load seed: %w", err)
-	}
-	key, err := DeriveKey(seed, LabelProjectEvents)
-	if err != nil {
-		return fmt.Errorf("fleet: project resume: derive key: %w", err)
+		return fmt.Errorf("fleet: project resume: derive keys: %w", err)
 	}
 
 	streamID := projectStreamID(projectID)
-	es, err := NewEventStream(ps.client, streamID, key)
+	es, err := newDecryptStream(ps.client, streamID, keys)
 	if err != nil {
 		return fmt.Errorf("fleet: project resume: stream: %w", err)
 	}

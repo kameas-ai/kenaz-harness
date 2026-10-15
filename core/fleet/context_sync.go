@@ -78,9 +78,47 @@ type replayResponse struct {
 // It is safe for concurrent use.
 type EventStream struct {
 	client   *Client
-	key      []byte   // 32-byte AEAD key; never logs
-	streamID string   // fleet stream identifier (stream-scoped UUID)
+	key      []byte // 32-byte AEAD key; never logs
+	streamID string // fleet stream identifier (stream-scoped UUID)
 	lastSeq  atomic.Uint64
+	// decryptFallbacks are keys derived from retained (pre-import) seeds.
+	// Replay tries them, in order, after key; encrypt never uses them.
+	decryptFallbacks [][]byte
+}
+
+// newDecryptStream builds a stream from DeriveDecryptKeys output: keys[0]
+// (the current seed's key) is the stream key, the rest are Replay-only
+// decrypt fallbacks.
+func newDecryptStream(client *Client, streamID string, keys [][]byte) (*EventStream, error) {
+	if len(keys) == 0 {
+		return nil, errors.New("fleet: EventStream needs at least one key")
+	}
+	es, err := NewEventStream(client, streamID, keys[0])
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range keys[1:] {
+		if len(k) != 32 {
+			return nil, fmt.Errorf("fleet: EventStream fallback key must be 32 bytes, got %d", len(k))
+		}
+		es.decryptFallbacks = append(es.decryptFallbacks, k)
+	}
+	return es, nil
+}
+
+// decrypt opens one wire payload with the stream key, then each fallback
+// key in order. ErrDecryptionFailed only when every key fails.
+func (es *EventStream) decrypt(ciphertext, nonce []byte) ([]byte, error) {
+	pt, err := Decrypt(es.key, ciphertext, nonce)
+	if err == nil || len(es.decryptFallbacks) == 0 {
+		return pt, err
+	}
+	for _, k := range es.decryptFallbacks {
+		if pt, fbErr := Decrypt(k, ciphertext, nonce); fbErr == nil {
+			return pt, nil
+		}
+	}
+	return nil, err
 }
 
 // NewEventStream constructs an EventStream for the given stream ID and AEAD
@@ -193,7 +231,7 @@ func (es *EventStream) Replay(ctx context.Context, sinceSeq uint64, apply func(E
 		}
 
 		for _, we := range rr.Events {
-			pt, decErr := Decrypt(es.key, we.EncryptedPayload, we.Nonce)
+			pt, decErr := es.decrypt(we.EncryptedPayload, we.Nonce)
 			if decErr != nil {
 				return fmt.Errorf("fleet: replay decrypt seq %d: %w", we.Seq, decErr)
 			}

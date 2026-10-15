@@ -12,7 +12,11 @@ package fleet
 //
 // Recovery flow: MintRecoveryCode encodes the seed as a BIP-39-style mnemonic.
 // UseRecoveryCode decodes it back to seed bytes. Import the seed on a second
-// device to decrypt fleet-stored sessions from the first device.
+// device to decrypt fleet-stored sessions from the first device. The import
+// keeps the replaced seed in credstore[fleet:<env>:context_seed_prev.<n>]
+// (n = 1..maxRetainedSeeds, most recent first) so decrypt paths
+// (ContextSeedsForDecrypt / DeriveDecryptKeys) still open what this device
+// wrote before the import. Encrypt paths always use the current seed.
 //
 // Privacy invariant: no plaintext context bytes appear in slog or in the wire
 // layer. Raw key material never leaves this file.
@@ -21,11 +25,13 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -190,21 +196,227 @@ func LoadContextSeed() ([]byte, error) {
 	return seed, nil
 }
 
-// StoreContextSeed writes a raw seed to the OS keychain, overwriting any
-// existing value. Used by UseRecoveryCode to import a seed from another
-// device — an explicit user action, the only sanctioned overwrite.
+// maxRetainedSeeds bounds how many previous seeds StoreContextSeed keeps
+// for decryption (provider-credentials-client-01PCCLI01 A3). Slot 1 is the
+// most recently replaced seed; the oldest beyond the bound is dropped.
+const maxRetainedSeeds = 4
+
+// retainedSeedAccount is the keychain account of retained slot i (1-based):
+// fleet:<env>:context_seed_prev.<i>, same service as the current seed.
+func retainedSeedAccount(i int) string {
+	return contextSeedAccount + "_prev." + strconv.Itoa(i)
+}
+
+// readRetainedSlotsLocked returns the raw (base64) value of every retained
+// slot, index 0 = slot 1; "" marks an empty slot. A keychain error other
+// than ErrNotFound is ErrKeychainUnavailable (the write path must not
+// reshuffle slots it cannot see). Caller holds seedMu.
+func readRetainedSlotsLocked() ([]string, error) {
+	slots, bad := readRetainedSlotsTolerantLocked()
+	if len(bad) > 0 {
+		return nil, fmt.Errorf("%w: retained seed slot %d unreadable", ErrKeychainUnavailable, bad[0])
+	}
+	return slots, nil
+}
+
+// readRetainedSlotsTolerantLocked reads every retained slot, leaving an
+// unreadable one "" and reporting its 1-based index in bad. The decrypt path
+// uses it so one bad slot costs only that slot's seed. Caller holds seedMu.
+func readRetainedSlotsTolerantLocked() (slots []string, bad []int) {
+	slots = make([]string, maxRetainedSeeds)
+	for i := range slots {
+		v, err := seedKeyringGet(paths.FleetKeychainService(), retainedSeedAccount(i+1))
+		switch {
+		case errors.Is(err, keyring.ErrNotFound):
+			continue
+		case err != nil:
+			bad = append(bad, i+1)
+			continue
+		}
+		slots[i] = v
+	}
+	return slots, bad
+}
+
+// retainSeedLocked records oldEncoded (the seed about to be replaced by
+// newEncoded) as the most recent retained seed. The target list is
+// oldEncoded, then the existing slots in order with oldEncoded and
+// newEncoded removed (newEncoded becomes current, so a retained copy would
+// be a duplicate), truncated to maxRetainedSeeds. A seed that is already
+// retained therefore MOVES to slot 1 instead of staying where it was, so
+// re-importing an older seed never lets it be evicted ahead of seeds that
+// were current before it.
+//
+// Crash safety: a slot is overwritten only when the value it holds is
+// recoverable elsewhere at that moment. That means it is empty, being
+// dropped deliberately (the duplicate of newEncoded, or the one past the
+// cap), equal to oldEncoded (still the current seed until the caller's
+// final write), or present in another slot. Writes repeat until every slot
+// matches. The surviving seeds keep their relative order, so the moves can
+// never form a cycle and the loop always finishes. Any keychain error
+// aborts the caller's overwrite. Caller holds seedMu.
+func retainSeedLocked(oldEncoded, newEncoded string) error {
+	slots, err := readRetainedSlotsLocked()
+	if err != nil {
+		return err
+	}
+	desired := make([]string, 0, maxRetainedSeeds)
+	desired = append(desired, oldEncoded)
+	for _, v := range slots {
+		if v == "" || v == oldEncoded || v == newEncoded {
+			continue
+		}
+		if len(desired) == maxRetainedSeeds {
+			break
+		}
+		desired = append(desired, v)
+	}
+	target := make([]string, maxRetainedSeeds)
+	copy(target, desired)
+	inTarget := func(v string) bool {
+		for _, t := range target {
+			if t == v {
+				return true
+			}
+		}
+		return false
+	}
+	svc := paths.FleetKeychainService()
+	for progressed := true; progressed; {
+		progressed = false
+		for k := range slots {
+			if slots[k] == target[k] {
+				continue
+			}
+			held := slots[k]
+			safe := held == "" || held == oldEncoded || !inTarget(held)
+			for j := range slots {
+				if j != k && slots[j] == held {
+					safe = true
+				}
+			}
+			if !safe {
+				continue
+			}
+			if err := seedKeyringSet(svc, retainedSeedAccount(k+1), target[k]); err != nil {
+				return fmt.Errorf("fleet: retain previous context seed (slot %d): %w", k+1, err)
+			}
+			slots[k] = target[k]
+			progressed = true
+		}
+	}
+	for k := range slots {
+		if slots[k] != target[k] {
+			return fmt.Errorf("fleet: retain previous context seed: slot %d could not be reordered safely", k+1)
+		}
+	}
+	return nil
+}
+
+// StoreContextSeed writes a raw seed to the OS keychain as the current
+// seed. Used by UseRecoveryCode to import a seed from another device — an
+// explicit user action, the only sanctioned overwrite.
+//
+// The import is lossless (A3): when a DIFFERENT seed is already stored it
+// is first saved to a retained slot (retainSeedLocked), so everything this
+// device encrypted under it stays decryptable via ContextSeedsForDecrypt.
+// Storing the seed that is already current is a no-op. If the current seed
+// cannot be read (ErrKeychainUnavailable) or retention fails, nothing is
+// overwritten and the error is returned — a root secret is never lost. A
+// stored value that is unreadable as a seed (bad base64 / length) cannot
+// decrypt anything, so it is replaced without being retained.
 func StoreContextSeed(seed []byte) error {
 	if len(seed) != seedSize {
 		return fmt.Errorf("fleet: seed must be %d bytes, got %d", seedSize, len(seed))
 	}
 	seedMu.Lock()
 	defer seedMu.Unlock()
+	existing, err := readSeedLocked()
+	switch {
+	case errors.Is(err, ErrKeychainUnavailable):
+		return fmt.Errorf("fleet: import context seed: read current seed: %w", err)
+	case err != nil:
+		logging.L().Warn("fleet.context_crypto.seed_unreadable_replaced", "err", err.Error())
+		existing = nil
+	}
+	if existing != nil && subtle.ConstantTimeCompare(existing, seed) == 1 {
+		return nil // same seed: nothing to retain, nothing to write
+	}
+	if existing != nil {
+		if err := retainSeedLocked(base64.StdEncoding.EncodeToString(existing), base64.StdEncoding.EncodeToString(seed)); err != nil {
+			return err
+		}
+	}
 	encoded := base64.StdEncoding.EncodeToString(seed)
 	if err := seedKeyringSet(paths.FleetKeychainService(), contextSeedAccount, encoded); err != nil {
 		return fmt.Errorf("fleet: persist imported context seed: %w", err)
 	}
-	logging.L().Info("fleet.context_crypto.seed_imported")
+	logging.L().Info("fleet.context_crypto.seed_imported", "previous_retained", existing != nil)
 	return nil
+}
+
+// ContextSeedsForDecrypt returns the current seed followed by the retained
+// previous seeds, most recent first, with duplicates of an earlier entry
+// removed. It is READ-ONLY and for DECRYPT paths only: encrypt/write paths
+// and the handoff identity must use the current seed (LoadContextSeed /
+// SeedKey). Returns ErrContextSeedNotFound when no current seed exists and
+// ErrKeychainUnavailable (wrapped) when the keychain could not be read. A
+// retained slot whose value is not a valid seed is skipped with a warning.
+func ContextSeedsForDecrypt() ([][]byte, error) {
+	seedMu.Lock()
+	defer seedMu.Unlock()
+	cur, err := readSeedLocked()
+	if err != nil {
+		return nil, err
+	}
+	if cur == nil {
+		return nil, ErrContextSeedNotFound
+	}
+	out := [][]byte{cur}
+	// Retained seeds only rescue data written before an import, so an
+	// unreadable slot costs just that slot's seed. It never blocks the
+	// current seed or the other retained ones.
+	slots, bad := readRetainedSlotsTolerantLocked()
+	for _, i := range bad {
+		logging.L().Warn("fleet.context_crypto.retained_seed_unreadable", "slot", i)
+	}
+next:
+	for i, v := range slots {
+		if v == "" {
+			continue
+		}
+		s, decErr := base64.StdEncoding.DecodeString(v)
+		if decErr != nil || len(s) != seedSize {
+			logging.L().Warn("fleet.context_crypto.retained_seed_invalid", "slot", i+1)
+			continue
+		}
+		for _, have := range out {
+			if subtle.ConstantTimeCompare(have, s) == 1 {
+				continue next
+			}
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// DeriveDecryptKeys derives the label's stream key from every seed in
+// ContextSeedsForDecrypt order: index 0 is the current seed's key (the
+// only one an encrypt path may use), the rest are decrypt fallbacks.
+func DeriveDecryptKeys(label DeriveLabel) ([][]byte, error) {
+	seeds, err := ContextSeedsForDecrypt()
+	if err != nil {
+		return nil, err
+	}
+	keys := make([][]byte, 0, len(seeds))
+	for _, s := range seeds {
+		k, err := DeriveKey(s, label)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
 }
 
 // DeriveKey derives a 32-byte symmetric key from seed using HKDF-SHA256 with
@@ -257,6 +469,10 @@ func DeriveHandoffPrivKey(seed []byte, nodeID string) (*ecdh.PrivateKey, error) 
 // ErrContextSeedNotFound (wrapped) when no seed exists yet — enroll mints
 // one (OQ-4), so a signed-in device normally has it.
 //
+// Deliberately CURRENT-seed only, never ContextSeedsForDecrypt: the
+// identity must match the public key this device has registered with
+// fleet, which a recovery-code import re-registers from the new seed.
+//
 // Privacy invariant: the private key bytes are never logged.
 func LoadOwnHandoffPrivKey(dataDir string) (*ecdh.PrivateKey, error) {
 	if strings.TrimSpace(dataDir) == "" {
@@ -271,6 +487,34 @@ func LoadOwnHandoffPrivKey(dataDir string) (*ecdh.PrivateKey, error) {
 		return nil, fmt.Errorf("fleet: load own handoff priv key: node id: %w", err)
 	}
 	return DeriveHandoffPrivKey(seed, nodeID)
+}
+
+// LoadOwnHandoffPrivKeysForReceive returns this device's handoff private
+// key under the current seed first, then under each retained seed. A share
+// wrapped to the key this device had before a recovery-code import, or
+// sent while re-registration after an import had not yet succeeded, still
+// opens. Sending and registration use LoadOwnHandoffPrivKey (current only).
+func LoadOwnHandoffPrivKeysForReceive(dataDir string) ([]*ecdh.PrivateKey, error) {
+	if strings.TrimSpace(dataDir) == "" {
+		return nil, ErrHandoffIdentityUnavailable
+	}
+	seeds, err := ContextSeedsForDecrypt()
+	if err != nil {
+		return nil, fmt.Errorf("fleet: load own handoff priv keys: %w", err)
+	}
+	nodeID, err := NodeID(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: load own handoff priv keys: node id: %w", err)
+	}
+	out := make([]*ecdh.PrivateKey, 0, len(seeds))
+	for _, seed := range seeds {
+		k, err := DeriveHandoffPrivKey(seed, nodeID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, nil
 }
 
 // KeyFingerprint is "sha256:<hex>" of a raw public key — the format fleet

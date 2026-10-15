@@ -22,6 +22,7 @@ package fleet
 
 import (
 	"context"
+	"crypto/ecdh"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -173,12 +174,13 @@ func (h *HandoffHandler) AcceptShare(ctx context.Context, inboxItemID string) (A
 	if err != nil {
 		return AcceptedHandoff{}, err
 	}
-	priv, err := LoadOwnHandoffPrivKey(h.client.dataDir)
+	// Current key first, then keys from seeds retained across a
+	// recovery-code import (a share may be wrapped to the pre-import key).
+	privs, err := LoadOwnHandoffPrivKeysForReceive(h.client.dataDir)
 	if err != nil {
 		return AcceptedHandoff{}, &HandoffError{Code: "no_device_key", cause: err,
 			msg: "This device has no key for opening shared sessions yet. Sign in again, then retry."}
 	}
-	ownFP := KeyFingerprint(priv.PublicKey().Bytes())
 
 	if payload.Mode != "wrapped" {
 		return AcceptedHandoff{}, &HandoffError{Code: "unknown_mode",
@@ -188,10 +190,15 @@ func (h *HandoffHandler) AcceptShare(ctx context.Context, inboxItemID string) (A
 		return AcceptedHandoff{}, err
 	}
 	var mine *handoffGetRecipient
-	for i := range payload.Recipients {
-		if payload.Recipients[i].Fingerprint == ownFP {
-			mine = &payload.Recipients[i]
-			break
+	var priv *ecdh.PrivateKey
+match:
+	for _, k := range privs {
+		fp := KeyFingerprint(k.PublicKey().Bytes())
+		for i := range payload.Recipients {
+			if payload.Recipients[i].Fingerprint == fp {
+				mine, priv = &payload.Recipients[i], k
+				break match
+			}
 		}
 	}
 	if mine == nil {
