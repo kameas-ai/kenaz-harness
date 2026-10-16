@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"github.com/kameas-ai/kenaz-harness/core/oautherr"
 	"io"
 	"net/http"
 	"net/url"
@@ -173,7 +174,8 @@ func (a *serviceAccountAuth) mintToken(ctx context.Context) (string, time.Time, 
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 
 	if resp.StatusCode != http.StatusOK {
-		return "", time.Time{}, fmt.Errorf("gemini: token endpoint %d: %s", resp.StatusCode, raw)
+		// Never the raw body: a token endpoint's response is credential-bearing.
+		return "", time.Time{}, fmt.Errorf("gemini: token endpoint: %s", oautherr.Summary(resp.StatusCode, raw))
 	}
 
 	var tok struct {

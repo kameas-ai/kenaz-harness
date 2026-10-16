@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/oautherr"
 )
 
 // shortID returns the first 8 chars of s for log-safe identifiers.
@@ -265,7 +266,7 @@ func exchangeCode(ctx context.Context, profile EnvProfile, code, redirectURI, ve
 		// Only the OAuth error fields, never the raw body. A token
 		// endpoint's response is credential-bearing by nature, and a
 		// misbehaving IdP or proxy could put anything in a non-200 body.
-		code, desc := oauthErrorFields(body)
+		code, desc := oautherr.Fields(body)
 		logging.L().Error("fleet.auth.token_exchange.failed",
 			"status", resp.StatusCode,
 			"url", tokenURL,
@@ -275,10 +276,7 @@ func exchangeCode(ctx context.Context, profile EnvProfile, code, redirectURI, ve
 			"oauth_error_description", desc,
 			"body_bytes", len(body),
 		)
-		if code != "" {
-			return TokenSet{}, fmt.Errorf("%w: status %d: %s: %s", ErrAuthFailed, resp.StatusCode, code, desc)
-		}
-		return TokenSet{}, fmt.Errorf("%w: status %d", ErrAuthFailed, resp.StatusCode)
+		return TokenSet{}, fmt.Errorf("%w: %s", ErrAuthFailed, oautherr.Summary(resp.StatusCode, body))
 	}
 	ts, err := parseTokenResponse(body)
 	if err != nil {
@@ -318,14 +316,16 @@ func RefreshTokenSet(ctx context.Context, profile EnvProfile, refreshToken strin
 	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized {
 		// OAuth2 rejects a dead refresh token with 400 invalid_grant (or
 		// 401 invalid_client): a DEFINITE rejection — the session is over.
-		return TokenSet{}, fmt.Errorf("%w: status %d during refresh: %s", ErrTokenExpired, resp.StatusCode, body)
+		// Never the raw body: this error reaches the session-expired event's
+		// Reason and the logs (oautherr).
+		return TokenSet{}, fmt.Errorf("%w: during refresh: %s", ErrTokenExpired, oautherr.Summary(resp.StatusCode, body))
 	}
 	if resp.StatusCode != http.StatusOK {
 		// IdP 5xx / 429 / anything else says nothing about the refresh
 		// token's validity: transient, NOT ErrTokenExpired, so the session
 		// is not shown as expired over an IdP hiccup
 		// (fleet-session-truth-01DOGF0A delta review #4).
-		return TokenSet{}, fmt.Errorf("fleet: token endpoint status %d during refresh: %s", resp.StatusCode, body)
+		return TokenSet{}, fmt.Errorf("fleet: token endpoint during refresh: %s", oautherr.Summary(resp.StatusCode, body))
 	}
 	return parseTokenResponse(body)
 }
@@ -358,28 +358,4 @@ func parseTokenResponse(body []byte) (TokenSet, error) {
 		IDToken:      tr.IDToken,
 		ExpiresAt:    expiresAt,
 	}, nil
-}
-
-// oauthErrorFields extracts RFC 6749 §5.2 `error` and `error_description`
-// from a token-endpoint error body. Anything else in the body is dropped.
-// The code must be a short token of [a-z_]; the description is cut to 200
-// runes. A body that isn't an OAuth error object yields "", "".
-func oauthErrorFields(body []byte) (code, desc string) {
-	var e struct {
-		Error            string `json:"error"`
-		ErrorDescription string `json:"error_description"`
-	}
-	if json.Unmarshal(body, &e) != nil || e.Error == "" || len(e.Error) > 64 {
-		return "", ""
-	}
-	for _, r := range e.Error {
-		if (r < 'a' || r > 'z') && r != '_' {
-			return "", ""
-		}
-	}
-	d := []rune(e.ErrorDescription)
-	if len(d) > 200 {
-		d = append(d[:200], '…')
-	}
-	return e.Error, string(d)
 }
