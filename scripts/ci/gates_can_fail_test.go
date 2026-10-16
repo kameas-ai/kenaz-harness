@@ -4149,8 +4149,10 @@ func TestKnobCoverageGate_UnregisteredSettingsFieldFires(t *testing.T) {
 	// documents for passthroughTopics' own terminator-anchored proof.
 	// Re-anchored 2026-10-09 to ShareModelCallTelemetryWithFleet
 	// (llm-call-telemetry-01LLMTEL01 WP02 appended the model-call fields).
-	const target = "\tShareModelCallTelemetryWithFleet bool `json:\"shareModelCallTelemetryWithFleet,omitempty\"`\n}"
-	const mutated = "\tShareModelCallTelemetryWithFleet bool `json:\"shareModelCallTelemetryWithFleet,omitempty\"`\n\n" +
+	// Re-anchored 2026-10-16 to MLLocalActivityRetentionDays
+	// (ml-producer-01MLPRD01 WP11).
+	const target = "\tMLLocalActivityRetentionDays int `json:\"mlLocalActivityRetentionDays,omitempty\"`\n}"
+	const mutated = "\tMLLocalActivityRetentionDays int `json:\"mlLocalActivityRetentionDays,omitempty\"`\n\n" +
 		"\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
 		"\t// to prove check-knob-coverage.sh's real settings.Settings guard\n" +
 		"\t// (TestKnobCoverage_Settings) fails when a field has no\n" +
