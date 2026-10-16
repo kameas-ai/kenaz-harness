@@ -40,7 +40,6 @@
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MLStatus } from '@/lib/types';
-import CloudMLExclusions from './CloudMLExclusions.vue';
 
 /** Spec §5: the fixed harness line, verbatim. */
 const HARNESS_LINE =
@@ -113,16 +112,15 @@ function openDashboard() {
 }
 
 /**
- * WP05: the org's exclusions, read-only (CloudMLExclusions). Paths and
- * command prefixes are enforced on this device; legacy notes are the org's
- * old free text and are shown only (never matched). exclude_browser changes
- * nothing here (the harness sends no browser data), so it is not listed.
- * While the notice is shown they render inside its card, before any action
- * button (legal, kameas-ai-11, 2026-10-16); otherwise on their own.
+ * WP05: the org's exclusions, read-only, as Fleet words them (legal,
+ * kameas-ai-11, 2026-10-16): the backend's port of Fleet's
+ * exclusionsSummary ("Excluded from upload: …" plus the legacy free-text
+ * sentence), never markup of our own. Inside the fallback notice it is
+ * notice.exclusionsText, before any action button; with no notice shown it
+ * is exclusionsSummary on its own. On the hub path nothing is added: the
+ * served body_text is the only exclusions source.
  */
-const exclusionPaths = computed(() => status.value?.exclusionPaths ?? []);
-const exclusionCommands = computed(() => status.value?.exclusionCommands ?? []);
-const legacyNotes = computed(() => status.value?.legacyExclusionNotes ?? []);
+const exclusionsSummary = computed(() => status.value?.exclusionsSummary ?? '');
 
 function policyLabel(p: string): string {
   switch (p) {
@@ -297,8 +295,8 @@ function onOptInChange(ev: Event) {
             <strong>{{ s.label }}</strong> {{ s.text }}
           </p>
           <p v-if="localNotice.policyText" data-testid="cloud-ml-notice-policy">{{ localNotice.policyText }}</p>
-          <!-- Exclusions are part of the notice: shown before any action button. -->
-          <CloudMLExclusions :paths="exclusionPaths" :commands="exclusionCommands" :legacy-notes="legacyNotes" />
+          <!-- Exclusions are part of the notice (Fleet's words): before any action button. -->
+          <p v-if="localNotice.exclusionsText" data-testid="cloud-ml-exclusions">{{ localNotice.exclusionsText }}</p>
           <div class="flex gap-2">
             <button
               v-for="a in localNotice.actions"
@@ -318,8 +316,8 @@ function onOptInChange(ev: Event) {
           <h3 v-if="status.noticeTitle" class="text-[13px] font-semibold" data-testid="cloud-ml-notice-heading">
             {{ status.noticeTitle }}
           </h3>
+          <!-- The served body_text is the only exclusions source here: nothing of our own. -->
           <p class="whitespace-pre-wrap" data-testid="cloud-ml-notice-text">{{ status.noticeText }}</p>
-          <CloudMLExclusions :paths="exclusionPaths" :commands="exclusionCommands" :legacy-notes="legacyNotes" />
           <button
             type="button"
             class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -351,13 +349,14 @@ function onOptInChange(ev: Event) {
         </template>
       </div>
 
-      <!-- Not inside the notice card: the exclusions stand on their own. -->
-      <CloudMLExclusions
-        v-if="loaded && !showNotice"
-        :paths="exclusionPaths"
-        :commands="exclusionCommands"
-        :legacy-notes="legacyNotes"
-      />
+      <!-- No notice shown: Fleet's exclusions paragraph on its own. -->
+      <p
+        v-if="loaded && !showNotice && exclusionsSummary"
+        class="text-[12px]"
+        data-testid="cloud-ml-exclusions"
+      >
+        {{ exclusionsSummary }}
+      </p>
 
       <p class="text-[12px] text-ink-muted" data-testid="cloud-ml-harness-line">{{ HARNESS_LINE }}</p>
     </template>

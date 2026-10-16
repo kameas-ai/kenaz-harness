@@ -111,6 +111,10 @@ type MLNoticeView struct {
 	PolicyText string `json:"policyText"`
 	// Policy is the org_policy the notice was rendered for.
 	Policy string `json:"policy"`
+	// ExclusionsText is the org's exclusions paragraph (MLExclusionsSummary),
+	// "" when nothing is excluded. PlainText ends with it, as Fleet's notice
+	// text does; the panel shows it inside the notice, before the buttons.
+	ExclusionsText string `json:"exclusionsText"`
 	// Actions are the button labels for that policy, in order:
 	// member_choice → [Turn on Offload, Not now], or [I have read this]
 	// when re-acknowledging (Offload already on); on → [I have read this];
@@ -129,13 +133,50 @@ type MLNoticeView struct {
 const localNoticeTextRevision = 1
 
 // localExclusionsTemplate is the version of Fleet's exclusions paragraph
-// template whose legacy-notes sentence this harness mirrors
-// (CloudMLExclusions.vue LEGACY_NOTES_LEAD): template 2, kenaz-fleet PR #289
-// (c9b08ca2, legal kameas-ai-11, 2026-10-16). The fallback ack sends it as
+// template this harness mirrors (MLExclusionsSummary): template 2,
+// kenaz-fleet PR #289 (c9b08ca2, legal kameas-ai-11, 2026-10-16). The fallback ack sends it as
 // "exclusions_template"; Fleet logs a mismatch, never refuses. Bump it
-// whenever the mirrored exclusions sentence changes — NOT
+// whenever the mirrored exclusions text changes — NOT
 // localNoticeTextRevision, which the exclusions paragraph never moves.
 const localExclusionsTemplate = 2
+
+// mlExclusionsLegacyLead is the legacy-notes sentence lead of Fleet's
+// exclusions template 2 (kenaz-fleet c9b08ca2 service/ml_notice_text.go
+// mlExclusionsLegacyLeadV2), verbatim.
+const mlExclusionsLegacyLead = "Your organization also listed these exclusions in its own words. Fleet can't " +
+	"apply them automatically, so matching activity may still be uploaded: "
+
+// MLExclusionsSummary renders the org's exclusions as the plain-text
+// paragraph Fleet appends to the ML notice — a faithful port of kenaz-fleet
+// exclusionsSummary (c9b08ca2 service/ml_exclusions.go, template
+// localExclusionsTemplate): "Excluded from upload: …" when anything typed is
+// excluded, then the legacy free-text sentence only when legacy notes exist.
+// "" when nothing is excluded. Pinned byte-for-byte against every case of
+// Fleet's shared fixture (testdata/ml_notice_text.json). Never hand-edit the
+// words here without the fixture.
+func MLExclusionsSummary(paths, commands []string, excludeBrowser bool, legacyNotes []string) string {
+	var parts []string
+	if len(paths) > 0 {
+		parts = append(parts, "file paths matching: "+strings.Join(paths, ", "))
+	}
+	if len(commands) > 0 {
+		parts = append(parts, "terminal commands starting with: "+strings.Join(commands, ", "))
+	}
+	if excludeBrowser {
+		parts = append(parts, "browser pages (all)")
+	}
+	out := ""
+	if len(parts) > 0 {
+		out = "Excluded from upload: " + strings.Join(parts, "; ") + "."
+	}
+	if len(legacyNotes) > 0 {
+		if out != "" {
+			out += " "
+		}
+		out += mlExclusionsLegacyLead + strings.Join(legacyNotes, "; ") + "."
+	}
+	return out
+}
 
 // mlDashboardConsentPath is the Fleet dashboard's hosted-inference consent
 // card, relative to the active profile's FleetBaseURL (stable per Fleet).
@@ -197,7 +238,8 @@ func RenderMLNotice(orgName string, retentionDays int, policy string, reack bool
 }
 
 // PlainText joins the notice into paragraphs separated by a blank line:
-// heading, intro, each "Label Text", then the policy paragraph.
+// heading, intro, each "Label Text", the policy paragraph, then the
+// exclusions paragraph (when anything is excluded).
 func (n MLNoticeView) PlainText() string {
 	parts := []string{n.Heading, n.Intro}
 	for _, s := range n.Sections {
@@ -205,6 +247,9 @@ func (n MLNoticeView) PlainText() string {
 	}
 	if n.PolicyText != "" {
 		parts = append(parts, n.PolicyText)
+	}
+	if n.ExclusionsText != "" {
+		parts = append(parts, n.ExclusionsText)
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -357,6 +402,11 @@ type MLStatusView struct {
 	// LegacyExclusionNotes are the org's old free-text exclusions: display
 	// only, never matched.
 	LegacyExclusionNotes []string `json:"legacyExclusionNotes"`
+	// ExclusionsSummary is the exclusions paragraph Fleet's notice carries
+	// (MLExclusionsSummary of the fields above), "" when nothing is
+	// excluded. The panel shows it outside a notice; on the hub path it
+	// shows nothing of its own (the served body_text carries it).
+	ExclusionsSummary string `json:"exclusionsSummary"`
 
 	// FleetError is the last /me/ml read error ("" on success).
 	FleetError string `json:"fleetError,omitempty"`
@@ -397,6 +447,8 @@ func mlFill(v *MLStatusView, m fleet.MeML, fleetBaseURL string) {
 		v.NoticeDashboardURL = mlDashboardConsentURL(fleetBaseURL)
 	} else {
 		n := RenderMLNotice(v.OrgName, m.RetentionDays, m.OrgPolicy, mlNoticeReack(m))
+		n.ExclusionsText = MLExclusionsSummary(m.Exclusions.Paths, m.Exclusions.Commands,
+			m.Exclusions.ExcludeBrowser, m.LegacyExclusionNotes)
 		v.Notice = &n
 		v.NoticeText = n.PlainText()
 	}
@@ -405,6 +457,8 @@ func mlFill(v *MLStatusView, m fleet.MeML, fleetBaseURL string) {
 	v.ExcludeBrowser = m.Exclusions.ExcludeBrowser
 	v.ExclusionsVersion = m.ExclusionsVersion
 	v.LegacyExclusionNotes = append([]string{}, m.LegacyExclusionNotes...)
+	v.ExclusionsSummary = MLExclusionsSummary(v.ExclusionPaths, v.ExclusionCommands, v.ExcludeBrowser,
+		v.LegacyExclusionNotes)
 }
 
 // mlNoticeReack reports whether a member_choice notice is a

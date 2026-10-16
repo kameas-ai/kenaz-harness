@@ -3,11 +3,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import CloudMLPanel from '@/views/settings/CloudMLPanel.vue';
-import CloudMLExclusions from '@/views/settings/CloudMLExclusions.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { MLStatus, PendingApprovals } from '@/lib/types';
@@ -81,92 +77,38 @@ function mountWith(
 const q = (w: any, id: string) => w.find(`[data-testid="${id}"]`);
 
 describe('CloudMLPanel', () => {
-  it('lists the org exclusions read-only (WP05)', async () => {
-    const { wrapper } = mountWith(
-      status({
-        effective: true,
-        exclusionPaths: ['hr/**', '**/secrets/*'],
-        exclusionCommands: ['ssh', 'git push'],
-        excludeBrowser: true,
-        legacyExclusionNotes: ['Nothing from the HR share'],
-      }),
-    );
+  // Fleet's exclusions paragraph (the backend's port of exclusionsSummary,
+  // pinned byte-for-byte against Fleet's fixture in ml_fixture_test.go).
+  const SUMMARY =
+    'Excluded from upload: file paths matching: legal/**. Your organization also listed these exclusions in ' +
+    "its own words. Fleet can't apply them automatically, so matching activity may still be uploaded: " +
+    'no HR team; no legal.';
+  const EXCL = {
+    exclusionPaths: ['legal/**'],
+    exclusionCommands: ['ssh'],
+    legacyExclusionNotes: ['no HR team', 'no legal'],
+    exclusionsSummary: SUMMARY,
+  };
+  const OLD_HEADING = /Earlier notes from your organization|Your organization excludes:/;
+
+  it("no notice shown: Fleet's exclusions paragraph, read-only, verbatim (WP05)", async () => {
+    const { wrapper } = mountWith(status({ ...EXCL, effective: true }));
     await flushPromises();
     const block = q(wrapper, 'cloud-ml-exclusions');
     expect(block.exists()).toBe(true);
-    expect(block.text()).toContain('Your organization excludes:');
-    const paths = wrapper.findAll('[data-testid="cloud-ml-exclusion-path"]').map((w) => w.text());
-    expect(paths).toEqual(['files matching hr/**', 'files matching **/secrets/*']);
-    const cmds = wrapper.findAll('[data-testid="cloud-ml-exclusion-command"]').map((w) => w.text());
-    expect(cmds).toEqual(['commands starting with ssh', 'commands starting with git push']);
-    // Read-only: no inputs inside the exclusions block.
+    expect(block.text()).toBe(SUMMARY);
     expect(block.findAll('input').length).toBe(0);
     expect(block.findAll('button').length).toBe(0);
-    const notes = q(wrapper, 'cloud-ml-legacy-notes');
-    expect(notes.exists()).toBe(true);
-    expect(notes.text()).toBe(
-      "Your organization also listed these exclusions in its own words. Fleet can't apply them " +
-        'automatically, so matching activity may still be uploaded: Nothing from the HR share.',
-    );
+    // No markup of our own: no typed list, no legacy-notes heading or list.
+    expect(q(wrapper, 'cloud-ml-legacy-notes').exists()).toBe(false);
+    expect(q(wrapper, 'cloud-ml-exclusion-path').exists()).toBe(false);
+    expect(wrapper.text()).not.toMatch(OLD_HEADING);
   });
 
-  // Legal (kameas-ai-11, 2026-10-16) via kenaz-fleet PR #289 (c9b08ca2):
-  // the legacy-notes sentence must match Fleet's shared fixture exactly.
-  describe("legacy notes sentence matches Fleet's shared fixture", () => {
-    type FixtureCase = { legacy_exclusion_notes?: string[] | null; text: string };
-    const fixture = JSON.parse(
-      readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/ml_notice_text.json'), 'utf-8'),
-    ) as { cases: FixtureCase[] };
-    const LEAD = 'Your organization also listed these exclusions in its own words.';
-    const withNotes = fixture.cases.filter((c) => (c.legacy_exclusion_notes ?? []).length > 0);
-
-    it('the fixture has cases with legacy notes', () => {
-      expect(withNotes.length).toBeGreaterThanOrEqual(2);
-    });
-
-    withNotes.forEach((c, i) => {
-      it(`case ${i}: ${JSON.stringify(c.legacy_exclusion_notes)}`, () => {
-        const para = c.text.split('\n\n').at(-1) ?? '';
-        const at = para.indexOf(LEAD);
-        expect(at).toBeGreaterThanOrEqual(0);
-        const want = para.slice(at);
-        const w = mount(CloudMLExclusions, {
-          props: { paths: [], commands: [], legacyNotes: c.legacy_exclusion_notes ?? [] },
-        });
-        expect(w.find('[data-testid="cloud-ml-legacy-notes"]').text()).toBe(want);
-      });
-    });
-
-    it('no legacy notes: no sentence', () => {
-      const w = mount(CloudMLExclusions, { props: { paths: ['a/**'], commands: [], legacyNotes: [] } });
-      expect(w.find('[data-testid="cloud-ml-legacy-notes"]').exists()).toBe(false);
-    });
-  });
-
-  describe('exclusions sit inside the notice, before any action button (legal, 2026-10-16)', () => {
-    const EXCL = {
-      exclusionPaths: ['hr/**'],
-      exclusionCommands: ['ssh'],
-      legacyExclusionNotes: ['Nothing from the HR share'],
-    };
+  describe('exclusions in the notice (legal, kameas-ai-11, 2026-10-16)', () => {
     const before = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    const assertOrder = (wrapper: any, buttonSel: string) => {
-      const card = q(wrapper, 'cloud-ml-notice');
-      expect(card.exists()).toBe(true);
-      const excl = card.find('[data-testid="cloud-ml-exclusions"]');
-      const notes = card.find('[data-testid="cloud-ml-legacy-notes"]');
-      expect(excl.exists()).toBe(true);
-      expect(notes.exists()).toBe(true);
-      const firstButton = card.find(buttonSel);
-      expect(firstButton.exists()).toBe(true);
-      expect(before(excl.element, firstButton.element)).toBe(true);
-      expect(before(notes.element, firstButton.element)).toBe(true);
-      // Rendered once: not repeated below the card.
-      expect(wrapper.findAll('[data-testid="cloud-ml-exclusions"]').length).toBe(1);
-      expect(wrapper.findAll('[data-testid="cloud-ml-legacy-notes"]').length).toBe(1);
-    };
 
-    it('local (fallback) notice: after the notice text, before "Turn on Offload"', async () => {
+    it("fallback notice: Fleet's exact exclusions text after the notice text, before the first button", async () => {
       const { wrapper } = mountWith(
         status({
           ...EXCL,
@@ -180,17 +122,27 @@ describe('CloudMLPanel', () => {
             sections: [],
             policyText: 'You decide.',
             policy: 'member_choice',
+            exclusionsText: SUMMARY,
             actions: ['Turn on Offload', 'Not now'],
           },
         }),
       );
       await flushPromises();
-      const policy = q(wrapper, 'cloud-ml-notice-policy');
-      expect(before(policy.element, q(wrapper, 'cloud-ml-exclusions').element)).toBe(true);
-      assertOrder(wrapper, '[data-testid="cloud-ml-notice-action"]');
+      const card = q(wrapper, 'cloud-ml-notice');
+      const excl = card.find('[data-testid="cloud-ml-exclusions"]');
+      expect(excl.exists()).toBe(true);
+      expect(excl.text()).toBe(SUMMARY);
+      const firstButton = card.find('[data-testid="cloud-ml-notice-action"]');
+      expect(before(q(wrapper, 'cloud-ml-notice-policy').element, excl.element)).toBe(true);
+      expect(before(excl.element, firstButton.element)).toBe(true);
+      // Rendered once, and nothing of the old markup anywhere.
+      expect(wrapper.findAll('[data-testid="cloud-ml-exclusions"]').length).toBe(1);
+      expect(q(wrapper, 'cloud-ml-legacy-notes').exists()).toBe(false);
+      expect(wrapper.text()).not.toMatch(OLD_HEADING);
     });
 
-    it('hub notice: after the body text, before the acknowledge button', async () => {
+    it('hub notice: no exclusions of our own; body_text whole, before the button', async () => {
+      const BODY = 'What changed\n\nNotice text.\n\n' + SUMMARY;
       const { wrapper } = mountWith(
         status({
           ...EXCL,
@@ -198,20 +150,26 @@ describe('CloudMLPanel', () => {
           orgPolicy: 'on',
           noticeAckRequired: true,
           noticeVersion: 3,
-          noticeText: 'Hub body',
+          noticeText: BODY,
           noticeFromHub: true,
           noticeItemId: 'ml_notice:o1:3',
         }),
       );
       await flushPromises();
+      expect(q(wrapper, 'cloud-ml-exclusions').exists()).toBe(false);
+      expect(q(wrapper, 'cloud-ml-legacy-notes').exists()).toBe(false);
       const text = q(wrapper, 'cloud-ml-notice-text');
-      expect(before(text.element, q(wrapper, 'cloud-ml-exclusions').element)).toBe(true);
-      assertOrder(wrapper, '[data-testid="cloud-ml-ack"]');
+      expect(text.element.textContent).toBe(BODY);
+      expect(before(text.element, q(wrapper, 'cloud-ml-ack').element)).toBe(true);
+      // No "excludes" wording outside the served body_text.
+      const outside = wrapper.text().replace(text.text(), '');
+      expect(outside).not.toMatch(/exclud/i);
+      expect(wrapper.text()).not.toMatch(OLD_HEADING);
     });
   });
 
   it('shows no exclusions block when the org excludes nothing', async () => {
-    const { wrapper } = mountWith(status({ effective: true, excludeBrowser: true }));
+    const { wrapper } = mountWith(status({ effective: true, exclusionsSummary: '' }));
     await flushPromises();
     expect(q(wrapper, 'cloud-ml-exclusions').exists()).toBe(false);
     expect(q(wrapper, 'cloud-ml-legacy-notes').exists()).toBe(false);
@@ -219,7 +177,7 @@ describe('CloudMLPanel', () => {
 
   it('shows no exclusions while /me/ml is not loaded', async () => {
     const { wrapper } = mountWith(
-      status({ loaded: false, fleetError: 'boom', exclusionPaths: ['hr/**'], legacyExclusionNotes: ['x'] }),
+      status({ loaded: false, fleetError: 'boom', exclusionPaths: ['hr/**'], legacyExclusionNotes: ['x'], exclusionsSummary: 'x' }),
     );
     await flushPromises();
     expect(q(wrapper, 'cloud-ml-exclusions').exists()).toBe(false);

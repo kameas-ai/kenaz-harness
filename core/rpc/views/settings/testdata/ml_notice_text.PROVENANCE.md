@@ -11,11 +11,14 @@ notice-text fixture:
 - Copied: 2026-10-16, for legal kameas-ai-11 (the legacy free-text
   exclusions sentence, Fleet exclusions template 2).
 
-Read by `CloudMLPanel.spec.ts`: every case with `legacy_exclusion_notes`
-is rendered through `CloudMLExclusions.vue` and the legacy-notes sentence
-must equal the one in the case's `text` exactly.
+Read by `ml_fixture_test.go` (package settings): for EVERY case,
+`MLExclusionsSummary` (the port of Fleet's `exclusionsSummary`, template 2)
+must produce the case's exclusions paragraph byte-identically ("" when the
+case excludes nothing), and every revision-1 case must match the local
+fallback notice (`RenderMLNotice` + `ExclusionsText`, heading excluded)
+in full.
 
 Do not edit by hand. To refresh, copy the file again from a newer
 kenaz-fleet commit, update the commit and hash above, and bump
-`localExclusionsTemplate` in `core/rpc/views/settings/ml.go` if the
-mirrored sentence changed.
+`localExclusionsTemplate` in `ml.go` if the mirrored exclusions text
+changed.
