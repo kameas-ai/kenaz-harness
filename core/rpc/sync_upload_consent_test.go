@@ -180,6 +180,35 @@ func TestSyncUploadConsent_NoPutUntilConfirmed_PersistsAcrossRestart(t *testing.
 	}
 }
 
+// TestSyncUploadConsent_WholeSettingsSaveCannotGrantConsent: only
+// Sync_ConfirmUploads (reached through the "Start syncing" notice) may set
+// the flag. Before the fix settings.API.Set only blocked true→false, so a
+// whole-settings save carrying settingsSyncUploadsConfirmed:true granted
+// consent and uploads began without the notice.
+func TestSyncUploadConsent_WholeSettingsSaveCannotGrantConsent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := settings.NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := store.LoadAll()
+	s.SettingsSyncUploadsConfirmed = true
+	if err := settings.NewAPI(store).Set(context.Background(), s); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	reopened, err := settings.NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := reopened.LoadAll()
+	if got.SettingsSyncUploadsConfirmed {
+		t.Fatal("a whole-settings save granted upload consent; only Sync_ConfirmUploads may")
+	}
+	if (settingsUploadConsent{store: reopened}).UploadsConfirmed() {
+		t.Fatal("upload gate open without the confirmation")
+	}
+}
+
 // TestSyncUploadConsent_FailsClosedWithoutStore: no settings store, no
 // upload, and confirming reports that the answer could not be saved.
 func TestSyncUploadConsent_FailsClosedWithoutStore(t *testing.T) {

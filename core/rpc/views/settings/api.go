@@ -941,8 +941,14 @@ type Settings struct {
 	// left the machine; the first upload waits for this. Default false.
 	// Consumer: fleet.Syncer.Push via the upload gate wired in
 	// core/rpc/sync_upload_consent.go. Written true only by
-	// Sync_ConfirmUploads; Set never clears it (one-way, so a stale
-	// whole-settings save cannot re-arm the prompt).
+	// Sync_ConfirmUploads; Set always keeps the stored value, in both
+	// directions: a stale whole-settings save cannot re-arm the prompt, and
+	// a save carrying true cannot grant consent without the notice.
+	//
+	// H1 scope (owner ruling): the confirmation is global and one-time. A
+	// category the user turns on AFTER confirming is itself consent for
+	// that category (no second prompt). "Not now" means not confirming: the
+	// notice stays until the user chooses Start syncing.
 	SettingsSyncUploadsConfirmed bool `json:"settingsSyncUploadsConfirmed,omitempty"`
 
 	// SettingsSyncEnabledCategories is the persisted set of settings-sync

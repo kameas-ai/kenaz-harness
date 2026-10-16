@@ -1597,18 +1597,23 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 			}
 		}
 	}
-	// SettingsSyncUploadsConfirmed is one-way: only Sync_ConfirmUploads
-	// sets it, and a whole-settings save from a copy loaded before the
-	// confirmation must not clear it again.
-	// SettingsSyncEnabledCategories is owned by Sync_Toggle: a whole-settings
-	// save always keeps the stored opt-ins, so a copy loaded before a toggle
-	// cannot silently revert it.
-	if cur, err := a.store.LoadAll(); err == nil {
-		if cur.SettingsSyncUploadsConfirmed {
-			s.SettingsSyncUploadsConfirmed = true
-		}
-		s.SettingsSyncEnabledCategories = cur.SettingsSyncEnabledCategories
+	// Two fields are not Set's to write; it always keeps the stored value:
+	//   - SettingsSyncUploadsConfirmed is the H1 upload consent. Only
+	//     Sync_ConfirmUploads, which the user reaches through the "Start
+	//     syncing" notice, may write it. Keeping it in BOTH directions means
+	//     a whole-settings save can neither clear it (a stale copy) nor set
+	//     it (a payload with settingsSyncUploadsConfirmed:true would
+	//     otherwise grant consent without the notice ever being shown).
+	//   - SettingsSyncEnabledCategories is owned by Sync_Toggle, so a copy
+	//     loaded before a toggle cannot silently revert it.
+	// If the stored settings cannot be read, fail closed: no consent and no
+	// opt-ins rather than whatever the caller sent.
+	cur, curErr := a.store.LoadAll()
+	if curErr != nil {
+		cur = Settings{}
 	}
+	s.SettingsSyncUploadsConfirmed = cur.SettingsSyncUploadsConfirmed
+	s.SettingsSyncEnabledCategories = cur.SettingsSyncEnabledCategories
 	if err := a.store.SaveAll(s); err != nil {
 		return err
 	}
