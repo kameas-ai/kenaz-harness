@@ -1384,3 +1384,19 @@
 # NotAvailableInServedMode instead.
 "Settings_GetModelCallTelemetry"
 "Settings_SetModelCallTelemetry"
+
+# CLASS: boundary-panelled -- ml-producer-01MLPRD01 WP11, 2026-10-16.
+# 3 entries.
+#
+# Settings_GetMLLocalActivity / Settings_SetMLLocalActivityRetention /
+# Settings_DeleteMLLocalActivity: the "Local activity" block of the Cloud ML
+# panel (local activity store status, retention, "Delete local activity
+# data"). Their only caller is views/settings/CloudMLPanel.vue, mounted
+# only in SettingsView's Sync sub-tab, which is boundary-panelled
+# (NotAvailableInServedMode) in served mode — the Fleet_ML* disposition
+# above. The store is the desktop process's own file.
+#
+# Blocker: a served settings surface. Dated 2026-10-16. Owner: alec.
+"Settings_DeleteMLLocalActivity"
+"Settings_GetMLLocalActivity"
+"Settings_SetMLLocalActivityRetention"

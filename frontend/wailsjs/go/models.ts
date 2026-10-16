@@ -6749,6 +6749,30 @@ export namespace rpc {
 		    return a;
 		}
 	}
+	export class MLLocalActivityView {
+	    available: boolean;
+	    events: number;
+	    tasks: number;
+	    sizeBytes: number;
+	    retentionDays: number;
+	    effectiveRetentionDays: number;
+	    sharingWithFleet: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MLLocalActivityView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.events = source["events"];
+	        this.tasks = source["tasks"];
+	        this.sizeBytes = source["sizeBytes"];
+	        this.retentionDays = source["retentionDays"];
+	        this.effectiveRetentionDays = source["effectiveRetentionDays"];
+	        this.sharingWithFleet = source["sharingWithFleet"];
+	    }
+	}
 	export class ShellReadFileResult {
 	    dataBase64: string;
 	    mediaType: string;
@@ -8550,6 +8574,7 @@ export namespace settings {
 	    modelCallStatsPullDisabled?: boolean;
 	    modelCallRetentionDays?: number;
 	    shareModelCallTelemetryWithFleet?: boolean;
+	    mlLocalActivityRetentionDays?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8651,6 +8676,7 @@ export namespace settings {
 	        this.modelCallStatsPullDisabled = source["modelCallStatsPullDisabled"];
 	        this.modelCallRetentionDays = source["modelCallRetentionDays"];
 	        this.shareModelCallTelemetryWithFleet = source["shareModelCallTelemetryWithFleet"];
+	        this.mlLocalActivityRetentionDays = source["mlLocalActivityRetentionDays"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

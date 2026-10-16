@@ -6,7 +6,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import CloudMLPanel from '@/views/settings/CloudMLPanel.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { MLStatus, PendingApprovals } from '@/lib/types';
+import type { MLLocalActivity, MLStatus, PendingApprovals } from '@/lib/types';
 
 const HARNESS_LINE =
   'From this app, Kenaz sends only what the agent does in your harness sessions (tool used, outcome, ' +
@@ -519,5 +519,102 @@ describe('CloudMLPanel', () => {
       expect(q(wrapper, 'cloud-ml-notice-changed').exists()).toBe(true);
       expect(q(wrapper, 'cloud-ml-notice-heading').exists()).toBe(true);
     });
+  });
+});
+
+// ── WP11: local activity (spec §12 A-16) ────────────────────────────────
+describe('CloudMLPanel — local activity', () => {
+  function local(over: Partial<MLLocalActivity> = {}): MLLocalActivity {
+    return {
+      available: true,
+      events: 120,
+      tasks: 3,
+      sizeBytes: 2.5 * 1024 * 1024,
+      retentionDays: 0,
+      effectiveRetentionDays: 90,
+      sharingWithFleet: false,
+      ...over,
+    };
+  }
+
+  function mountLocal(initial: MLLocalActivity, ml: MLStatus = status({ signedIn: false })) {
+    const getMLLocalActivity = vi.fn(async () => initial);
+    const setMLLocalActivityRetention = vi.fn(async (days: number) =>
+      local({ retentionDays: days, effectiveRetentionDays: days }),
+    );
+    const deleteMLLocalActivity = vi.fn(async () => local({ events: 0, tasks: 0, sizeBytes: 4096 }));
+    const client = createFakeHarnessClient({
+      fleet: { mlStatus: vi.fn(async () => ml) } as any,
+    });
+    Object.assign(client.settings, { getMLLocalActivity, setMLLocalActivityRetention, deleteMLLocalActivity });
+    const wrapper = mount(CloudMLPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    return { wrapper, getMLLocalActivity, setMLLocalActivityRetention, deleteMLLocalActivity };
+  }
+
+  it('is shown when signed out, with the plain local-first copy and the counts', async () => {
+    const { wrapper } = mountLocal(local());
+    await flushPromises();
+    expect(q(wrapper, 'cloud-ml-panel').exists()).toBe(false);
+    expect(q(wrapper, 'ml-local-activity').exists()).toBe(true);
+    expect(q(wrapper, 'ml-local-line').text()).toBe(
+      'Kenaz records agent activity on this device to power local suggestions. Nothing is sent to Fleet unless you opt in.',
+    );
+    expect(q(wrapper, 'ml-local-counts').text()).toBe('120 events, 3 tasks');
+    expect(q(wrapper, 'ml-local-size').text()).toBe('2.5 MB');
+    expect(q(wrapper, 'ml-local-retention').text()).toBe('90 days');
+    expect(q(wrapper, 'ml-local-sharing').exists()).toBe(false);
+  });
+
+  it('says so when Fleet sharing is on', async () => {
+    const { wrapper } = mountLocal(local({ sharingWithFleet: true }));
+    await flushPromises();
+    expect(q(wrapper, 'ml-local-sharing').text()).toContain('also sent');
+  });
+
+  it('saves the retention setting', async () => {
+    const { wrapper, setMLLocalActivityRetention } = mountLocal(local());
+    await flushPromises();
+    await q(wrapper, 'ml-local-retention-input').setValue('30');
+    await q(wrapper, 'ml-local-retention-save').trigger('click');
+    await flushPromises();
+    expect(setMLLocalActivityRetention).toHaveBeenCalledWith(30);
+    expect(q(wrapper, 'ml-local-retention').text()).toBe('30 days');
+  });
+
+  it('refuses an out-of-range retention without calling the backend', async () => {
+    const { wrapper, setMLLocalActivityRetention } = mountLocal(local());
+    await flushPromises();
+    await q(wrapper, 'ml-local-retention-input').setValue('0');
+    await q(wrapper, 'ml-local-retention-save').trigger('click');
+    await flushPromises();
+    expect(setMLLocalActivityRetention).not.toHaveBeenCalled();
+    expect(q(wrapper, 'ml-local-error').text()).toContain('1 to 3650');
+  });
+
+  it('deletes only after the confirm, and cancel deletes nothing', async () => {
+    const { wrapper, deleteMLLocalActivity } = mountLocal(local());
+    await flushPromises();
+    await q(wrapper, 'ml-local-delete').trigger('click');
+    expect(q(wrapper, 'ml-local-delete-confirm').exists()).toBe(true);
+    expect(deleteMLLocalActivity).not.toHaveBeenCalled();
+    await q(wrapper, 'ml-local-delete-cancel').trigger('click');
+    expect(q(wrapper, 'ml-local-delete-confirm').exists()).toBe(false);
+    expect(deleteMLLocalActivity).not.toHaveBeenCalled();
+
+    await q(wrapper, 'ml-local-delete').trigger('click');
+    await q(wrapper, 'ml-local-delete-yes').trigger('click');
+    await flushPromises();
+    expect(deleteMLLocalActivity).toHaveBeenCalledTimes(1);
+    expect(q(wrapper, 'ml-local-counts').text()).toBe('0 events, 0 tasks');
+    expect(q(wrapper, 'ml-local-delete-confirm').exists()).toBe(false);
+  });
+
+  it('reports an unavailable store honestly', async () => {
+    const { wrapper } = mountLocal(local({ available: false, events: 0, tasks: 0 }));
+    await flushPromises();
+    expect(q(wrapper, 'ml-local-unavailable').exists()).toBe(true);
+    expect(q(wrapper, 'ml-local-delete').exists()).toBe(false);
   });
 });

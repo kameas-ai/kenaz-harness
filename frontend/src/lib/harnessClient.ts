@@ -158,6 +158,7 @@ import type {
   SessionUsage,
   ModelCall,
   ModelCallTelemetrySettings,
+  MLLocalActivity,
   TurnRun,
   DriftReport,
   PolicyFileDetail,
@@ -309,6 +310,10 @@ interface WailsBindingsLike {
   Sessions_ModelCalls(id: string, limit: number): Promise<ModelCall[] | null>;
   Settings_GetModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   Settings_SetModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  // ── ml-producer-01MLPRD01 WP11 ──────────────────────────────────────
+  Settings_GetMLLocalActivity(): Promise<MLLocalActivity>;
+  Settings_SetMLLocalActivityRetention(days: number): Promise<MLLocalActivity>;
+  Settings_DeleteMLLocalActivity(): Promise<MLLocalActivity>;
   /** Turn -> run links (agentgraph-settings-linkage-01DOGF0D WP03). Desktop-only. */
   Sessions_TurnRuns(sessionID: string): Promise<TurnRun[]>;
   Sessions_SaveAsArtifact(
@@ -2511,6 +2516,15 @@ export interface SettingsClient {
   getModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   /** Persist them; turning sharing on exports only calls that start afterwards. */
   setModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /**
+   * The local ML activity store (ml-producer-01MLPRD01 WP11): row counts,
+   * size, retention, and whether new activity is also shared with Fleet.
+   */
+  getMLLocalActivity(): Promise<MLLocalActivity>;
+  /** Days to keep local activity (0 = the 90-day default; 1..3650). */
+  setMLLocalActivityRetention(days: number): Promise<MLLocalActivity>;
+  /** "Delete local activity data": wipes the store, the unsent outbox and task state. */
+  deleteMLLocalActivity(): Promise<MLLocalActivity>;
   /** Persist the MCP auto-restart dial. */
   setMCPAutoRestart(enabled: boolean): Promise<void>;
 
@@ -4736,6 +4750,9 @@ export function createHarnessClient(): HarnessClient {
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
       getModelCallTelemetry: () => b().Settings_GetModelCallTelemetry(),
       setModelCallTelemetry: (mc) => b().Settings_SetModelCallTelemetry(mc),
+      getMLLocalActivity: () => b().Settings_GetMLLocalActivity(),
+      setMLLocalActivityRetention: (days) => b().Settings_SetMLLocalActivityRetention(days),
+      deleteMLLocalActivity: () => b().Settings_DeleteMLLocalActivity(),
       setMCPAutoRestart: (enabled) => b().Settings_SetMCPAutoRestart(enabled),
       getToolExposure: () => b().Settings_GetToolExposure(),
       setToolExposure: (settings) => b().Settings_SetToolExposure(settings),
@@ -6274,6 +6291,9 @@ export function createFakeHarnessClient(
         shareWithFleet: false,
       }),
       setModelCallTelemetry: noop,
+      getMLLocalActivity: async () => fakeMLLocalActivity(),
+      setMLLocalActivityRetention: async (days: number) => fakeMLLocalActivity(days),
+      deleteMLLocalActivity: async () => fakeMLLocalActivity(),
       setMCPAutoRestart: noop,
       getToolExposure: async () => ({
         exposure: {},
@@ -7235,6 +7255,19 @@ export function createFakeHarnessClient(
 }
 
 /** Fake-client Cloud ML state: signed out (no Fleet in the fake). */
+/** Fake client: an empty local activity store (ml-producer-01MLPRD01 WP11). */
+function fakeMLLocalActivity(retentionDays = 0): MLLocalActivity {
+  return {
+    available: true,
+    events: 0,
+    tasks: 0,
+    sizeBytes: 0,
+    retentionDays,
+    effectiveRetentionDays: retentionDays > 0 ? retentionDays : 90,
+    sharingWithFleet: false,
+  };
+}
+
 function fakeMLStatus(): MLStatus {
   return {
     signedIn: false,

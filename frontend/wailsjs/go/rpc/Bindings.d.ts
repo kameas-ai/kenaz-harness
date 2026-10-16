@@ -752,6 +752,8 @@ export function SetContext(arg1:context.Context):Promise<void>;
 
 export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
 
+export function Settings_DeleteMLLocalActivity():Promise<rpc.MLLocalActivityView>;
+
 export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
 export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
@@ -811,6 +813,8 @@ export function Settings_GetFSWriteEnabled():Promise<boolean>;
 export function Settings_GetLocalRuntimeRAMOverrideGB():Promise<number>;
 
 export function Settings_GetMCPAutoRestart():Promise<boolean>;
+
+export function Settings_GetMLLocalActivity():Promise<rpc.MLLocalActivityView>;
 
 export function Settings_GetMaxAgentTurns():Promise<number>;
 
@@ -877,6 +881,8 @@ export function Settings_SetFSWriteEnabled(arg1:boolean):Promise<void>;
 export function Settings_SetLocalRuntimeRAMOverrideGB(arg1:number):Promise<void>;
 
 export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
+
+export function Settings_SetMLLocalActivityRetention(arg1:number):Promise<rpc.MLLocalActivityView>;
 
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
