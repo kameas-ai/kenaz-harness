@@ -1742,6 +1742,19 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"func zzGateProbeCredBytes(cred []byte) {\n\t_ = cred\n}\n",
 		},
 		{
+			// check-no-cred-bytes-in-rpc.sh check 2: a current-format
+			// (hyphenated) provider key literal in production source. The
+			// pre-2026-10-14 regex missed sk-or-v1- / sk-proj- /
+			// sk-ant-api03- keys entirely. The literal is assembled here
+			// so this file holds none.
+			name:       "no-cred-bytes-in-rpc/hyphenated-provider-key-literal",
+			wantOutput: "zz_gate_probe_apikey.go",
+			gate:       "check-no-cred-bytes-in-rpc.sh",
+			file:       "core/rpc/zz_gate_probe_apikey.go",
+			content: "package rpc\n\n" +
+				"const zzGateProbeAPIKey = \"" + "sk" + "-or-v1-" + strings.Repeat("zZ09-_", 8) + "\"\n",
+		},
+		{
 			// check-no-forbidden-compaction-symbols.sh (I4): exactly one
 			// compaction entry point. SuppressAutomaticCompaction and
 			// runPreSendCompaction are grep-forbidden outside

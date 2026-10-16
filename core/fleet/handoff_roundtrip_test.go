@@ -92,6 +92,35 @@ func TestHandoffRoundTrip_OneAcceptPerUser(t *testing.T) {
 	}
 }
 
+// #418 review fix: a share wrapped to this device's PRE-import handoff key
+// (the seed it had before a recovery-code import, or while re-registration
+// after the import had not yet reached Fleet) still opens, via the retained
+// seed.
+func TestHandoffAccept_OpensShareWrappedToPreImportKey(t *testing.T) {
+	clearSeedSlots(t)
+	f, sender, _ := sendRig(t)
+	f.setKeys(fxRecipientUser, fxKeySet(t)) // keys derived from fxSeed()
+	res, err := sender.ShareSession(context.Background(), "sess_pre", fxRecipientUser, plainEvents(2))
+	if err != nil {
+		t.Fatalf("share: %v", err)
+	}
+	// Current seed = fxSeed(); the import below retains it.
+	dev := recipientDevice(t, f, fxNodeA)
+	if err := StoreContextSeed(testSeed(0xC7)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dev.Inbox(context.Background()); err != nil {
+		t.Fatalf("inbox: %v", err)
+	}
+	got, err := dev.AcceptShare(context.Background(), res.InboxItemID)
+	if err != nil {
+		t.Fatalf("accept after import: %v (want the retained-seed key to open it)", err)
+	}
+	if len(got.Events) != 2 {
+		t.Fatalf("events = %d", len(got.Events))
+	}
+}
+
 // Review fix #9: the v1 "direct" accept arm is gone — a direct-mode item
 // is refused with update-the-app copy, never decrypted.
 func TestHandoffAccept_DirectModeRefused(t *testing.T) {

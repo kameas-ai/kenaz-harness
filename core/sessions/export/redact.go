@@ -140,6 +140,12 @@ var builtinMatchers = []credMatcher{
 		re:        regexp.MustCompile(`\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}\b`),
 	},
 	{
+		// OpenRouter keys: `sk-or-v1-` + hex. The bare shape below stops at
+		// the `-` after `or`, so before this entry they were exported whole.
+		profileID: "openrouter-key",
+		re:        regexp.MustCompile(`\bsk-or-v1-[A-Za-z0-9_-]{20,}\b`),
+	},
+	{
 		// The bare `sk-…` shape: base62 body only, matching the siblings.
 		profileID: "openai-key",
 		re:        regexp.MustCompile(`\bsk-[A-Za-z0-9]{20,}\b`),
