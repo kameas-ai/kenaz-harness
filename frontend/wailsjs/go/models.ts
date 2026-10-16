@@ -3811,6 +3811,7 @@ export namespace llm {
 	    scopeName?: string;
 	    profileIds: string[];
 	    orgDefault?: boolean;
+	    teamDefault?: boolean;
 	    preselected?: boolean;
 	    userSelectable: boolean;
 	
@@ -3826,6 +3827,7 @@ export namespace llm {
 	        this.scopeName = source["scopeName"];
 	        this.profileIds = source["profileIds"];
 	        this.orgDefault = source["orgDefault"];
+	        this.teamDefault = source["teamDefault"];
 	        this.preselected = source["preselected"];
 	        this.userSelectable = source["userSelectable"];
 	    }

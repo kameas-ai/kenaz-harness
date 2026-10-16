@@ -391,6 +391,8 @@ export interface CredentialKey {
   scopeName?: string;
   profileIds: string[];
   orgDefault?: boolean;
+  teamDefault?: boolean;
+  /** The provider's default key, in contract order (team → org → own key). */
   preselected?: boolean;
   userSelectable: boolean;
 }

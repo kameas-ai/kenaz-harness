@@ -2268,6 +2268,7 @@ func CredentialKeys(provs []Provider) []CredentialKey {
 			ScopeName:      k.ScopeName,
 			ProfileIDs:     k.ProfileIDs,
 			OrgDefault:     k.OrgDefault,
+			TeamDefault:    k.TeamDefault,
 			Preselected:    k.Preselected,
 			UserSelectable: k.UserSelectable,
 		})

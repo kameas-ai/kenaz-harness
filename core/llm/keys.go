@@ -36,8 +36,10 @@ type CredentialKey struct {
 	ProfileIDs []string `json:"profile_ids"`
 	// OrgDefault marks the org-designated default key for Provider.
 	OrgDefault bool `json:"org_default,omitempty"`
-	// Preselected marks the key the UI preselects for Provider: the org
-	// default when there is one, otherwise the first personal key.
+	// TeamDefault marks the team-designated default key for Provider.
+	TeamDefault bool `json:"team_default,omitempty"`
+	// Preselected marks the key a new profile or chat on Provider uses by
+	// default, in the contract's order (see defaultKeyFor).
 	Preselected bool `json:"preselected,omitempty"`
 	// UserSelectable reports whether the user may pick this key. False
 	// unless an explicit org policy allows user selection (fail closed).
@@ -56,6 +58,14 @@ type CredentialPolicy struct {
 	// defaults to FALSE: unless the org explicitly allows it, the user
 	// does not pick among keys.
 	AllowUserSelection bool
+	// AllowUserCredentials is the contract's allow_user_credentials (signed
+	// bundle model_prefs): whether the user's own keys may be used at all.
+	// Defaults to false. WP04 uses it only for default precedence;
+	// disabling user keys outright is WP07/WP12.
+	AllowUserCredentials bool
+	// TeamDefaults maps a provider kind to the credential id the user's
+	// team designated as that provider's default. It outranks the org's.
+	TeamDefaults map[string]string
 	// OrgDefaults maps a provider kind to the credential id the org
 	// designated as that provider's default.
 	OrgDefaults map[string]string
@@ -66,9 +76,9 @@ type CredentialPolicy struct {
 // or nil when it is not known (WP04 passes nil: nothing fetches it yet). scopeNames maps a Fleet credential id to the org
 // or team display name; nil is fine.
 func BuildKeyList(profs []ProviderProfile, policy *CredentialPolicy, scopeNames map[string]string) []CredentialKey {
-	var orgDefaults map[string]string
+	var orgDefaults, teamDefaults map[string]string
 	if policy != nil {
-		orgDefaults = policy.OrgDefaults
+		orgDefaults, teamDefaults = policy.OrgDefaults, policy.TeamDefaults
 	}
 	byID := map[string]*CredentialKey{}
 	var order []string
@@ -86,7 +96,8 @@ func BuildKeyList(profs []ProviderProfile, policy *CredentialPolicy, scopeNames 
 			k = &CredentialKey{ID: id, Provider: p.Kind, Source: src}
 			if src.IsFleet() {
 				k.ScopeName = scopeNames[id]
-				k.OrgDefault = orgDefaults[p.Kind] == id && src != CredSourceUserSync
+				k.OrgDefault = src == CredSourceOrg && orgDefaults[p.Kind] == id
+				k.TeamDefault = src == CredSourceTeam && teamDefaults[p.Kind] == id
 			}
 			byID[id] = k
 			order = append(order, id)
@@ -106,33 +117,61 @@ func BuildKeyList(profs []ProviderProfile, policy *CredentialPolicy, scopeNames 
 		}
 		return out[i].ID < out[j].ID
 	})
-	markPreselected(out)
+	markPreselected(out, policy)
 	return out
 }
 
-// markPreselected sets Preselected on one key per provider: the org default
-// if present, otherwise the first personal key, otherwise the first key.
-func markPreselected(keys []CredentialKey) {
-	pick := map[string]int{}
-	rank := func(k CredentialKey) int {
-		switch {
-		case k.OrgDefault:
-			return 0
-		case !k.Source.IsFleet() || k.Source == CredSourceUserSync:
-			return 1
-		default:
-			return 2
+// markPreselected sets Preselected on the default key of each provider.
+func markPreselected(keys []CredentialKey, policy *CredentialPolicy) {
+	providers := map[string]bool{}
+	for _, k := range keys {
+		providers[k.Provider] = true
+	}
+	for prov := range providers {
+		if i, ok := defaultKeyFor(keys, prov, "", policy); ok {
+			keys[i].Preselected = true
 		}
 	}
-	for i, k := range keys {
-		j, ok := pick[k.Provider]
-		if !ok || rank(k) < rank(keys[j]) {
-			pick[k.Provider] = i
+}
+
+// defaultKeyFor returns the index in keys of the key a profile on provider
+// uses, in the contract's precedence order (Fleet FR-11, spec B4 / §8):
+//
+//  1. the profile's own key, profileKeyID, when it names a listed key for
+//     provider;
+//  2. the team default for provider;
+//  3. the org default for provider;
+//  4. the user's own key — only when policy.AllowUserCredentials is set.
+//
+// With no policy (nil: not known yet) only step 1 can match: steps 2–4
+// all depend on the policy, and step 4 fails closed. Among several
+// personal keys, step 4 takes the first by id (keys arrive sorted).
+func defaultKeyFor(keys []CredentialKey, provider, profileKeyID string, policy *CredentialPolicy) (int, bool) {
+	find := func(match func(CredentialKey) bool) (int, bool) {
+		for i, k := range keys {
+			if k.Provider == provider && match(k) {
+				return i, true
+			}
+		}
+		return 0, false
+	}
+	if profileKeyID != "" {
+		if i, ok := find(func(k CredentialKey) bool { return k.ID == profileKeyID }); ok {
+			return i, true
 		}
 	}
-	for _, i := range pick {
-		keys[i].Preselected = true
+	if i, ok := find(func(k CredentialKey) bool { return k.TeamDefault }); ok {
+		return i, true
 	}
+	if i, ok := find(func(k CredentialKey) bool { return k.OrgDefault }); ok {
+		return i, true
+	}
+	if policy != nil && policy.AllowUserCredentials {
+		return find(func(k CredentialKey) bool {
+			return k.Source.Effective() == CredSourceLocal || k.Source == CredSourceUserSync
+		})
+	}
+	return 0, false
 }
 
 // userKeySelectionAllowed is the enforcement hook for org policy over key

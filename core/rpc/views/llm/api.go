@@ -86,6 +86,7 @@ type CredentialKey struct {
 	ScopeName      string   `json:"scopeName,omitempty"`
 	ProfileIDs     []string `json:"profileIds"`
 	OrgDefault     bool     `json:"orgDefault,omitempty"`
+	TeamDefault    bool     `json:"teamDefault,omitempty"`
 	Preselected    bool     `json:"preselected,omitempty"`
 	UserSelectable bool     `json:"userSelectable"`
 }

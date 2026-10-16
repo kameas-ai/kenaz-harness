@@ -12,7 +12,7 @@ func TestBuildKeyList_ManyKeysPerProvider(t *testing.T) {
 		{ID: "anth", Kind: "anthropic", Cred: CredentialReference{Kind: "keychain", Locator: "kenaz-harness/anth"}},
 		{ID: "local-runtime", Kind: "ollama"},
 	}
-	keys := BuildKeyList(profs, &CredentialPolicy{AllowUserSelection: true, OrgDefaults: map[string]string{"openai": "c-org"}}, map[string]string{"c-org": "Acme", "c-team": "Research"})
+	keys := BuildKeyList(profs, &CredentialPolicy{AllowUserSelection: true, AllowUserCredentials: true, OrgDefaults: map[string]string{"openai": "c-org"}}, map[string]string{"c-org": "Acme", "c-team": "Research"})
 	byID := map[string]CredentialKey{}
 	for _, k := range keys {
 		byID[k.ID] = k
@@ -44,18 +44,75 @@ func TestBuildKeyList_ManyKeysPerProvider(t *testing.T) {
 	}
 }
 
-func TestBuildKeyList_NoOrgDefaultPrefersPersonal(t *testing.T) {
-	keys := BuildKeyList([]ProviderProfile{
-		{ID: "org-1", Kind: "openai", Cred: CredentialReference{Kind: "keychain", Source: CredSourceOrg, CredentialID: "c-org"}},
+// TestDefaultKeyPrecedence pins the contract order: profile key → team
+// default → org default → the user's own key, the last only when
+// allow_user_credentials. The old markPreselected preferred a personal key
+// over any non-default org key and had no team tier at all.
+func TestDefaultKeyPrecedence(t *testing.T) {
+	profs := []ProviderProfile{
 		{ID: "mine", Kind: "openai", Cred: CredentialReference{Kind: "keychain", Locator: "kenaz-harness/mine"}},
-	}, nil, nil)
-	for _, k := range keys {
-		if k.Preselected != (k.ID == LocalKeyID("mine")) {
-			t.Errorf("%s preselected=%v", k.ID, k.Preselected)
+		{ID: "org-1", Kind: "openai", Cred: CredentialReference{Kind: "keychain", Source: CredSourceOrg, CredentialID: "c-org"}},
+		{ID: "team-1", Kind: "openai", Cred: CredentialReference{Kind: "keychain", Source: CredSourceTeam, CredentialID: "c-team"}},
+	}
+	all := &CredentialPolicy{
+		AllowUserCredentials: true,
+		TeamDefaults:         map[string]string{"openai": "c-team"},
+		OrgDefaults:          map[string]string{"openai": "c-org"},
+	}
+	preselected := func(pol *CredentialPolicy) string {
+		t.Helper()
+		var got []string
+		for _, k := range BuildKeyList(profs, pol, nil) {
+			if k.Preselected {
+				got = append(got, k.ID)
+			}
 		}
-		if k.OrgDefault {
-			t.Errorf("%s marked org default with no defaults supplied", k.ID)
+		if len(got) > 1 {
+			t.Fatalf("more than one preselected key: %v", got)
 		}
+		if len(got) == 0 {
+			return ""
+		}
+		return got[0]
+	}
+	cases := []struct {
+		name string
+		pol  *CredentialPolicy
+		want string
+	}{
+		{"team default outranks org default", all, "c-team"},
+		{"org default when no team default", &CredentialPolicy{AllowUserCredentials: true, OrgDefaults: all.OrgDefaults}, "c-org"},
+		{"user's own key only when allowed", &CredentialPolicy{AllowUserCredentials: true}, LocalKeyID("mine")},
+		{"user keys not allowed: no default", &CredentialPolicy{}, ""},
+		{"policy unknown: fail closed", nil, ""},
+		{"a default that names no listed key is skipped", &CredentialPolicy{TeamDefaults: map[string]string{"openai": "gone"}, OrgDefaults: all.OrgDefaults}, "c-org"},
+	}
+	for _, tc := range cases {
+		if got := preselected(tc.pol); got != tc.want {
+			t.Errorf("%s: preselected %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// Step 1: a profile's own key wins over every default.
+	keys := BuildKeyList(profs, all, nil)
+	i, ok := defaultKeyFor(keys, "openai", "c-org", all)
+	if !ok || keys[i].ID != "c-org" {
+		t.Fatalf("profile key not honoured: %v %v", ok, keys[i].ID)
+	}
+	// A profile key for another provider does not leak across.
+	if i, ok := defaultKeyFor(keys, "openai", LocalKeyID("elsewhere"), all); !ok || keys[i].ID != "c-team" {
+		t.Fatalf("unknown profile key should fall through to the team default")
+	}
+}
+
+// TestDefaultKey_OrgDefaultFlagNeedsMatchingSource: an org default id that
+// is actually a team or synced key is not marked as the org default.
+func TestDefaultKey_OrgDefaultFlagNeedsMatchingSource(t *testing.T) {
+	keys := BuildKeyList([]ProviderProfile{
+		{ID: "u", Kind: "openai", Cred: CredentialReference{Kind: "keychain", Source: CredSourceUserSync, CredentialID: "c-1"}},
+	}, &CredentialPolicy{OrgDefaults: map[string]string{"openai": "c-1"}}, nil)
+	if keys[0].OrgDefault {
+		t.Fatal("a synced user key was marked the org default")
 	}
 }
 
