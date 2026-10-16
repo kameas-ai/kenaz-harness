@@ -187,6 +187,15 @@ type PolicyFile struct {
 
 // Options configures a new Engine.
 type Options struct {
+	// DeviceKind is stamped on every request's context as
+	// `context.device_kind`, overriding any caller value ("desktop" when
+	// empty; the phone facade passes "mobile"; anything else is
+	// ErrInvalidDeviceKind). Admins can then write
+	// device-specific rules (provider-credentials-client-01PCCLI01 H6.3).
+	// It is always present, so a policy reading it can't error, and an
+	// erroring forbid fails closed.
+	DeviceKind string
+
 	// DataDir is the harness data root. The engine reads policy files
 	// from filepath.Join(DataDir, PolicyDir). Required when LoadFromDisk
 	// is true; ignored otherwise (in-memory engines for tests).
@@ -254,6 +263,11 @@ type Engine struct {
 // applies) and returns the engine without error. A genuine I/O or
 // parse error is surfaced.
 func NewEngine(opts Options) (*Engine, error) {
+	switch opts.DeviceKind {
+	case "", DeviceKindDesktop, DeviceKindMobile:
+	default:
+		return nil, fmt.Errorf("%w (got %q)", ErrInvalidDeviceKind, opts.DeviceKind)
+	}
 	e := &Engine{opts: opts}
 	if opts.Decisions != nil {
 		e.decisions = opts.Decisions
@@ -511,6 +525,7 @@ func (e *Engine) Evaluate(
 		ps = cedar.NewPolicySet()
 	}
 	contextAttrs = populateFamilyContext(action, resource, contextAttrs)
+	contextAttrs = withDeviceKind(contextAttrs, e.opts.DeviceKind)
 	req := cedar.Request{
 		Principal: principal,
 		Action:    ActionUID(action),
@@ -646,6 +661,37 @@ const (
 	CtxKeySecretBudget          = "budget"
 	CtxKeySecretAgentKind       = "agent_kind"
 )
+
+// CtxKeyDeviceKind is `context.device_kind`: "desktop" | "mobile"
+// (Options.DeviceKind). Present on every request.
+const CtxKeyDeviceKind = "device_kind"
+
+// DeviceKindDesktop is the default Options.DeviceKind.
+const DeviceKindDesktop = "desktop"
+
+// DeviceKindMobile is the phone facade's Options.DeviceKind.
+const DeviceKindMobile = "mobile"
+
+// ErrInvalidDeviceKind: Options.DeviceKind must be "", "desktop" or
+// "mobile" exactly, so a typo ("Mobile") fails at construction instead of
+// silently matching no policy.
+var ErrInvalidDeviceKind = errors.New(`cedar: Options.DeviceKind must be "desktop" or "mobile"`)
+
+// withDeviceKind returns attrs with device_kind set to the ENGINE's value.
+// The device is a fact about the process, so a caller-supplied
+// device_kind never overrides it. The caller's map is never mutated.
+func withDeviceKind(attrs map[cedar.String]cedar.Value, kind string) map[cedar.String]cedar.Value {
+	k := cedar.String(CtxKeyDeviceKind)
+	if kind == "" {
+		kind = DeviceKindDesktop
+	}
+	out := make(map[cedar.String]cedar.Value, len(attrs)+1)
+	for key, v := range attrs {
+		out[key] = v
+	}
+	out[k] = cedar.String(kind)
+	return out
+}
 
 // populateFamilyContext fills in context-attribute defaults for the
 // four WP01 resource families. Caller-provided keys ALWAYS win — this

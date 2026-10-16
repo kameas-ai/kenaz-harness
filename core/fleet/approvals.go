@@ -40,6 +40,9 @@ const (
 	ApprovalKindLegalAcceptance    = "legal_acceptance"
 	ApprovalKindMLNotice           = "ml_notice"
 	ApprovalKindMLExclusionsChange = "ml_exclusions_change"
+	// ApprovalKindMLOptInAvailable is the informational "you can turn on
+	// offload" offer; its approve action is the "Not now" dismissal.
+	ApprovalKindMLOptInAvailable = "ml_opt_in_available"
 )
 
 // Approve paths the harness will POST to (contract "Client behaviour" 3;
@@ -49,18 +52,24 @@ const (
 	ApprovePathLegalAcceptances = "/api/v1/me/legal-acceptances"
 	ApprovePathMLNoticeAck      = "/api/v1/me/ml/notice-ack"
 	ApprovePathMLExclusionsSeen = "/api/v1/me/ml/exclusions-seen"
-	// ApprovePathMLOptInPromptDismissed dismisses the informational
-	// ml_opt_in_available item (contract: Fleet's own approve allowlist
-	// includes it; added 2026-10-09).
+	// ApprovePathMLOptInPromptDismissed is "Not now" on the
+	// ml_opt_in_available offer. Legal (kameas-ai-11, final ruling "option
+	// a", 2026-10-16): it is member-private UX state. Fleet keeps only
+	// (user_id, org_id, notice_version), readable only through the member's
+	// own /me ML state, and deletes it on erase, so clients may send it. A
+	// "Not now" on the Offload ML NOTICE itself stays unrecorded
+	// (CloudMLPanel.vue: no request is made).
 	ApprovePathMLOptInPromptDismissed = "/api/v1/me/ml/opt-in-prompt-dismissed"
 )
 
 // approveAllowlist is method + " " + path for every approve action the harness
 // may send.
 var approveAllowlist = map[string]struct{}{
-	http.MethodPost + " " + ApprovePathLegalAcceptances:       {},
-	http.MethodPost + " " + ApprovePathMLNoticeAck:            {},
-	http.MethodPost + " " + ApprovePathMLExclusionsSeen:       {},
+	http.MethodPost + " " + ApprovePathLegalAcceptances: {},
+	http.MethodPost + " " + ApprovePathMLNoticeAck:      {},
+	http.MethodPost + " " + ApprovePathMLExclusionsSeen: {},
+	// Only for the ml_opt_in_available offer (legal option a). The Offload
+	// ML notice's "Not now" never calls this or any route.
 	http.MethodPost + " " + ApprovePathMLOptInPromptDismissed: {},
 }
 
@@ -69,6 +78,38 @@ var approveAllowlist = map[string]struct{}{
 func ApproveActionAllowed(method, path string) bool {
 	_, ok := approveAllowlist[method+" "+path]
 	return ok
+}
+
+// kindBoundPaths restricts an allowlisted path to the one item kind it
+// belongs to. The opt-in prompt's dismissal may be sent only for the
+// ml_opt_in_available offer. Legal (kameas-ai-11, 2026-10-16) requires
+// that a "Not now" on the Offload ML notice can never reach it.
+var kindBoundPaths = map[string]string{
+	ApprovePathMLOptInPromptDismissed: ApprovalKindMLOptInAvailable,
+}
+
+// pathBoundKinds is the reverse binding: these kinds may carry ONLY their
+// own path. The opt-in offer's button reads "Not now", so a malformed offer
+// carrying, say, notice-ack or legal-acceptances must never turn that click
+// into a recorded acknowledgement or acceptance.
+var pathBoundKinds = map[string]string{
+	ApprovalKindMLOptInAvailable: ApprovePathMLOptInPromptDismissed,
+}
+
+// ApproveActionAllowedFor is ApproveActionAllowed plus the two-way kind
+// binding: a kind-bound path is allowed only for its own kind, and a
+// path-bound kind only with its own path.
+func ApproveActionAllowedFor(kind, method, path string) bool {
+	if !ApproveActionAllowed(method, path) {
+		return false
+	}
+	if want, bound := kindBoundPaths[path]; bound && kind != want {
+		return false
+	}
+	if want, bound := pathBoundKinds[kind]; bound && path != want {
+		return false
+	}
+	return true
 }
 
 // Fleet error codes on the approve endpoints that mean "what you were shown
@@ -354,7 +395,7 @@ func (c *Client) ApprovePendingItem(ctx context.Context, item PendingApproval) e
 	if c == nil || c.isNop {
 		return ErrFleetDisabled
 	}
-	if !ApproveActionAllowed(item.Approve.Method, item.Approve.Path) {
+	if !ApproveActionAllowedFor(item.Kind, item.Approve.Method, item.Approve.Path) {
 		slog.Warn("fleet: pending approval action refused (not in the harness allowlist)",
 			"kind", item.Kind, "method", item.Approve.Method, "path", item.Approve.Path)
 		return ErrApproveActionNotAllowed
