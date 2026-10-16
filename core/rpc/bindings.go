@@ -1438,15 +1438,13 @@ func (b *Bindings) Settings_SetShortcut(id, binding string) error {
 		return ss.SaveShortcuts(m)
 	}
 	// Fallback: full round-trip.
-	s, err := store.LoadAll()
-	if err != nil {
-		return err
-	}
-	if s.KeyboardShortcuts == nil {
-		s.KeyboardShortcuts = make(map[string]string)
-	}
-	s.KeyboardShortcuts[id] = binding
-	return store.SaveAll(s)
+	return settings.Update(store, func(s *settings.Settings) error {
+		if s.KeyboardShortcuts == nil {
+			s.KeyboardShortcuts = make(map[string]string)
+		}
+		s.KeyboardShortcuts[id] = binding
+		return nil
+	})
 }
 
 // Settings_SetShortcuts atomically replaces the full keyboard shortcut
@@ -1468,12 +1466,10 @@ func (b *Bindings) Settings_SetShortcuts(m map[string]string) error {
 		return ss.SaveShortcuts(m)
 	}
 	// Fallback: full round-trip.
-	s, err := store.LoadAll()
-	if err != nil {
-		return err
-	}
-	s.KeyboardShortcuts = m
-	return store.SaveAll(s)
+	return settings.Update(store, func(s *settings.Settings) error {
+		s.KeyboardShortcuts = m
+		return nil
+	})
 }
 
 // Settings_GetMCPAutoRestart returns whether MCP servers should auto-restart
@@ -1626,12 +1622,10 @@ func (b *Bindings) Settings_SetShowPerMessageTokenMeter(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	s.ShowPerMessageTokenMeter = enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		s.ShowPerMessageTokenMeter = enabled
+		return nil
+	})
 }
 
 // ── WP08 — multimodal input feature flag ──────────────────────────────
@@ -1662,13 +1656,11 @@ func (b *Bindings) Settings_SetMultimodalInput(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	// Inverted storage: Disabled = !enabled.
-	s.MultimodalInputDisabled = !enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		// Inverted storage: Disabled = !enabled.
+		s.MultimodalInputDisabled = !enabled
+		return nil
+	})
 }
 
 // ── Multimodal output capture dials (multimodal-io-extended-01KQ8TD2 WP06) ──
@@ -1698,13 +1690,11 @@ func (b *Bindings) Settings_SetAutoCaptureGeneratedImages(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	// Inverted storage: Disabled = !enabled.
-	s.AutoCaptureGeneratedImagesDisabled = !enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		// Inverted storage: Disabled = !enabled.
+		s.AutoCaptureGeneratedImagesDisabled = !enabled
+		return nil
+	})
 }
 
 // Settings_GetMaxGeneratedImageBytes returns the per-image byte cap for the
@@ -1732,15 +1722,13 @@ func (b *Bindings) Settings_SetMaxGeneratedImageBytes(bytes int64) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	if bytes < 0 {
-		bytes = 0
-	}
-	s.MaxGeneratedImageBytes = bytes
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		if bytes < 0 {
+			bytes = 0
+		}
+		s.MaxGeneratedImageBytes = bytes
+		return nil
+	})
 }
 
 // ── key-rotation settings (provider-keychain-rotation-01KQ8TD9 WP07) ──
@@ -1771,12 +1759,10 @@ func (b *Bindings) Settings_SetAutoResumeOnKeyRotation(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	s.AutoResumeOnKeyRotationDisabled = !enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		s.AutoResumeOnKeyRotationDisabled = !enabled
+		return nil
+	})
 }
 
 // ── audit settings (audit-log-enhancement-01KX5R8F WP07) ────────────────────
@@ -3543,15 +3529,13 @@ func (b *Bindings) Settings_SetLocalRuntimeRAMOverrideGB(gb float64) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	if gb < 0 {
-		gb = 0
-	}
-	s.LocalRuntimeRAMOverrideGB = gb
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		if gb < 0 {
+			gb = 0
+		}
+		s.LocalRuntimeRAMOverrideGB = gb
+		return nil
+	})
 }
 
 // LLM_ListDetectedLocalRuntimes returns the current local runtime detection

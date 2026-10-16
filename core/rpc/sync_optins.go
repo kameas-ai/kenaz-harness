@@ -11,7 +11,6 @@ package rpc
 
 import (
 	"sort"
-	"sync"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
@@ -21,14 +20,12 @@ import (
 // settingsSyncOptIns implements syncview.OptInStore over the settings store.
 type settingsSyncOptIns struct {
 	store settings.SettingsStore
-	// mu serialises the load-modify-save of concurrent toggles.
-	mu *sync.Mutex
 }
 
 var _ syncview.OptInStore = settingsSyncOptIns{}
 
 func newSettingsSyncOptIns(store settings.SettingsStore) settingsSyncOptIns {
-	return settingsSyncOptIns{store: store, mu: &sync.Mutex{}}
+	return settingsSyncOptIns{store: store}
 }
 
 // EnabledCategories returns the persisted opt-ins. No store means none.
@@ -48,31 +45,26 @@ func (o settingsSyncOptIns) SetCategoryEnabled(category string, enabled bool) er
 	if o.store == nil {
 		return nil
 	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	s, err := o.store.LoadAll()
-	if err != nil {
-		return err
-	}
-	set := make(map[string]struct{}, len(s.SettingsSyncEnabledCategories)+1)
-	for _, c := range s.SettingsSyncEnabledCategories {
-		set[c] = struct{}{}
-	}
-	if _, had := set[category]; had == enabled {
+	// Under the store lock (settings.Update), so concurrent toggles and
+	// other settings writes cannot lose each other's changes.
+	return settings.Update(o.store, func(s *settings.Settings) error {
+		set := make(map[string]struct{}, len(s.SettingsSyncEnabledCategories)+1)
+		for _, c := range s.SettingsSyncEnabledCategories {
+			set[c] = struct{}{}
+		}
+		if enabled {
+			set[category] = struct{}{}
+		} else {
+			delete(set, category)
+		}
+		out := make([]string, 0, len(set))
+		for c := range set {
+			out = append(out, c)
+		}
+		sort.Strings(out)
+		s.SettingsSyncEnabledCategories = out
 		return nil
-	}
-	if enabled {
-		set[category] = struct{}{}
-	} else {
-		delete(set, category)
-	}
-	out := make([]string, 0, len(set))
-	for c := range set {
-		out = append(out, c)
-	}
-	sort.Strings(out)
-	s.SettingsSyncEnabledCategories = out
-	return o.store.SaveAll(s)
+	})
 }
 
 // wireSyncOptIns is rpc.New's boot step: install the opt-in store on the

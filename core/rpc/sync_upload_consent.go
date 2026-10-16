@@ -45,13 +45,11 @@ func (c settingsUploadConsent) ConfirmUploads() error {
 	if c.store == nil {
 		return syncview.ErrUploadConsentUnavailable
 	}
-	s, err := c.store.LoadAll()
-	if err != nil {
-		return err
-	}
-	if s.SettingsSyncUploadsConfirmed {
+	// Under the store lock (settings.Update): a concurrent whole-settings
+	// save or sync apply cannot write back a copy read before this and
+	// revert the confirmation.
+	return settings.Update(c.store, func(s *settings.Settings) error {
+		s.SettingsSyncUploadsConfirmed = true
 		return nil
-	}
-	s.SettingsSyncUploadsConfirmed = true
-	return c.store.SaveAll(s)
+	})
 }

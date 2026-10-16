@@ -87,12 +87,10 @@ func uiThemeKind(store settings.SettingsStore) corefleet.SyncKind {
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return err
 			}
-			s, err := store.LoadAll()
-			if err != nil {
-				return err
-			}
-			s.Theme = p.Theme
-			return store.SaveAll(s)
+			return settings.Update(store, func(s *settings.Settings) error {
+				s.Theme = p.Theme
+				return nil
+			})
 		},
 		SecretPolicy:   corefleet.SecretPolicyMustNotContainSecrets,
 		ConflictPolicy: corefleet.ConflictPolicyLWW,
@@ -126,23 +124,21 @@ func modelPrefsKind(store settings.SettingsStore) corefleet.SyncKind {
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return err
 			}
-			s, err := store.LoadAll()
-			if err != nil {
-				return err
-			}
-			if p.CompactionAggressiveness != "" {
-				s.CompactionAggressiveness = p.CompactionAggressiveness
-			}
-			if p.CompactionArchiveDays > 0 {
-				s.CompactionArchiveDays = p.CompactionArchiveDays
-			}
-			if p.CompactionRecentWindow > 0 {
-				s.CompactionRecentWindow = p.CompactionRecentWindow
-			}
-			if p.MaxAgentTurns > 0 {
-				s.MaxAgentTurns = p.MaxAgentTurns
-			}
-			return store.SaveAll(s)
+			return settings.Update(store, func(s *settings.Settings) error {
+				if p.CompactionAggressiveness != "" {
+					s.CompactionAggressiveness = p.CompactionAggressiveness
+				}
+				if p.CompactionArchiveDays > 0 {
+					s.CompactionArchiveDays = p.CompactionArchiveDays
+				}
+				if p.CompactionRecentWindow > 0 {
+					s.CompactionRecentWindow = p.CompactionRecentWindow
+				}
+				if p.MaxAgentTurns > 0 {
+					s.MaxAgentTurns = p.MaxAgentTurns
+				}
+				return nil
+			})
 		},
 		SecretPolicy:   corefleet.SecretPolicyMustNotContainSecrets,
 		ConflictPolicy: corefleet.ConflictPolicyLWW,
