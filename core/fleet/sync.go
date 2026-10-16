@@ -317,6 +317,9 @@ type Syncer struct {
 	clockMu     sync.Mutex
 	clockOffset time.Duration
 	clockKnown  bool
+	// skewRefusals counts consecutive checkClock refusals; at
+	// syncSkewReprobeAfter the next check re-reads Fleet's clock first.
+	skewRefusals int
 	// stopOnce guards close(stopCh). Stop is reachable from more than one
 	// teardown path (rpc.API.Shutdown, and any caller that stops the syncer
 	// directly), and a bare close() panics on the second call with

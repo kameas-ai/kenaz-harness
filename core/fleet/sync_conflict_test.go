@@ -178,3 +178,69 @@ func TestSyncClock_SmallSkewStillPushes(t *testing.T) {
 		t.Fatalf("PUTs = %d, want 1", n)
 	}
 }
+
+// TestSyncClock_StaleOffsetIsReprobedAfterThreeRefusals: a remembered
+// offset that is wrong (a caching proxy served a stale Date) must not refuse
+// uploads forever. The first syncSkewReprobeAfter refusals use the
+// remembered offset without a request; the next check re-reads Fleet's
+// clock, finds it in range, and uploads. Before the fix every push after
+// the stale reading was refused, with no request to correct it.
+func TestSyncClock_StaleOffsetIsReprobedAfterThreeRefusals(t *testing.T) {
+	fake, base := startFake(t) // fake clock: correct
+	var open atomic.Bool
+	open.Store(true)
+	s := newStateSyncer(t, base, "", &open, `{"maxAgentTurns":7}`, &recordingApplier{})
+	if err := s.RestoreEnabled(SyncCategoryModelPrefs, true); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// The stale reading: Fleet's clock "five minutes behind".
+	s.clockMu.Lock()
+	s.clockOffset, s.clockKnown = 5*time.Minute, true
+	s.clockMu.Unlock()
+
+	for i := 0; i < syncSkewReprobeAfter; i++ {
+		if err := s.Push(ctx, SyncCategoryModelPrefs); !errors.Is(err, ErrSyncClockMismatch) {
+			t.Fatalf("push %d = %v, want ErrSyncClockMismatch", i+1, err)
+		}
+	}
+	if n := len(fake.snapshot()); n != 0 {
+		t.Fatalf("%d requests before the re-probe threshold, want 0", n)
+	}
+	if err := s.Push(ctx, SyncCategoryModelPrefs); err != nil {
+		t.Fatalf("push after re-probe = %v, want an upload", err)
+	}
+	reqs := fake.snapshot()
+	if len(reqs) != 2 || reqs[0].Method != http.MethodGet || reqs[1].Method != http.MethodPut {
+		t.Fatalf("requests = %+v, want one probe GET then the PUT", reqs)
+	}
+}
+
+// TestSyncClock_GenuineSkewStillRefusedAfterReprobe: when the fresh reading
+// confirms the skew, the push is still refused (one probe per check once
+// past the threshold, never a PUT).
+func TestSyncClock_GenuineSkewStillRefusedAfterReprobe(t *testing.T) {
+	fake, base := startFake(t)
+	fake.mu.Lock()
+	fake.now = func() time.Time { return time.Now().Add(-5 * time.Minute) }
+	fake.mu.Unlock()
+	var open atomic.Bool
+	open.Store(true)
+	s := newStateSyncer(t, base, "", &open, `{"maxAgentTurns":7}`, &recordingApplier{})
+	if err := s.RestoreEnabled(SyncCategoryModelPrefs, true); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < syncSkewReprobeAfter+2; i++ {
+		if err := s.Push(context.Background(), SyncCategoryModelPrefs); !errors.Is(err, ErrSyncClockMismatch) {
+			t.Fatalf("push %d = %v, want ErrSyncClockMismatch", i+1, err)
+		}
+	}
+	if n := fake.countMethod(http.MethodPut); n != 0 {
+		t.Fatalf("%d PUTs from a skewed clock", n)
+	}
+	// 1 initial probe (offset unknown) + 1 re-probe per check past the threshold.
+	if n := fake.countMethod(http.MethodGet); n != 1+2 {
+		t.Fatalf("GETs = %d, want 3", n)
+	}
+}

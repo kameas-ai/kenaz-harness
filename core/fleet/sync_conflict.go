@@ -83,21 +83,63 @@ func (s *Syncer) clockSkew() (time.Duration, bool) {
 	return s.clockOffset, s.clockKnown
 }
 
+// syncSkewReprobeAfter is how many consecutive skew refusals checkClock
+// makes from a remembered offset before it asks Fleet's clock again.
+const syncSkewReprobeAfter = 3
+
+// probeClock sends one GET (nothing applied) to read Fleet's Date header.
+func (s *Syncer) probeClock(ctx context.Context, cat SyncCategory) {
+	if resp, err := s.client.Get(ctx, "/api/v1/sync/"+url.PathEscape(string(cat))); err == nil {
+		s.observeClock(resp)
+		_ = resp.Body.Close()
+	}
+}
+
+func skewInRange(offset time.Duration) bool {
+	return offset <= syncMaxClockSkew && offset >= -syncMaxClockSkew
+}
+
 // checkClock refuses a push while this clock is off by more than
 // syncMaxClockSkew. With no observation yet it asks Fleet first (one GET,
 // nothing applied), so even the first push of a run is checked.
+//
+// FAILS OPEN when Fleet's clock cannot be read: if no response so far has
+// carried a parseable Date header (a proxy that strips it, a malformed
+// value), the push goes ahead unchecked. That is deliberate. Refusing would
+// stop sync for good behind such a proxy, and the backstop still holds:
+// Fleet itself rejects any lww_ts more than five minutes ahead of its own
+// clock with 422 lww_ts_in_future (ErrSyncClockSkew). What fail-open gives up
+// is only the tighter one-minute check and the "slow clock" direction.
+//
+// A remembered offset can also be wrong: a caching proxy may serve a stale
+// Date, which would keep refusing pushes after the clock is fine. So after
+// syncSkewReprobeAfter consecutive refusals checkClock re-reads Fleet's
+// clock with a fresh request before refusing again.
 func (s *Syncer) checkClock(ctx context.Context, cat SyncCategory, st *CategoryState) error {
 	if _, known := s.clockSkew(); !known {
-		if resp, err := s.client.Get(ctx, "/api/v1/sync/"+url.PathEscape(string(cat))); err == nil {
-			s.observeClock(resp)
-			_ = resp.Body.Close()
-		}
+		s.probeClock(ctx, cat)
 	}
 	offset, known := s.clockSkew()
-	if !known || (offset <= syncMaxClockSkew && offset >= -syncMaxClockSkew) {
-		// In range, or no Date header from this server to compare against.
+	if known && !skewInRange(offset) {
+		s.clockMu.Lock()
+		reprobe := s.skewRefusals >= syncSkewReprobeAfter
+		s.clockMu.Unlock()
+		if reprobe {
+			s.probeClock(ctx, cat)
+			offset, known = s.clockSkew()
+		}
+	}
+	if !known || skewInRange(offset) {
+		// In range, or no Date header from this server to compare against
+		// (fail open; see above).
+		s.clockMu.Lock()
+		s.skewRefusals = 0
+		s.clockMu.Unlock()
 		return nil
 	}
+	s.clockMu.Lock()
+	s.skewRefusals++
+	s.clockMu.Unlock()
 	dir, mag := "ahead of", offset
 	if offset < 0 {
 		dir, mag = "behind", -offset
