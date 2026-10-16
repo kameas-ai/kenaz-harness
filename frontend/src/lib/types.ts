@@ -4971,6 +4971,11 @@ export interface PendingApprovalItem {
   blocking: string;
   /** true = blocking; false = informational. */
   required: boolean;
+  /**
+   * RFC 3339 instant a required legal item starts blocking ("" = blocking
+   * now). Before it the item is still required but nothing is paused yet.
+   */
+  deferrableUntil: string;
   /** False when Fleet's action is outside the harness allowlist: not approvable here. */
   approveAllowed: boolean;
 }

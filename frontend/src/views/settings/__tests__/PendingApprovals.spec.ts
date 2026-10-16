@@ -22,6 +22,7 @@ import PendingApprovalsModal from '@/views/settings/PendingApprovalsModal.vue';
 import { createFakeHarnessClient, type HarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import { collectSettingsIssues } from '@/lib/settingsIssues';
+import { formatAcceptByDate } from '@/lib/approvalDeferral';
 import { closePendingApprovalsDialog, pendingApprovalsDialog } from '@/lib/pendingApprovalsDialog';
 import type { PendingApprovalItem, PendingApprovals } from '@/lib/types';
 
@@ -39,6 +40,7 @@ const LEGAL: PendingApprovalItem = {
   version: 'v1.1',
   blocking: 'Continued use of Fleet',
   required: true,
+  deferrableUntil: '',
   approveAllowed: true,
 };
 const NOTICE: PendingApprovalItem = {
@@ -52,6 +54,7 @@ const NOTICE: PendingApprovalItem = {
   version: '4',
   blocking: 'Hosted inference uploads for Acme Corp',
   required: true,
+  deferrableUntil: '',
   approveAllowed: true,
 };
 const EXCL: PendingApprovalItem = {
@@ -65,6 +68,7 @@ const EXCL: PendingApprovalItem = {
   version: '5',
   blocking: 'Nothing is paused',
   required: false,
+  deferrableUntil: '',
   approveAllowed: true,
 };
 const FUTURE: PendingApprovalItem = {
@@ -78,6 +82,7 @@ const FUTURE: PendingApprovalItem = {
   version: '1',
   blocking: 'Nothing is paused',
   required: false,
+  deferrableUntil: '',
   approveAllowed: false,
 };
 
@@ -135,6 +140,27 @@ describe('pending-approvals settings issue provider', () => {
     const [issue] = (await collectSettingsIssues(client, false)).filter((i) => i.id === 'pending-approvals');
     expect(issue.severity).toBe('warning');
     expect(issue.title).toBe('1 item needs your approval');
+  });
+
+  it('warning with "Accept by <date>" while every required item is still deferrable', async () => {
+    const soon = { ...LEGAL, deferrableUntil: new Date(Date.now() + 10 * 86_400_000).toISOString() };
+    const later = { ...LEGAL, id: 'legal:privacy:v1.2', deferrableUntil: new Date(Date.now() + 40 * 86_400_000).toISOString() };
+    const { client } = makeClient([view([later, soon])]);
+    const [issue] = (await collectSettingsIssues(client, false)).filter((i) => i.id === 'pending-approvals');
+    expect(issue.severity).toBe('warning');
+    expect(issue.body).toBe(`Accept by ${formatAcceptByDate(new Date(soon.deferrableUntil))} to keep using Fleet. Nothing is paused yet.`);
+    expect(issue.fix?.label).toBe('Review');
+  });
+
+  it('error once a deferral has passed, or when another required item blocks now', async () => {
+    const past = { ...LEGAL, deferrableUntil: new Date(Date.now() - 60_000).toISOString() };
+    const future = { ...LEGAL, deferrableUntil: new Date(Date.now() + 86_400_000).toISOString() };
+    for (const items of [[past], [future, NOTICE]]) {
+      const { client } = makeClient([view(items)]);
+      const [issue] = (await collectSettingsIssues(client, false)).filter((i) => i.id === 'pending-approvals');
+      expect(issue.severity).toBe('error');
+      expect(issue.body).toBe('Some things are paused until you review and approve them.');
+    }
   });
 
   it('skipped in a served build (desktop-only bindings)', async () => {
@@ -211,6 +237,66 @@ describe('PendingApprovalsModal', () => {
     await q(w, 'pending-approval-approve').trigger('click');
     await flushPromises();
     expect(approveItem).toHaveBeenCalledWith('legal:terms:v1.1');
+  });
+
+  it('legal, still deferrable: "Accept by <date>" only; Fleet\'s present-tense blocking text is not appended', async () => {
+    const until = new Date(Date.now() + 10 * 86_400_000);
+    // What Fleet actually sends for a deferrable item (pending_approvals.go).
+    const blocking = `Nothing is paused until ${formatAcceptByDate(until)}`;
+    const { client } = makeClient([view([{ ...LEGAL, blocking, deferrableUntil: until.toISOString() }])]);
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approval-blocking').exists()).toBe(false);
+    expect(q(w, 'pending-approval-deferrable').text()).toBe(`Accept by ${formatAcceptByDate(until)}.`);
+    expect(w.text()).not.toContain('paused until you approve: Nothing is paused');
+  });
+
+  it('an open dialog flips to "Paused until you approve" when the deadline passes', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    try {
+      const until = new Date(Date.now() + 90_000);
+      const blocking = `Nothing is paused until ${formatAcceptByDate(until)}`;
+      const { client } = makeClient([view([{ ...LEGAL, blocking, deferrableUntil: until.toISOString() }])]);
+      const w = await mountModal(client);
+      expect(q(w, 'pending-approval-deferrable').exists()).toBe(true);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await flushPromises();
+      expect(q(w, 'pending-approval-deferrable').exists()).toBe(false);
+      // Fleet's stale pre-deadline text is not shown after the flip.
+      expect(q(w, 'pending-approval-blocking').text()).toBe('Paused until you approve.');
+      w.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('several deferrable legal items: each shows its own date', async () => {
+    const sa = new Date(Date.now() + 10 * 86_400_000);
+    const privacy = new Date(Date.now() + 20 * 86_400_000);
+    const { client, approveItem } = makeClient([
+      view([
+        { ...LEGAL, id: 'legal:sa:v1.2', deferrableUntil: sa.toISOString() },
+        { ...LEGAL, id: 'legal:privacy:v2.2', title: 'Privacy Policy', deferrableUntil: privacy.toISOString() },
+      ]),
+    ]);
+    approveItem.mockImplementation(async () =>
+      view([{ ...LEGAL, id: 'legal:privacy:v2.2', title: 'Privacy Policy', deferrableUntil: privacy.toISOString() }]),
+    );
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approval-deferrable').text()).toContain(`Accept by ${formatAcceptByDate(sa)}.`);
+    await q(w, 'pending-approval-accept-box').setValue(true);
+    await q(w, 'pending-approval-approve').trigger('click');
+    await flushPromises();
+    expect(q(w, 'pending-approval-title').text()).toBe('Privacy Policy');
+    expect(q(w, 'pending-approval-deferrable').text()).toContain(`Accept by ${formatAcceptByDate(privacy)}.`);
+  });
+
+  it('legal, deferral passed on a stale copy: "Paused until you approve." without the stale text', async () => {
+    const past = new Date(Date.now() - 60_000);
+    const blocking = `Nothing is paused until ${formatAcceptByDate(past)}`;
+    const { client } = makeClient([view([{ ...LEGAL, blocking, deferrableUntil: past.toISOString() }])]);
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approval-deferrable').exists()).toBe(false);
+    expect(q(w, 'pending-approval-blocking').text()).toBe('Paused until you approve.');
   });
 
   it('ml_notice: body_text rendered verbatim as text; I agree approves by id', async () => {

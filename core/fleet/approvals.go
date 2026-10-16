@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Pending-approval kinds the harness renders specifically. Any other kind is
@@ -138,7 +139,11 @@ type PendingApproval struct {
 	Blocking string
 	// Required: true = blocking, false = informational.
 	Required bool
-	Approve  ApproveAction
+	// DeferrableUntil is when a required legal item starts blocking (zero
+	// when absent = blocking now). Until then an existing customer may keep
+	// using Fleet without accepting (contract field deferrable_until).
+	DeferrableUntil time.Time
+	Approve         ApproveAction
 }
 
 // PendingApprovals is GET /api/v1/me/pending-approvals.
@@ -164,17 +169,18 @@ type pendingApprovalsWire struct {
 }
 
 type pendingApprovalWire struct {
-	ID             *string         `json:"id"`
-	Kind           *string         `json:"kind"`
-	Title          *string         `json:"title"`
-	Summary        *string         `json:"summary"`
-	BodyText       *string         `json:"body_text"`
-	DocumentURL    *string         `json:"document_url"`
-	DocumentSHA256 *string         `json:"document_sha256"`
-	Version        *string         `json:"version"`
-	Blocking       *string         `json:"blocking"`
-	Required       *bool           `json:"required"`
-	Approve        json.RawMessage `json:"approve"`
+	ID              *string         `json:"id"`
+	Kind            *string         `json:"kind"`
+	Title           *string         `json:"title"`
+	Summary         *string         `json:"summary"`
+	BodyText        *string         `json:"body_text"`
+	DocumentURL     *string         `json:"document_url"`
+	DocumentSHA256  *string         `json:"document_sha256"`
+	Version         *string         `json:"version"`
+	Blocking        *string         `json:"blocking"`
+	Required        *bool           `json:"required"`
+	DeferrableUntil *string         `json:"deferrable_until"`
+	Approve         json.RawMessage `json:"approve"`
 }
 
 type approveWire struct {
@@ -187,7 +193,8 @@ type approveWire struct {
 // kind, title, summary, version, blocking (string), required (bool) and
 // approve {method, path, body (object)}. body_text and document_url are each
 // optional; a document_url must be an absolute http(s) URL and comes with a
-// 64-hex document_sha256. Unknown keys are ignored; unknown kinds are kept.
+// 64-hex document_sha256. deferrable_until is optional; a value that is not an
+// RFC 3339 instant is dropped (the item reads as blocking now). Unknown keys are ignored; unknown kinds are kept.
 func DecodePendingApprovals(raw []byte) (PendingApprovals, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	var w pendingApprovalsWire
@@ -263,6 +270,17 @@ func decodePendingApproval(raw json.RawMessage) (PendingApproval, error) {
 			return PendingApproval{}, fmt.Errorf("%w: document_url without a 64-hex document_sha256", ErrPendingApprovalsDecode)
 		}
 		it.DocumentURL, it.DocumentSHA256 = *w.DocumentURL, strings.ToLower(*w.DocumentSHA256)
+	}
+	if w.DeferrableUntil != nil && *w.DeferrableUntil != "" {
+		// A malformed deadline must not hide the whole hub (every other
+		// item, blocking ones included), so it is dropped, not refused: the
+		// item then reads as blocking now, the conservative interpretation.
+		if t, err := time.Parse(time.RFC3339, *w.DeferrableUntil); err == nil {
+			it.DeferrableUntil = t.UTC()
+		} else {
+			slog.Warn("fleet: pending approval deferrable_until is not RFC 3339; treating the item as blocking now",
+				"kind", it.Kind)
+		}
 	}
 	act, err := decodeApproveAction(w.Approve)
 	if err != nil {

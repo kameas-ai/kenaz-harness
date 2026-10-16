@@ -14,6 +14,7 @@ package settings
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 )
@@ -35,6 +36,10 @@ type PendingApprovalView struct {
 	// Blocking says what is paused until this is approved.
 	Blocking string `json:"blocking"`
 	Required bool   `json:"required"`
+	// DeferrableUntil is the RFC 3339 instant a required legal item starts
+	// blocking ("" = blocking now). Before it the item is still required
+	// but nothing is paused yet.
+	DeferrableUntil string `json:"deferrableUntil"`
 	// ApproveAllowed is false when Fleet's approve action is outside the
 	// harness allowlist: the item is shown but cannot be approved here.
 	ApproveAllowed bool `json:"approveAllowed"`
@@ -82,12 +87,16 @@ func approvalsView(p fleet.PendingApprovals) PendingApprovalsView {
 		if it.Required {
 			v.RequiredCount++
 		}
-		v.Items = append(v.Items, PendingApprovalView{
+		iv := PendingApprovalView{
 			ID: it.ID, Kind: it.Kind, Title: it.Title, Summary: it.Summary,
 			BodyText: it.BodyText, DocumentURL: it.DocumentURL, DocumentSHA256: it.DocumentSHA256,
 			Version: it.Version, Blocking: it.Blocking, Required: it.Required,
 			ApproveAllowed: fleet.ApproveActionAllowed(it.Approve.Method, it.Approve.Path),
-		})
+		}
+		if !it.DeferrableUntil.IsZero() {
+			iv.DeferrableUntil = it.DeferrableUntil.Format(time.RFC3339)
+		}
+		v.Items = append(v.Items, iv)
 	}
 	return v
 }
