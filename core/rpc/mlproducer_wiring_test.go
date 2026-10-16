@@ -66,12 +66,15 @@ type otlpReply struct {
 type mlFleet struct {
 	srv *httptest.Server
 
-	mu           sync.Mutex
-	enrollOrg    string
-	hosted       bool
-	paused       bool
-	meML         string
-	meMLStatus   int
+	mu         sync.Mutex
+	enrollOrg  string
+	hosted     bool
+	paused     bool
+	meML       string
+	meMLStatus int
+	// meMLDrop: GET /me/ml hijacks and closes the connection — a real
+	// transport error (connection reset), not an HTTP status.
+	meMLDrop     bool
 	otlp         func(n int, req *collogs.ExportLogsServiceRequest) otlpReply
 	posts        []*collogs.ExportLogsServiceRequest
 	contentTypes []string
@@ -159,8 +162,16 @@ func newMLFleet(t *testing.T, enrollOrg string) *mlFleet {
 	mux.HandleFunc("/api/v1/me/ml", func(w http.ResponseWriter, _ *http.Request) {
 		f.mu.Lock()
 		f.mlGets++
-		st, body := f.meMLStatus, f.meML
+		st, body, drop := f.meMLStatus, f.meML, f.meMLDrop
 		f.mu.Unlock()
+		if drop {
+			if hj, ok := w.(http.Hijacker); ok {
+				if conn, _, err := hj.Hijack(); err == nil {
+					_ = conn.Close()
+					return
+				}
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(st)
 		_, _ = io.WriteString(w, body)
