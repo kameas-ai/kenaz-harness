@@ -23,7 +23,7 @@
  * open Settings → Account. No fleet affordances appear anywhere else in
  * the UI when the user is signed out.
  */
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { refreshFeatureFlags } from '@/lib/featureFlags';
 import { isUserNotProvisionedError } from '@/lib/errors';
@@ -34,9 +34,26 @@ import {
   useFleetSession,
 } from '@/lib/fleetSession';
 import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
+import { fleetBundleNotices } from '@/lib/fleetBundleCompat';
+import type { FleetConfigPullStatusView } from '@/lib/types';
 
 const client = useHarnessClient();
 const fleet = useFleetSession(client);
+
+// ── organization settings this build can't fully apply ──────────────────
+// signed-bundle-bytes-01SBBYT01 WP03: newer settings this build doesn't
+// recognise, rules it is too old to enforce, and "update required" (406).
+const pullStatus = ref<FleetConfigPullStatusView | null>(null);
+async function loadPullStatus() {
+  try {
+    const fn = client.settings?.fleetConfigPullStatus;
+    pullStatus.value = typeof fn === 'function' ? await fn.call(client.settings) : null;
+  } catch {
+    // Not wired (fleet disabled / served build): show nothing.
+    pullStatus.value = null;
+  }
+}
+const bundleNotices = computed(() => fleetBundleNotices(pullStatus.value));
 
 // ── state ────────────────────────────────────────────────────────────────
 
@@ -52,6 +69,12 @@ const state = fleet.state;
 const fleetDisabled = computed(() => state.value === 'disabled');
 /** signed_in OR degraded — tokens are usable (FR-3). */
 const isSignedIn = fleet.signedIn;
+onMounted(() => {
+  void loadPullStatus();
+});
+watch(isSignedIn, (now) => {
+  if (now) void loadPullStatus();
+});
 const isDegraded = computed(() => state.value === 'degraded');
 const isSigningIn = computed(() => state.value === 'signing_in');
 const identity = fleet.identity;
@@ -362,6 +385,21 @@ async function refreshIdentity() {
       </li>
     </ul>
 
+    <div v-if="bundleNotices.length" class="org-settings-notices" data-testid="account-org-settings">
+      <div
+        v-for="n in bundleNotices"
+        :key="n.id"
+        class="org-settings-notice"
+        :class="`org-settings-notice--${n.severity}`"
+        role="status"
+        :data-testid="n.id"
+      >
+        <p class="org-settings-title">{{ n.title }}</p>
+        <p class="org-settings-body">{{ n.body }}</p>
+        <p v-if="n.detail" class="org-settings-detail">Settings: {{ n.detail }}</p>
+      </div>
+    </div>
+
     <div class="identity-card" data-testid="identity-card">
       <div v-if="nameLabel" class="identity-row">
         <span class="identity-label">Name</span>
@@ -604,6 +642,43 @@ async function refreshIdentity() {
   color: var(--warn);
   margin: 0 0 0.75rem;
   padding-left: 1rem;
+}
+
+.org-settings-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+}
+
+.org-settings-notice {
+  font-size: 0.8125rem;
+  border-left: 3px solid var(--warn);
+  padding: 0.25rem 0 0.25rem 0.6rem;
+}
+
+.org-settings-notice--error {
+  border-left-color: var(--danger);
+}
+
+.org-settings-title {
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0;
+}
+
+.org-settings-body {
+  color: var(--ink);
+  margin: 0.15rem 0 0;
+}
+
+.org-settings-detail {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--ink);
+  opacity: 0.7;
+  margin: 0.15rem 0 0;
+  word-break: break-all;
 }
 
 .error-msg {

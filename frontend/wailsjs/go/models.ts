@@ -7760,6 +7760,20 @@ export namespace settings {
 	        this.source = source["source"];
 	    }
 	}
+	export class FleetUnenforceableSettingView {
+	    name: string;
+	    minVersion: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetUnenforceableSettingView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.minVersion = source["minVersion"];
+	    }
+	}
 	export class FleetConfigPullStatusView {
 	    lastAppliedId: number;
 	    lastAppliedAt: string;
@@ -7767,6 +7781,10 @@ export namespace settings {
 	    source: string;
 	    bundleChecksum: string;
 	    configDistributionEnabled: boolean;
+	    updateRequired: boolean;
+	    unknownSettingsCount: number;
+	    unknownSettings: string[];
+	    unenforceableSettings: FleetUnenforceableSettingView[];
 	
 	    static createFrom(source: any = {}) {
 	        return new FleetConfigPullStatusView(source);
@@ -7780,7 +7798,29 @@ export namespace settings {
 	        this.source = source["source"];
 	        this.bundleChecksum = source["bundleChecksum"];
 	        this.configDistributionEnabled = source["configDistributionEnabled"];
+	        this.updateRequired = source["updateRequired"];
+	        this.unknownSettingsCount = source["unknownSettingsCount"];
+	        this.unknownSettings = source["unknownSettings"];
+	        this.unenforceableSettings = this.convertValues(source["unenforceableSettings"], FleetUnenforceableSettingView);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class FleetDeviceKeysView {
 	    status: string;
@@ -8093,6 +8133,7 @@ export namespace settings {
 		    return a;
 		}
 	}
+	
 	export class LockdownStatusView {
 	    active: boolean;
 	    reason?: string;

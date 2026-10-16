@@ -31,10 +31,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"golang.org/x/mod/semver"
 )
 
 // configPollInterval is the normal interval between config bundle fetches.
@@ -97,6 +100,56 @@ type ConfigPollStatus struct {
 	// bundle form Fleet no longer serves. The last applied bundle stays in
 	// force. Cleared by the next verified bundle, 304, or other rejection.
 	UpdateRequired bool `json:"updateRequired"`
+	// UnknownFieldCount / UnknownFields describe the last verified v2 bundle:
+	// the NAMES (never values) of settings in it this build does not
+	// recognise ("N newer settings from your organization need a Kenaz
+	// update", spec §4.5). Ignoring them never relaxes a restriction this
+	// build knows; restriction-bearing additions are covered by
+	// UnenforceableFields instead (spec §6 R1).
+	UnknownFieldCount int      `json:"unknownFieldCount"`
+	UnknownFields     []string `json:"unknownFields"`
+	// UnenforceableFields lists the min_client_versions entries of the last
+	// verified v2 bundle whose minimum is above this build's version: "this
+	// device can't enforce <name> until it updates" (Fleet ruling 6). All
+	// fields this build knows still apply.
+	UnenforceableFields []UnenforceableField `json:"unenforceableFields"`
+}
+
+// UnenforceableField is one min_client_versions entry this build is too old
+// to enforce.
+type UnenforceableField struct {
+	// Name is the section or field Fleet named ("model_prefs.allow_user_credentials").
+	Name string `json:"name"`
+	// MinVersion is the minimum harness version that can enforce it.
+	MinVersion string `json:"minVersion"`
+}
+
+// unenforceableFields compares a bundle's min_client_versions against this
+// build's version. A build version that is not semver ("dev", "", a local
+// build) is treated as current: it reports nothing, since it cannot be
+// placed on the release line. A malformed minimum IS reported — the build
+// cannot show it meets a minimum it cannot read.
+func unenforceableFields(mins map[string]string, buildVersion string) []UnenforceableField {
+	bv := ensureSemverV(buildVersion)
+	if len(mins) == 0 || !semver.IsValid(bv) {
+		return nil
+	}
+	var out []UnenforceableField
+	for name, minV := range mins {
+		mv := ensureSemverV(minV)
+		if !semver.IsValid(mv) || semver.Compare(bv, mv) < 0 {
+			out = append(out, UnenforceableField{Name: name, MinVersion: minV})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func ensureSemverV(v string) string {
+	if v != "" && v[0] != 'v' {
+		return "v" + v
+	}
+	return v
 }
 
 // ConfigPoller polls the fleet config endpoint, verifies bundles, and drives
@@ -117,6 +170,10 @@ type ConfigPoller struct {
 	keyUnknown    bool // last rejection was ErrSigningKeyUnknown
 	// updateRequired: the last answer was 406 bundle_format_unsupported.
 	updateRequired bool
+	// unknownFields / unenforceable: the decode report of the last
+	// verified v2 bundle (WP03); nil for a legacy bundle.
+	unknownFields []string
+	unenforceable []UnenforceableField
 	// orgPaused: the last fetch was refused 403 org_paused (kenaz-fleet
 	// #206) — transient; the last applied bundle stays in force, and
 	// ResumeAfterOrgUnpause clears the "org_paused" lastError it set. The
@@ -234,10 +291,11 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 	// Restore state from disk cache. The cached envelope is re-verified
 	// first (signed-bundle-bytes-01SBBYT01 WP02); a cache that fails to
 	// verify is discarded and restores nothing.
-	if id, cs, _, err := restoreBundleCache(p.dataDir, FleetSigningKeys()); err == nil {
+	if id, cs, vb, err := restoreBundleCache(p.dataDir, FleetSigningKeys()); err == nil {
 		p.mu.Lock()
 		p.lastAppliedID = id
 		p.checksum = cs
+		p.setDecodeReportLocked(vb)
 		if id > 0 {
 			p.source = "cache"
 			meta := loadBundleApplyMeta(p.dataDir)
@@ -350,6 +408,13 @@ func (p *ConfigPoller) Status() ConfigPollStatus {
 		BundleChecksum:    p.checksum,
 		SigningKeyUnknown: p.keyUnknown,
 		UpdateRequired:    p.updateRequired,
+		UnknownFieldCount: len(p.unknownFields),
+	}
+	if len(p.unknownFields) > 0 {
+		s.UnknownFields = append([]string(nil), p.unknownFields...)
+	}
+	if len(p.unenforceable) > 0 {
+		s.UnenforceableFields = append([]UnenforceableField(nil), p.unenforceable...)
 	}
 	if !p.lastAppliedAt.IsZero() {
 		s.LastAppliedAt = p.lastAppliedAt.UTC().Format(time.RFC3339)
@@ -539,6 +604,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	p.mu.Lock()
 	p.keyUnknown = false // the bundle verified under a pinned key
 	p.updateRequired = false
+	p.setDecodeReportLocked(vb) // nil (legacy) clears it
 	hadRefusals := false
 	for _, st := range itemStats {
 		if st.Status == MandatedStatusRefused {
@@ -601,6 +667,29 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return applyErrs[0] // triggers backoff; all errors already in lastError
 	}
 	return nil
+}
+
+// setDecodeReportLocked records what this build could not interpret in the
+// verified bundle vb (nil → a legacy bundle, nothing known): unknown field
+// names, and min_client_versions entries above this build. Names are logged
+// at debug — never values. Caller holds p.mu.
+func (p *ConfigPoller) setDecodeReportLocked(vb *VerifiedBundle) {
+	p.unknownFields, p.unenforceable = nil, nil
+	if vb == nil {
+		return
+	}
+	p.unknownFields = vb.UnknownFields
+	p.unenforceable = unenforceableFields(vb.MinClientVersions, p.buildVersion)
+	if len(p.unknownFields) > 0 {
+		logging.L().Debug("fleet.config_poller.unknown_fields",
+			"bundle_id", vb.Bundle.BundleID,
+			"count", len(p.unknownFields),
+			"names", strings.Join(p.unknownFields, ","))
+	}
+	for _, u := range p.unenforceable {
+		logging.L().Info("fleet.config_poller.cannot_enforce",
+			"bundle_id", vb.Bundle.BundleID, "name", u.Name, "min_version", u.MinVersion)
+	}
 }
 
 // setError records a TRANSIENT failure (fetch, non-200 status, body read).

@@ -6371,6 +6371,7 @@ export function createFakeHarnessClient(
       fleetConfigPullStatus: async () => ({
         lastAppliedId: 0, lastAppliedAt: '', lastError: '', source: 'default-deny', bundleChecksum: '',
         configDistributionEnabled: false,
+        updateRequired: false, unknownSettingsCount: 0, unknownSettings: null, unenforceableSettings: null,
       }),
       // fleet-emergency-lockdown-01NDFSEX12 WP02
       fleetLockdownStatus: async () => ({ active: false, reason: '' }),
