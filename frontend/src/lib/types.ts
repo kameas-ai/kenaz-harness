@@ -5254,6 +5254,13 @@ export interface SyncStatusView {
    * takes the other device's. Automatic sync leaves it alone until then.
    */
   conflict?: boolean;
+  /**
+   * True when personal sync for this category is not built yet
+   * (fleet.SyncKind.UserSyncNotBuilt — provider_profiles, mcp_recipes):
+   * nothing is uploaded or applied, so the panel offers no toggle and the
+   * upload confirmation never lists it.
+   */
+  not_syncing_yet?: boolean;
 }
 
 /**

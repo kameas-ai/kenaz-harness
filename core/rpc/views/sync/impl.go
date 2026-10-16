@@ -219,6 +219,9 @@ func enrichWithRegistry(v SyncStatusView, registry *corefleet.KindRegistry, cate
 			scopes = append(scopes, string(s))
 		}
 		v.Scopes = scopes
+		if kind.UserSyncNotBuilt {
+			v.NotSyncingYet = true
+		}
 	}
 	if at, ok := registry.OrgAppliedAt(category); ok {
 		v.OrgAppliedAt = at.UTC().Format(time.RFC3339)
@@ -273,6 +276,7 @@ func syncStatusToView(s corefleet.SyncStatus) SyncStatusView {
 		AwaitingConfirmation: s.AwaitingConfirmation,
 		LocalOnly:            s.LocalOnly,
 		Conflict:             s.Conflict,
+		NotSyncingYet:        s.NotSyncingYet,
 	}
 	if !s.LastPushAt.IsZero() {
 		v.LastPushAt = s.LastPushAt.UTC().Format(time.RFC3339)

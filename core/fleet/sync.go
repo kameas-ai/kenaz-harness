@@ -95,6 +95,11 @@ var ErrSyncUploadNotConfirmed = errors.New("fleet/sync: uploads are paused until
 // does not accept. Nothing was sent.
 var ErrSyncCategoryLocalOnly = errors.New("fleet/sync: this category stays on this device; Fleet does not sync it yet")
 
+// ErrSyncCategoryNotSyncingYet is returned by Push and Pull for a category
+// whose personal sync is not built yet (CategoryConfig.NotSyncingYet).
+// Nothing was sent.
+var ErrSyncCategoryNotSyncingYet = errors.New("fleet/sync: this category does not sync yet")
+
 // ErrSyncClockSkew is returned by Push when Fleet rejects the write with 422
 // lww_ts_in_future: this device's clock is more than 5 minutes ahead.
 var ErrSyncClockSkew = errors.New("fleet/sync: this device's clock is more than 5 minutes ahead of Fleet; correct the clock and sync will resume")
@@ -238,6 +243,9 @@ type SyncStatus struct {
 	// resolves it with ForcePush (keep this device's) or ForcePull (take
 	// the other device's); see sync_conflict.go.
 	Conflict bool `json:"conflict,omitempty"`
+	// NotSyncingYet is true when personal sync for this category is not
+	// built (CategoryConfig.NotSyncingYet): nothing is sent or applied.
+	NotSyncingYet bool `json:"not_syncing_yet,omitempty"`
 }
 
 // CategoryCollector is called by the Syncer to gather the current local state
@@ -253,6 +261,10 @@ type CategoryApplier func(ctx context.Context, payload json.RawMessage) error
 type CategoryConfig struct {
 	Collector CategoryCollector
 	Applier   CategoryApplier
+	// NotSyncingYet: personal sync for this category is not built (see
+	// SyncKind.UserSyncNotBuilt). Push and Pull send nothing and return
+	// ErrSyncCategoryNotSyncingYet.
+	NotSyncingYet bool
 }
 
 // Syncer manages per-category sync (push-up / pull-down) against
@@ -381,7 +393,8 @@ func (s *Syncer) SetEnabled(ctx context.Context, cat SyncCategory, enabled bool)
 		// FR-102 (push current local state on enable), after taking any
 		// newer state from Fleet.
 		err := s.pullThenPush(ctx, cat)
-		if errors.Is(err, ErrSyncUploadNotConfirmed) || errors.Is(err, ErrSyncCategoryLocalOnly) {
+		if errors.Is(err, ErrSyncUploadNotConfirmed) || errors.Is(err, ErrSyncCategoryLocalOnly) ||
+			errors.Is(err, ErrSyncCategoryNotSyncingYet) {
 			return nil
 		}
 		return err
@@ -458,6 +471,7 @@ func (s *Syncer) Status() []SyncStatus {
 	defer s.mu.RUnlock()
 	out := make([]SyncStatus, 0, len(s.categories))
 	for cat, st := range s.categories {
+		notYet := s.configs[cat].NotSyncingYet
 		st.mu.Lock()
 		localOnly := !FleetAcceptsSyncCategory(cat) || st.fleetRejected
 		out = append(out, SyncStatus{
@@ -467,9 +481,10 @@ func (s *Syncer) Status() []SyncStatus {
 			LastPullAt:           st.lastPull,
 			LastError:            st.lastErr,
 			LWWTS:                st.lwwTS,
-			AwaitingConfirmation: st.enabled && !localOnly && !allowed,
+			AwaitingConfirmation: st.enabled && !localOnly && !notYet && !allowed,
 			LocalOnly:            localOnly,
 			Conflict:             st.conflict,
+			NotSyncingYet:        notYet,
 		})
 		st.mu.Unlock()
 	}
@@ -489,7 +504,8 @@ func (s *Syncer) PushHeld(ctx context.Context) error {
 		if !s.IsEnabled(cat) || !FleetAcceptsSyncCategory(cat) {
 			continue
 		}
-		if err := s.pullThenPush(ctx, cat); err != nil && !errors.Is(err, ErrSyncCategoryLocalOnly) {
+		if err := s.pullThenPush(ctx, cat); err != nil && !errors.Is(err, ErrSyncCategoryLocalOnly) &&
+			!errors.Is(err, ErrSyncCategoryNotSyncingYet) {
 			errs = append(errs, err)
 		}
 	}
@@ -537,6 +553,7 @@ func (s *Syncer) NotifyMutation(cat SyncCategory) {
 		switch {
 		case err == nil, errors.Is(err, ErrFleetDisabled):
 		case errors.Is(err, ErrSyncUploadNotConfirmed), errors.Is(err, ErrSyncCategoryLocalOnly),
+			errors.Is(err, ErrSyncCategoryNotSyncingYet),
 			errors.Is(err, ErrSyncConflict): // markConflict already logged it once
 
 			logging.L().Debug("fleet.sync.debounced_push.held",
@@ -643,6 +660,9 @@ func (s *Syncer) push(ctx context.Context, cat SyncCategory, force bool) error {
 	}
 	if !cfgOk || cfg.Collector == nil {
 		return nil
+	}
+	if cfg.NotSyncingYet {
+		return ErrSyncCategoryNotSyncingYet
 	}
 	if categoryLocalOnly(cat, st) {
 		return ErrSyncCategoryLocalOnly
@@ -794,6 +814,9 @@ func (s *Syncer) pullMode(ctx context.Context, cat SyncCategory, force bool) (ap
 	st.mu.Unlock()
 	if !enabled {
 		return false, nil
+	}
+	if cfgOk && cfg.NotSyncingYet {
+		return false, ErrSyncCategoryNotSyncingYet
 	}
 	if categoryLocalOnly(cat, st) {
 		return false, ErrSyncCategoryLocalOnly
@@ -977,7 +1000,8 @@ func (s *Syncer) pollLoop(ctx context.Context) {
 				// A local-only category (Fleet does not accept it) is
 				// skipped, not failed: counting it would drive every
 				// category's poll into backoff.
-				if err := s.Pull(ctx, cat); err != nil && !errors.Is(err, ErrSyncCategoryLocalOnly) {
+				if err := s.Pull(ctx, cat); err != nil && !errors.Is(err, ErrSyncCategoryLocalOnly) &&
+					!errors.Is(err, ErrSyncCategoryNotSyncingYet) {
 					consecutiveErrors[cat]++
 					logging.L().Warn("fleet.sync.poll.pull_failed",
 						"category", string(cat),

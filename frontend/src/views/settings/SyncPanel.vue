@@ -75,7 +75,7 @@ interface CategoryLabel {
 const CATEGORY_LABELS: Record<string, CategoryLabel> = {
   provider_profiles: {
     label: 'Provider profiles',
-    description: 'Not yet syncing provider profile metadata (no credentials either way — API keys always stay on-device).',
+    description: 'Not syncing yet: provider profiles stay on this device. API keys always stay on-device.',
   },
     // core/rpc/sync_categories.go's modelPrefsPayload carries exactly
     // CompactionAggressiveness, CompactionArchiveDays,
@@ -92,7 +92,7 @@ const CATEGORY_LABELS: Record<string, CategoryLabel> = {
     // provisioned-recipe entries. WP12/AC-024.
   mcp_recipes: {
     label: 'MCP recipes',
-    description: 'Personal recipe sync is not yet syncing (org-provisioned recipes still apply from your fleet admin).',
+    description: 'Not syncing yet: your personal recipes stay on this device. Recipes your fleet admin provisions still apply.',
   },
   // Canonical wire value: corefleet.SyncCategoryInstalledMCP
   // (core/fleet/sync.go:34), registered under this exact string at
@@ -175,6 +175,16 @@ function isEnabled(id: string): boolean {
  * forward-compat case, `provider_setups` (fleet-org-config-inheritance-
  * 01NORGX01 WP04, still gated on the fleet-side blocker).
  */
+/**
+ * notSyncingYet — personal sync for this kind is not built
+ * (fleet.SyncKind.UserSyncNotBuilt; provider_profiles, mcp_recipes): the
+ * backend sends and applies nothing, so the row offers no toggle and no
+ * Push/Pull rather than a switch that would do nothing.
+ */
+function notSyncingYet(id: string): boolean {
+  return statusFor(id)?.not_syncing_yet ?? false;
+}
+
 function isOrgOnly(id: string): boolean {
   const scopes = statusFor(id)?.scopes;
   if (!scopes || scopes.length === 0) return false;
@@ -228,7 +238,9 @@ const pendingCount = computed(() => pendingSecrets.value.length);
  * page, which the banner (loaded on mount) has not seen yet.
  */
 const awaitingConfirmation = computed(() =>
-  statusList.value.filter((s) => s.awaiting_confirmation).map((s) => labelFor(s.category)),
+  statusList.value
+    .filter((s) => s.awaiting_confirmation && !s.not_syncing_yet)
+    .map((s) => labelFor(s.category)),
 );
 const confirming = ref(false);
 
@@ -421,8 +433,15 @@ function goToMCPTools() {
                  show 'managed'"); every live kind today also declares
                  ScopeUser, so this branch is forward-compat rather than
                  currently load-bearing. -->
+            <span
+              v-if="notSyncingYet(s.category)"
+              class="mt-0.5 shrink-0 rounded-sm bg-surface-2 px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim"
+              :data-testid="`sync-not-yet-${s.category}`"
+            >
+              Not syncing yet
+            </span>
             <label
-              v-if="!isOrgOnly(s.category)"
+              v-else-if="!isOrgOnly(s.category)"
               class="mt-0.5 flex shrink-0 cursor-pointer items-center"
             >
               <input
@@ -448,7 +467,7 @@ function goToMCPTools() {
               <div class="flex items-center justify-between gap-2">
                 <span class="text-sm font-medium text-ink">{{ labelFor(s.category) }}</span>
                 <!-- Force push/pull — only when enabled -->
-                <div v-if="isEnabled(s.category) && !localOnly(s.category)" class="flex items-center gap-1.5 shrink-0">
+                <div v-if="isEnabled(s.category) && !localOnly(s.category) && !notSyncingYet(s.category)" class="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
                     class="h-6 rounded-sm border border-border-muted px-2 font-ui text-[10px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"

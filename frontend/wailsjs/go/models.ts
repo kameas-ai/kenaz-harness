@@ -9163,6 +9163,7 @@ export namespace sync {
 	    awaiting_confirmation?: boolean;
 	    local_only?: boolean;
 	    conflict?: boolean;
+	    not_syncing_yet?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SyncStatusView(source);
@@ -9180,6 +9181,7 @@ export namespace sync {
 	        this.awaiting_confirmation = source["awaiting_confirmation"];
 	        this.local_only = source["local_only"];
 	        this.conflict = source["conflict"];
+	        this.not_syncing_yet = source["not_syncing_yet"];
 	    }
 	}
 

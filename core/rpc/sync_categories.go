@@ -191,6 +191,9 @@ func emptyPayloadKind(id corefleet.SyncCategory, scopes []corefleet.Scope) coref
 		},
 		SecretPolicy:   corefleet.SecretPolicyMustNotContainSecrets,
 		ConflictPolicy: corefleet.ConflictPolicyLWW,
+		// Nothing real to send or apply: the Syncer leaves it alone and the
+		// UI says it does not sync yet, instead of offering to upload {}.
+		UserSyncNotBuilt: true,
 	}
 }
 
@@ -256,6 +259,10 @@ func mcpRecipesKind(cat *recipes.MergedCatalog) corefleet.SyncKind {
 		// Recipe.Source (finer-grained: WHICH recipes, not just whether the
 		// kind as a whole has an active org layer).
 		ConflictPolicy: corefleet.ConflictPolicyOrgWinsReadonly,
+		// Personal (user-scope) sync is the documented no-op above: the
+		// Syncer sends and pulls nothing for it and the UI says so. The org
+		// arm (org_config, not the Syncer) is unaffected.
+		UserSyncNotBuilt: true,
 	}
 }
 

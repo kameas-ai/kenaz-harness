@@ -250,6 +250,13 @@ round-tripped. Fleet main has no `POST` route and no int64 `lww_ts` form
 can upload. The contract test is `core/fleet/sync_wire_test.go`, run
 against fixtures in `core/fleet/testdata/sync/` (see `PROVENANCE.md`).
 
+`provider_profiles` and `mcp_recipes` have no personal sync yet: their
+user collector would send `{}` and their user applier does nothing. They
+are registered with `UserSyncNotBuilt: true`, so the Syncer sends and pulls
+nothing for them, `Sync_Status` reports `not_syncing_yet`, and the panel
+and the upload confirmation never present them as syncing. (The
+`mcp_recipes` org arm, applied through `org_config`, is unaffected.)
+
 Because nothing had ever been uploaded, the first upload waits for a
 one-time confirmation (owner ruling H1). The answer is stored in
 `Settings.SettingsSyncUploadsConfirmed`, and the Syncer's upload gate

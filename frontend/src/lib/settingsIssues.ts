@@ -314,7 +314,12 @@ const settingsSyncConfirmIssues: SettingsIssueProvider = {
   desktopOnly: true,
   async collect(client) {
     const rows = await client.sync.status();
-    const held = rows.filter((r) => r.awaiting_confirmation).map((r) => syncCategoryName(r.category));
+    // Name only categories that really upload something: a not-built kind
+    // (provider_profiles, mcp_recipes) sends nothing, so "uploads them so
+    // your other devices can use them" would be false for it.
+    const held = rows
+      .filter((r) => r.awaiting_confirmation && !r.not_syncing_yet)
+      .map((r) => syncCategoryName(r.category));
     if (held.length === 0) return [];
     return [
       {

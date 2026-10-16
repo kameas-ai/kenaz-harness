@@ -43,6 +43,10 @@ type SyncStatusView struct {
 	// Sync_ForcePush keeps this device's settings; Sync_ForcePull takes
 	// the other device's.
 	Conflict bool `json:"conflict,omitempty"`
+	// NotSyncingYet is true when personal sync for this category is not
+	// built yet (fleet.SyncKind.UserSyncNotBuilt): nothing is uploaded or
+	// applied, so the UI offers no toggle and never lists it as uploading.
+	NotSyncingYet bool `json:"not_syncing_yet,omitempty"`
 }
 
 // UploadConsent persists the one-time "settings may be uploaded" answer

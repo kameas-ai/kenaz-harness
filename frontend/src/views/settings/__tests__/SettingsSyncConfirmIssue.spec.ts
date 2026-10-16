@@ -81,6 +81,26 @@ describe('settings-sync-confirm provider', () => {
     expect(confirmUploads).toHaveBeenCalledTimes(1);
   });
 
+  // provider_profiles / mcp_recipes upload {} (personal sync not built), so
+  // "uploads them so your other devices can use them" would be false.
+  it('never names a not-syncing-yet category, and raises nothing when only those are on', async () => {
+    const { client } = makeClient([
+      { category: 'ui_theme', enabled: true, awaiting_confirmation: true },
+      { category: 'provider_profiles', enabled: true, awaiting_confirmation: true, not_syncing_yet: true },
+      { category: 'mcp_recipes', enabled: true, not_syncing_yet: true },
+    ]);
+    const issue = (await collectSettingsIssues(client, false)).find((i) => i.id === 'settings-sync-confirm');
+    expect(issue!.body).toContain('UI theme');
+    expect(issue!.body).not.toContain('provider profiles');
+    expect(issue!.body).not.toContain('MCP recipes');
+
+    const { client: onlyStubs } = makeClient([
+      { category: 'provider_profiles', enabled: true, awaiting_confirmation: true, not_syncing_yet: true },
+    ]);
+    const none = (await collectSettingsIssues(onlyStubs, false)).find((i) => i.id === 'settings-sync-confirm');
+    expect(none).toBeUndefined();
+  });
+
   it('is skipped in served mode', async () => {
     const { client, status } = makeClient(HELD);
     const issues = await collectSettingsIssues(client, true);

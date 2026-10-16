@@ -243,8 +243,31 @@ describe('SyncPanel', () => {
 
     const providerText = wrapper.find('[data-testid="sync-category-provider_profiles"]').text().toLowerCase();
     const recipesText = wrapper.find('[data-testid="sync-category-mcp_recipes"]').text().toLowerCase();
-    expect(providerText).toContain('not yet syncing');
-    expect(recipesText).toContain('not yet syncing');
+    expect(providerText).toContain('not syncing yet');
+    expect(recipesText).toContain('not syncing yet');
+  });
+
+  // provider_profiles / mcp_recipes collect {} and apply nothing
+  // (core/rpc/sync_categories.go emptyPayloadKind / mcpRecipesKind), so the
+  // backend marks them not_syncing_yet. The panel must not offer a switch
+  // that does nothing, nor name them in "Start syncing" as uploading.
+  it('offers no toggle or push/pull for a not-syncing-yet kind and leaves it out of the upload notice', async () => {
+    const statuses: SyncStatusView[] = [
+      { category: 'provider_profiles', enabled: true, not_syncing_yet: true, awaiting_confirmation: true },
+      { category: 'mcp_recipes', enabled: true, not_syncing_yet: true },
+      { category: 'ui_theme', enabled: true, awaiting_confirmation: true },
+    ];
+    const { client } = buildClient({ statuses });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+    for (const id of ['provider_profiles', 'mcp_recipes']) {
+      expect(wrapper.find(`[data-testid="sync-not-yet-${id}"]`).exists()).toBe(true);
+      expect(wrapper.find(`[data-testid="sync-toggle-${id}"]`).exists()).toBe(false);
+      expect(wrapper.find(`[data-testid="sync-force-push-${id}"]`).exists()).toBe(false);
+    }
+    const notice = wrapper.find('[data-testid="sync-confirm-uploads-notice"]').text();
+    expect(notice).toContain('UI theme');
+    expect(notice).not.toContain('Provider profiles');
   });
 
   it('7. installed-MCP toggle sends the canonical backend category id, not the historic installed_mcp_servers id', async () => {
