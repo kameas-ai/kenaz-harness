@@ -875,6 +875,24 @@ func (m *gatedFirstCallModel) Generate(ctx context.Context, _ coreag.LLMRequest)
 	return coreag.LLMResponse{Content: "ok", FinishReason: "stop"}, nil
 }
 
+// waitModelCalls waits (≤10 s) until model has been called at least n times.
+func waitModelCalls(t *testing.T, model *gatedFirstCallModel, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		model.mu.Lock()
+		got := model.calls
+		model.mu.Unlock()
+		if got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("model reached %d call(s), want %d", got, n)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // TestScheduledRunContainment_UnrelatedStreamInSessionDoesNotRelease is the
 // re-review's probe, kept as a pin: while a contained scheduled stream is
 // still running, a user opens the "Scheduled:" session and completes an
@@ -888,6 +906,13 @@ func TestScheduledRunContainment_UnrelatedStreamInSessionDoesNotRelease(t *testi
 	f.armOnce(t, scheduler.ChatRunRecord{ID: "cr-mid", CreatedBy: scheduler.ScheduledRunCreatedByModel, ToolAllowlist: []string{"kenaz__alpha"}})
 	sid := f.scheduledSessionID(t)
 
+	// The scheduled stream must be the model's FIRST call (the one gated on
+	// model.release) before the interactive turn starts. Otherwise, under
+	// load, the interactive call can win call #1 and block, the scheduled run
+	// proceeds on call #2, completes and legitimately releases containment,
+	// and the assertion below misfires (CI flake, PR #419 run 38741452338).
+	waitModelCalls(t, model, 1)
+
 	// The interactive turn, through the same production surfaces the chat
 	// UI uses, in the SAME session, while the scheduled stream is blocked.
 	ctx := context.Background()
@@ -897,19 +922,7 @@ func TestScheduledRunContainment_UnrelatedStreamInSessionDoesNotRelease(t *testi
 	if _, err := f.llm.StartStream(ctx, "test-profile", sid, ""); err != nil {
 		t.Fatalf("interactive StartStream: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		model.mu.Lock()
-		n := model.calls
-		model.mu.Unlock()
-		if n >= 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("interactive turn never reached the model")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitModelCalls(t, model, 2)
 	time.Sleep(500 * time.Millisecond) // let the interactive stream's terminal event land
 	if !f.registry.Contained(sid) {
 		t.Fatal("an unrelated interactive stream ending released the scheduled run's containment while the scheduled stream still runs")
