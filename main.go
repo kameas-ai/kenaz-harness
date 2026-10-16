@@ -63,6 +63,11 @@ func main() {
 	// wire-up point 1 for sentry (sentry-error-monitoring-01KX5R8G WP02).
 	defer coresentry.RecoverMain()
 
+	// Every Fleet request carries User-Agent: kenaz-harness/<semver>
+	// (legal kameas-ai-11, 2026-10-16, via kenaz-fleet #289): set it before
+	// any mode can talk to Fleet.
+	fleet.SetClientVersion(Version)
+
 	// Early dispatch: `harness mcp <server>` routes to the stdio MCP server
 	// BEFORE flag.Parse, Wails, SQLite, or any other subsystem init.
 	// This keeps the subprocess cold-start well under 200 ms (NFR-001).

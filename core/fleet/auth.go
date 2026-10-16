@@ -253,6 +253,7 @@ func exchangeCode(ctx context.Context, profile EnvProfile, code, redirectURI, ve
 		return TokenSet{}, fmt.Errorf("fleet: token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setUserAgent(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -304,6 +305,7 @@ func RefreshTokenSet(ctx context.Context, profile EnvProfile, refreshToken strin
 		return TokenSet{}, fmt.Errorf("fleet: refresh request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setUserAgent(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
