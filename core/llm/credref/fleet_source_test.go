@@ -2,6 +2,7 @@ package credref
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -21,7 +22,11 @@ func TestResolve_FleetSourcesUseTheirNamespace(t *testing.T) {
 	t.Setenv("KENAZ_HARNESS_ENV", "dev")
 	env := paths.KeychainNamespace()
 	mem := secrets.NewMemoryBackend()
-	store, err := secrets.NewFleetCredentialStore(env, mem)
+	alice, err := secrets.NewFleetPrincipal("https://auth.kameas.ai", "alice", "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := secrets.NewFleetCredentialStore(env, alice, mem)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +43,7 @@ func TestResolve_FleetSourcesUseTheirNamespace(t *testing.T) {
 	})
 	mem.SetEntry(secrets.RefKeychain, "kenaz-harness/p-local", []byte(localVal))
 
-	r := New(mem)
+	r := New(mem).WithFleetPrincipal(func() (secrets.FleetPrincipal, error) { return alice, nil })
 	cases := []struct {
 		name string
 		ref  llm.CredentialReference
@@ -77,4 +82,34 @@ func TestResolve_MalformedFleetReferenceFailsClosed(t *testing.T) {
 			t.Errorf("%s: resolved, want an error", name)
 		}
 	}
+}
+
+// TestResolve_FleetKeyIsScopedToTheSignedInUser: another Fleet account on
+// the same OS account, or nobody signed in, cannot resolve alice's key.
+func TestResolve_FleetKeyIsScopedToTheSignedInUser(t *testing.T) {
+	t.Setenv("KENAZ_HARNESS_ENV", "dev")
+	env := paths.KeychainNamespace()
+	alice, _ := secrets.NewFleetPrincipal("https://auth.kameas.ai", "alice", "org-1")
+	bob, _ := secrets.NewFleetPrincipal("https://auth.kameas.ai", "bob", "org-1")
+	store, _ := secrets.NewFleetCredentialStore(env, alice, nil)
+	if err := store.Put(secrets.FleetNamespaceOrg, "cred-scope", []byte(testKey("alice"))); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = secrets.PurgeFleetCredentialsForSignOut(env, alice, nil) })
+	ref := llm.CredentialReference{Kind: "keychain", Source: llm.CredSourceOrg, CredentialID: "cred-scope"}
+
+	asBob := New(secrets.NewMemoryBackend()).WithFleetPrincipal(func() (secrets.FleetPrincipal, error) { return bob, nil })
+	if _, err := asBob.Resolve(context.Background(), "p", ref); err == nil {
+		t.Fatal("bob resolved alice's org key")
+	}
+	signedOut := New(secrets.NewMemoryBackend())
+	if _, err := signedOut.Resolve(context.Background(), "p", ref); !errors.Is(err, secrets.ErrNoFleetPrincipal) {
+		t.Fatalf("no principal: err = %v, want ErrNoFleetPrincipal", err)
+	}
+	asAlice := New(secrets.NewMemoryBackend()).WithFleetPrincipal(func() (secrets.FleetPrincipal, error) { return alice, nil })
+	c, err := asAlice.Resolve(context.Background(), "p", ref)
+	if err != nil {
+		t.Fatalf("alice: %v", err)
+	}
+	c.Destroy()
 }

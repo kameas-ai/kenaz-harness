@@ -115,7 +115,7 @@ var pkgSinks = map[string]map[string]bool{
 
 var loggerRecv = regexp.MustCompile(`(?i)(^|\.)(l|log|logger|lg|slog)$|log|logging\.L\(\)`)
 
-const scopeMarker = `\b(FleetCredentialStore|FleetCredentialLocator|FleetNamespaceOrg|FleetNamespaceUser)\b`
+const scopeMarker = `\b(FleetCredentialStore|FleetCredentialLocator|FleetNamespaceOrg|FleetNamespaceUser|FleetPrincipal|NewFleetPrincipal|PurgeFleetCredentialsForSignOut|ReconcileFleetCredentialPrincipal)\b`
 
 func main() {
 	root := repoRoot()

@@ -21,7 +21,8 @@
 #   - core/llm/credref/*.go                       (resolution by Source)
 #   - core/fleet/credential*.go, core/fleet/credentials/**  (WP05/WP06)
 #   - or ANY file that names FleetCredentialStore, FleetCredentialLocator,
-#     FleetNamespaceOrg or FleetNamespaceUser — so a new caller is in scope
+#     FleetNamespaceOrg, FleetNamespaceUser, FleetPrincipal or the
+#     principal purge/reconcile functions — so a new caller is in scope
 #     the moment it touches the namespace, with no edit to this script.
 # The scan refuses to pass on an empty or implausibly small scope.
 #

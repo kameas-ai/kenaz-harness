@@ -40,7 +40,8 @@ var ErrNoBridge = errors.New("credref: secrets bridge not configured")
 // Resolver is the bridge between llm.CredentialReference and
 // secrets.Backend.
 type Resolver struct {
-	backend secrets.Backend
+	backend   secrets.Backend
+	principal FleetPrincipalFunc
 }
 
 // New returns a Resolver backed by b. b may be nil; in that case Resolve
@@ -131,21 +132,15 @@ func Zeroize(c *Cred) {
 // shape. The Kind string lookup is best-effort; unknown kinds map to
 // ref.RefUnknown and downstream resolution returns an error.
 //
-// A Fleet-sourced reference (Source org|team|user_sync) resolves from the
-// Fleet keychain namespace its Source selects, keyed by CredentialID:
-// org and team keys from kenaz-harness/fleet/<env>/org/<id>, synced user
-// keys from kenaz-harness/fleet/<env>/user/<id>, with <env> from
-// paths.KeychainNamespace(). Its Locator field is ignored. A malformed
-// Fleet reference maps to ref.RefUnknown so resolution fails closed. A
-// local reference (empty or "local" Source) is translated exactly as
-// before.
+// A Fleet-sourced reference (Source org|team|user_sync) maps to
+// ref.RefUnknown here: its keychain locator depends on WHO is signed in
+// (secrets.FleetCredentialLocator scopes it per realm and user), which this
+// context-free conversion cannot know. Resolver.Resolve derives it with the
+// resolver's principal source. A local reference (empty or "local" Source)
+// is translated exactly as before.
 func ToSecretsRef(r llm.CredentialReference) secrets.CredentialReference {
 	if r.Source.IsFleet() {
-		loc, err := fleetLocator(r)
-		if err != nil || r.Kind != "keychain" {
-			return secrets.CredentialReference{Kind: ref.RefUnknown}
-		}
-		return secrets.CredentialReference{Kind: ref.RefKeychain, Locator: loc}
+		return secrets.CredentialReference{Kind: ref.RefUnknown}
 	}
 	return secrets.CredentialReference{
 		Kind:    refKindFromString(r.Kind),
@@ -153,13 +148,45 @@ func ToSecretsRef(r llm.CredentialReference) secrets.CredentialReference {
 	}
 }
 
-// fleetLocator derives the keychain locator for a Fleet-sourced reference.
-func fleetLocator(r llm.CredentialReference) (string, error) {
+// FleetPrincipalFunc reports the Fleet identity currently signed in, for
+// scoping Fleet-sourced credentials. It returns secrets.ErrNoFleetPrincipal
+// (or any error) when nobody is signed in.
+type FleetPrincipalFunc func() (secrets.FleetPrincipal, error)
+
+// WithFleetPrincipal sets the principal source Fleet-sourced references
+// resolve under and returns r. Without one, every Fleet reference fails
+// closed with secrets.ErrNoFleetPrincipal.
+func (r *Resolver) WithFleetPrincipal(fn FleetPrincipalFunc) *Resolver {
+	if r != nil {
+		r.principal = fn
+	}
+	return r
+}
+
+// fleetRef derives the keychain reference for a Fleet-sourced reference:
+// org and team keys from the principal's org namespace, synced user keys
+// from its user namespace, keyed by CredentialID, under
+// paths.KeychainNamespace(). Its Locator field is ignored.
+func (r *Resolver) fleetRef(lr llm.CredentialReference) (secrets.CredentialReference, error) {
+	if lr.Kind != "keychain" {
+		return secrets.CredentialReference{}, fmt.Errorf("a %s credential must be kind keychain", lr.Source)
+	}
+	if r.principal == nil {
+		return secrets.CredentialReference{}, secrets.ErrNoFleetPrincipal
+	}
+	p, err := r.principal()
+	if err != nil {
+		return secrets.CredentialReference{}, err
+	}
 	ns := secrets.FleetNamespaceOrg
-	if r.Source == llm.CredSourceUserSync {
+	if lr.Source == llm.CredSourceUserSync {
 		ns = secrets.FleetNamespaceUser
 	}
-	return secrets.FleetCredentialLocator(ns, paths.KeychainNamespace(), r.CredentialID)
+	loc, err := secrets.FleetCredentialLocator(ns, paths.KeychainNamespace(), p, lr.CredentialID)
+	if err != nil {
+		return secrets.CredentialReference{}, err
+	}
+	return secrets.CredentialReference{Kind: ref.RefKeychain, Locator: loc}, nil
 }
 
 // refKindFromString maps the llm-side string Kind to the secrets RefKind
@@ -207,24 +234,25 @@ func (r *Resolver) Resolve(ctx context.Context, profileID string, lref llm.Crede
 			Cause:     fmt.Errorf("unknown credential source %q", lref.Source),
 		}
 	}
+	var sref secrets.CredentialReference
 	if lref.Source.IsFleet() {
-		if _, err := fleetLocator(lref); err != nil || lref.Kind != "keychain" {
-			if err == nil {
-				err = fmt.Errorf("a %s credential must be kind keychain", lref.Source)
-			}
+		fr, err := r.fleetRef(lref)
+		if err != nil {
 			return nil, &llm.ErrCredentialResolution{
 				ProfileID: profileID,
 				Ref:       lref,
 				Cause:     err,
 			}
 		}
-	}
-	sref := ToSecretsRef(lref)
-	if sref.Kind == ref.RefUnknown {
-		return nil, &llm.ErrCredentialResolution{
-			ProfileID: profileID,
-			Ref:       lref,
-			Cause:     fmt.Errorf("unknown credential kind %q", lref.Kind),
+		sref = fr
+	} else {
+		sref = ToSecretsRef(lref)
+		if sref.Kind == ref.RefUnknown {
+			return nil, &llm.ErrCredentialResolution{
+				ProfileID: profileID,
+				Ref:       lref,
+				Cause:     fmt.Errorf("unknown credential kind %q", lref.Kind),
+			}
 		}
 	}
 	sref.ConsumerID = profileID

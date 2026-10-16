@@ -2185,6 +2185,10 @@ func New(c *core.Core, opts ...Option) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+	// Fleet-delivered provider keys follow the signed-in account: a sign-in
+	// as someone else (or into another org) purges what the previous
+	// account left (provider-credentials-client-01PCCLI01 WP04).
+	settingsImpl.OnFleetSessionReset(settings.ReconcileFleetCredentialsOnSessionReset)
 	// Hand the process-singleton Cedar engine to the fleet config applier
 	// (fleet-enforcement-truth-01PMZ505 WP03, spec §1.1/§5.2). Without
 	// this, compositeConfigApplier.ApplyBundle's cedarEngine read
@@ -6354,7 +6358,7 @@ func newLLMStack(
 	// one is the LLM registry's own structured-output outcome audit and
 	// has nothing to do with hooks.
 	reg, err := llmregistry.New(llmregistry.Options{
-		Resolver: credref.New(secretsBackend),
+		Resolver: credref.New(secretsBackend).WithFleetPrincipal(corefleet.CredentialPrincipal),
 		Policy:   cedarGuard,
 		Cost:     costReducer,
 		Cache:    llmcap.DefaultCache(db),
@@ -6371,7 +6375,7 @@ func newLLMStack(
 	// Registry interface used by the view impl.
 	var _ corellm.Registry = (*llmregistry.Registry)(nil)
 
-	credResolver := credref.New(secretsBackend)
+	credResolver := credref.New(secretsBackend).WithFleetPrincipal(corefleet.CredentialPrincipal)
 	historyAdapter := newSessionHistoryReader(c)
 	// WP02 — wire the global static resolver against
 	// <DataDir>/mcp_servers.json. A missing file soft-fails to

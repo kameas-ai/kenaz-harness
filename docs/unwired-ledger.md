@@ -352,15 +352,16 @@ binds one, and every reader below reports exactly what exists.
 
 - `secrets.FleetCredentialStore` (`Put`, `Delete`, `Purge`, `IDs`) and
   `NewFleetCredentialStore` — the only writer of
-  `kenaz-harness/fleet/<env>/{org,user}/<credential_id>`; called only by
-  `core/secrets/fleet_credentials_test.go` and
-  `core/llm/credref/fleet_source_test.go`. The read half is live:
-  `credref.ToSecretsRef` resolves `Source` + `CredentialID` through
-  `secrets.FleetCredentialLocator` on every model call. **Owner:** WP05
-  (org/team fetch + unwrap → `Put(FleetNamespaceOrg, …)`; purge on
-  tombstone, lockdown, `node_removed`, sign-out and org change →
-  `Purge(FleetNamespaceOrg)`) and WP06 (synced user keys →
-  `Put`/`Purge(FleetNamespaceUser)`).
+  `kenaz-harness/fleet/<env>/<realm>/<sub>/{org,user}/<credential_id>`;
+  `Put` is called only by tests. Live today: resolution
+  (`credref.Resolver.WithFleetPrincipal(fleet.CredentialPrincipal)` on
+  every model call), the sign-out and `node_removed` purge
+  (`secrets.PurgeFleetCredentialsForSignOut` from `FleetSignOut` /
+  `handleNodeRemoved`) and the account/org-change purge
+  (`settings.ReconcileFleetCredentialsOnSessionReset` on
+  `OnFleetSessionReset`). **Owner:** WP05 (org/team fetch + unwrap →
+  `Put(FleetNamespaceOrg, …)`; tombstone and lockdown purges) and WP06
+  (synced user keys → `Put`/`Purge(FleetNamespaceUser)`).
 - `llm.BuildKeyList`'s `policy` (`*llm.CredentialPolicy`) and `scopeNames`
   arguments — the one production caller (`views/llm.CredentialKeys`, behind
   `LLM_ListCredentialKeys`) passes nil for both, so `CredentialKey.OrgDefault`
