@@ -555,7 +555,14 @@ func validMLNoticeAckAction(a string) bool {
 // surface is always "desktop"; action is one of MLNoticeAckAction* and is
 // refused client-side (nothing sent) otherwise. include_ai_usage also
 // requires a non-nil aiUsageEpoch, or Fleet would answer 422.
-func (c *Client) AckMLNotice(ctx context.Context, action string, noticeVersion, textRevision int, aiUsageEpoch *int) (MeML, error) {
+//
+// exclusionsTemplate (kenaz-fleet #289): the version of Fleet's exclusions
+// paragraph template the caller rendered the exclusions text from, sent as
+// "exclusions_template" only when > 0. Fleet logs it beside its own; a
+// mismatch is logged, never refused, and a missing value means 1. Only the
+// fallback ack (the harness's own copy of the text) passes one; hub acks
+// post Fleet's served body.
+func (c *Client) AckMLNotice(ctx context.Context, action string, noticeVersion, textRevision int, aiUsageEpoch *int, exclusionsTemplate int) (MeML, error) {
 	if c == nil || c.isNop {
 		return MeML{}, ErrFleetDisabled
 	}
@@ -574,6 +581,9 @@ func (c *Client) AckMLNotice(ctx context.Context, action string, noticeVersion, 
 	if aiUsageEpoch != nil && *aiUsageEpoch < 0 {
 		return MeML{}, fmt.Errorf("fleet: ack ml notice: ai_usage_epoch %d < 0", *aiUsageEpoch)
 	}
+	if exclusionsTemplate < 0 {
+		return MeML{}, fmt.Errorf("fleet: ack ml notice: exclusions_template %d < 0", exclusionsTemplate)
+	}
 	body := map[string]any{
 		"notice_version": noticeVersion,
 		"surface":        MLNoticeAckSurfaceDesktop,
@@ -584,6 +594,9 @@ func (c *Client) AckMLNotice(ctx context.Context, action string, noticeVersion, 
 	}
 	if aiUsageEpoch != nil {
 		body["ai_usage_epoch"] = *aiUsageEpoch
+	}
+	if exclusionsTemplate > 0 {
+		body["exclusions_template"] = exclusionsTemplate
 	}
 	resp, err := c.PostJSON(ctx, "/api/v1/me/ml/notice-ack", body)
 	if err != nil {

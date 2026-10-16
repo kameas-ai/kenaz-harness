@@ -222,6 +222,24 @@ func TestFleetApproveItem_MLNoticeForwardsHubBodyByteForByte(t *testing.T) {
 	}
 }
 
+// kenaz-fleet #289: exclusions_template is the fallback ack's alone. A hub
+// ml_notice ack posts Fleet's served body (+ surface only) and never gains
+// it.
+func TestFleetApproveItem_MLNoticeHubAckHasNoExclusionsTemplate(t *testing.T) {
+	r := newMLRig(t, true)
+	r.fleet.set(func(f *mlFakeFleet) {
+		f.hubStatus, f.hubBody = 200, hubBody(hubNotice())
+		f.ackBody = mlBody(true, "on", false, false, true, 4, "2026-10-09T13:00:00Z", 90, false)
+	})
+	if _, err := r.api.FleetApproveItem(context.Background(), "ml_notice:o1:4"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	_, _, acks := r.fleet.hubSnapshot()
+	if len(acks) != 1 || strings.Contains(acks[0], "exclusions_template") {
+		t.Errorf("hub notice-ack bodies = %q, want one without exclusions_template", acks)
+	}
+}
+
 func TestFleetApproveItem_LegalSendsVerbatimBody(t *testing.T) {
 	r := newMLRig(t, true)
 	r.fleet.set(func(f *mlFakeFleet) { f.hubStatus, f.hubBody = 200, hubBody(hubLegal()) })

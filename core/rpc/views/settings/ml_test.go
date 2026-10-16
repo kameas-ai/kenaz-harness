@@ -412,8 +412,8 @@ func TestFleetMLAckNotice_PostsShownVersion(t *testing.T) {
 		t.Errorf("acks = %v, want [4]", acks)
 	}
 	// An older Fleet (no notice_text_revision) gets the original body.
-	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"action":"read","notice_version":4,"surface":"desktop"}` {
-		t.Errorf("ack bodies = %v, want [{action:read, notice_version:4, surface:desktop}] (no text_revision)", bodies)
+	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"action":"read","exclusions_template":2,"notice_version":4,"surface":"desktop"}` {
+		t.Errorf("ack bodies = %v, want [{action:read, exclusions_template:2, notice_version:4, surface:desktop}] (no text_revision)", bodies)
 	}
 }
 
@@ -450,6 +450,11 @@ func TestFleetMLAckNotice_SurfaceAndActionByPolicy(t *testing.T) {
 			}
 			if got["action"] != tc.wantAction || got["surface"] != "desktop" {
 				t.Errorf("ack body = %s, want action %q and surface desktop", bodies[0], tc.wantAction)
+			}
+			// kenaz-fleet #289: the fallback ack names the exclusions
+			// template the harness mirrors.
+			if got["exclusions_template"] != float64(localExclusionsTemplate) || localExclusionsTemplate != 2 {
+				t.Errorf("ack body = %s, want exclusions_template 2", bodies[0])
 			}
 		})
 	}
@@ -549,8 +554,8 @@ func TestFleetMLAckNotice_Rev1ServerSendsTextRevision(t *testing.T) {
 	if !v.Effective || v.NoticeNeedsDashboard || v.NoticeTextRevision != 1 || v.AckedTextRevision != 1 {
 		t.Errorf("view = %+v", v)
 	}
-	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"action":"read","notice_version":4,"surface":"desktop","text_revision":1}` {
-		t.Errorf("ack bodies = %v, want [{action:read, notice_version:4, surface:desktop, text_revision:1}]", bodies)
+	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"action":"read","exclusions_template":2,"notice_version":4,"surface":"desktop","text_revision":1}` {
+		t.Errorf("ack bodies = %v, want [{action:read, exclusions_template:2, notice_version:4, surface:desktop, text_revision:1}]", bodies)
 	}
 }
 
@@ -575,9 +580,9 @@ func TestFleetMLAckNotice_AIUsageEpoch(t *testing.T) {
 		epoch    int
 		wantBody string
 	}{
-		{"include_ai_usage false: no epoch", false, 7, `{"action":"read","notice_version":4,"surface":"desktop"}`},
-		{"include_ai_usage true: epoch echoed", true, 7, `{"action":"read","ai_usage_epoch":7,"notice_version":4,"surface":"desktop"}`},
-		{"include_ai_usage true, epoch 0: still echoed", true, 0, `{"action":"read","ai_usage_epoch":0,"notice_version":4,"surface":"desktop"}`},
+		{"include_ai_usage false: no epoch", false, 7, `{"action":"read","exclusions_template":2,"notice_version":4,"surface":"desktop"}`},
+		{"include_ai_usage true: epoch echoed", true, 7, `{"action":"read","ai_usage_epoch":7,"exclusions_template":2,"notice_version":4,"surface":"desktop"}`},
+		{"include_ai_usage true, epoch 0: still echoed", true, 0, `{"action":"read","ai_usage_epoch":0,"exclusions_template":2,"notice_version":4,"surface":"desktop"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -613,7 +618,7 @@ func TestFleetMLAckNotice_StaleAIUsageEpoch409ReShows(t *testing.T) {
 	if !v.NoticeChanged || !v.NoticeAckRequired || v.Notice == nil || v.NoticeText == "" {
 		t.Errorf("view = %+v, want noticeChanged with the notice re-shown", v)
 	}
-	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"action":"read","ai_usage_epoch":3,"notice_version":4,"surface":"desktop"}` {
+	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"action":"read","ai_usage_epoch":3,"exclusions_template":2,"notice_version":4,"surface":"desktop"}` {
 		t.Errorf("ack bodies = %v", bodies)
 	}
 }

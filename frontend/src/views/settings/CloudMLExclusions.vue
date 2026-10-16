@@ -2,7 +2,8 @@
 /**
  * CloudMLExclusions — the org's exclusions, read-only, for CloudMLPanel
  * (WP05). Paths and command prefixes are enforced on this device; legacy
- * notes are the org's old free text and are shown only (never matched).
+ * notes are the org's old free text and are shown only (never matched), as
+ * one sentence that says so plainly.
  *
  * Legal (kameas-ai-11, 2026-10-16): while the ML notice is shown, this
  * renders INSIDE the notice card, after the notice text and before any
@@ -10,11 +11,27 @@
  * "Turn on Offload" / "I have read this". Otherwise the panel renders it
  * on its own.
  */
-defineProps<{
+import { computed } from 'vue';
+
+const props = defineProps<{
   paths: string[];
   commands: string[];
   legacyNotes: string[];
 }>();
+
+/**
+ * Legal (kameas-ai-11, 2026-10-16): the legacy free-text notes are one
+ * candid sentence, mirrored from Fleet's exclusions template 2 (kenaz-fleet
+ * PR #289, c9b08ca2, service/ml_notice_text.go mlExclusionsLegacyLeadV2):
+ * this lead, the notes joined with "; ", and a final ".". Shown only when
+ * legacy notes exist. Pinned against Fleet's shared fixture
+ * (__tests__/fixtures/ml_notice_text.json). If this sentence changes, bump
+ * localExclusionsTemplate in core/rpc/views/settings/ml.go in lockstep.
+ */
+const LEGACY_NOTES_LEAD =
+  "Your organization also listed these exclusions in its own words. Fleet can't apply them " +
+  'automatically, so matching activity may still be uploaded: ';
+const legacySentence = computed(() => LEGACY_NOTES_LEAD + props.legacyNotes.join('; ') + '.');
 </script>
 
 <template>
@@ -33,10 +50,5 @@ defineProps<{
       tool ran, its outcome and timing.
     </p>
   </div>
-  <div v-if="legacyNotes.length" class="space-y-1 text-[12px] text-ink-muted" data-testid="cloud-ml-legacy-notes">
-    <p>Earlier notes from your organization (for information; not applied as patterns):</p>
-    <ul class="list-disc pl-5">
-      <li v-for="(n, i) in legacyNotes" :key="i" data-testid="cloud-ml-legacy-note">{{ n }}</li>
-    </ul>
-  </div>
+  <p v-if="legacyNotes.length" class="text-[12px]" data-testid="cloud-ml-legacy-notes">{{ legacySentence }}</p>
 </template>

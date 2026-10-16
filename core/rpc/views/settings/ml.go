@@ -128,6 +128,15 @@ type MLNoticeView struct {
 // to the Fleet dashboard instead of acknowledging it.
 const localNoticeTextRevision = 1
 
+// localExclusionsTemplate is the version of Fleet's exclusions paragraph
+// template whose legacy-notes sentence this harness mirrors
+// (CloudMLExclusions.vue LEGACY_NOTES_LEAD): template 2, kenaz-fleet PR #289
+// (c9b08ca2, legal kameas-ai-11, 2026-10-16). The fallback ack sends it as
+// "exclusions_template"; Fleet logs a mismatch, never refuses. Bump it
+// whenever the mirrored exclusions sentence changes — NOT
+// localNoticeTextRevision, which the exclusions paragraph never moves.
+const localExclusionsTemplate = 2
+
 // mlDashboardConsentPath is the Fleet dashboard's hosted-inference consent
 // card, relative to the active profile's FleetBaseURL (stable per Fleet).
 const mlDashboardConsentPath = "/settings#hosted-inference"
@@ -519,7 +528,9 @@ func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int, button st
 	// whenever the notice includes the AI-usage section (include_ai_usage);
 	// a stale one is a 409, handled below. The epoch never turns the action
 	// into include_ai_usage — that is the AI-usage add-on control's alone.
-	m, err := c.AckMLNotice(ctx, action, noticeVersion, textRevision, cur.AckAIUsageEpoch())
+	// exclusions_template: the panel rendered the exclusions from this
+	// harness's own copy of Fleet's template (localExclusionsTemplate).
+	m, err := c.AckMLNotice(ctx, action, noticeVersion, textRevision, cur.AckAIUsageEpoch(), localExclusionsTemplate)
 	if errors.Is(err, fleet.ErrMLPolicyChanged) {
 		fresh, ferr := a.FleetMLStatus(ctx)
 		fresh.NoticeChanged = true

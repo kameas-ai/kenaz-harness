@@ -3,7 +3,11 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import CloudMLPanel from '@/views/settings/CloudMLPanel.vue';
+import CloudMLExclusions from '@/views/settings/CloudMLExclusions.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { MLStatus, PendingApprovals } from '@/lib/types';
@@ -100,10 +104,43 @@ describe('CloudMLPanel', () => {
     expect(block.findAll('button').length).toBe(0);
     const notes = q(wrapper, 'cloud-ml-legacy-notes');
     expect(notes.exists()).toBe(true);
-    expect(notes.text()).toContain('not applied as patterns');
-    expect(wrapper.findAll('[data-testid="cloud-ml-legacy-note"]').map((w) => w.text())).toEqual([
-      'Nothing from the HR share',
-    ]);
+    expect(notes.text()).toBe(
+      "Your organization also listed these exclusions in its own words. Fleet can't apply them " +
+        'automatically, so matching activity may still be uploaded: Nothing from the HR share.',
+    );
+  });
+
+  // Legal (kameas-ai-11, 2026-10-16) via kenaz-fleet PR #289 (c9b08ca2):
+  // the legacy-notes sentence must match Fleet's shared fixture exactly.
+  describe("legacy notes sentence matches Fleet's shared fixture", () => {
+    type FixtureCase = { legacy_exclusion_notes?: string[] | null; text: string };
+    const fixture = JSON.parse(
+      readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/ml_notice_text.json'), 'utf-8'),
+    ) as { cases: FixtureCase[] };
+    const LEAD = 'Your organization also listed these exclusions in its own words.';
+    const withNotes = fixture.cases.filter((c) => (c.legacy_exclusion_notes ?? []).length > 0);
+
+    it('the fixture has cases with legacy notes', () => {
+      expect(withNotes.length).toBeGreaterThanOrEqual(2);
+    });
+
+    withNotes.forEach((c, i) => {
+      it(`case ${i}: ${JSON.stringify(c.legacy_exclusion_notes)}`, () => {
+        const para = c.text.split('\n\n').at(-1) ?? '';
+        const at = para.indexOf(LEAD);
+        expect(at).toBeGreaterThanOrEqual(0);
+        const want = para.slice(at);
+        const w = mount(CloudMLExclusions, {
+          props: { paths: [], commands: [], legacyNotes: c.legacy_exclusion_notes ?? [] },
+        });
+        expect(w.find('[data-testid="cloud-ml-legacy-notes"]').text()).toBe(want);
+      });
+    });
+
+    it('no legacy notes: no sentence', () => {
+      const w = mount(CloudMLExclusions, { props: { paths: ['a/**'], commands: [], legacyNotes: [] } });
+      expect(w.find('[data-testid="cloud-ml-legacy-notes"]').exists()).toBe(false);
+    });
   });
 
   describe('exclusions sit inside the notice, before any action button (legal, 2026-10-16)', () => {
