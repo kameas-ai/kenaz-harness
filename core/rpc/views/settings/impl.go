@@ -1643,12 +1643,15 @@ func (a *API) SetModelCallTelemetry(_ context.Context, mc ModelCallTelemetrySett
 	}
 	s.ModelCallStatsPullDisabled = !mc.StatsPullEnabled
 	s.ModelCallRetentionDays = mc.RetentionDays
-	s.ShareModelCallTelemetryWithFleet = mc.ShareWithFleet
-	if mc.ShareWithFleet {
-		// Consent evidence: which wording was agreed to, and when.
+	// Consent evidence: which wording was agreed to, and when. Stamped only
+	// on a real opt-in, i.e. off (or an outdated revision) → on. A later
+	// panel save while sharing stays on (e.g. a retention change) keeps the
+	// original agreement time.
+	if mc.ShareWithFleet && !s.modelCallSharingEffective() {
 		s.ShareModelCallTelemetryTextRevision = ModelCallOptInTextRevision
 		s.ShareModelCallTelemetryAcceptedAt = time.Now().UTC().Format(time.RFC3339)
 	}
+	s.ShareModelCallTelemetryWithFleet = mc.ShareWithFleet
 	if err := a.store.SaveAll(s); err != nil {
 		return err
 	}
@@ -1659,7 +1662,10 @@ func (a *API) SetModelCallTelemetry(_ context.Context, mc ModelCallTelemetrySett
 // modelCallSharingEffective is the opt-in as the pipeline applies it: on
 // only when the user agreed to the CURRENT opt-in text revision.
 func (s Settings) modelCallSharingEffective() bool {
-	return s.ShareModelCallTelemetryWithFleet && s.ShareModelCallTelemetryTextRevision >= ModelCallOptInTextRevision
+	// Equality, not >=: after a downgrade to a build with an older text, an
+	// opt-in given under a newer text must not count as agreement to the
+	// text this build shows.
+	return s.ShareModelCallTelemetryWithFleet && s.ShareModelCallTelemetryTextRevision == ModelCallOptInTextRevision
 }
 
 func (s Settings) modelCallTelemetry() ModelCallTelemetrySettings {

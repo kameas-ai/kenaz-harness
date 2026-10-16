@@ -145,3 +145,56 @@ func TestSettings_ModelCallSharingRequiresCurrentTextRevision(t *testing.T) {
 		t.Fatal("the panel shows sharing on for an outdated opt-in")
 	}
 }
+
+// #422 follow-up: AcceptedAt records the opt-in moment, not the latest
+// panel save; a retention-only change while sharing stays on keeps it.
+func TestSettings_ModelCallAcceptedAtStampedOnlyOnOptIn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAPI(store)
+	mc, _ := a.GetModelCallTelemetry(ctx)
+	mc.ShareWithFleet = true
+	if err := a.SetModelCallTelemetry(ctx, mc); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := a.Get(ctx)
+	if first.ShareModelCallTelemetryAcceptedAt == "" {
+		t.Fatal("opt-in did not record AcceptedAt")
+	}
+	// Force a different stamp if one were written.
+	s := first
+	s.ShareModelCallTelemetryAcceptedAt = "2000-01-01T00:00:00Z"
+	if err := store.SaveAll(s); err != nil {
+		t.Fatal(err)
+	}
+	mc.RetentionDays = 45
+	if err := a.SetModelCallTelemetry(ctx, mc); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := a.Get(ctx); got.ShareModelCallTelemetryAcceptedAt != "2000-01-01T00:00:00Z" {
+		t.Fatalf("a retention-only save re-stamped AcceptedAt: %q", got.ShareModelCallTelemetryAcceptedAt)
+	}
+}
+
+// #422 follow-up: an opt-in recorded under a NEWER text revision (then the
+// user downgraded) is not agreement to this build's text.
+func TestSettings_ModelCallSharingRequiresExactRevision(t *testing.T) {
+	t.Parallel()
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveAll(Settings{ShareModelCallTelemetryWithFleet: true, ShareModelCallTelemetryTextRevision: ModelCallOptInTextRevision + 1}); err != nil {
+		t.Fatal(err)
+	}
+	a := NewAPI(store)
+	p := fleet.NewFleetOTLPPipeline(nil)
+	a.SetFleetOTLPPipeline(p, nil, nil, nil)
+	if p.ModelCallSharing() {
+		t.Fatal("an opt-in under a newer text revision took effect on an older build")
+	}
+}

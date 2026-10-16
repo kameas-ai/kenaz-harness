@@ -4139,23 +4139,18 @@ func TestKnobCoverageGate_UnregisteredSettingsFieldFires(t *testing.T) {
 	root := repoRoot(t)
 	apiPath := filepath.Join(root, "core", "rpc", "views", "settings", "api.go")
 
-	// Anchored on AdviceEscalateModelDisabled (laya-advisors-01LAYA001
-	// WP04-06) — the struct's last field as of this test's most recent
-	// update (re-anchored from AdvisorModel, WP02's last field, when
-	// WP04-06 appended the three per-kind advisor disable switches).
-	// Content-anchored, not order-anchored (findings #67/#92): this must
-	// be re-anchored to the real last field whenever a later WP appends
-	// one, the same maintenance TestServedModeTopicForwardingGate_Planted*
-	// documents for passthroughTopics' own terminator-anchored proof.
-	// Re-anchored 2026-10-09 to ShareModelCallTelemetryWithFleet
-	// (llm-call-telemetry-01LLMTEL01 WP02 appended the model-call fields).
-	const target = "\tShareModelCallTelemetryWithFleet bool `json:\"shareModelCallTelemetryWithFleet,omitempty\"`\n}"
-	const mutated = "\tShareModelCallTelemetryWithFleet bool `json:\"shareModelCallTelemetryWithFleet,omitempty\"`\n\n" +
-		"\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
+	// Anchored on the stable end-of-struct marker in settings.Settings
+	// ("gates:settings-struct-end", views/settings/api.go). It replaces the
+	// old last-field anchor, which broke every time a WP appended a field
+	// (findings #67/#92; #419/#422, 2026-10-16). New fields go above the
+	// marker, so this target never moves.
+	const marker = "\t// gates:settings-struct-end"
+	const target = marker
+	const mutated = "\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
 		"\t// to prove check-knob-coverage.sh's real settings.Settings guard\n" +
 		"\t// (TestKnobCoverage_Settings) fails when a field has no\n" +
 		"\t// knobcoverage.Register/RegisterDeferred entry. Never a real field.\n" +
-		"\tZZGateProbeUnregisteredField string `json:\"zzGateProbeUnregisteredField,omitempty\"`\n}"
+		"\tZZGateProbeUnregisteredField string `json:\"zzGateProbeUnregisteredField,omitempty\"`\n\n" + marker
 
 	cleanup := plantReplace(t, apiPath, target, mutated)
 	defer cleanup()

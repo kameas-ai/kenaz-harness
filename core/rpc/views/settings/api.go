@@ -943,6 +943,11 @@ type Settings struct {
 	// opt-in.
 	ShareModelCallTelemetryTextRevision int    `json:"shareModelCallTelemetryTextRevision,omitempty"`
 	ShareModelCallTelemetryAcceptedAt   string `json:"shareModelCallTelemetryAcceptedAt,omitempty"`
+
+	// gates:settings-struct-end — keep this marker the LAST line of the
+	// struct and add new fields ABOVE it. scripts/ci/gates_can_fail_test.go
+	// plants a probe field here, so it no longer re-anchors on whichever
+	// field happens to be last.
 }
 
 // ModelCallOptInTextRevision is the revision of the inline text under
