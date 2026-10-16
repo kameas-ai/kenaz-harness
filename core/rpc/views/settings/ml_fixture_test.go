@@ -117,3 +117,24 @@ func TestFleetMLStatus_ExclusionsSummary(t *testing.T) {
 		t.Errorf("summary = %q / %q / text %q, want %q", v.ExclusionsSummary, v.Notice.ExclusionsText, v.NoticeText, want)
 	}
 }
+
+// The exclusions template this harness mirrors is the one Fleet's fixture
+// declares (kenaz-fleet 84338a0e, top-level exclusions_template).
+func TestLocalExclusionsTemplate_MatchesFleetFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/ml_notice_text.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		ExclusionsTemplate *int `json:"exclusions_template"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.ExclusionsTemplate == nil {
+		t.Fatal("fixture has no top-level exclusions_template")
+	}
+	if *f.ExclusionsTemplate != localExclusionsTemplate {
+		t.Errorf("localExclusionsTemplate = %d, fixture exclusions_template = %d", localExclusionsTemplate, *f.ExclusionsTemplate)
+	}
+}
