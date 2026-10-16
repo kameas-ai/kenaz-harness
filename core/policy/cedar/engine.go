@@ -188,8 +188,9 @@ type PolicyFile struct {
 // Options configures a new Engine.
 type Options struct {
 	// DeviceKind is stamped on every request's context as
-	// `context.device_kind` unless the caller set it ("desktop" when
-	// empty; the phone facade passes "mobile"). Admins can then write
+	// `context.device_kind`, overriding any caller value ("desktop" when
+	// empty; the phone facade passes "mobile"; anything else is
+	// ErrInvalidDeviceKind). Admins can then write
 	// device-specific rules (provider-credentials-client-01PCCLI01 H6.3).
 	// It is always present, so a policy reading it can't error, and an
 	// erroring forbid fails closed.
@@ -262,6 +263,11 @@ type Engine struct {
 // applies) and returns the engine without error. A genuine I/O or
 // parse error is surfaced.
 func NewEngine(opts Options) (*Engine, error) {
+	switch opts.DeviceKind {
+	case "", DeviceKindDesktop, DeviceKindMobile:
+	default:
+		return nil, fmt.Errorf("%w (got %q)", ErrInvalidDeviceKind, opts.DeviceKind)
+	}
 	e := &Engine{opts: opts}
 	if opts.Decisions != nil {
 		e.decisions = opts.Decisions
@@ -663,13 +669,19 @@ const CtxKeyDeviceKind = "device_kind"
 // DeviceKindDesktop is the default Options.DeviceKind.
 const DeviceKindDesktop = "desktop"
 
-// withDeviceKind returns attrs with device_kind set, unless the caller
-// already set it. The caller's map is never mutated.
+// DeviceKindMobile is the phone facade's Options.DeviceKind.
+const DeviceKindMobile = "mobile"
+
+// ErrInvalidDeviceKind: Options.DeviceKind must be "", "desktop" or
+// "mobile" exactly, so a typo ("Mobile") fails at construction instead of
+// silently matching no policy.
+var ErrInvalidDeviceKind = errors.New(`cedar: Options.DeviceKind must be "desktop" or "mobile"`)
+
+// withDeviceKind returns attrs with device_kind set to the ENGINE's value.
+// The device is a fact about the process, so a caller-supplied
+// device_kind never overrides it. The caller's map is never mutated.
 func withDeviceKind(attrs map[cedar.String]cedar.Value, kind string) map[cedar.String]cedar.Value {
 	k := cedar.String(CtxKeyDeviceKind)
-	if _, set := attrs[k]; set {
-		return attrs
-	}
 	if kind == "" {
 		kind = DeviceKindDesktop
 	}

@@ -2,6 +2,7 @@ package cedar
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	cedarlib "github.com/cedar-policy/cedar-go"
@@ -33,8 +34,9 @@ forbid(principal, action, resource) when { context.device_kind == "mobile" };`)}
 	}
 }
 
-// A caller-set device_kind wins, and the caller's map is not mutated.
-func TestEvaluate_CallerDeviceKindWinsAndMapUnmutated(t *testing.T) {
+// The engine's device_kind wins over a caller-supplied one (the device is
+// a fact about the process), and the caller's map is not mutated.
+func TestEvaluate_EngineDeviceKindWinsAndMapUnmutated(t *testing.T) {
 	in := map[cedarlib.String]cedarlib.Value{"session_kind": cedarlib.String("chat")}
 	out := withDeviceKind(in, "")
 	if _, ok := in[cedarlib.String(CtxKeyDeviceKind)]; ok {
@@ -43,8 +45,20 @@ func TestEvaluate_CallerDeviceKindWinsAndMapUnmutated(t *testing.T) {
 	if out[cedarlib.String(CtxKeyDeviceKind)] != cedarlib.String(DeviceKindDesktop) {
 		t.Fatalf("device_kind = %v, want desktop", out[cedarlib.String(CtxKeyDeviceKind)])
 	}
-	set := map[cedarlib.String]cedarlib.Value{cedarlib.String(CtxKeyDeviceKind): cedarlib.String("mobile")}
-	if got := withDeviceKind(set, DeviceKindDesktop); got[cedarlib.String(CtxKeyDeviceKind)] != cedarlib.String("mobile") {
-		t.Fatal("a caller-set device_kind was overwritten")
+	spoof := map[cedarlib.String]cedarlib.Value{cedarlib.String(CtxKeyDeviceKind): cedarlib.String("mobile")}
+	if got := withDeviceKind(spoof, DeviceKindDesktop); got[cedarlib.String(CtxKeyDeviceKind)] != cedarlib.String(DeviceKindDesktop) {
+		t.Fatal("a caller-supplied device_kind overrode the engine's")
+	}
+	if spoof[cedarlib.String(CtxKeyDeviceKind)] != cedarlib.String("mobile") {
+		t.Fatal("withDeviceKind mutated the caller's map")
+	}
+}
+
+// A device kind other than desktop/mobile fails at construction.
+func TestNewEngine_RejectsUnknownDeviceKind(t *testing.T) {
+	for _, bad := range []string{"Mobile", "phone", "DESKTOP", " desktop"} {
+		if _, err := NewEngine(Options{DeviceKind: bad}); !errors.Is(err, ErrInvalidDeviceKind) {
+			t.Errorf("DeviceKind %q: err = %v, want ErrInvalidDeviceKind", bad, err)
+		}
 	}
 }
