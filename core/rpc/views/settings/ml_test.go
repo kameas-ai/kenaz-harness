@@ -412,8 +412,59 @@ func TestFleetMLAckNotice_PostsShownVersion(t *testing.T) {
 		t.Errorf("acks = %v, want [4]", acks)
 	}
 	// An older Fleet (no notice_text_revision) gets the original body.
-	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"notice_version":4}` {
-		t.Errorf("ack bodies = %v, want [{\"notice_version\":4}] (no text_revision)", bodies)
+	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"action":"read","notice_version":4,"surface":"desktop"}` {
+		t.Errorf("ack bodies = %v, want [{action:read, notice_version:4, surface:desktop}] (no text_revision)", bodies)
+	}
+}
+
+// Legal (kameas-ai-11, 2026-10-16): every fallback ack names surface
+// "desktop" and an explicit action, mapped from the org_policy the notice
+// was shown for — member_choice ("Turn on Offload") → turn_on, on
+// (required) → read. Fleet stores exactly what is sent and never defaults.
+func TestFleetMLAckNotice_SurfaceAndActionByPolicy(t *testing.T) {
+	cases := []struct {
+		policy, wantAction string
+	}{
+		{"member_choice", "turn_on"},
+		{"on", "read"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.policy, func(t *testing.T) {
+			r := newMLRig(t, true)
+			r.fleet.set(func(f *mlFakeFleet) {
+				f.state = mlBody(true, tc.policy, true, true, false, 4, "", 90, false)
+				f.ackBody = mlBody(true, tc.policy, true, false, true, 4, "2026-10-09T13:00:00Z", 90, false)
+			})
+			if _, err := r.api.FleetMLAckNotice(context.Background(), 4); err != nil {
+				t.Fatalf("FleetMLAckNotice: %v", err)
+			}
+			bodies := r.fleet.ackBodies()
+			if len(bodies) != 1 {
+				t.Fatalf("ack bodies = %v, want one", bodies)
+			}
+			var got map[string]any
+			if err := json.Unmarshal([]byte(bodies[0]), &got); err != nil {
+				t.Fatalf("ack body %q: %v", bodies[0], err)
+			}
+			if got["action"] != tc.wantAction || got["surface"] != "desktop" {
+				t.Errorf("ack body = %s, want action %q and surface desktop", bodies[0], tc.wantAction)
+			}
+		})
+	}
+}
+
+// A policy with no notice button (e.g. off) has no legal action: nothing
+// is posted.
+func TestFleetMLAckNotice_NoActionForPolicyPostsNothing(t *testing.T) {
+	r := newMLRig(t, true)
+	r.fleet.set(func(f *mlFakeFleet) {
+		f.state = mlBody(true, "off", false, true, false, 4, "", 90, false)
+	})
+	if _, err := r.api.FleetMLAckNotice(context.Background(), 4); err == nil {
+		t.Fatal("ack under org_policy off succeeded, want an error")
+	}
+	if bodies := r.fleet.ackBodies(); len(bodies) != 0 {
+		t.Errorf("ack bodies = %v, want none", bodies)
 	}
 }
 
@@ -432,8 +483,8 @@ func TestFleetMLAckNotice_Rev1ServerSendsTextRevision(t *testing.T) {
 	if !v.Effective || v.NoticeNeedsDashboard || v.NoticeTextRevision != 1 || v.AckedTextRevision != 1 {
 		t.Errorf("view = %+v", v)
 	}
-	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"notice_version":4,"text_revision":1}` {
-		t.Errorf("ack bodies = %v, want [{\"notice_version\":4,\"text_revision\":1}]", bodies)
+	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"action":"read","notice_version":4,"surface":"desktop","text_revision":1}` {
+		t.Errorf("ack bodies = %v, want [{action:read, notice_version:4, surface:desktop, text_revision:1}]", bodies)
 	}
 }
 
@@ -458,9 +509,9 @@ func TestFleetMLAckNotice_AIUsageEpoch(t *testing.T) {
 		epoch    int
 		wantBody string
 	}{
-		{"include_ai_usage false: no epoch", false, 7, `{"notice_version":4}`},
-		{"include_ai_usage true: epoch echoed", true, 7, `{"ai_usage_epoch":7,"notice_version":4}`},
-		{"include_ai_usage true, epoch 0: still echoed", true, 0, `{"ai_usage_epoch":0,"notice_version":4}`},
+		{"include_ai_usage false: no epoch", false, 7, `{"action":"read","notice_version":4,"surface":"desktop"}`},
+		{"include_ai_usage true: epoch echoed", true, 7, `{"action":"read","ai_usage_epoch":7,"notice_version":4,"surface":"desktop"}`},
+		{"include_ai_usage true, epoch 0: still echoed", true, 0, `{"action":"read","ai_usage_epoch":0,"notice_version":4,"surface":"desktop"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -496,7 +547,7 @@ func TestFleetMLAckNotice_StaleAIUsageEpoch409ReShows(t *testing.T) {
 	if !v.NoticeChanged || !v.NoticeAckRequired || v.Notice == nil || v.NoticeText == "" {
 		t.Errorf("view = %+v, want noticeChanged with the notice re-shown", v)
 	}
-	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"ai_usage_epoch":3,"notice_version":4}` {
+	if bodies := r.fleet.ackBodies(); len(bodies) != 1 || bodies[0] != `{"action":"read","ai_usage_epoch":3,"notice_version":4,"surface":"desktop"}` {
 		t.Errorf("ack bodies = %v", bodies)
 	}
 }

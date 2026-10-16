@@ -6531,6 +6531,22 @@ declares the names, plus the one-line rename of
 `fleet.ModelCallTelemetryClass` if Fleet picks another name, deletes this
 entry.
 
+### 2026-10-16 (legal kameas-ai-11, ML notice ack surface/action) — `include_ai_usage` ack action has no control
+
+`fleet.(*Client).AckMLNotice` accepts the third legal notice-ack action,
+`fleet.MLNoticeAckActionIncludeAIUsage` (`"include_ai_usage"`), and refuses
+it client-side unless the served `ai_usage_epoch` is passed (Fleet answers
+422 without it); pinned by `TestAckMLNotice_BodyCarriesSurfaceActionAndEpoch`
+and `TestAckMLNotice_RefusesInvalidActionWithoutRequest`. Nothing sends
+it: `CloudMLPanel.vue` has no AI-usage add-on control ("Include AI usage" /
+"Cancel"), and `FleetMLAckNotice` only maps org_policy to `turn_on` /
+`read` (the epoch is echoed there as served, which never implies
+`include_ai_usage`). Not a lie — no surface claims the capability — but the
+action is built and unreached. Per the brief, no new UI was built in this
+change. **Blocker:** a product/legal-approved design for the AI-usage
+add-on control in Settings › Cloud ML. **Owner:** the change that adds that
+control (it wires the action through a binding and deletes this entry).
+
 ## Drained
 
 ### 2026-10-09 · CLOSED — owner-accepted extensions of FR-K4's `tool_exposure` shape (tool-context-budget-01TCBUD01 WP07)

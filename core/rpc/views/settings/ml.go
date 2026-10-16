@@ -25,6 +25,7 @@ package settings
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -492,9 +493,15 @@ func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatus
 	if cur.NoticeTextRevision > 0 {
 		textRevision = localNoticeTextRevision
 	}
-	// ai_usage_epoch from the same fresh read (sent only while
-	// include_ai_usage); a stale one is a 409, handled below.
-	m, err := c.AckMLNotice(ctx, noticeVersion, textRevision, cur.AckAIUsageEpoch())
+	action, err := mlNoticeAckAction(cur.OrgPolicy)
+	if err != nil {
+		return base, err
+	}
+	// ai_usage_epoch from the same fresh read, echoed exactly as served
+	// whenever the notice includes the AI-usage section (include_ai_usage);
+	// a stale one is a 409, handled below. The epoch never turns the action
+	// into include_ai_usage — that is the AI-usage add-on control's alone.
+	m, err := c.AckMLNotice(ctx, action, noticeVersion, textRevision, cur.AckAIUsageEpoch())
 	if errors.Is(err, fleet.ErrMLPolicyChanged) {
 		fresh, ferr := a.FleetMLStatus(ctx)
 		fresh.NoticeChanged = true
@@ -505,6 +512,20 @@ func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatus
 	}
 	mlFill(&v, m, c.Profile().FleetBaseURL)
 	return v, nil
+}
+
+// mlNoticeAckAction maps the org_policy the notice was shown for to the
+// explicit notice-ack action (legal, kameas-ai-11, 2026-10-16): member_choice
+// ("Turn on Offload") → turn_on; on (required, "I have read this") → read.
+// Any other policy has no notice button, so nothing is acknowledged.
+func mlNoticeAckAction(policy string) (string, error) {
+	switch policy {
+	case fleet.MLPolicyMemberChoice:
+		return fleet.MLNoticeAckActionTurnOn, nil
+	case fleet.MLPolicyOn:
+		return fleet.MLNoticeAckActionRead, nil
+	}
+	return "", fmt.Errorf("settings: ml notice: no acknowledgement action for org_policy %q", policy)
 }
 
 // FleetSetWorkflowEventsOptIn implements SettingsAPI: writes the member's
