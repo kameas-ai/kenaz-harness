@@ -316,14 +316,32 @@ describe('PendingApprovalsModal', () => {
     expect(approveItem).toHaveBeenCalledWith('ml_notice:o1:4');
   });
 
-  it('ml_exclusions_change: informational, Dismiss approves it', async () => {
-    const { client, approveItem } = makeClient([view([EXCL])]);
+  // Legal (kameas-ai-11, 2026-10-16): only "I have read this" records the
+  // exclusions change (exclusions-seen); the full body shows untruncated.
+  it('ml_exclusions_change: "I have read this" is the only action that records it', async () => {
+    const longBody = 'Excluded now:\n' + Array.from({ length: 80 }, (_, i) => `- path/${i}/**`).join('\n') + '\n\nChanged: added path/79/**';
+    const { client, approveItem } = makeClient([view([{ ...EXCL, bodyText: longBody }])]);
     const w = await mountModal(client);
     expect(q(w, 'pending-approval-blocking').exists()).toBe(false);
-    expect(q(w, 'pending-approval-approve').text()).toBe('Dismiss');
+    expect(q(w, 'pending-approval-body').text()).toBe(longBody);
+    expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
+    expect(w.text()).not.toMatch(/\b(agree|consent|accept)\b/i);
     await q(w, 'pending-approval-approve').trigger('click');
     await flushPromises();
+    expect(approveItem).toHaveBeenCalledTimes(1);
     expect(approveItem).toHaveBeenCalledWith('ml_exclusions_change:o1:5');
+  });
+
+  it('ml_exclusions_change: Close and Esc record nothing and leave it pending', async () => {
+    const { client, approveItem } = makeClient([view([EXCL])]);
+    const w = await mountModal(client);
+    await q(w, 'pending-approvals-close').trigger('click');
+    await flushPromises();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await flushPromises();
+    expect(approveItem).not.toHaveBeenCalled();
+    expect(w.emitted('close')?.length ?? 0).toBeGreaterThanOrEqual(1);
   });
 
   it('"Offload available" offer: Not now sends the hub\'s own (member-private) dismissal', async () => {

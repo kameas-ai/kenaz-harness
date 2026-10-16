@@ -14,7 +14,8 @@
  *     ticked. The document opens in the system browser; it is not fetched.
  *   - ml_notice: the server-rendered notice, including any "Changed since
  *     you last approved" section; "I agree" sends the hub's approve action.
- *   - ml_exclusions_change: informational ("Dismiss"); the backend lists it
+ *   - ml_exclusions_change: informational ("I have read this", the only
+ *     recorded action; closing records nothing); the backend lists it
  *     only while nothing required is pending.
  *   - unknown kinds: rendered generically ("I agree" / "Got it").
  *
@@ -109,7 +110,10 @@ function approveLabel(it: PendingApprovalItem): string {
   // path: the backend binds kind and path both ways
   // (fleet.ApproveActionAllowedFor). Otherwise there is no approve button.
   if (it.kind === 'ml_opt_in_available' && it.approveAllowed) return 'Not now';
-  if (it.kind === 'ml_exclusions_change') return 'Dismiss';
+  // Legal (kameas-ai-11, 2026-10-16): the exclusions-change card records
+  // only "I have read this" (exclusions-seen). No consent wording; close,
+  // Esc and outside-click record nothing and the item stays pending.
+  if (it.kind === 'ml_exclusions_change' && it.approveAllowed) return 'I have read this';
   if (needsCheckbox(it)) return 'Accept';
   return it.required ? 'I agree' : 'Got it';
 }
