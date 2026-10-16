@@ -22,6 +22,54 @@ const maxDesc = 120
 // is not.
 var tokenish = regexp.MustCompile(`[A-Za-z0-9._~+/=-]{20,}`)
 
+// pctEscape matches a URL percent-escape (%2B, %2F, …).
+var pctEscape = regexp.MustCompile(`%[0-9A-Fa-f]{2}`)
+
+// looksSecret is deliberately over-eager: a human-readable OAuth error
+// description survives, and anything that could be (part of) a credential
+// does not. It is true when the text has any of:
+//   - a 20+ char run of the base64/JWT alphabet;
+//   - a URL percent-escape (an encoded token);
+//   - more than 8 characters from [0-9+/=_] in total, which catches a token
+//     split into short chunks by spaces or colons;
+//   - a single word (split on space, colon, comma, semicolon) of 16+ chars;
+//   - four or more equal-length words (5+ chars) making up most of the
+//     text: the shape of a token chopped into fixed-size chunks.
+func looksSecret(d string) bool {
+	if tokenish.MatchString(d) || pctEscape.MatchString(d) {
+		return true
+	}
+	n := 0
+	for _, r := range d {
+		if (r >= '0' && r <= '9') || r == '+' || r == '/' || r == '=' || r == '_' {
+			n++
+		}
+	}
+	if n > 8 {
+		return true
+	}
+	words := strings.FieldsFunc(d, func(r rune) bool { return r == ' ' || r == ':' || r == ',' || r == ';' })
+	lengths := map[int]int{}
+	for _, w := range words {
+		if len(w) >= 16 {
+			return true
+		}
+		if len(w) >= 5 {
+			lengths[len(w)]++
+		}
+	}
+	// A token chopped into fixed-size chunks ("eyJaaaa aaaaaaa aaaaaaa …")
+	// gives many equal-length words, unlike prose. Four or more words that
+	// share one length of 5+ characters and make up most of the text means
+	// withhold.
+	for _, n := range lengths {
+		if n >= 4 && n*2 >= len(words) {
+			return true
+		}
+	}
+	return false
+}
+
 // Fields extracts RFC 6749 §5.2 `error` and `error_description` from body.
 // code must be a short [a-z_] token, otherwise both are "". desc keeps
 // printable ASCII only, is dropped if anything in it looks like a
@@ -49,7 +97,7 @@ func Fields(body []byte) (code, desc string) {
 		}
 	}
 	d := strings.TrimSpace(b.String())
-	if tokenish.MatchString(d) {
+	if looksSecret(d) {
 		d = "(details withheld)"
 	}
 	if len(d) > maxDesc {

@@ -37,3 +37,34 @@ func TestSummary(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// #431 delta review: the 20-char run rule alone could be beaten by splitting
+// or encoding a token. Each bypass is withheld, and plain prose survives.
+func TestFields_DescriptionBypassesWithheld(t *testing.T) {
+	jwt := strayJWT()
+	chunk := func(s, sep string, n int) string {
+		var parts []string
+		for len(s) > n {
+			parts = append(parts, s[:n])
+			s = s[n:]
+		}
+		return strings.Join(append(parts, s), sep)
+	}
+	for name, d := range map[string]string{
+		"space-split JWT":   chunk(jwt, " ", 7),
+		"colon-split JWT":   chunk(jwt, ":", 7),
+		"url-encoded token": "tok%2Bab%2Fcd%3D",
+		"letters-only key":  "your key ABCDEFGHIJKLMNOPQRST is bad",
+		"digit-heavy":       "code 1234 5678 9012",
+	} {
+		_, got := Fields([]byte(`{"error":"invalid_grant","error_description":"` + d + `"}`))
+		if got != "(details withheld)" {
+			t.Errorf("%s: description %q survived as %q", name, d, got)
+		}
+	}
+	for _, prose := range []string{"The refresh token is expired", "Client authentication failed (unknown client)", "Invalid redirect URI"} {
+		if _, got := Fields([]byte(`{"error":"invalid_grant","error_description":"` + prose + `"}`)); got != prose {
+			t.Errorf("plain prose %q was withheld (%q)", prose, got)
+		}
+	}
+}

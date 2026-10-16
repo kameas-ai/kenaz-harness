@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/oautherr"
 )
 
 // ClientMetadata is the registration request body sent to the
@@ -72,12 +74,6 @@ func (r *RegisteredClient) SecretExpired(now time.Time) bool {
 		return false
 	}
 	return now.Unix() >= r.ClientSecretExpiresAt
-}
-
-// registrationErrorResponse is the RFC 7591 §3.2.2 error body.
-type registrationErrorResponse struct {
-	Error            string `json:"error"`
-	ErrorDescription string `json:"error_description"`
 }
 
 // RegisterClientOptions controls optional parameters for RegisterClient.
@@ -165,11 +161,11 @@ func RegisterClient(ctx context.Context, client *http.Client, asm *AuthServerMet
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Attempt to parse RFC 7591 error body for a useful message.
-		var errResp registrationErrorResponse
-		if jsonErr := json.Unmarshal(respBody, &errResp); jsonErr == nil && errResp.Error != "" {
-			return nil, fmt.Errorf("oauth: dcr: registration failed (HTTP %d): %s: %s",
-				resp.StatusCode, errResp.Error, errResp.ErrorDescription)
+		// The RFC 7591 error fields only, sanitised (oautherr): never the raw
+		// body or an unsanitised error_description.
+		if code, _ := oautherr.Fields(respBody); code != "" {
+			return nil, fmt.Errorf("oauth: dcr: registration failed (HTTP %d): %s",
+				resp.StatusCode, strings.TrimPrefix(oautherr.Summary(resp.StatusCode, respBody), fmt.Sprintf("status %d: ", resp.StatusCode)))
 		}
 		return nil, fmt.Errorf("oauth: dcr: registration endpoint returned HTTP %d", resp.StatusCode)
 	}

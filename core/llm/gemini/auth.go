@@ -11,13 +11,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"github.com/kameas-ai/kenaz-harness/core/oautherr"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/oautherr"
 )
 
 // Authenticator is the common interface for Gemini authentication modes.
@@ -246,6 +247,12 @@ func (a *adcAuth) getToken(ctx context.Context) (string, error) {
 // fetchMetadataToken requests an access token from the GCE metadata server.
 func fetchMetadataToken(ctx context.Context, httpc *http.Client) (string, time.Time, error) {
 	const metadataURL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+	return fetchMetadataTokenFrom(ctx, httpc, metadataURL)
+}
+
+// fetchMetadataTokenFrom is fetchMetadataToken against an explicit URL (the
+// test seam).
+func fetchMetadataTokenFrom(ctx context.Context, httpc *http.Client, metadataURL string) (string, time.Time, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataURL, nil)
 	if err != nil {
 		return "", time.Time{}, err
@@ -258,7 +265,8 @@ func fetchMetadataToken(ctx context.Context, httpc *http.Client) (string, time.T
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode != http.StatusOK {
-		return "", time.Time{}, fmt.Errorf("metadata server %d: %s", resp.StatusCode, raw)
+		// Never the raw body: the metadata token endpoint is credential-bearing.
+		return "", time.Time{}, fmt.Errorf("gemini: metadata server: %s", oautherr.Summary(resp.StatusCode, raw))
 	}
 	var tok struct {
 		AccessToken string `json:"access_token"`

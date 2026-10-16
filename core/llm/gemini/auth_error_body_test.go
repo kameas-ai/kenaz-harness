@@ -41,3 +41,17 @@ func TestMintToken_ErrorNeverCarriesTheBody(t *testing.T) {
 		t.Errorf("lost the OAuth error code: %v", err)
 	}
 }
+
+// The GCE metadata token endpoint's error body never reaches the error.
+func TestFetchMetadataToken_ErrorNeverCarriesTheBody(t *testing.T) {
+	stray := "ya29." + strings.Repeat("M", 40)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprintf(w, `{"error":"access_denied","access_token":"%s"}`, stray)
+	}))
+	defer srv.Close()
+	_, _, err := fetchMetadataTokenFrom(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL)
+	if err == nil || strings.Contains(err.Error(), stray) {
+		t.Fatalf("err = %v (must exist and not carry the body)", err)
+	}
+}
