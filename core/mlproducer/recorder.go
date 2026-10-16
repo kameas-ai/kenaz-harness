@@ -89,7 +89,11 @@ type Config struct {
 	// OpenLocal, when set, (re)opens the local store while Local is nil —
 	// a first open that failed at boot (a busy file, a full disk) is
 	// retried lazily on later records, at most once per ReopenEvery, so
-	// the process does not stay without local recording forever.
+	// the process does not stay without local recording forever. The
+	// retry runs on its own goroutine (one at a time): activity.Open can
+	// take seconds on a locked file, and the worker never waits for it —
+	// records seen meanwhile are handled as while the store is
+	// unavailable (ship view only).
 	OpenLocal func() (*activity.Store, error)
 	// ReopenEvery throttles OpenLocal. 0 = DefaultReopenEvery.
 	ReopenEvery time.Duration
@@ -169,10 +173,12 @@ type Recorder struct {
 	branch branchCache
 
 	// localStore is the open local activity store (Config.Local, or what
-	// OpenLocal returned); nil until one opens. lastOpenTry (unix ms,
-	// guarded by mu) throttles OpenLocal.
+	// OpenLocal returned); nil until one opens, then never changes.
+	// lastOpenTry (unix ms, guarded by mu) throttles OpenLocal; reopening
+	// is set while a background OpenLocal is in flight.
 	localStore  atomic.Pointer[activity.Store]
 	lastOpenTry int64
+	reopening   atomic.Bool
 }
 
 // view is one destination's task state (see Recorder). Guarded by
@@ -359,8 +365,12 @@ func (r *Recorder) LocalStore() *activity.Store {
 	return r.loc()
 }
 
-// ensureLocal tries OpenLocal when no store is open, at most once per
-// ReopenEvery. Caller holds r.mu (worker).
+// ensureLocal returns the open local store, or nil. With none open it
+// starts a background OpenLocal — at most once per ReopenEvery and never
+// while one is in flight — and returns nil without waiting: the record
+// at hand goes on as while the store is unavailable, and a later one
+// finds the store once the attempt has succeeded. Caller holds r.mu
+// (worker).
 func (r *Recorder) ensureLocal() *activity.Store {
 	if s := r.loc(); s != nil || r.cfg.OpenLocal == nil {
 		return s
@@ -369,15 +379,44 @@ func (r *Recorder) ensureLocal() *activity.Store {
 	if r.lastOpenTry != 0 && now-r.lastOpenTry < r.cfg.ReopenEvery.Milliseconds() {
 		return nil
 	}
-	r.lastOpenTry = now
-	s, err := r.cfg.OpenLocal()
-	if err != nil {
-		logging.L().Warn("mlproducer.activity.reopen_failed", "err", err.Error())
+	if !r.reopening.CompareAndSwap(false, true) {
 		return nil
 	}
-	r.localStore.Store(s)
-	logging.L().Info("mlproducer.activity.reopened")
-	return s
+	r.lastOpenTry = now
+	go r.reopenLocal()
+	return nil
+}
+
+// reopenLocal is the background OpenLocal attempt ensureLocal starts.
+func (r *Recorder) reopenLocal() {
+	defer r.reopening.Store(false)
+	r.safe(func() {
+		s, err := r.cfg.OpenLocal()
+		if err != nil {
+			logging.L().Warn("mlproducer.activity.reopen_failed", "err", err.Error())
+			return
+		}
+		if r.publishLocal(s) {
+			logging.L().Info("mlproducer.activity.reopened")
+		}
+	})
+}
+
+// publishLocal installs s as the local store unless the recorder has
+// closed (its owner has already closed, or is about to close, the store
+// it holds) or another open got there first; otherwise it closes s, so
+// no handle outlives the recorder. Under closeMu: Close cannot complete
+// between the check and the install.
+func (r *Recorder) publishLocal(s *activity.Store) bool {
+	r.closeMu.RLock()
+	defer r.closeMu.RUnlock()
+	if !r.closed && r.localStore.CompareAndSwap(nil, s) {
+		return true
+	}
+	if err := s.Close(); err != nil {
+		logging.L().Warn("mlproducer.activity.close_failed", "err", err.Error())
+	}
+	return false
 }
 
 // views returns the views a record goes to now: local whenever it
@@ -684,12 +723,25 @@ func (r *Recorder) DeleteLocal(ctx context.Context) error {
 	if r.closed {
 		return ErrRecorderClosed
 	}
+	var errs []error
+	// The user asked for the file's contents to go: with no store open
+	// yet, open it now (not the worker's throttled background retry).
+	s := r.loc()
+	if s == nil && r.cfg.OpenLocal != nil {
+		if opened, err := r.cfg.OpenLocal(); err != nil {
+			errs = append(errs, fmt.Errorf("mlproducer: open local activity store: %w", err))
+		} else if r.localStore.CompareAndSwap(nil, opened) {
+			s = opened
+		} else {
+			_ = opened.Close() // a background reopen won
+			s = r.loc()
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ship = newView(true)
 	r.local = newView(false)
-	var errs []error
-	if s := r.ensureLocal(); s != nil {
+	if s != nil {
 		errs = append(errs, s.DeleteAll(ctx))
 	}
 	if r.cfg.Store != nil {
