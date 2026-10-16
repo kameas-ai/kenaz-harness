@@ -173,6 +173,7 @@ func TestApproveActionAllowed_ExactMatch(t *testing.T) {
 		{"POST", "/api/v1/me/legal-acceptances"},
 		{"POST", "/api/v1/me/ml/notice-ack"},
 		{"POST", "/api/v1/me/ml/exclusions-seen"},
+		{"POST", "/api/v1/me/ml/opt-in-prompt-dismissed"},
 	}
 	for _, a := range allowed {
 		if !ApproveActionAllowed(a[0], a[1]) {
@@ -188,8 +189,6 @@ func TestApproveActionAllowed_ExactMatch(t *testing.T) {
 		{"POST", "/api/v1/me/ml/../ml/notice-ack"},
 		{"POST", "https://evil.example/api/v1/me/ml/notice-ack"},
 		{"POST", "/api/v1/me/ml/opt-in-prompt-dismissed/"},
-		// Legal (kameas-ai-11, 2026-10-16): a "Not now" is never recorded.
-		{"POST", "/api/v1/me/ml/opt-in-prompt-dismissed"},
 		{"POST", "/api/v1/me/telemetry-opt-ins"},
 		{"POST", ""},
 	}
@@ -333,5 +332,23 @@ func TestPendingApprovals_NopClient(t *testing.T) {
 	}
 	if err := nop.ApprovePendingItem(t.Context(), PendingApproval{}); !errors.Is(err, ErrFleetDisabled) {
 		t.Errorf("approve: %v", err)
+	}
+}
+
+// Legal (kameas-ai-11, 2026-10-16): the opt-in prompt's dismissal route is
+// bound to the ml_opt_in_available kind. An ml_notice (the Offload ML
+// notice) or any other kind carrying that path is refused, and nothing is
+// sent.
+func TestApproveActionAllowedFor_OptInDismissalBoundToItsKind(t *testing.T) {
+	if !ApproveActionAllowedFor(ApprovalKindMLOptInAvailable, "POST", ApprovePathMLOptInPromptDismissed) {
+		t.Fatal("the opt-in offer's dismissal must be allowed")
+	}
+	for _, kind := range []string{ApprovalKindMLNotice, ApprovalKindMLExclusionsChange, ApprovalKindLegalAcceptance, "future_kind", ""} {
+		if ApproveActionAllowedFor(kind, "POST", ApprovePathMLOptInPromptDismissed) {
+			t.Errorf("kind %q may call the opt-in dismissal route", kind)
+		}
+	}
+	if !ApproveActionAllowedFor(ApprovalKindMLNotice, "POST", ApprovePathMLNoticeAck) {
+		t.Fatal("the notice ack must stay allowed for ml_notice")
 	}
 }

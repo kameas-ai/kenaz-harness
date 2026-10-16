@@ -95,7 +95,7 @@ func approvalsView(p fleet.PendingApprovals) PendingApprovalsView {
 			ID: it.ID, Kind: it.Kind, Title: it.Title, Summary: it.Summary,
 			BodyText: it.BodyText, DocumentURL: it.DocumentURL, DocumentSHA256: it.DocumentSHA256,
 			Version: it.Version, Blocking: it.Blocking, Required: it.Required,
-			ApproveAllowed: fleet.ApproveActionAllowed(it.Approve.Method, it.Approve.Path),
+			ApproveAllowed: fleet.ApproveActionAllowedFor(it.Kind, it.Approve.Method, it.Approve.Path),
 		}
 		iv.LocalDismiss = !iv.Required && !iv.ApproveAllowed
 		if !it.DeferrableUntil.IsZero() {

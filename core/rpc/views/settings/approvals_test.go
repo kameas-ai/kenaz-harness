@@ -358,46 +358,91 @@ func hubOptInOffer(version string) map[string]any {
 		"summary": "Your organization lets you choose.", "version": version,
 		"blocking": "Nothing is paused", "required": false,
 		"approve": map[string]any{"method": "POST", "path": "/api/v1/me/ml/opt-in-prompt-dismissed",
-			"body": map[string]any{"version": version}},
+			"body": map[string]any{"notice_version": 3}},
 	}
 }
 
-// Legal (kameas-ai-11, 2026-10-16): "Not now" on an ML offer is never
-// recorded. The opt-in-offer dismissal is not approvable (nothing is sent);
-// "Not now" hides it on this device until its version changes; required
-// items can't be dismissed at all.
-func TestFleetDismissItemLocally_NeverSentAndVersionScoped(t *testing.T) {
+// hubFutureInfo is an informational item of a kind this build doesn't know,
+// whose action the harness does not send: "Not now" is local only.
+func hubFutureInfo(version string) map[string]any {
+	return map[string]any{
+		"id": "future_info:1", "kind": "future_info", "title": "Something new",
+		"summary": "Informational.", "version": version,
+		"blocking": "Nothing is paused", "required": false,
+		"approve": map[string]any{"method": "POST", "path": "/api/v1/me/future/seen", "body": map[string]any{}},
+	}
+}
+
+// Legal (kameas-ai-11, final ruling 2026-10-16): the "Offload available"
+// prompt's "Not now" is member-private and is sent as the hub's own action
+// (POST /me/ml/opt-in-prompt-dismissed {notice_version}). That route is
+// bound to the ml_opt_in_available kind, so an ml_notice carrying it is not
+// approvable (the notice's "Not now" is never recorded).
+func TestFleetApproveItem_OptInPromptNotNowIsSentNoticeCannotUseIt(t *testing.T) {
 	r := newMLRig(t, true)
-	r.fleet.set(func(f *mlFakeFleet) { f.hubStatus, f.hubBody = 200, hubBody(hubOptInOffer("1")) })
+	notice := hubNotice()
+	notice["id"], notice["version"] = "ml_notice:o1:9", "9"
+	notice["approve"] = map[string]any{"method": "POST", "path": "/api/v1/me/ml/opt-in-prompt-dismissed",
+		"body": map[string]any{"notice_version": 9}}
+	r.fleet.set(func(f *mlFakeFleet) { f.hubStatus, f.hubBody = 200, hubBody(hubOptInOffer("1"), notice) })
 	ctx := context.Background()
 
 	v, err := r.api.FleetPendingApprovals(ctx)
-	if err != nil || len(v.Items) != 1 {
+	if err != nil || len(v.Items) != 2 {
 		t.Fatalf("view = %+v, %v", v, err)
 	}
-	if it := v.Items[0]; it.ApproveAllowed || !it.LocalDismiss {
-		t.Fatalf("opt-in offer: approveAllowed=%v localDismiss=%v, want false/true", it.ApproveAllowed, it.LocalDismiss)
+	for _, it := range v.Items {
+		switch it.Kind {
+		case "ml_opt_in_available":
+			if !it.ApproveAllowed || it.LocalDismiss {
+				t.Fatalf("opt-in offer: approveAllowed=%v localDismiss=%v, want true/false", it.ApproveAllowed, it.LocalDismiss)
+			}
+		case "ml_notice":
+			if it.ApproveAllowed {
+				t.Fatal("an ml_notice carrying the opt-in dismissal route must not be approvable")
+			}
+		}
 	}
-	// Approving it sends nothing (the path is not in the allowlist).
-	if _, err := r.api.FleetApproveItem(ctx, "ml_opt_in_available:o1"); !errors.Is(err, fleet.ErrApproveActionNotAllowed) {
-		t.Fatalf("approve opt-in offer err = %v, want ErrApproveActionNotAllowed", err)
+	if _, err := r.api.FleetApproveItem(ctx, "ml_notice:o1:9"); !errors.Is(err, fleet.ErrApproveActionNotAllowed) {
+		t.Fatalf("notice via dismissal route err = %v, want ErrApproveActionNotAllowed", err)
 	}
-	v, err = r.api.FleetDismissItemLocally(ctx, "ml_opt_in_available:o1")
+	if _, posts, _ := r.fleet.hubSnapshot(); len(posts) != 0 {
+		t.Fatalf("the notice reached the dismissal route: %v", posts)
+	}
+	if _, err := r.api.FleetApproveItem(ctx, "ml_opt_in_available:o1"); err != nil {
+		t.Fatalf("opt-in Not now: %v", err)
+	}
+	if _, posts, _ := r.fleet.hubSnapshot(); len(posts) != 1 || !strings.Contains(posts[0], "opt-in-prompt-dismissed") {
+		t.Fatalf("opt-in Not now posts = %v, want one POST to opt-in-prompt-dismissed", posts)
+	}
+}
+
+// An informational item whose action the harness does not send can be
+// hidden on this device ("Not now"). Nothing reaches Fleet; a revised
+// version shows again; required items can't be dismissed.
+func TestFleetDismissItemLocally_NeverSentAndVersionScoped(t *testing.T) {
+	r := newMLRig(t, true)
+	r.fleet.set(func(f *mlFakeFleet) { f.hubStatus, f.hubBody = 200, hubBody(hubFutureInfo("1")) })
+	ctx := context.Background()
+
+	v, err := r.api.FleetPendingApprovals(ctx)
+	if err != nil || len(v.Items) != 1 || v.Items[0].ApproveAllowed || !v.Items[0].LocalDismiss {
+		t.Fatalf("view = %+v, %v; want a locally dismissible item", v, err)
+	}
+	v, err = r.api.FleetDismissItemLocally(ctx, "future_info:1")
 	if err != nil || len(v.Items) != 0 {
 		t.Fatalf("after Not now = %+v, %v; want the item hidden", v, err)
 	}
 	if _, posts, _ := r.fleet.hubSnapshot(); len(posts) != 0 {
-		t.Fatalf("a Not now reached Fleet: %v", posts)
+		t.Fatalf("a local Not now reached Fleet: %v", posts)
 	}
 	if v, _ := r.api.FleetPendingApprovals(ctx); len(v.Items) != 0 {
 		t.Fatalf("dismissed item came back at the same version: %+v", v)
 	}
-	// A revised offer shows again.
-	r.fleet.set(func(f *mlFakeFleet) { f.hubBody = hubBody(hubOptInOffer("2")) })
+	r.fleet.set(func(f *mlFakeFleet) { f.hubBody = hubBody(hubFutureInfo("2")) })
 	if v, _ := r.api.FleetPendingApprovals(ctx); len(v.Items) != 1 {
-		t.Fatalf("revised offer hidden: %+v", v)
+		t.Fatalf("revised item hidden: %+v", v)
 	}
-	// Required items cannot be dismissed.
 	r.fleet.set(func(f *mlFakeFleet) { f.hubBody = hubBody(hubLegal()) })
 	if _, err := r.api.FleetDismissItemLocally(ctx, "legal:terms:v1.1"); !errors.Is(err, ErrNotLocallyDismissible) {
 		t.Fatalf("dismiss required err = %v", err)

@@ -326,16 +326,29 @@ describe('PendingApprovalsModal', () => {
     expect(approveItem).toHaveBeenCalledWith('ml_exclusions_change:o1:5');
   });
 
-  it('ML opt-in offer: "Not now" hides it locally; nothing is approved', async () => {
+  it('"Offload available" offer: Not now sends the hub\'s own (member-private) dismissal', async () => {
     const OFFER: PendingApprovalItem = {
       ...FUTURE,
       id: 'ml_opt_in_available:o1',
       kind: 'ml_opt_in_available',
       title: 'Turn on offload?',
-      approveAllowed: false,
-      localDismiss: true,
+      approveAllowed: true,
+      localDismiss: false,
     };
     const { client, approveItem } = makeClient([view([OFFER])]);
+    const dismissItemLocally = vi.fn(async () => view([]));
+    client.fleet.dismissItemLocally = dismissItemLocally;
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approval-approve').text()).toBe('Not now');
+    await q(w, 'pending-approval-approve').trigger('click');
+    await flushPromises();
+    expect(approveItem).toHaveBeenCalledWith('ml_opt_in_available:o1');
+    expect(dismissItemLocally).not.toHaveBeenCalled();
+  });
+
+  it('informational item the app sends nothing for: Not now hides it on this device only', async () => {
+    const INFO: PendingApprovalItem = { ...FUTURE, id: 'future_info:1', kind: 'future_info', approveAllowed: false, localDismiss: true };
+    const { client, approveItem } = makeClient([view([INFO])]);
     const dismissItemLocally = vi.fn(async () => view([]));
     client.fleet.dismissItemLocally = dismissItemLocally;
     const w = await mountModal(client);
@@ -343,7 +356,7 @@ describe('PendingApprovalsModal', () => {
     expect(q(w, 'pending-approval-local-dismiss-note').text()).toContain('this device only');
     await q(w, 'pending-approval-dismiss-local').trigger('click');
     await flushPromises();
-    expect(dismissItemLocally).toHaveBeenCalledWith('ml_opt_in_available:o1');
+    expect(dismissItemLocally).toHaveBeenCalledWith('future_info:1');
     expect(approveItem).not.toHaveBeenCalled();
     expect(q(w, 'pending-approvals-empty').exists()).toBe(true);
   });
