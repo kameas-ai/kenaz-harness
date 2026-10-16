@@ -205,6 +205,13 @@ type fleetState struct {
 	// package — the context-sync append breaker — forgets the old session.
 	sessionResetHooks []func()
 
+	// enrolledHooks run after EVERY successful enroll — sign-in, the boot
+	// enroll and the session supervisor's periodic re-enroll alike
+	// (OnFleetEnrolled). sessionResetHooks deliberately do not fire on a
+	// plain re-enroll (they purge per-session state); a consumer that only
+	// needs to re-read "am I enrolled now" registers here instead.
+	enrolledHooks []func()
+
 	// orgUnpausedHooks run when the org pause lifts (OnOrgUnpaused): the
 	// circuits / latches org_paused set outside this package — the append
 	// breaker, the audit archiver — reopen in the same fan-out as this
@@ -1496,6 +1503,7 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	a.ReconcileTelemetry(ctx)
 
 	a.publishFleetSession("enroll_ok")
+	a.runEnrolledHooks()
 	return fleetIdentityToView(id), nil
 }
 

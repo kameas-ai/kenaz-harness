@@ -22,6 +22,7 @@ package rpc
 //                 contract "do not cache across sessions"; a new session may
 //                 be another account), bump the enrolment generation,
 //                 re-read the gate. A closed gate pauses the shipper.
+//   - any successful enroll (settings OnFleetEnrolled): re-read the gate.
 //   - org pause change / unpause / capability change: re-read the gate.
 //   - Shutdown:   flush the recorder, stop the shipper, one final ship
 //                 attempt bounded to 5 s, close the recorder, remove
@@ -135,6 +136,12 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 	})
 
 	settingsImpl.OnFleetSessionReset(w.onSessionReset)
+	// Every successful enroll (boot, periodic, sign-in) re-reads the gate
+	// now. Without this the boot enroll — which runs no session-reset hook
+	// — left the gate on its pre-enroll not_enrolled decision until the
+	// refresher's next tick (TTL·5/6 = 50 s): the dev log's ~40 s gap
+	// between fleet.rpc.enroll.success and mlproducer.gate.changed open.
+	settingsImpl.OnFleetEnrolled(w.gate.Invalidate)
 	settingsImpl.OnOrgUnpaused(w.gate.Invalidate)
 	if cl := settingsImpl.FleetClientForBootstrap(); cl != nil {
 		cl.OnOrgPauseChange(func(corefleet.OrgPauseStatus) { w.gate.Invalidate() })
