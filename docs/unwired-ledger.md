@@ -343,6 +343,40 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-16 (provider-credentials-client-01PCCLI01 WP04) · Fleet credential groundwork with no producer yet — dated
+
+WP04 lands the local model for Fleet-delivered keys with no Fleet calls, so
+these pieces have no production writer yet. None of them claims to do
+something it does not: no profile can carry a Fleet source until a writer
+binds one, and every reader below reports exactly what exists.
+
+- `secrets.FleetCredentialStore` (`Put`, `Delete`, `Purge`, `IDs`) and
+  `NewFleetCredentialStore` — the only writer of
+  `kenaz-harness/fleet/<env>/{org,user}/<credential_id>`; called only by
+  `core/secrets/fleet_credentials_test.go` and
+  `core/llm/credref/fleet_source_test.go`. The read half is live:
+  `credref.ToSecretsRef` resolves `Source` + `CredentialID` through
+  `secrets.FleetCredentialLocator` on every model call. **Owner:** WP05
+  (org/team fetch + unwrap → `Put(FleetNamespaceOrg, …)`; purge on
+  tombstone, lockdown, `node_removed`, sign-out and org change →
+  `Purge(FleetNamespaceOrg)`) and WP06 (synced user keys →
+  `Put`/`Purge(FleetNamespaceUser)`).
+- `llm.BuildKeyList`'s `orgDefaults` and `scopeNames` arguments — the one
+  production caller (`views/llm.CredentialKeys`, behind
+  `LLM_ListCredentialKeys`) passes nil for both, so `CredentialKey.OrgDefault`
+  is never true and `ScopeName` is always empty; the Providers view falls
+  back to "Provided by your organization". **Owner:** WP05, which receives
+  the defaults (`GET /me/credentials/policy`) and org/team names.
+- `llm.userKeySelectionAllowed` returns true for every key: no policy is
+  evaluated, and `CredentialKey.UserSelectable` says so rather than
+  guessing. **Owner:** WP12 (Cedar Credential family, "user-chosen keys
+  forbidden") replaces its body.
+- `writeSessionCredential` / `SessionModelConfig.credentialId`
+  (`frontend/src/lib/sessionModelStash.ts`) — the per-chat key selection is
+  persisted next to the chat's provider and model, but only the spec reaches
+  the writer and no send path reads it. **Owner:** WP07 (precedence + the
+  per-chat key picker that writes it and passes it to the turn).
+
 ### 2026-10-09 (ml-producer-01MLPRD01 WP03) · Fleet's OTLP-JSON decode — the ML shipper sends protobuf
 
 (WP03's dev-org-only guard entry that stood here was closed by WP05, which

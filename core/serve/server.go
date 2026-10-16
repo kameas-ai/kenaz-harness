@@ -68,6 +68,7 @@ import (
 	agentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agents"
 	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
+	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	permissionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/permissions"
 	sessionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
@@ -1138,6 +1139,15 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	// credential env var NAME (e.g. "ANTHROPIC_API_KEY"), never its bytes.
 	case "LLM_ListProviders":
 		return s.api.LLMConnector().ListProviders(ctx)
+	case "LLM_ListCredentialKeys":
+		// Same projection as the desktop binding. Served mode has no
+		// keychain and receives no Fleet keys (spec R4), so it lists
+		// only what its providers reference.
+		provs, err := s.api.LLMConnector().ListProviders(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return llmview.CredentialKeys(provs), nil
 
 	// ── chat: the turn itself ────────────────────────────────────────
 	//

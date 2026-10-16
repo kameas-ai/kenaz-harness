@@ -116,6 +116,7 @@ var cwdSensitiveGates = []string{
 	"check-test-only-symbols.sh",
 	"check-no-credential-in-ui.sh",
 	"check-no-user-content-in-slog.sh",
+	"check-no-credential-in-fleet-logs.sh",
 	"check-serve-dispatch-drift.sh",
 	"check-builtin-tool-registration.sh",
 	"check-single-move-writer.sh",
@@ -386,6 +387,43 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// `logger.` not `slog.` — the receiver spelling the gate was blind
 			// to, and the one 86% of this codebase's log calls actually use.
 			content: "package rpc\n\nfunc zzGateProbe(p string) { logger.Info(\"saved\", \"Path\", p) }\n",
+		},
+		{
+			// provider-credentials-client-01PCCLI01 WP04. The probe file
+			// name puts it in the namespace store's own scope
+			// (core/secrets/fleet_credentials*.go).
+			name:       "fleet-cred-logs/one-line-value",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(plaintext []byte) { logger.Info(\"stored\", \"value\", string(plaintext)) }\n",
+			wantOutput: "forbidden attribute key",
+		},
+		{
+			// A multi-line call — the shape the line-oriented slog-privacy
+			// gate cannot see — logging a locator variable.
+			name:       "fleet-cred-logs/multi-line-locator",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(loc string) {\n\tslog.Warn(\n\t\t\"fleet key write failed\",\n\t\t\"where\", loc,\n\t)\n}\n",
+			wantOutput: "raw-secret identifier loc",
+		},
+		{
+			// Spec §10.4: uck_auth is never logged, including as a typed
+			// attribute built out of line.
+			name:       "fleet-cred-logs/typed-attr-uck-auth",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nvar zzGateProbe = slog.String(\"uck_auth\", \"x\")\n",
+			wantOutput: "typed slog attribute",
+		},
+		{
+			// A new file anywhere under core/ joins the scope the moment it
+			// names the namespace store — no script edit needed.
+			name:       "fleet-cred-logs/new-caller-joins-scope",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/rpc/zz_gate_probe.go",
+			content:    "package rpc\n\nfunc zzGateProbe(_ *secrets.FleetCredentialStore, secret string) { log.Printf(\"got %s\", secret) }\n",
+			wantOutput: "raw-secret identifier secret",
 		},
 		{
 			name: "agentgraph-convergence/I5-second-ask-store",

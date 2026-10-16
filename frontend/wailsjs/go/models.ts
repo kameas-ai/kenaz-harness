@@ -3587,6 +3587,8 @@ export namespace llm {
 	export class CredentialReference {
 	    kind: string;
 	    locator: string;
+	    source?: string;
+	    credentialId?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CredentialReference(source);
@@ -3596,6 +3598,8 @@ export namespace llm {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.locator = source["locator"];
+	        this.source = source["source"];
+	        this.credentialId = source["credentialId"];
 	    }
 	}
 	export class AddProviderInput {
@@ -3799,6 +3803,32 @@ export namespace llm {
 		    }
 		    return a;
 		}
+	}
+	export class CredentialKey {
+	    id: string;
+	    provider: string;
+	    source: string;
+	    scopeName?: string;
+	    profileIds: string[];
+	    orgDefault?: boolean;
+	    preselected?: boolean;
+	    userSelectable: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CredentialKey(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.provider = source["provider"];
+	        this.source = source["source"];
+	        this.scopeName = source["scopeName"];
+	        this.profileIds = source["profileIds"];
+	        this.orgDefault = source["orgDefault"];
+	        this.preselected = source["preselected"];
+	        this.userSelectable = source["userSelectable"];
+	    }
 	}
 	
 	export class CustomCapabilityMatrix {

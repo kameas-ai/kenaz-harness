@@ -26,6 +26,7 @@ import (
 	"sync"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
 	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
 	"github.com/kameas-ai/kenaz-harness/core/secrets/secret"
@@ -129,11 +130,36 @@ func Zeroize(c *Cred) {
 // ToSecretsRef converts an llm.CredentialReference to the secrets-package
 // shape. The Kind string lookup is best-effort; unknown kinds map to
 // ref.RefUnknown and downstream resolution returns an error.
+//
+// A Fleet-sourced reference (Source org|team|user_sync) resolves from the
+// Fleet keychain namespace its Source selects, keyed by CredentialID:
+// org and team keys from kenaz-harness/fleet/<env>/org/<id>, synced user
+// keys from kenaz-harness/fleet/<env>/user/<id>, with <env> from
+// paths.KeychainNamespace(). Its Locator field is ignored. A malformed
+// Fleet reference maps to ref.RefUnknown so resolution fails closed. A
+// local reference (empty or "local" Source) is translated exactly as
+// before.
 func ToSecretsRef(r llm.CredentialReference) secrets.CredentialReference {
+	if r.Source.IsFleet() {
+		loc, err := fleetLocator(r)
+		if err != nil || r.Kind != "keychain" {
+			return secrets.CredentialReference{Kind: ref.RefUnknown}
+		}
+		return secrets.CredentialReference{Kind: ref.RefKeychain, Locator: loc}
+	}
 	return secrets.CredentialReference{
 		Kind:    refKindFromString(r.Kind),
 		Locator: r.Locator,
 	}
+}
+
+// fleetLocator derives the keychain locator for a Fleet-sourced reference.
+func fleetLocator(r llm.CredentialReference) (string, error) {
+	ns := secrets.FleetNamespaceOrg
+	if r.Source == llm.CredSourceUserSync {
+		ns = secrets.FleetNamespaceUser
+	}
+	return secrets.FleetCredentialLocator(ns, paths.KeychainNamespace(), r.CredentialID)
 }
 
 // refKindFromString maps the llm-side string Kind to the secrets RefKind
@@ -172,6 +198,25 @@ func (r *Resolver) Resolve(ctx context.Context, profileID string, lref llm.Crede
 			ProfileID: profileID,
 			Ref:       lref,
 			Cause:     ErrNoBridge,
+		}
+	}
+	if !lref.Source.Valid() {
+		return nil, &llm.ErrCredentialResolution{
+			ProfileID: profileID,
+			Ref:       lref,
+			Cause:     fmt.Errorf("unknown credential source %q", lref.Source),
+		}
+	}
+	if lref.Source.IsFleet() {
+		if _, err := fleetLocator(lref); err != nil || lref.Kind != "keychain" {
+			if err == nil {
+				err = fmt.Errorf("a %s credential must be kind keychain", lref.Source)
+			}
+			return nil, &llm.ErrCredentialResolution{
+				ProfileID: profileID,
+				Ref:       lref,
+				Cause:     err,
+			}
 		}
 	}
 	sref := ToSecretsRef(lref)

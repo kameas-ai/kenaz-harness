@@ -421,6 +421,19 @@ func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {
 	defer sentry.WrapBinding("LLM_ListProviders")()
 	return b.api.LLMConnector().ListProviders(b.ctx())
 }
+
+// LLM_ListCredentialKeys lists every key the configured provider profiles
+// use, one row per distinct key, labelled by scope (local | user_sync | org
+// | team) — provider-credentials-client-01PCCLI01 WP04, §7a H2. Read-only
+// display metadata: never key bytes, never a keychain locator.
+func (b *Bindings) LLM_ListCredentialKeys() ([]llm.CredentialKey, error) {
+	defer sentry.WrapBinding("LLM_ListCredentialKeys")()
+	provs, err := b.api.LLMConnector().ListProviders(b.ctx())
+	if err != nil {
+		return nil, err
+	}
+	return llm.CredentialKeys(provs), nil
+}
 func (b *Bindings) LLM_StartStream(profileID, sessionID, modelOverride string) (string, error) {
 	defer sentry.WrapBinding("LLM_StartStream")()
 	// Gating (fleet emergency lockdown) lives in API.StartLLMStream so the

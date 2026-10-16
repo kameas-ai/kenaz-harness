@@ -438,6 +438,8 @@ export function LLM_DeleteChain(arg1:string):Promise<void>;
 
 export function LLM_GetAttachmentLimits(arg1:string,arg2:string):Promise<llm.AttachmentLimitsView>;
 
+export function LLM_ListCredentialKeys():Promise<Array<llm.CredentialKey>>;
+
 export function LLM_ListCustomTemplates():Promise<Array<llm.CustomTemplateSummary>>;
 
 export function LLM_ListDetectedLocalRuntimes():Promise<Array<llm.LocalRuntimeInfo>>;

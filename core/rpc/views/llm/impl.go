@@ -1266,6 +1266,9 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 	// ~/.aws/credentials which the AWS SDK reads directly, env / file
 	// resolve via their respective backends with no upfront staging.
 	if in.PlaintextAPIKey != "" {
+		if corellm.CredentialSource(in.Cred.Source).IsFleet() {
+			return ErrFleetKeyReadOnly
+		}
 		if in.Cred.Kind != "keychain" {
 			return fmt.Errorf("llm: PlaintextAPIKey is only used with kind=keychain, got %q", in.Cred.Kind)
 		}
@@ -1286,10 +1289,7 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 		Model:  in.Model,
 		Models: in.Models,
 		Region: in.Region,
-		Cred: corellm.CredentialReference{
-			Kind:    in.Cred.Kind,
-			Locator: in.Cred.Locator,
-		},
+		Cred:   toCoreCred(in.Cred),
 	}
 	if err := a.store.Add(profile); err != nil {
 		log.Error("llm.add_provider.failed", "id", in.ID, "stage", "store.Add", "err", err.Error())
@@ -1333,6 +1333,9 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 		}
 	}
 	if in.PlaintextAPIKey != "" {
+		if corellm.CredentialSource(in.Cred.Source).IsFleet() {
+			return ErrFleetKeyReadOnly
+		}
 		if in.Cred.Kind != "keychain" {
 			return fmt.Errorf("llm: PlaintextAPIKey is only used with kind=keychain, got %q", in.Cred.Kind)
 		}
@@ -1353,10 +1356,7 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 		Model:  in.Model,
 		Models: in.Models,
 		Region: in.Region,
-		Cred: corellm.CredentialReference{
-			Kind:    in.Cred.Kind,
-			Locator: in.Cred.Locator,
-		},
+		Cred:   toCoreCred(in.Cred),
 	}
 	if err := a.store.Update(profile); err != nil {
 		return err
@@ -1653,10 +1653,7 @@ func profileToProvider(p corellm.ProviderProfile, source string, validated bool)
 		Model:  p.Model,
 		Models: p.AvailableModels(),
 		Region: p.Region,
-		Cred: CredentialReference{
-			Kind:    p.Cred.Kind,
-			Locator: p.Cred.Locator,
-		},
+		Cred:      fromCoreCred(p.Cred),
 		Source:    source,
 		Validated: validated,
 	}
@@ -2200,4 +2197,57 @@ func viewToChain(v FallbackChainView) *fallback.Chain {
 		Description: v.Description,
 		Entries:     entries,
 	}
+}
+
+// ErrFleetKeyReadOnly rejects a plaintext key on a profile bound to a Fleet
+// key (org, team or synced user key): that key is delivered by Fleet into
+// its own keychain namespace and is never overwritten from a provider form.
+var ErrFleetKeyReadOnly = errors.New("llm: this profile uses a key delivered by Fleet; it cannot be replaced here")
+
+// toCoreCred converts the RPC credential reference to the connector shape,
+// carrying Source and CredentialID so an edit of a Fleet-bound profile keeps
+// its binding.
+func toCoreCred(c CredentialReference) corellm.CredentialReference {
+	return corellm.CredentialReference{
+		Kind:         c.Kind,
+		Locator:      c.Locator,
+		Source:       corellm.CredentialSource(c.Source),
+		CredentialID: c.CredentialID,
+	}
+}
+
+// fromCoreCred is the inverse of toCoreCred.
+func fromCoreCred(c corellm.CredentialReference) CredentialReference {
+	return CredentialReference{
+		Kind:         c.Kind,
+		Locator:      c.Locator,
+		Source:       string(c.Source),
+		CredentialID: c.CredentialID,
+	}
+}
+
+// CredentialKeys projects the listed providers onto the keys they use, one
+// row per distinct key (corellm.BuildKeyList). Org defaults and org/team
+// display names come from Fleet's credential policy, which WP05 delivers;
+// until then none are known and none are claimed.
+func CredentialKeys(provs []Provider) []CredentialKey {
+	profs := make([]corellm.ProviderProfile, 0, len(provs))
+	for _, p := range provs {
+		profs = append(profs, corellm.ProviderProfile{ID: p.ID, Kind: p.Kind, Cred: toCoreCred(p.Cred)})
+	}
+	keys := corellm.BuildKeyList(profs, nil, nil)
+	out := make([]CredentialKey, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, CredentialKey{
+			ID:             k.ID,
+			Provider:       k.Provider,
+			Source:         string(k.Source),
+			ScopeName:      k.ScopeName,
+			ProfileIDs:     k.ProfileIDs,
+			OrgDefault:     k.OrgDefault,
+			Preselected:    k.Preselected,
+			UserSelectable: k.UserSelectable,
+		})
+	}
+	return out
 }
