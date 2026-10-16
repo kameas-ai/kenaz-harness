@@ -1041,6 +1041,7 @@ interface WailsBindingsLike {
   // ── Fleet pending-approvals hub (ml-producer-01MLPRD01 WP06) ──────────
   Fleet_PendingApprovals(): Promise<PendingApprovals>;
   Fleet_ApproveItem(id: string): Promise<PendingApprovals>;
+  Fleet_DismissItemLocally(id: string): Promise<PendingApprovals>;
 
   // ── Capabilities: the one install framework (install-framework-01DOGF0B) ──
   /** Every install provider's items (consumer-derived state) + unreachable sources with reasons. */
@@ -4008,6 +4009,12 @@ export interface FleetClient {
    * item comes back as the fresh list with `changed` set.
    */
   approveItem(id: string): Promise<PendingApprovals>;
+  /**
+   * "Not now" on an informational item (`localDismiss`): hidden on THIS
+   * device until the item's version changes. Nothing is sent to Fleet —
+   * legal rules a decline is never recorded.
+   */
+  dismissItemLocally(id: string): Promise<PendingApprovals>;
 }
 
 // ── Capabilities client (install-framework-01DOGF0B) ────────────────────────
@@ -5115,6 +5122,7 @@ export function createHarnessClient(): HarnessClient {
       setWorkflowEventsOptIn: (optedIn) => b().Fleet_SetWorkflowEventsOptIn(optedIn),
       pendingApprovals: () => b().Fleet_PendingApprovals(),
       approveItem: (id) => b().Fleet_ApproveItem(id),
+      dismissItemLocally: (id) => b().Fleet_DismissItemLocally(id),
     },
     // ── Capabilities (install-framework-01DOGF0B) ─────────────────────────
     capabilities: {
@@ -7071,6 +7079,7 @@ export function createFakeHarnessClient(
       setWorkflowEventsOptIn: async () => fakeMLStatus(),
       pendingApprovals: async () => fakePendingApprovals(),
       approveItem: async () => fakePendingApprovals(),
+      dismissItemLocally: async () => fakePendingApprovals(),
       getTelemetryStatus: async () => ({
         wired: false,
         enrolled: false,

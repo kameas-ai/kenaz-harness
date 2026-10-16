@@ -354,6 +354,8 @@ export function Elicit_SubmitWizardStep(arg1:string,arg2:string,arg3:json.RawMes
 
 export function Fleet_ApproveItem(arg1:string):Promise<settings.PendingApprovalsView>;
 
+export function Fleet_DismissItemLocally(arg1:string):Promise<settings.PendingApprovalsView>;
+
 export function Fleet_GetTelemetryConsent():Promise<string>;
 
 export function Fleet_MLAckNotice(arg1:number):Promise<settings.MLStatusView>;

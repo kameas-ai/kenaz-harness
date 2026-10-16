@@ -1839,6 +1839,10 @@ type SettingsAPI interface {
 	// looked up server-side from a fresh read and sent only when its method +
 	// path is in the harness allowlist.
 	FleetApproveItem(ctx context.Context, id string) (PendingApprovalsView, error)
+	// FleetDismissItemLocally hides an informational hub item on this
+	// device until its version changes. Nothing is sent to Fleet: legal
+	// (kameas-ai-11, 2026-10-16) rules that a "Not now" is never recorded.
+	FleetDismissItemLocally(ctx context.Context, id string) (PendingApprovalsView, error)
 
 	// FleetProfile returns the active env profile for UI rendering.
 	// Does NOT expose ClientID, APIAudience, or any secret fields.

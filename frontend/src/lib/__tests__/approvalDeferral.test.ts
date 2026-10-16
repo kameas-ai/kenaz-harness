@@ -37,7 +37,7 @@ describe('deferredUntil', () => {
   const item = (over: Partial<PendingApprovalItem>): PendingApprovalItem => ({
     id: 'legal:sa:v1.2', kind: 'legal_acceptance', title: 'SA', summary: '', bodyText: '',
     documentUrl: '', documentSha256: '', version: 'v1.2', blocking: 'Fleet', required: true,
-    deferrableUntil: '', approveAllowed: true, ...over,
+    deferrableUntil: '', approveAllowed: true, localDismiss: false, ...over,
   });
   const now = new Date('2026-11-01T00:00:00Z');
 

@@ -1310,7 +1310,7 @@
 "Fleet_SetWorkflowEventsOptIn"
 
 # CLASS: gated -- ml-producer-01MLPRD01 WP06, 2026-10-09.
-# 2 entries.
+# 3 entries.
 #
 # The pending-approvals hub. Callers: lib/settingsIssues.ts's
 # `pending-approvals` issue provider, declared desktopOnly and skipped by
@@ -1324,6 +1324,10 @@
 # Blocker: a served settings surface. Dated 2026-10-09. Owner: alec.
 "Fleet_ApproveItem"
 "Fleet_PendingApprovals"
+# Fleet_DismissItemLocally: the same modal's "Not now" (legal, kameas-ai-11,
+# 2026-10-16: a decline is never recorded, so it is a local-only memory).
+# Same surface, same blocker. Dated 2026-10-16. Owner: alec.
+"Fleet_DismissItemLocally"
 
 # CLASS: gated -- tool-context-budget-01TCBUD01 WP06, 2026-10-09.
 # 7 entries.
