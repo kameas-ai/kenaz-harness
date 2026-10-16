@@ -1597,13 +1597,23 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 			}
 		}
 	}
+	// "Share model-call telemetry with Fleet" is consent, and a
+	// whole-settings save is not a consent action. Callers send the whole
+	// object they loaded earlier, so a stale copy would turn sharing back
+	// on without the user seeing the opt-in text. The stored values always
+	// win here; only SetModelCallTelemetry (the panel action) changes them.
+	// If the stored values can't be read, sharing is forced off.
+	if cur, err := a.store.LoadAll(); err == nil {
+		s.ShareModelCallTelemetryWithFleet = cur.ShareModelCallTelemetryWithFleet
+		s.ShareModelCallTelemetryTextRevision = cur.ShareModelCallTelemetryTextRevision
+		s.ShareModelCallTelemetryAcceptedAt = cur.ShareModelCallTelemetryAcceptedAt
+	} else {
+		s.ShareModelCallTelemetryWithFleet = false
+	}
 	if err := a.store.SaveAll(s); err != nil {
 		return err
 	}
-	// A whole-settings save can flip "Share model-call telemetry with
-	// Fleet": apply it to the live pipeline, exactly as
-	// SetModelCallTelemetry does.
-	a.applyModelCallSharing(s.ShareModelCallTelemetryWithFleet)
+	a.applyModelCallSharing(s.modelCallSharingEffective())
 	// Schedule a debounced push of the ui_theme category (the credential-free
 	// surface this full-settings save can affect). The Syncer no-ops when the
 	// category is disabled (harness-fleet-sync-activation-01NSYNC01 gap #1).
@@ -1633,12 +1643,29 @@ func (a *API) SetModelCallTelemetry(_ context.Context, mc ModelCallTelemetrySett
 	}
 	s.ModelCallStatsPullDisabled = !mc.StatsPullEnabled
 	s.ModelCallRetentionDays = mc.RetentionDays
+	// Consent evidence: which wording was agreed to, and when. Stamped only
+	// on a real opt-in, i.e. off (or an outdated revision) → on. A later
+	// panel save while sharing stays on (e.g. a retention change) keeps the
+	// original agreement time.
+	if mc.ShareWithFleet && !s.modelCallSharingEffective() {
+		s.ShareModelCallTelemetryTextRevision = ModelCallOptInTextRevision
+		s.ShareModelCallTelemetryAcceptedAt = time.Now().UTC().Format(time.RFC3339)
+	}
 	s.ShareModelCallTelemetryWithFleet = mc.ShareWithFleet
 	if err := a.store.SaveAll(s); err != nil {
 		return err
 	}
-	a.applyModelCallSharing(s.ShareModelCallTelemetryWithFleet)
+	a.applyModelCallSharing(s.modelCallSharingEffective())
 	return nil
+}
+
+// modelCallSharingEffective is the opt-in as the pipeline applies it: on
+// only when the user agreed to the CURRENT opt-in text revision.
+func (s Settings) modelCallSharingEffective() bool {
+	// Equality, not >=: after a downgrade to a build with an older text, an
+	// opt-in given under a newer text must not count as agreement to the
+	// text this build shows.
+	return s.ShareModelCallTelemetryWithFleet && s.ShareModelCallTelemetryTextRevision == ModelCallOptInTextRevision
 }
 
 func (s Settings) modelCallTelemetry() ModelCallTelemetrySettings {
@@ -1646,7 +1673,7 @@ func (s Settings) modelCallTelemetry() ModelCallTelemetrySettings {
 		StatsPullEnabled:       !s.ModelCallStatsPullDisabled,
 		RetentionDays:          s.ModelCallRetentionDays,
 		EffectiveRetentionDays: modelcalls.EffectiveRetentionDays(s.ModelCallRetentionDays),
-		ShareWithFleet:         s.ShareModelCallTelemetryWithFleet,
+		ShareWithFleet:         s.modelCallSharingEffective(),
 	}
 }
 

@@ -436,7 +436,7 @@ func (a *API) SetFleetOTLPPipeline(
 	// value reaches the span lane the moment the pipeline is wired.
 	if p != nil && a.store != nil {
 		if s, err := a.store.LoadAll(); err == nil {
-			p.SetModelCallSharing(s.ShareModelCallTelemetryWithFleet)
+			p.SetModelCallSharing(s.modelCallSharingEffective())
 		}
 	}
 	a.fleet.telemetryRes = startupRes

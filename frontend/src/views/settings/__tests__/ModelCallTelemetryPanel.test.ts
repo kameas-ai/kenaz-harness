@@ -31,7 +31,7 @@ function setup(initial?: Partial<ModelCallTelemetrySettings>) {
   const w = mount(ModelCallTelemetryPanel, {
     global: { provide: { [HarnessClientKey as symbol]: client } },
   });
-  return { w, get, set };
+  return { w, get, set, client };
 }
 
 describe('ModelCallTelemetryPanel', () => {
@@ -43,9 +43,29 @@ describe('ModelCallTelemetryPanel', () => {
     expect(pull.checked).toBe(true);
     expect(share.checked).toBe(false);
     expect(w.text()).toContain('now 30');
-    expect(w.find('[data-testid="model-call-share-explainer"]').text()).toContain(
-      'Prompts, responses, tool arguments and tool results are never sent',
+    // B4a text, legal D82 (counsel review pending), text revision 1: verbatim; whitespace normalised.
+    expect(w.find('[data-testid="model-call-share-explainer"]').text().replace(/\s+/g, ' ').trim()).toBe(
+      "Off by default, and separate from the Fleet Telemetry level above. This setting applies to this device only. " +
+        "When it is on and you are signed in, each model call you make from then on is sent to your organization's " +
+        'Fleet account, attributed to you: model and provider IDs, token counts, latency, cost, finish reason, error ' +
+        "class and a keyed hash of the session ID. Your organization's Fleet administrators can see these records. " +
+        'Calls made before you turn it on are never sent. Prompts, responses, tool arguments and tool results are ' +
+        "never sent. Turning it off stops sending; records already sent are kept under your organization's retention " +
+        'settings. This setting does not control usage records your organization receives directly from an AI ' +
+        'provider it has connected to Fleet, such as OpenRouter; Fleet lists any such connection under Settings. ' +
+        'Details: kenaz.kameas.ai/telemetry',
     );
+  });
+
+  it('the disclosure link opens externally and does not toggle the opt-in', async () => {
+    const { w, set, client } = setup();
+    await flushPromises();
+    const open = vi.spyOn(client, 'openExternalURL');
+    await w.find('[data-testid="model-call-disclosure-link"]').trigger('click');
+    await flushPromises();
+    expect(open).toHaveBeenCalledWith('https://kenaz.kameas.ai/telemetry');
+    expect((w.find('[data-testid="model-call-share-fleet"]').element as HTMLInputElement).checked).toBe(false);
+    expect(set).not.toHaveBeenCalled();
   });
 
   it('writes the Fleet opt-in and the stats-pull toggle through the setter', async () => {

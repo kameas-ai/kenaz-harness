@@ -20,6 +20,12 @@ import type { ModelCallTelemetrySettings } from '@/lib/types';
 
 const client = useHarnessClient();
 
+/** The published Telemetry Disclosure; opened in the system browser. */
+const DISCLOSURE_URL = 'https://kenaz.kameas.ai/telemetry';
+function openDisclosure() {
+  client.openExternalURL(DISCLOSURE_URL);
+}
+
 const loaded = ref(false);
 const saving = ref(false);
 const errorMsg = ref('');
@@ -124,11 +130,23 @@ async function save() {
         <span>
           <span class="text-sm text-ink font-medium">Share model-call telemetry with Fleet</span>
           <span class="block text-xs text-ink-muted" data-testid="model-call-share-explainer">
-            Off by default, and separate from the Fleet Telemetry level above. When on and you are
-            signed in, each model call from then on is sent to your organization's Fleet account,
-            attributed to you: model and provider ids, token counts, latency, cost, finish reason,
-            error class and a keyed hash of the session id. Calls made before you turn it on are
-            never sent. Prompts, responses, tool arguments and tool results are never sent.
+            <!-- B4a text: decided (legal D82, package doc 02); counsel review pending; text revision 1. VERBATIM. Do not edit without legal review, and bump ModelCallOptInTextRevision (core/rpc/views/settings/api.go) when it changes. -->
+            Off by default, and separate from the Fleet Telemetry level above. This setting applies to
+            this device only. When it is on and you are signed in, each model call you make from then
+            on is sent to your organization's Fleet account, attributed to you: model and provider IDs,
+            token counts, latency, cost, finish reason, error class and a keyed hash of the session ID.
+            Your organization's Fleet administrators can see these records. Calls made before you turn
+            it on are never sent. Prompts, responses, tool arguments and tool results are never sent.
+            Turning it off stops sending; records already sent are kept under your organization's
+            retention settings. This setting does not control usage records your organization receives
+            directly from an AI provider it has connected to Fleet, such as OpenRouter; Fleet lists any
+            such connection under Settings. Details:
+            <a
+              href="https://kenaz.kameas.ai/telemetry"
+              class="underline"
+              data-testid="model-call-disclosure-link"
+              @click.prevent.stop="openDisclosure"
+            >kenaz.kameas.ai/telemetry</a>
           </span>
         </span>
       </label>
