@@ -1,113 +1,71 @@
 // Package oautherr reduces an OAuth token-endpoint error body to the parts
 // that are safe to log or return. A token endpoint's response is
 // credential-bearing by nature, and a misbehaving IdP or proxy can put
-// anything in an error body (a stray token, an HTML page, terminal escape
-// codes), so callers must never log or wrap the raw body.
+// anything in an error body, so callers must never log or wrap the raw body.
+//
+// It is an ALLOWLIST, not a deny-list: a deny-list of "token-looking" text
+// is always beatable (split, encoded or prefixed tokens), so nothing from
+// the body survives unless it matches a known-safe shape.
 package oautherr
 
 import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strings"
 )
 
-// maxDesc is the error_description cap, in bytes. The text is ASCII once
-// sanitised.
-const maxDesc = 120
-
-// tokenish matches a run that looks like a credential: 20+ characters from
-// the base64 / base64url / JWT alphabet. A description containing one is
-// dropped whole. Over-redacting a human message is fine; leaking a token
-// is not.
-var tokenish = regexp.MustCompile(`[A-Za-z0-9._~+/=-]{20,}`)
-
-// pctEscape matches a URL percent-escape (%2B, %2F, …).
-var pctEscape = regexp.MustCompile(`%[0-9A-Fa-f]{2}`)
-
-// looksSecret is deliberately over-eager: a human-readable OAuth error
-// description survives, and anything that could be (part of) a credential
-// does not. It is true when the text has any of:
-//   - a 20+ char run of the base64/JWT alphabet;
-//   - a URL percent-escape (an encoded token);
-//   - more than 8 characters from [0-9+/=_] in total, which catches a token
-//     split into short chunks by spaces or colons;
-//   - a single word (split on space, colon, comma, semicolon) of 16+ chars;
-//   - four or more equal-length words (5+ chars) making up most of the
-//     text: the shape of a token chopped into fixed-size chunks.
-func looksSecret(d string) bool {
-	if tokenish.MatchString(d) || pctEscape.MatchString(d) {
-		return true
-	}
-	n := 0
-	for _, r := range d {
-		if (r >= '0' && r <= '9') || r == '+' || r == '/' || r == '=' || r == '_' {
-			n++
-		}
-	}
-	if n > 8 {
-		return true
-	}
-	words := strings.FieldsFunc(d, func(r rune) bool { return r == ' ' || r == ':' || r == ',' || r == ';' })
-	lengths := map[int]int{}
-	for _, w := range words {
-		if len(w) >= 16 {
-			return true
-		}
-		if len(w) >= 5 {
-			lengths[len(w)]++
-		}
-	}
-	// A token chopped into fixed-size chunks ("eyJaaaa aaaaaaa aaaaaaa …")
-	// gives many equal-length words, unlike prose. Four or more words that
-	// share one length of 5+ characters and make up most of the text means
-	// withhold.
-	for _, n := range lengths {
-		if n >= 4 && n*2 >= len(words) {
-			return true
-		}
-	}
-	return false
+// knownCodes are the error codes registered by RFC 6749 §5.2/§4.1.2.1,
+// RFC 6750 §3.1, RFC 8628 §3.5 and RFC 7591 §3.2.2. Any other `error`
+// value is reported as UnknownCode.
+var knownCodes = map[string]bool{
+	// RFC 6749
+	"invalid_request": true, "invalid_client": true, "invalid_grant": true,
+	"unauthorized_client": true, "unsupported_grant_type": true, "invalid_scope": true,
+	"access_denied": true, "unsupported_response_type": true,
+	"server_error": true, "temporarily_unavailable": true,
+	// RFC 6750
+	"invalid_token": true, "insufficient_scope": true,
+	// RFC 8628
+	"authorization_pending": true, "slow_down": true, "expired_token": true,
+	// RFC 7591
+	"invalid_redirect_uri": true, "invalid_client_metadata": true,
+	"invalid_software_statement": true, "unapproved_software_statement": true,
 }
 
-// Fields extracts RFC 6749 §5.2 `error` and `error_description` from body.
-// code must be a short [a-z_] token, otherwise both are "". desc keeps
-// printable ASCII only, is dropped if anything in it looks like a
-// credential, and is capped at maxDesc. Nothing else from the body is
-// returned.
+// UnknownCode stands in for an `error` value outside knownCodes.
+const UnknownCode = "unknown_error"
+
+// zitadelID is the only error_description shape kept: Zitadel's message
+// IDs, e.g. "Errors.User.NotFound". Anything else is dropped.
+var zitadelID = regexp.MustCompile(`^Errors(\.[A-Za-z0-9]+){1,6}$`)
+
+// Fields extracts RFC 6749 §5.2 `error` and `error_description` from body,
+// keeping only allowlisted values:
+//   - code is a known RFC code, UnknownCode for any other non-empty
+//     `error`, or "" when the body is not an OAuth error object;
+//   - desc is kept only if it is a Zitadel message ID (≤ 80 chars), else "".
+//
+// Nothing else from the body is ever returned.
 func Fields(body []byte) (code, desc string) {
 	var e struct {
 		Error            string `json:"error"`
 		ErrorDescription string `json:"error_description"`
 	}
-	if json.Unmarshal(body, &e) != nil || e.Error == "" || len(e.Error) > 64 {
+	if json.Unmarshal(body, &e) != nil || e.Error == "" {
 		return "", ""
 	}
-	for _, r := range e.Error {
-		if (r < 'a' || r > 'z') && r != '_' {
-			return "", ""
-		}
+	code = UnknownCode
+	if knownCodes[e.Error] {
+		code = e.Error
 	}
-	var b strings.Builder
-	for _, r := range e.ErrorDescription {
-		if r >= 0x20 && r <= 0x7e {
-			b.WriteRune(r)
-		} else if r == '\n' || r == '\t' || r == '\r' {
-			b.WriteByte(' ')
-		}
+	if len(e.ErrorDescription) <= 80 && zitadelID.MatchString(e.ErrorDescription) {
+		desc = e.ErrorDescription
 	}
-	d := strings.TrimSpace(b.String())
-	if looksSecret(d) {
-		d = "(details withheld)"
-	}
-	if len(d) > maxDesc {
-		d = d[:maxDesc] + "..."
-	}
-	return e.Error, d
+	return code, desc
 }
 
-// Summary is "status N" plus ": code: desc" when the body is an OAuth error
-// object. Use it in returned errors and log fields instead of the body.
+// Summary is "status N" plus ": code" and ": desc" when present. Use it in
+// returned errors and log fields instead of the body.
 func Summary(status int, body []byte) string {
 	code, desc := Fields(body)
 	switch {
