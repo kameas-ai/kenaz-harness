@@ -15,7 +15,7 @@ import (
 // diag.Errors, so before the fix the blanket permit won → Allow.
 const reproPolicy = `
 permit(principal, action, resource);
-forbid(principal, action, resource) when { context.device_kind == "mobile" };
+forbid(principal, action, resource) when { context.missing_attr == "mobile" };
 `
 
 func evalErrEngine(t *testing.T, src string) *Engine {
@@ -45,15 +45,15 @@ func TestErroringForbid_FailsClosed_Repro(t *testing.T) {
 	// With the attribute present and not "mobile" the forbid evaluates
 	// cleanly to false → the permit wins.
 	d = e.Evaluate(context.Background(), UserUID(), ActionFileRead, FilesystemUID("/tmp/x"),
-		map[cedarlib.String]cedarlib.Value{"device_kind": cedarlib.String("desktop")})
+		map[cedarlib.String]cedarlib.Value{"missing_attr": cedarlib.String("desktop")})
 	if d.Outcome != Allow {
-		t.Fatalf("device_kind=desktop: outcome = %v, want Allow", d.Outcome)
+		t.Fatalf("missing_attr=desktop: outcome = %v, want Allow", d.Outcome)
 	}
 	// And "mobile" matches the forbid outright.
 	d = e.Evaluate(context.Background(), UserUID(), ActionFileRead, FilesystemUID("/tmp/x"),
-		map[cedarlib.String]cedarlib.Value{"device_kind": cedarlib.String("mobile")})
+		map[cedarlib.String]cedarlib.Value{"missing_attr": cedarlib.String("mobile")})
 	if d.Outcome != Deny || d.Reason != "forbid policy matched" {
-		t.Fatalf("device_kind=mobile: %v / %q, want Deny / forbid policy matched", d.Outcome, d.Reason)
+		t.Fatalf("missing_attr=mobile: %v / %q, want Deny / forbid policy matched", d.Outcome, d.Reason)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestEvalErrors_Surfaced(t *testing.T) {
 	if pe.Effect != "forbid" || pe.Count != 3 || pe.File != "repro.cedar" {
 		t.Fatalf("record = %+v, want effect=forbid count=3 file=repro.cedar", pe)
 	}
-	if !strings.Contains(pe.Message, "device_kind") {
+	if !strings.Contains(pe.Message, "missing_attr") {
 		t.Fatalf("message %q does not name the missing attribute", pe.Message)
 	}
 	if strings.Contains(pe.Message, "SENSITIVE") || strings.Contains(pe.Message, "/secret/path") {
@@ -165,7 +165,7 @@ func TestEvalErrors_LogRateLimited(t *testing.T) {
 
 func TestSanitizeEvalErrorMessage(t *testing.T) {
 	cases := map[string]string{
-		"record does not have the attribute `device_kind`":                        "record does not have the attribute `device_kind`",
+		"record does not have the attribute `missing_attr`":                        "record does not have the attribute `missing_attr`",
 		"`Tool::\"secret-tool\"` does not have the attribute `owner`":             "entity does not have the attribute `owner`",
 		"entity `User::\"alice\"` does not exist":                                 "entity does not exist",
 		"integer overflow while attempting to add `9223372036854775807` with `1`": "integer overflow",

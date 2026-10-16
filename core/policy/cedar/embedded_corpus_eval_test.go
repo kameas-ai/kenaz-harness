@@ -213,7 +213,7 @@ func corpusEngine(t *testing.T) *cedar.Engine {
 func TestEmbeddedCorpus_DetectsPlantedErroringForbid(t *testing.T) {
 	e := corpusEngine(t)
 	planted := map[string][]byte{"planted_forbid.cedar": []byte(
-		`forbid(principal, action == Action::"file_read", resource) when { context.device_kind == "mobile" };`)}
+		`forbid(principal, action == Action::"file_read", resource) when { context.missing_attr == "mobile" };`)}
 	if err := e.LoadHarnessSnippets(planted); err != nil {
 		t.Fatal(err)
 	}
