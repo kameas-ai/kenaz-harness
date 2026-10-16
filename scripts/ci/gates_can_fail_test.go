@@ -570,6 +570,38 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			wantOutput: "raw-secret identifier apiKey",
 		},
 		{
+			// A *credref.Cred passed straight to slog, under a name (h) no identifier rule knows. Cred redacts itself, but logging a credential handle at all is the violation.
+			name:       "fleet-cred-logs/round3-cred-slog-pointer",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/llm/credref/zz_gate_probe.go",
+			content:    "package credref\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"log/slog\"\n)\n\nvar _ = fmt.Sprint\nvar _ = log.Print\nvar _ = slog.Info\n\nfunc zzGateProbe(h *Cred) { slog.Info(\"resolved\", \"h\", h) }\n",
+			wantOutput: "credential handle credref.Cred rendered (pointer)",
+		},
+		{
+			// A Cred value formatted by %v into a message that is logged later.
+			name:       "fleet-cred-logs/round3-cred-sprintf-value",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/llm/credref/zz_gate_probe.go",
+			content:    "package credref\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"log/slog\"\n)\n\nvar _ = fmt.Sprint\nvar _ = log.Print\nvar _ = slog.Info\n\nfunc zzGateProbe(h Cred) {\n\tmsg := fmt.Sprintf(\"got %v\", h)\n\tslog.Info(msg)\n}\n",
+			wantOutput: "credential handle credref.Cred rendered (value)",
+		},
+		{
+			// The handle's own String() in a log attribute.
+			name:       "fleet-cred-logs/round3-cred-string-method",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/llm/credref/zz_gate_probe.go",
+			content:    "package credref\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"log/slog\"\n)\n\nvar _ = fmt.Sprint\nvar _ = log.Print\nvar _ = slog.Info\n\nfunc zzGateProbe(h *Cred) { slog.Warn(\"x\", \"h\", h.String()) }\n",
+			wantOutput: "String() of credential handle credref.Cred",
+		},
+		{
+			// A struct holding a *Cred, rendered whole by %+v into log.Printf.
+			name:       "fleet-cred-logs/round3-cred-in-struct",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/llm/credref/zz_gate_probe.go",
+			content:    "package credref\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"log/slog\"\n)\n\nvar _ = fmt.Sprint\nvar _ = log.Print\nvar _ = slog.Info\n\ntype zzHolder struct {\n\tID string\n\tC  *Cred\n}\n\nfunc zzGateProbe(z zzHolder) { log.Printf(\"%+v\", z) }\n",
+			wantOutput: "field C pointer",
+		},
+		{
 			name: "agentgraph-convergence/I5-second-ask-store",
 			gate: "check-agentgraph-convergence.sh",
 			// A second store forks by declaring the AskBus read half
@@ -5969,6 +6001,25 @@ func TestFleetCredLogsGate_TypedBenignPass(t *testing.T) {
 		"}\n", "")()
 	if code, out := runGate(t, "check-no-credential-in-fleet-logs.sh", root); code != 0 {
 		t.Fatalf("typed benign namespace logging tripped the gate (exit %d):\n%s", code, out)
+	}
+}
+
+// TestFleetCredLogsGate_CredMetadataPasses is the negative control for the
+// round3-cred-* cases: logging a credref.Cred's metadata — its
+// ReferenceID(), whether it is present, the length of its view — is not
+// logging the credential and must pass.
+func TestFleetCredLogsGate_CredMetadataPasses(t *testing.T) {
+	root := repoRoot(t)
+	full := filepath.Join(root, "core/llm/credref/zz_gate_probe.go")
+	defer plant(t, full, "package credref\n\n"+
+		"import (\n\t\"fmt\"\n\t\"log/slog\"\n)\n\n"+
+		"func zzGateProbe(h *Cred, profileID string) {\n"+
+		"\tslog.Info(\"credential resolved\", \"profile\", profileID, \"ref\", h.ReferenceID())\n"+
+		"\tslog.Debug(\"credential state\", \"present\", h != nil, \"len\", len(h.Bytes()))\n"+
+		"\tslog.Info(fmt.Sprintf(\"resolved %s for %s\", h.ReferenceID(), profileID))\n"+
+		"}\n", "")()
+	if code, out := runGate(t, "check-no-credential-in-fleet-logs.sh", root); code != 0 {
+		t.Fatalf("credref.Cred metadata logging tripped the gate (exit %d):\n%s", code, out)
 	}
 }
 

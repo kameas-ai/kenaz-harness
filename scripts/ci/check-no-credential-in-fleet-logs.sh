@@ -53,6 +53,12 @@
 #       argument;
 #   (h) a key literal split with + (constant-folded before matching);
 #   (i) a method value: f := l.Info; f(…).
+# Round 3 (#424 follow-up):
+#   (j) a credref.Cred / *credref.Cred — or a struct, slice or map holding
+#       one — rendered whole (log argument, %v into a logged string) or via
+#       its String()/GoString(). Cred redacts under every verb, but the rule
+#       is "never log a credential"; the redaction is only a backstop. Log
+#       its ReferenceID().
 # A level method (Info/Warn/Error…) counts only on a logger type when the
 # type is known, so an audit emitter's .Error(…) is not a log call.
 # Opt-out: a `cred-log-allow: <reason>` comment on a line the call spans.

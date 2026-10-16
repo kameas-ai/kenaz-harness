@@ -15,6 +15,13 @@ package main
 //  4. a key literal split with + (constant folding before shape-matching);
 //  5. a method value — f := l.Info; f("k", key).
 //
+// Round 3 (#424 follow-up): a credref.Cred — the resolved-credential
+// handle — rendered whole (a log argument, %v into a logged string, a
+// struct/slice/map holding one) or via its String/GoString method is a
+// violation even though Cred now redacts under every verb. The rule is
+// "never log a credential"; the redaction is the backstop for a miss,
+// not a licence. Its metadata (ReferenceID()) is fine.
+//
 // The analysis is intraprocedural on purpose: a value laundered through a
 // helper function's return is caught only because any call with a tainted
 // argument is itself treated as tainted (conservative), not because the
@@ -414,6 +421,9 @@ func (a *analyzer) callTaint(c *ast.CallExpr) string {
 			return "borrowed secret view ." + fn.Sel.Name + "("
 		}
 		if textMethods[fn.Sel.Name] && !isPackageIdent(a.info, fn.X) {
+			if a.credTyped(fn.X) {
+				return fmt.Sprintf("%s() of credential handle %s", fn.Sel.Name, credTypeName)
+			}
 			if r := a.taint(fn.X, false); r != "" {
 				return fmt.Sprintf("%s() of %s", fn.Sel.Name, r)
 			}
@@ -523,6 +533,9 @@ func (a *analyzer) secretTyped(e ast.Expr) string {
 	if !ok || tv.Type == nil || tv.IsType() {
 		return ""
 	}
+	if path := credIn(tv.Type, 0, map[types.Type]bool{}); path != "" {
+		return fmt.Sprintf("credential handle %s rendered (%s) — log its ReferenceID(), never the handle", credTypeName, path)
+	}
 	if field := secretField(tv.Type, 0, map[types.Type]bool{}); field != "" {
 		return fmt.Sprintf("value of type %s rendered whole (secret field %s)", types.TypeString(tv.Type, shortQualifier), field)
 	}
@@ -530,6 +543,77 @@ func (a *analyzer) secretTyped(e ast.Expr) string {
 }
 
 func shortQualifier(p *types.Package) string { return p.Name() }
+
+// credTypeName / credPkgSuffix identify the resolved-credential handle,
+// core/llm/credref.Cred.
+const (
+	credTypeName  = "credref.Cred"
+	credPkgSuffix = "/core/llm/credref"
+)
+
+// isCredType reports whether t is credref.Cred itself (not a pointer).
+func isCredType(t types.Type) bool {
+	n, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := n.Obj()
+	return obj.Name() == "Cred" && obj.Pkg() != nil && strings.HasSuffix(obj.Pkg().Path(), credPkgSuffix)
+}
+
+// credTyped reports whether e's static type contains a credref.Cred.
+func (a *analyzer) credTyped(e ast.Expr) bool {
+	if a.info == nil {
+		return false
+	}
+	tv, ok := a.info.Types[e]
+	if !ok || tv.Type == nil || tv.IsType() {
+		return false
+	}
+	return credIn(tv.Type, 0, map[types.Type]bool{}) != ""
+}
+
+// credIn returns a description of where t holds a credref.Cred — the
+// type itself, a pointer to it, or a struct field / element (to a small
+// depth) — or "". Unlike secretField, a String/LogValue/Format method on
+// the enclosing type does not exempt it: Cred has all three.
+func credIn(t types.Type, depth int, seen map[types.Type]bool) string {
+	if depth > 3 || seen[t] {
+		return ""
+	}
+	seen[t] = true
+	if isCredType(t) {
+		return "value"
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Pointer:
+		if isCredType(u.Elem()) {
+			return "pointer"
+		}
+		if r := credIn(u.Elem(), depth+1, seen); r != "" {
+			return r
+		}
+	case *types.Slice:
+		if r := credIn(u.Elem(), depth+1, seen); r != "" {
+			return "element " + r
+		}
+	case *types.Array:
+		if r := credIn(u.Elem(), depth+1, seen); r != "" {
+			return "element " + r
+		}
+	case *types.Map:
+		if r := credIn(u.Elem(), depth+1, seen); r != "" {
+			return "map value " + r
+		}
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			if r := credIn(u.Field(i).Type(), depth+1, seen); r != "" {
+				return "field " + u.Field(i).Name() + " " + r
+			}
+		}
+	}
+	return ""
+}
 
 // secretField returns the dotted name of the first secret-like field of t,
 // or "". A type with a String() or LogValue() method renders through it,
