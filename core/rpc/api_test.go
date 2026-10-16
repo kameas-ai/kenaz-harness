@@ -113,6 +113,18 @@ func (f *fakeHarnessAPI) AppInfo(_ context.Context) (AppInfo, error) { return Ap
 func (f *fakeHarnessAPI) ToolSchemaCosts(_ context.Context, _, _ string) ([]loadtools.ServerCost, error) {
 	return nil, ErrToolExposureNotConfigured
 }
+func (f *fakeHarnessAPI) MLLocalActivity(context.Context) (MLLocalActivityView, error) {
+	return MLLocalActivityView{}, nil
+}
+
+func (f *fakeHarnessAPI) SetMLLocalActivityRetention(context.Context, int) (MLLocalActivityView, error) {
+	return MLLocalActivityView{}, nil
+}
+
+func (f *fakeHarnessAPI) DeleteMLLocalActivity(context.Context) (MLLocalActivityView, error) {
+	return MLLocalActivityView{}, nil
+}
+
 func (f *fakeHarnessAPI) ModelCallsForSession(_ context.Context, _ string, _ int) ([]modelcalls.CallView, error) {
 	return []modelcalls.CallView{}, nil
 }

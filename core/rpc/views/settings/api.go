@@ -932,6 +932,17 @@ type Settings struct {
 	// at pipeline wiring; the consumer is fleet.closableSpanExporter's
 	// model-call filter. Never content.
 	ShareModelCallTelemetryWithFleet bool `json:"shareModelCallTelemetryWithFleet,omitempty"`
+
+	// ── Local ML activity (ml-producer-01MLPRD01 WP11, spec §12 A-16) ──
+
+	// MLLocalActivityRetentionDays is how long the local activity store
+	// (<dataDir>/ml/activity.db) keeps agent activity. 0 = the 90-day
+	// default; valid range 1..3650 (activity.EffectiveRetentionDays).
+	// Read on every pass of core/mlproducer/activity.Pruner
+	// (core/rpc/mlproducer_wiring.go). UI: Settings › Sync › Cloud ML ›
+	// "Local activity", written through
+	// Settings_SetMLLocalActivityRetention or a whole-settings Set.
+	MLLocalActivityRetentionDays int `json:"mlLocalActivityRetentionDays,omitempty"`
 }
 
 // ModelCallTelemetrySettings is the wire shape of the three model-call

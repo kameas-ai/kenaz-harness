@@ -335,6 +335,15 @@ func init() {
 			"which model_calls rows PruneBefore deletes "+
 			"(TestModelCallsWiring_SettingsReachConsumers).",
 	)
+	// ── Local ML activity (ml-producer-01MLPRD01 WP11) ───────────────
+	knobcoverage.Register[settings.Settings](
+		"MLLocalActivityRetentionDays",
+		"core/rpc/mlproducer_wiring.go passes settings.API."+
+			"MLLocalActivityRetentionDays to activity.NewPruner, read on every "+
+			"pass through EffectiveRetentionDays (0 = 90 days) — decides which "+
+			"events / tasks rows of <dataDir>/ml/activity.db PruneBefore deletes "+
+			"(TestMLProducerWiring_LocalActivityRetentionReachesPruner).",
+	)
 	knobcoverage.Register[settings.Settings](
 		"ShareModelCallTelemetryWithFleet",
 		"views/settings applyModelCallSharing (every Set / "+

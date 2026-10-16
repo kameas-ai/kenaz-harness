@@ -1501,6 +1501,29 @@ func (b *Bindings) Settings_SetModelCallTelemetry(mc settings.ModelCallTelemetry
 	return b.api.Settings().SetModelCallTelemetry(b.ctx(), mc)
 }
 
+// Settings_GetMLLocalActivity returns the local ML activity store's
+// status (ml-producer-01MLPRD01 WP11): row counts, size on disk,
+// retention, and whether new activity is also being shared with Fleet.
+func (b *Bindings) Settings_GetMLLocalActivity() (MLLocalActivityView, error) {
+	defer sentry.WrapBinding("Settings_GetMLLocalActivity")()
+	return b.api.MLLocalActivity(b.ctx())
+}
+
+// Settings_SetMLLocalActivityRetention sets how many days local agent
+// activity is kept (0 = the 90-day default; 1..3650).
+func (b *Bindings) Settings_SetMLLocalActivityRetention(days int) (MLLocalActivityView, error) {
+	defer sentry.WrapBinding("Settings_SetMLLocalActivityRetention")()
+	return b.api.SetMLLocalActivityRetention(b.ctx(), days)
+}
+
+// Settings_DeleteMLLocalActivity is "Delete local activity data": it
+// wipes the local activity store, the unsent Fleet outbox and the task
+// state on this device.
+func (b *Bindings) Settings_DeleteMLLocalActivity() (MLLocalActivityView, error) {
+	defer sentry.WrapBinding("Settings_DeleteMLLocalActivity")()
+	return b.api.DeleteMLLocalActivity(b.ctx())
+}
+
 // Settings_SetMCPAutoRestart persists the MCP auto-restart dial.
 func (b *Bindings) Settings_SetMCPAutoRestart(enabled bool) error {
 	defer sentry.WrapBinding("Settings_SetMCPAutoRestart")()

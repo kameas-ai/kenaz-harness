@@ -10,6 +10,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/advice"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/channels"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer/activity"
 	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
@@ -43,6 +44,28 @@ func sidecarRoot(dataDir string) string {
 		}
 	}
 	return filepath.Join(dataDir, sidecarRootDirName)
+}
+
+// activityDBPath is where the local ML activity store lives
+// (ml-producer-01MLPRD01 WP11): <dataDir>/ml/activity.db (activity.Path),
+// which for the standard profile (~/.kenaz/harness/<env>) is separate from
+// the shared engine root ~/.kenaz/ml/<env>. A non-standard data dir puts
+// the engine's isolated install root AT <dataDir>/ml, which
+// mlsidecar.Manager.Uninstall removes wholesale (ownsWholeRoot) and which
+// boot must not create; the store then moves to
+// <dataDir>/ml-activity/activity.db so an engine uninstall never deletes
+// the user's activity. The engine is told the path either way
+// (KENAZ_ML_ACTIVITY_DB), so it never assumes one.
+func activityDBPath(dataDir string) string {
+	p := activity.Path(dataDir)
+	if filepath.Clean(sidecarRoot(dataDir)) == filepath.Dir(p) {
+		alt := filepath.Join(dataDir, "ml-activity", activity.FileName)
+		if abs, err := filepath.Abs(alt); err == nil {
+			return abs
+		}
+		return alt
+	}
+	return p
 }
 
 // newSidecarStack constructs the process's single *mlsidecar.Manager and
@@ -82,7 +105,10 @@ func newSidecarStack(dataDir, buildVersion string) (*mlsidecar.Manager, advice.S
 	layout.DeveloperBuilds = env == mlsidecar.EngineEnvDev
 	m := mlsidecar.NewManager(layout,
 		mlsidecar.NewClient(mlsidecar.BaseURLForEnv(env), nil),
-		mlsidecar.ProcessSpawner{Layout: layout},
+		// WP11 (spec §12 A-16): the engine reads the harness's local
+		// activity store as a second source — and only that file, never
+		// data.db (least privilege).
+		mlsidecar.ProcessSpawner{Layout: layout, ExtraEnv: []string{activity.EnvVar + "=" + activityDBPath(dataDir)}},
 		"harness", buildVersion)
 	m.BasePort = mlsidecar.EnginePort(env)
 	// A real PyInstaller engine needs seconds to bind its port.
