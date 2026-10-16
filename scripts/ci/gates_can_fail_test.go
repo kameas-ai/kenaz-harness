@@ -414,7 +414,7 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			gate:       "check-no-credential-in-fleet-logs.sh",
 			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
 			content:    "package secrets\n\nvar zzGateProbe = slog.String(\"uck_auth\", \"x\")\n",
-			wantOutput: "typed slog attribute",
+			wantOutput: "forbidden attribute key \"uck_auth\"",
 		},
 		{
 			// A new file anywhere under core/ joins the scope the moment it
@@ -424,6 +424,86 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			file:       "core/rpc/zz_gate_probe.go",
 			content:    "package rpc\n\nfunc zzGateProbe(_ *secrets.FleetCredentialStore, secret string) { log.Printf(\"got %s\", secret) }\n",
 			wantOutput: "raw-secret identifier secret",
+		},
+		{
+			// Review shape 1: logging.L().Info — the repo's dominant spelling, a call (not an identifier) before the dot.
+			name:       "fleet-cred-logs/review-1-logging-chain",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(v []byte) { logging.L().Info(\"stored\", \"value\", string(v)) }\n",
+			wantOutput: "forbidden attribute key \"value\"",
+		},
+		{
+			// Review shape 2: an apiKey identifier.
+			name:       "fleet-cred-logs/review-2-apikey-ident",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(apiKey string) { slog.Info(\"x\", \"k\", apiKey) }\n",
+			wantOutput: "raw-secret identifier apiKey",
+		},
+		{
+			// Review shape 3: a bare key identifier.
+			name:       "fleet-cred-logs/review-3-key-ident",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(key string) { slog.Info(\"x\", \"k\", key) }\n",
+			wantOutput: "raw-secret identifier key",
+		},
+		{
+			// Review shape 4: pt (plaintext) identifier.
+			name:       "fleet-cred-logs/review-4-pt-ident",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(pt string) { logger.Warn(\"x\", \"k\", pt) }\n",
+			wantOutput: "raw-secret identifier pt",
+		},
+		{
+			// Review shape 5: a token identifier.
+			name:       "fleet-cred-logs/review-5-token-ident",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(token string) { logging.L().Debug(\"x\", \"t\", token) }\n",
+			wantOutput: "raw-secret identifier token",
+		},
+		{
+			// Review shape 6: a key-shaped literal in the message (assembled at runtime; matched by core/fleet/secretshape.go's patterns).
+			name:       "fleet-cred-logs/review-6-key-shaped-message",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe() { logging.L().Info(\"loaded " + zzFakeAnthropicKey() + "\") }\n",
+			wantOutput: "key-shaped literal",
+		},
+		{
+			// Review shape 7: fmt.Sprintf building the message inline.
+			name:       "fleet-cred-logs/review-7-inline-sprintf",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(secret string) { logging.L().Info(fmt.Sprintf(\"got %s\", secret)) }\n",
+			wantOutput: "raw-secret identifier secret",
+		},
+		{
+			// Review shape 8: a Sprintf result bound to a variable, then logged.
+			name:       "fleet-cred-logs/review-8-sprintf-variable",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(plaintext string) {\n\tmsg := fmt.Sprintf(\"%s\", plaintext)\n\tlogger.Info(msg)\n}\n",
+			wantOutput: "via fmt.Sprint* into msg",
+		},
+		{
+			// Review shape 9: logger.With(...) attrs.
+			name:       "fleet-cred-logs/review-9-logger-with",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(x string) { logger.With(\"value\", x).Info(\"y\") }\n",
+			wantOutput: "forbidden attribute key \"value\"",
+		},
+		{
+			// Review shape 10: log.Printf / fmt.Fprintf(os.Stderr) feeding a stream.
+			name:       "fleet-cred-logs/review-10-printf",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(locator string) { log.Printf(\"%s\", locator); fmt.Fprintf(os.Stderr, \"%s\", locator) }\n",
+			wantOutput: "raw-secret identifier locator",
 		},
 		{
 			name: "agentgraph-convergence/I5-second-ask-store",
@@ -5790,5 +5870,34 @@ func TestGenAISpanGate_StructuralVerdictIsCWDIndependent(t *testing.T) {
 			!strings.Contains(out, "local store model_calls: 42 columns") {
 			t.Fatalf("check-genai-span-no-content.sh from %s passed without reporting its scan:\n%s", dir, out)
 		}
+	}
+}
+
+// zzFakeAnthropicKey assembles an Anthropic-shaped key at runtime so this
+// file never carries one (#413 pattern).
+func zzFakeAnthropicKey() string {
+	return "sk" + "-" + "ant" + "-" + "api03" + "-" + strings.Repeat("Q", 32)
+}
+
+// TestFleetCredLogsGate_BenignLogsPass is the negative control for the
+// fleet-cred-logs cases: ordinary logging in the namespace — an id, a
+// count, an enum conversion, an error string, a length, formatting into a
+// builder, prose that mentions "value" and "key" — must not trip the gate.
+func TestFleetCredLogsGate_BenignLogsPass(t *testing.T) {
+	root := repoRoot(t)
+	full := filepath.Join(root, "core/secrets/fleet_credentials_zz_gate_probe.go")
+	defer plant(t, full, "package secrets\n\n"+
+		"func zzGateProbe(id string, n int, kind Kind, err error, pt []byte, secret string) {\n"+
+		"\tlogging.L().Info(\"fleet.credential.stored\", \"credential_id\", id)\n"+
+		"\tlogger.Debug(\"purge done\", \"count\", n, \"kind\", string(kind))\n"+
+		"\tslog.Warn(\"purge failed\", \"credential_id\", id, \"err\", err.Error(), \"len\", len(pt))\n"+
+		"\tlogging.L().Info(\"the value for this key was stored\", \"credential_id\", id)\n"+
+		"\t_ = err.Error()\n"+
+		"\t_ = fmt.Sprintf(\"%d keys\", n)\n"+
+		"\tvar b strings.Builder\n"+
+		"\tfmt.Fprintf(&b, \"%s\", secret)\n"+
+		"}\n", "")()
+	if code, out := runGate(t, "check-no-credential-in-fleet-logs.sh", root); code != 0 {
+		t.Fatalf("benign namespace logging tripped the gate (exit %d):\n%s", code, out)
 	}
 }

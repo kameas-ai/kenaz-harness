@@ -27,27 +27,30 @@
 #
 # WHAT FAILS
 # ----------
-# Inside any log call — <recv>.{Debug,Info,Warn,Error}[Context](…),
-# slog.Log / slog.LogAttrs, log.Print*/Fatal*/Panic*, fmt.Print*/Fprint* —
-# matched across lines (balanced parentheses, so a multi-line call is not
-# invisible the way it is to the one-line slog-privacy gate):
-#   (a) a forbidden attribute key: "value", "plaintext", "secret", "key",
-#       "api_key", "apikey", "locator", "cred_locator", "uck", "uck_auth",
-#       "uck_auth_hash", "ucek", "kek", "seed", "nonce", "sealed",
-#       "na", "nb" (case-insensitive);
-#   (b) a raw-secret identifier as an argument: plaintext, secret,
-#       credBytes, value, buf, locator, loc, uck, uckAuth, ucek, kek,
-#       seed, nonce, sealed;
-#   (c) a bytes-to-text conversion or borrowed view: string(…), .Bytes(),
-#       .Use(.
-# Anywhere in a scoped file: (d) a typed slog attribute with a forbidden
-# key — slog.String("value", …) etc. — since that is how a multi-line call
-# builds its attrs out of line.
-# Opt-out: a `cred-log-allow: <reason>` comment inside the call.
+# The checker is an AST pass, scripts/ci/cmd/checkfleetcredlogs — see its
+# header for the full sink and finding list. In short: any log sink
+# (<recv>.{Debug,Info,Warn,Error}[Context], including the repo's dominant
+# logging.L().Info(…) chain; logger.With(…); slog.*; log.Print*; fmt.Print*;
+# a fmt.Sprintf result that reaches one) whose arguments carry
+#   (a) a forbidden attribute key ("value", "plaintext", "key", "token",
+#       "uck_auth", "nonce", …);
+#   (b) a KEY-SHAPED literal — matched with the regexes the checker reads
+#       out of core/fleet/secretshape.go (secretValuePatterns +
+#       apiKeyShapeRegex), so this gate and the sync backstop share one
+#       definition of "looks like a key";
+#   (c) a secret-named identifier or field (plaintext, pt, secret, value,
+#       key, apiKey, token, locator, …, or *Key/*Token/*Secret/*Password);
+#   (d) string(…), .Bytes() or .Use(.
+# Opt-out: a `cred-log-allow: <reason>` comment on a line the call spans.
+#
+# HISTORY: the first version (2026-10-15) was a perl regex over
+# `ident.Info(`. Review planted ten violations — logging.L().Info, apiKey /
+# key / pt / token identifiers, a key-shaped message, Sprintf-built
+# messages, logger.With — and it caught none. The AST pass replaced it.
 #
 # Planted-violation proofs: scripts/ci/gates_can_fail_test.go cases
-# "fleet-cred-logs/*" (a one-line value log, a multi-line locator log, a
-# typed attribute, a new file that only names FleetCredentialStore).
+# "fleet-cred-logs/*" (one per shape) and
+# TestFleetCredLogsGate_BenignLogsPass (negative controls).
 #
 # Usage: bash scripts/ci/check-no-credential-in-fleet-logs.sh (from anywhere).
 
@@ -58,96 +61,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
 GATE="[fleet-cred-logs]"
 ci_require_dir core "$GATE"
 
-scope=$(
-  {
-    find core/secrets -maxdepth 1 -type f -name 'fleet_credentials*.go' ! -name '*_test.go' 2>/dev/null || true
-    find core/llm/credref -type f -name '*.go' ! -name '*_test.go' 2>/dev/null || true
-    find core/fleet -maxdepth 1 -type f -name 'credential*.go' ! -name '*_test.go' 2>/dev/null || true
-    if [[ -d core/fleet/credentials ]]; then
-      find core/fleet/credentials -type f -name '*.go' ! -name '*_test.go'
-    fi
-    grep -rlE '\b(FleetCredentialStore|FleetCredentialLocator|FleetNamespaceOrg|FleetNamespaceUser)\b' \
-      --include='*.go' --exclude='*_test.go' core 2>/dev/null || true
-  } | sort -u
-)
-
-nfiles=$(printf '%s\n' "$scope" | grep -c . || true)
-if [[ "$nfiles" -lt 2 ]]; then
-  echo "$GATE FAIL: scope resolved to $nfiles file(s); expected at least core/secrets/fleet_credentials.go and core/llm/credref/credref.go." >&2
-  echo "$GATE A gate with nothing in scope passes vacuously — refusing." >&2
+BIN="$(mktemp -d)/checkfleetcredlogs"
+trap 'rm -rf "$(dirname "$BIN")"' EXIT
+if ! go build -o "$BIN" ./scripts/ci/cmd/checkfleetcredlogs/; then
+  echo "$GATE FAIL: checkfleetcredlogs failed to build." >&2
   exit 1
 fi
-
-# The scanner: perl, so a call can be matched with balanced parentheses
-# across lines. Prints "<file>:<line>: <reason>: <call excerpt>" per hit.
-# shellcheck disable=SC2016
-scanner='
-use strict; use warnings;
-my $keys = qr/(?i:value|plaintext|secret|key|api_key|apikey|locator|cred_locator|uck|uck_auth|uck_auth_hash|ucek|kek|seed|nonce|sealed|na|nb)/;
-my $idents = qr/\b(?:plaintext|secret|credBytes|value|buf|locator|loc|uck|uckAuth|ucek|kek|seed|nonce|sealed)\b/;
-my $call = qr/
-  (?: \b[A-Za-z_][A-Za-z0-9_]*\.(?:Debug|Info|Warn|Error)(?:Context)?
-    | \bslog\.(?:Log|LogAttrs)
-    | \blog\.(?:Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)
-    | \bfmt\.(?:Print|Printf|Println|Fprint|Fprintf|Fprintln)
-  )
-  (\((?:[^()"`]++|"(?:[^"\\]|\\.)*+"|`[^`]*+`|(?1))*+\))
-/xs;
-my $fail = 0;
-for my $f (@ARGV) {
-  open(my $fh, "<", $f) or die "$f: $!";
-  local $/; my $src = <$fh>; close $fh;
-  # A call that sits after // on its line is prose, not code.
-  while ($src =~ /$call/g) {
-    my $text = $&; my $args = $1;
-    my $start = $-[0];
-    my $line = 1 + (substr($src, 0, $start) =~ tr/\n//);
-    next if $text =~ /cred-log-allow:/;
-    my $prefix = substr($src, rindex($src, "\n", $start) + 1, $start - rindex($src, "\n", $start) - 1);
-    next if $prefix =~ m{//};
-    my $inner = substr($args, 1, -1);
-    # Drop the first argument when it is the message literal (or ctx then
-    # message), so the message text itself is never scanned for keys.
-    (my $scan = $inner) =~ s/^\s*(?:ctx\s*,\s*)?(?:[A-Za-z_.]*Level[A-Za-z]*\s*,\s*)?"(?:[^"\\]|\\.)*"//s;
-    my @why;
-    while ($scan =~ /"($keys)"/g) { push @why, "forbidden attribute key \"$1\""; }
-    # Identifiers and conversions are code, so scan with string literals
-    # removed: "value" as a key is (a); value as an argument is (b).
-    (my $code = $scan) =~ s/"(?:[^"\\]|\\.)*"|`[^`]*`//g;
-    while ($code =~ /($idents)/g) { push @why, "raw-secret identifier $1"; }
-    push @why, "bytes-to-text conversion string(...)" if $code =~ /\bstring\s*\(/;
-    push @why, "borrowed secret view .Bytes()/.Use(" if $code =~ /\.(?:Bytes\s*\(\s*\)|Use\s*\()/;
-    next unless @why;
-    (my $excerpt = $text) =~ s/\s+/ /g;
-    $excerpt = substr($excerpt, 0, 160);
-    my %seen; @why = grep { !$seen{$_}++ } @why;
-    print "$f:$line: " . join("; ", @why) . ": $excerpt\n";
-    $fail = 1;
-  }
-  while ($src =~ /\bslog\.(?:String|Any|Int|Int64|Uint64|Float64|Bool|Time|Duration|Group|Attr)\(\s*"($keys)"/g) {
-    my $line = 1 + (substr($src, 0, $-[0]) =~ tr/\n//);
-    my $eol = index($src, "\n", $-[0]);
-    my $rest = substr($src, $-[0], ($eol < 0 ? length($src) : $eol) - $-[0]);
-    next if $rest =~ /cred-log-allow:/;
-    print "$f:$line: typed slog attribute with forbidden key \"$1\"\n";
-    $fail = 1;
-  }
-}
-exit $fail;
-'
-
-files=()
-while IFS= read -r f; do
-  [[ -n "$f" ]] && files+=("$f")
-done <<< "$scope"
-if ! out=$(perl -e "$scanner" "${files[@]}"); then
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    echo "$GATE FAIL: $line" >&2
-  done <<< "$out"
-  echo "$GATE Fleet credential code must not log key material, locators or secret-typed values." >&2
-  echo "$GATE Log the credential id only, or annotate the call with 'cred-log-allow: <reason>'." >&2
-  exit 1
-fi
-
-echo "$GATE clean — $nfiles file(s) in the credential namespaces, no credential reaches a log call."
+"$BIN"
