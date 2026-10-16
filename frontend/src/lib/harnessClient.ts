@@ -158,6 +158,7 @@ import type {
   SessionUsage,
   ModelCall,
   ModelCallTelemetrySettings,
+  SettingsResetUnreadableResult,
   TurnRun,
   DriftReport,
   PolicyFileDetail,
@@ -309,6 +310,8 @@ interface WailsBindingsLike {
   Sessions_ModelCalls(id: string, limit: number): Promise<ModelCall[] | null>;
   Settings_GetModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   Settings_SetModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /** "Reset settings" recovery for an unreadable settings.json. Desktop-only. */
+  Settings_ResetUnreadable(): Promise<SettingsResetUnreadableResult>;
   /** Turn -> run links (agentgraph-settings-linkage-01DOGF0D WP03). Desktop-only. */
   Sessions_TurnRuns(sessionID: string): Promise<TurnRun[]>;
   Sessions_SaveAsArtifact(
@@ -2518,6 +2521,13 @@ export interface SettingsClient {
   getModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   /** Persist them; turning sharing on exports only calls that start afterwards. */
   setModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /**
+   * Recovery for a settings file that cannot be read: moves it aside to
+   * settings.json.corrupt-<UTC timestamp> (returned as backupPath), writes
+   * the defaults, and turns settings sync off. Rejects, changing nothing,
+   * when the file reads fine. Desktop-only (no served dispatch).
+   */
+  resetUnreadable(): Promise<SettingsResetUnreadableResult>;
   /** Persist the MCP auto-restart dial. */
   setMCPAutoRestart(enabled: boolean): Promise<void>;
 
@@ -4751,6 +4761,7 @@ export function createHarnessClient(): HarnessClient {
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
       getModelCallTelemetry: () => b().Settings_GetModelCallTelemetry(),
       setModelCallTelemetry: (mc) => b().Settings_SetModelCallTelemetry(mc),
+      resetUnreadable: () => b().Settings_ResetUnreadable(),
       setMCPAutoRestart: (enabled) => b().Settings_SetMCPAutoRestart(enabled),
       getToolExposure: () => b().Settings_GetToolExposure(),
       setToolExposure: (settings) => b().Settings_SetToolExposure(settings),
@@ -6291,6 +6302,7 @@ export function createFakeHarnessClient(
         shareWithFleet: false,
       }),
       setModelCallTelemetry: noop,
+      resetUnreadable: async () => ({ backupPath: '' }),
       setMCPAutoRestart: noop,
       getToolExposure: async () => ({
         exposure: {},

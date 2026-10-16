@@ -52,6 +52,11 @@ type SyncStatusView struct {
 	// not be read (UploadConsent.UploadState). Confirming cannot fix that,
 	// so AwaitingConfirmation is false on such a row.
 	UploadsBlockedReason string `json:"uploads_blocked_reason,omitempty"`
+	// SettingsUnreadable is true when UploadsBlockedReason is set because
+	// the settings file itself cannot be read (not because no store is
+	// wired). The UI then offers the "Reset settings" recovery
+	// (Settings_ResetUnreadable).
+	SettingsUnreadable bool `json:"settings_unreadable,omitempty"`
 }
 
 // UploadConsent persists the one-time "settings may be uploaded" answer

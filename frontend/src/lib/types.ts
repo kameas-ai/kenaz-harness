@@ -5269,6 +5269,21 @@ export interface SyncStatusView {
    * cannot fix it, so awaiting_confirmation is false on such a row.
    */
   uploads_blocked_reason?: string;
+  /**
+   * True when uploads_blocked_reason is set because the settings file itself
+   * cannot be read. The UI then offers "Reset settings"
+   * (Settings_ResetUnreadable).
+   */
+  settings_unreadable?: boolean;
+}
+
+/**
+ * SettingsResetUnreadableResult — Settings_ResetUnreadable's answer
+ * (Go: settings.ResetUnreadableResult). backupPath is where the unreadable
+ * settings.json was kept (settings.json.corrupt-<UTC timestamp>).
+ */
+export interface SettingsResetUnreadableResult {
+  backupPath: string;
 }
 
 /**

@@ -8443,6 +8443,18 @@ export namespace settings {
 	        this.modelId = source["modelId"];
 	    }
 	}
+	export class ResetUnreadableResult {
+	    backupPath: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ResetUnreadableResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.backupPath = source["backupPath"];
+	    }
+	}
 	export class WindowSize {
 	    width: number;
 	    height: number;
@@ -9167,6 +9179,7 @@ export namespace sync {
 	    conflict?: boolean;
 	    not_syncing_yet?: boolean;
 	    uploads_blocked_reason?: string;
+	    settings_unreadable?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SyncStatusView(source);
@@ -9186,6 +9199,7 @@ export namespace sync {
 	        this.conflict = source["conflict"];
 	        this.not_syncing_yet = source["not_syncing_yet"];
 	        this.uploads_blocked_reason = source["uploads_blocked_reason"];
+	        this.settings_unreadable = source["settings_unreadable"];
 	    }
 	}
 

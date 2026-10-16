@@ -32,9 +32,16 @@ export interface SettingsIssueFix {
   /**
    * Applies the fix. Resolves when the fix landed; the banner then re-runs
    * every provider, so a fixed issue disappears on its own. Rejects with a
-   * user-presentable Error when it did not.
+   * user-presentable Error when it did not. A string result is a note the
+   * banner keeps showing after the issue is gone (e.g. where a backup was
+   * saved).
    */
-  run: () => Promise<void>;
+  run: () => Promise<void | string>;
+  /**
+   * When set, the fix is destructive: the banner first shows `body` with a
+   * `label` button and Cancel, and runs the fix only on that second click.
+   */
+  confirm?: { body: string; label: string };
 }
 
 export interface SettingsIssue {
@@ -301,6 +308,32 @@ function syncCategoryName(id: string): string {
 }
 
 /**
+ * "Reset settings": the way out of an unreadable settings.json, which Kenaz
+ * otherwise refuses to save over (Settings_ResetUnreadable). Destructive, so
+ * it asks first, and says plainly what is lost and where the old file goes.
+ */
+function resetUnreadableFix(client: HarnessClient): SettingsIssueFix {
+  return {
+    label: 'Reset settings',
+    confirm: {
+      label: 'Reset to defaults',
+      body:
+        'All of your Kenaz settings will return to their defaults: theme, model preferences, ' +
+        'tool settings, and which settings sync. Settings sync turns off until you turn it back on. ' +
+        'Your current settings file can’t be read, so it isn’t deleted: Kenaz keeps it, unchanged, ' +
+        'in the same folder, renamed settings.json.corrupt- followed by today’s date and time (UTC). ' +
+        'Your sessions and API keys are not affected.',
+    },
+    run: async () => {
+      const { backupPath } = await client.settings.resetUnreadable();
+      return backupPath
+        ? `Your settings were reset to their defaults. Your old settings file is kept at ${backupPath}.`
+        : 'Your settings were reset to their defaults.';
+    },
+  };
+}
+
+/**
  * Owner ruling H1 (provider-credentials-client-01PCCLI01 §7a): settings sync
  * never reached Fleet before the A2 wire fix, so a category the user turned
  * on had never left the machine. Before the first upload, ask once. The
@@ -324,6 +357,9 @@ const settingsSyncConfirmIssues: SettingsIssueProvider = {
           severity: 'error',
           title: 'Settings sync is paused',
           body: blocked.uploads_blocked_reason!,
+          // The file itself cannot be read: offer the recovery. (A build with
+          // no settings store has nothing to reset.)
+          fix: blocked.settings_unreadable ? resetUnreadableFix(client) : undefined,
           link: { label: 'Open Sync settings', to: '/settings?tab=sync' },
         },
       ];

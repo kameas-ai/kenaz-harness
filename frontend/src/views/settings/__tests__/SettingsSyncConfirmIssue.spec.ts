@@ -144,3 +144,68 @@ describe('SettingsIssuesBanner with the sync confirmation', () => {
     expect(w.find('[data-testid="settings-issue-settings-sync-confirm"]').exists()).toBe(false);
   });
 });
+
+// The settings file cannot be read: the paused notice offers "Reset
+// settings", which asks first, then calls Settings_ResetUnreadable and says
+// where the old file was kept.
+describe('SettingsIssuesBanner reset for unreadable settings', () => {
+  const reason = 'Settings sync is paused: Kenaz could not read your settings file.';
+  const backupPath = '/cfg/kenaz-harness/settings.json.corrupt-20261016T150405Z';
+
+  function makeResetClient() {
+    const base = createFakeHarnessClient();
+    let current: SyncStatusView[] = [
+      { category: 'ui_theme', enabled: true, uploads_blocked_reason: reason, settings_unreadable: true },
+    ];
+    const resetUnreadable = vi.fn(async () => {
+      current = [{ category: 'ui_theme', enabled: false }];
+      return { backupPath };
+    });
+    const client: HarnessClient = {
+      ...base,
+      sync: { ...base.sync, status: vi.fn(async () => current) },
+      settings: { ...base.settings, resetUnreadable },
+    };
+    return { client, resetUnreadable };
+  }
+
+  it('offers no reset when no settings store is wired (nothing to recover)', async () => {
+    const { client } = makeClient([{ category: 'ui_theme', enabled: true, uploads_blocked_reason: 'no store' }]);
+    const blocked = (await collectSettingsIssues(client, false)).find((i) => i.id === 'settings-sync-blocked');
+    expect(blocked?.fix).toBeUndefined();
+  });
+
+  it('confirms, calls the binding, and shows where the backup is', async () => {
+    const { client, resetUnreadable } = makeResetClient();
+    const w = mount(SettingsIssuesBanner, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+
+    const section = () => w.find('[data-testid="settings-issue-settings-sync-blocked"]');
+    const fix = section().find('[data-testid="settings-issue-fix"]');
+    expect(fix.text()).toBe('Reset settings');
+
+    // First click only asks.
+    await fix.trigger('click');
+    await flushPromises();
+    expect(resetUnreadable).not.toHaveBeenCalled();
+    const body = section().find('[data-testid="settings-issue-confirm-body"]').text();
+    expect(body).toContain('return to their defaults');
+    expect(body).toContain('settings.json.corrupt-');
+    expect(body).toContain('isn’t deleted');
+
+    // Cancel backs out without resetting.
+    await section().find('[data-testid="settings-issue-confirm-cancel"]').trigger('click');
+    expect(section().find('[data-testid="settings-issue-confirm"]').exists()).toBe(false);
+    expect(resetUnreadable).not.toHaveBeenCalled();
+
+    // Confirmed: the binding runs once, the paused notice goes, the backup is named.
+    await section().find('[data-testid="settings-issue-fix"]').trigger('click');
+    await section().find('[data-testid="settings-issue-confirm-run"]').trigger('click');
+    await flushPromises();
+    expect(resetUnreadable).toHaveBeenCalledTimes(1);
+    expect(section().exists()).toBe(false);
+    expect(w.find('[data-testid="settings-issue-notice"]').text()).toContain(backupPath);
+  });
+});

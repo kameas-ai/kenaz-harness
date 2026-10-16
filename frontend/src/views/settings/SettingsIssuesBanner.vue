@@ -13,6 +13,9 @@
  *     the manual instructions and Copy diagnostics.
  *   - without a fix: the instructions and Copy diagnostics straight away.
  *   - with a link: a secondary "go change it yourself" route beside the fix.
+ *   - with fix.confirm (a destructive fix, e.g. Reset settings): the first
+ *     click shows what will happen; only the second runs it. A note the fix
+ *     returns (where a backup went) stays shown after the issue is gone.
  *
  * Desktop-only providers are skipped in a served build (their RPCs have no
  * serve dispatch), so in practice the banner is silent there today.
@@ -40,6 +43,10 @@ const fixBusy = ref<Record<string, boolean>>({});
 const fixError = ref<Record<string, string>>({});
 const copied = ref<Record<string, boolean>>({});
 const copyError = ref<Record<string, string>>({});
+/** Issues whose destructive fix is waiting for its confirm click. */
+const confirming = ref<Record<string, boolean>>({});
+/** Notes a fix returned (e.g. where a backup went); outlive the issue. */
+const notices = ref<string[]>([]);
 let copiedTimer: ReturnType<typeof setTimeout> | null = null;
 let unmounted = false;
 
@@ -55,12 +62,30 @@ async function load(): Promise<void> {
   if (!unmounted) issues.value = next;
 }
 
+function setConfirming(id: string, on: boolean): void {
+  const next = { ...confirming.value };
+  if (on) next[id] = true;
+  else delete next[id];
+  confirming.value = next;
+}
+
+/** Fix button: a destructive fix asks first (SettingsIssueFix.confirm). */
+function requestFix(issue: SettingsIssue): void {
+  if (issue.fix?.confirm) {
+    setConfirming(issue.id, true);
+    return;
+  }
+  void runFix(issue);
+}
+
 async function runFix(issue: SettingsIssue): Promise<void> {
   if (!issue.fix || fixBusy.value[issue.id]) return;
+  setConfirming(issue.id, false);
   fixBusy.value = { ...fixBusy.value, [issue.id]: true };
   fixError.value = without(fixError.value, issue.id);
   try {
-    await issue.fix.run();
+    const note = await issue.fix.run();
+    if (typeof note === 'string' && note) notices.value = [...notices.value, note];
     await load();
   } catch (e) {
     fixError.value = {
@@ -110,10 +135,19 @@ onBeforeUnmount(() => {
 
 <template>
   <div
-    v-if="issues.length > 0"
+    v-if="issues.length > 0 || notices.length > 0"
     class="px-6 pt-4 grid gap-3"
     data-testid="settings-issues-banner"
   >
+    <p
+      v-for="(note, i) in notices"
+      :key="`notice-${i}`"
+      role="status"
+      class="rounded-sm border border-border-muted bg-surface-1 px-4 py-3 text-[12px] text-ink max-w-prose"
+      data-testid="settings-issue-notice"
+    >
+      {{ note }}
+    </p>
     <section
       v-for="issue in issues"
       :key="issue.id"
@@ -139,18 +173,50 @@ onBeforeUnmount(() => {
         {{ issue.body }}
       </p>
 
+      <!-- Destructive fix: say what happens, then a second, explicit click. -->
       <div
-        v-if="(issue.fix && !fixError[issue.id]) || issue.link"
+        v-if="issue.fix?.confirm && confirming[issue.id]"
+        class="mt-3 rounded-sm border border-border-muted bg-surface-1 px-3 py-2"
+        data-testid="settings-issue-confirm"
+      >
+        <p class="text-[12px] text-ink max-w-prose" data-testid="settings-issue-confirm-body">
+          {{ issue.fix.confirm.body }}
+        </p>
+        <div class="mt-2 flex items-center gap-3">
+          <button
+            type="button"
+            class="rounded px-3 py-1.5 text-[12px] font-ui border border-signal-danger text-signal-danger
+                   hover:bg-signal-danger hover:text-white disabled:opacity-50 disabled:cursor-wait"
+            :disabled="fixBusy[issue.id] ?? false"
+            data-testid="settings-issue-confirm-run"
+            @click="runFix(issue)"
+          >
+            {{ issue.fix.confirm.label }}
+          </button>
+          <button
+            type="button"
+            class="rounded px-3 py-1.5 text-[12px] font-ui border border-border-muted
+                   bg-surface-1 text-ink hover:bg-surface-2"
+            data-testid="settings-issue-confirm-cancel"
+            @click="setConfirming(issue.id, false)"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="(issue.fix && !fixError[issue.id] && !confirming[issue.id]) || issue.link"
         class="mt-3 flex items-center gap-3"
       >
         <button
-          v-if="issue.fix && !fixError[issue.id]"
+          v-if="issue.fix && !fixError[issue.id] && !confirming[issue.id]"
           type="button"
           class="rounded px-3 py-1.5 text-[12px] font-ui bg-accent text-on-accent
                  hover:bg-accent-hover disabled:opacity-50 disabled:cursor-wait"
           :disabled="fixBusy[issue.id] ?? false"
           data-testid="settings-issue-fix"
-          @click="runFix(issue)"
+          @click="requestFix(issue)"
         >
           {{ fixBusy[issue.id] ? 'Working…' : issue.fix.label }}
         </button>

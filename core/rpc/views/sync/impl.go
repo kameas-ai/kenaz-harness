@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -199,11 +200,12 @@ func (a *API) Sync_Status(_ context.Context) ([]SyncStatusView, error) {
 	}
 	raw := a.syncer.Status()
 	out := make([]SyncStatusView, len(raw))
-	blocked := a.uploadsBlockedReason()
+	blocked, unreadable := a.uploadsBlockedReason()
 	for i, s := range raw {
 		v := enrichWithRegistry(syncStatusToView(s), registry, string(s.Category))
 		if blocked != "" && v.Enabled && !v.LocalOnly && !v.NotSyncingYet {
 			v.UploadsBlockedReason = blocked
+			v.SettingsUnreadable = unreadable
 			v.AwaitingConfirmation = false
 		}
 		out[i] = v
@@ -215,16 +217,21 @@ func (a *API) Sync_Status(_ context.Context) ([]SyncStatusView, error) {
 // read, so uploads are held for a reason the user cannot fix by
 // confirming. Without this the gate failed closed silently: the panel
 // asked the user to "Start syncing", and confirming could not take effect.
-func (a *API) uploadsBlockedReason() string {
+// unreadable is true when the reason is the settings file itself, which
+// "Reset settings" can recover from.
+func (a *API) uploadsBlockedReason() (reason string, unreadable bool) {
 	c := a.uploadConsent()
 	if c == nil {
-		return "Settings sync cannot upload: this build has no settings store to record your confirmation."
+		return "Settings sync cannot upload: this build has no settings store to record your confirmation.", false
 	}
 	if _, err := c.UploadState(); err != nil {
+		if errors.Is(err, ErrUploadConsentUnavailable) {
+			return "Settings sync cannot upload: this build has no settings store to record your confirmation.", false
+		}
 		return "Settings sync is paused: Kenaz could not read your settings file, so it cannot tell whether you confirmed uploads (" +
-			err.Error() + "). Uploads resume as soon as the file can be read again."
+			err.Error() + "). Uploads resume as soon as the file can be read again.", true
 	}
-	return ""
+	return "", false
 }
 
 // enrichWithRegistry adds Scopes + OrgAppliedAt to v from registry, when a

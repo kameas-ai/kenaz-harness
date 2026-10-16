@@ -1566,6 +1566,10 @@ export function Settings_GetWebSearch() {
   return window['go']['rpc']['Bindings']['Settings_GetWebSearch']();
 }
 
+export function Settings_ResetUnreadable() {
+  return window['go']['rpc']['Bindings']['Settings_ResetUnreadable']();
+}
+
 export function Settings_Set(arg1) {
   return window['go']['rpc']['Bindings']['Settings_Set'](arg1);
 }

@@ -1394,3 +1394,15 @@
 # NotAvailableInServedMode instead.
 "Settings_GetModelCallTelemetry"
 "Settings_SetModelCallTelemetry"
+
+# CLASS: desktop-only-by-nature -- settings-sync review round, 2026-10-16.
+# 1 entries.
+#
+# Settings_ResetUnreadable: the "Reset settings" recovery for an unreadable
+# settings.json (moves it to settings.json.corrupt-<UTC timestamp>, writes
+# the defaults). The file is the desktop host's own; a served client has no
+# business resetting it. Its only caller is the "Settings sync is paused"
+# issue in lib/settingsIssues.ts, whose provider is desktopOnly, so the
+# banner skips it in a served build. Owner: alec; this line goes when the
+# Sync_* family ports to served mode and brings the recovery with it.
+"Settings_ResetUnreadable"

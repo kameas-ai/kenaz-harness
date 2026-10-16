@@ -848,6 +848,8 @@ export function Settings_GetWebFetchEnabled():Promise<boolean>;
 
 export function Settings_GetWebSearch():Promise<boolean>;
 
+export function Settings_ResetUnreadable():Promise<settings.ResetUnreadableResult>;
+
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
 
 export function Settings_SetAuditSettings(arg1:settings.AuditSettings):Promise<void>;

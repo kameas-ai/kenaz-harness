@@ -3919,6 +3919,21 @@ func (b *Bindings) Sync_ConfirmUploads() error {
 	return b.api.Sync().Sync_ConfirmUploads(b.ctx())
 }
 
+// Settings_ResetUnreadable is the "Reset settings" recovery for a
+// settings.json that cannot be read: it moves the file aside to
+// settings.json.corrupt-<UTC timestamp>, writes the defaults and turns the
+// live settings-sync opt-ins off to match (settings_reset.go). It refuses,
+// changing nothing, when the file reads fine. Desktop-only: the settings
+// file is the host's own.
+func (b *Bindings) Settings_ResetUnreadable() (settings.ResetUnreadableResult, error) {
+	defer sentry.WrapBinding("Settings_ResetUnreadable")()
+	r, ok := b.api.(unreadableSettingsResetter)
+	if !ok {
+		return settings.ResetUnreadableResult{}, settings.ErrResetUnsupported
+	}
+	return r.ResetUnreadableSettings(b.ctx())
+}
+
 // Sync_PendingMCPSecrets returns MCPs that arrived via sync but need credentials
 // from the user before they can start. Shown in the SyncPanel "Provide credentials" banner.
 func (b *Bindings) Sync_PendingMCPSecrets() ([]syncview.PendingMCPSecret, error) {
