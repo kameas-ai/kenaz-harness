@@ -82,7 +82,9 @@ onMounted(load);
  * this", so it gets no checkbox or accept wording (legal, 2026-10-16).
  */
 function needsCheckbox(it: PendingApprovalItem): boolean {
-  if (it.kind === 'ml_exclusions_change') return false;
+  // ML notices and exclusions changes record "I have read this" only, never
+  // an acceptance (legal, 2026-10-16), even if Fleet ever attaches a document.
+  if (it.kind === 'ml_exclusions_change' || it.kind === 'ml_notice' || it.kind === 'ml_opt_in_available') return false;
   return it.kind === 'legal_acceptance' || !!it.documentUrl;
 }
 

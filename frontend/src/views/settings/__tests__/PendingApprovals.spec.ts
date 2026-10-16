@@ -378,6 +378,15 @@ describe('PendingApprovalsModal', () => {
     expect(w.text()).not.toMatch(/\b(agree|consent|accept|approval|approve|OK, continue)\b/i);
   });
 
+  it('ml_notice with a documentUrl: never the read-and-accept checkbox', async () => {
+    const withDoc = { ...NOTICE, documentUrl: 'https://kenaz.kameas.ai/notice.html', documentSha256: 'c'.repeat(64) };
+    const { client } = makeClient([view([withDoc])]);
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approval-accept').exists()).toBe(false);
+    expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
+    expect(q(w, 'pending-approval-approve').attributes('disabled')).toBeUndefined();
+  });
+
   it('dialog title says "approval" only when every item is required', async () => {
     const { client } = makeClient([view([LEGAL, NOTICE])]);
     const w = await mountModal(client);
