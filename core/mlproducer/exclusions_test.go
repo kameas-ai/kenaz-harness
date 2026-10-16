@@ -333,7 +333,7 @@ func TestRecorder_ExclusionInForceAtObservationWins(t *testing.T) {
 	h.rec.SetExclusions(&ExclusionSet{})
 	h.rec.enqueue(func() {
 		h.rec.handleTool(coreag.ToolCallRecord{Ctx: ctx, SessionID: "s1", ToolName: "kenaz__bash", Outcome: coreag.ToolOutcomeOK,
-			RawArgs: `{"command":"ssh host"}`, ResultContent: bashOK}, false, at, excl)
+			RawArgs: `{"command":"ssh host"}`, ResultContent: bashOK}, false, at, excl, true)
 	})
 	if k := suppressedKinds(h.outbox()); len(k) != 0 {
 		t.Fatalf("a call observed under an exclusion produced %v", k)
