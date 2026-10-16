@@ -72,6 +72,7 @@ const (
 	DefaultUpsertEvery   = 60 * time.Second
 	DefaultIdleAfter     = 7 * 24 * time.Hour
 	DefaultSweepInterval = time.Hour
+	DefaultReopenEvery   = 30 * time.Second
 	maxLinkDepth         = 32
 )
 
@@ -83,8 +84,15 @@ type Config struct {
 	// Local is the local activity store (<dataDir>/ml/activity.db; WP11,
 	// spec §12 A-16): every record is written to it whatever the Fleet
 	// gate says, with the org exclusions NOT applied (they govern only
-	// what leaves the device). nil = no local store.
+	// what leaves the device). nil = no local store (unless OpenLocal).
 	Local *activity.Store
+	// OpenLocal, when set, (re)opens the local store while Local is nil —
+	// a first open that failed at boot (a busy file, a full disk) is
+	// retried lazily on later records, at most once per ReopenEvery, so
+	// the process does not stay without local recording forever.
+	OpenLocal func() (*activity.Store, error)
+	// ReopenEvery throttles OpenLocal. 0 = DefaultReopenEvery.
+	ReopenEvery time.Duration
 	// Hasher computes h(x). Required; a key error records nothing.
 	Hasher *Hasher
 	// Gate decides whether a record is copied to the ship outbox, read at
@@ -159,6 +167,12 @@ type Recorder struct {
 
 	// branch is the throttled branch read (branch.go), guarded by mu.
 	branch branchCache
+
+	// localStore is the open local activity store (Config.Local, or what
+	// OpenLocal returned); nil until one opens. lastOpenTry (unix ms,
+	// guarded by mu) throttles OpenLocal.
+	localStore  atomic.Pointer[activity.Store]
+	lastOpenTry int64
 }
 
 // view is one destination's task state (see Recorder). Guarded by
@@ -209,6 +223,9 @@ func NewRecorder(cfg Config) *Recorder {
 	if cfg.SweepInterval == 0 {
 		cfg.SweepInterval = DefaultSweepInterval
 	}
+	if cfg.ReopenEvery <= 0 {
+		cfg.ReopenEvery = DefaultReopenEvery
+	}
 	r := &Recorder{
 		cfg:    cfg,
 		min:    minimiser{hasher: cfg.Hasher},
@@ -218,6 +235,9 @@ func NewRecorder(cfg Config) *Recorder {
 		ship:   newView(true),
 		local:  newView(false),
 		parent: map[string]string{},
+	}
+	if cfg.Local != nil {
+		r.localStore.Store(cfg.Local)
 	}
 	go r.run()
 	return r
@@ -321,9 +341,43 @@ func (r *Recorder) shipOn() bool {
 	return r.cfg.Gate != nil && r.cfg.Gate.Recording() && r.cfg.Store != nil && r.cfg.Hasher != nil
 }
 
-// localOn: a local activity store exists (always written; A-16).
+// localOn: a local activity store exists, or can be (re)opened (always
+// written; A-16). Cheap: no I/O.
 func (r *Recorder) localOn() bool {
-	return r.cfg.Local != nil && r.cfg.Hasher != nil
+	return (r.localStore.Load() != nil || r.cfg.OpenLocal != nil) && r.cfg.Hasher != nil
+}
+
+// loc is the open local store, or nil.
+func (r *Recorder) loc() *activity.Store { return r.localStore.Load() }
+
+// LocalStore is the open local activity store, or nil while none has
+// opened (the wiring's status readout, pruner and shutdown use it).
+func (r *Recorder) LocalStore() *activity.Store {
+	if r == nil {
+		return nil
+	}
+	return r.loc()
+}
+
+// ensureLocal tries OpenLocal when no store is open, at most once per
+// ReopenEvery. Caller holds r.mu (worker).
+func (r *Recorder) ensureLocal() *activity.Store {
+	if s := r.loc(); s != nil || r.cfg.OpenLocal == nil {
+		return s
+	}
+	now := r.nowMS()
+	if r.lastOpenTry != 0 && now-r.lastOpenTry < r.cfg.ReopenEvery.Milliseconds() {
+		return nil
+	}
+	r.lastOpenTry = now
+	s, err := r.cfg.OpenLocal()
+	if err != nil {
+		logging.L().Warn("mlproducer.activity.reopen_failed", "err", err.Error())
+		return nil
+	}
+	r.localStore.Store(s)
+	logging.L().Info("mlproducer.activity.reopened")
+	return s
 }
 
 // views returns the views a record goes to now: local whenever it
@@ -331,7 +385,7 @@ func (r *Recorder) localOn() bool {
 // observed) is true AND the gate is still open. Caller holds r.mu.
 func (r *Recorder) views(ship bool) []*view {
 	out := make([]*view, 0, 2)
-	if r.localOn() {
+	if r.localOn() && r.ensureLocal() != nil {
 		out = append(out, r.local)
 	}
 	if ship && r.shipOn() {
@@ -622,8 +676,8 @@ func (r *Recorder) DeleteLocal(ctx context.Context) error {
 	r.ship = newView(true)
 	r.local = newView(false)
 	var errs []error
-	if r.cfg.Local != nil {
-		errs = append(errs, r.cfg.Local.DeleteAll(ctx))
+	if s := r.ensureLocal(); s != nil {
+		errs = append(errs, s.DeleteAll(ctx))
 	}
 	if r.cfg.Store != nil {
 		errs = append(errs, r.cfg.Store.Purge(ctx))
@@ -653,7 +707,7 @@ func (r *Recorder) loadTask(ctx context.Context, v *view, id string) *mlstore.Ta
 		t, ok, err = r.cfg.Store.LoadTask(ctx, id)
 	} else {
 		var lt activity.Task
-		lt, ok, err = r.cfg.Local.LoadTask(ctx, id)
+		lt, ok, err = r.loc().LoadTask(ctx, id)
 		t = fromLocalTask(lt)
 	}
 	if err != nil {
@@ -1032,7 +1086,7 @@ func (r *Recorder) sweepIdle(ctx context.Context) {
 			rows, err = r.cfg.Store.OpenTasksIdleSince(ctx, cutoff)
 		} else {
 			var lts []activity.Task
-			lts, err = r.cfg.Local.OpenTasksIdleSince(ctx, cutoff)
+			lts, err = r.loc().OpenTasksIdleSince(ctx, cutoff)
 			for _, lt := range lts {
 				rows = append(rows, fromLocalTask(lt))
 			}
@@ -1105,7 +1159,7 @@ func (r *Recorder) commitLocal(ctx context.Context, v *view, task *mlstore.TaskR
 		lt := toLocalTask(*task, r.currentBranch())
 		w.Task = &lt
 	}
-	if _, err := r.cfg.Local.Commit(ctx, w); err != nil {
+	if _, err := r.loc().Commit(ctx, w); err != nil {
 		logging.L().Warn("mlproducer.recorder.local_commit_failed", "err", err.Error())
 		return
 	}

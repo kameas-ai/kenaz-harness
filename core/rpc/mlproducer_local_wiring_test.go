@@ -28,7 +28,7 @@ func newLocalActivityAPI(t *testing.T) (*API, string) {
 	}
 	a := New(c, WithSettingsStore(newTestStore(t)))
 	t.Cleanup(a.Shutdown)
-	if a.mlProducer == nil || a.mlProducer.local == nil {
+	if a.mlProducer == nil || a.mlProducer.rec.LocalStore() == nil {
 		t.Fatal("New wired no local activity store over a real DataDir")
 	}
 	return a, dataDir
@@ -41,7 +41,7 @@ func TestMLProducerWiring_LocalActivityRecordedSignedOutAndDeleted(t *testing.T)
 	a, dataDir := newLocalActivityAPI(t)
 	ctx := context.Background()
 	w := a.mlProducer
-	if got, want := w.local.Path(), activityDBPath(dataDir); got != want {
+	if got, want := w.rec.LocalStore().Path(), activityDBPath(dataDir); got != want {
 		t.Fatalf("store path = %q, want %q", got, want)
 	}
 	w.rec.ToolCallCompleted(coreag.ToolCallRecord{
@@ -82,7 +82,7 @@ func TestMLProducerWiring_LocalActivityRetentionReachesPruner(t *testing.T) {
 	now := time.Now()
 	for i, age := range []time.Duration{40 * 24 * time.Hour, time.Hour} {
 		ts := now.Add(-age).UnixMilli()
-		if _, err := w.local.Commit(ctx, activity.Write{
+		if _, err := w.rec.LocalStore().Commit(ctx, activity.Write{
 			Source: "harness.agent",
 			Events: []activity.Event{{Kind: "phase_change", TS: ts, Payload: map[string]any{"task": "agent-x", "phase": "coding"}}},
 			Task:   &activity.Task{ID: "agent-" + string(rune('a'+i)), RepoRoot: "r", StartedAt: ts, LastActive: ts},
@@ -119,7 +119,7 @@ func TestMLProducerWiring_SidecarGetsActivityDBPath(t *testing.T) {
 	if !ok {
 		t.Fatalf("Spawner = %T", a.sidecarMgr.Spawner)
 	}
-	want := activity.EnvVar + "=" + a.mlProducer.local.Path()
+	want := activity.EnvVar + "=" + a.mlProducer.rec.LocalStore().Path()
 	found := false
 	for _, kv := range sp.ExtraEnv {
 		if kv == want {
@@ -129,10 +129,10 @@ func TestMLProducerWiring_SidecarGetsActivityDBPath(t *testing.T) {
 	if !found {
 		t.Fatalf("ExtraEnv = %v, want %q", sp.ExtraEnv, want)
 	}
-	if !filepath.IsAbs(a.mlProducer.local.Path()) {
-		t.Fatalf("path %q is not absolute", a.mlProducer.local.Path())
+	if !filepath.IsAbs(a.mlProducer.rec.LocalStore().Path()) {
+		t.Fatalf("path %q is not absolute", a.mlProducer.rec.LocalStore().Path())
 	}
-	if got := a.mlProducer.local.Path(); got != filepath.Join(dataDir, "ml-activity", "activity.db") {
+	if got := a.mlProducer.rec.LocalStore().Path(); got != filepath.Join(dataDir, "ml-activity", "activity.db") {
 		t.Fatalf("custom-data-dir store = %q, want <dataDir>/ml-activity/activity.db", got)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "ml")); !os.IsNotExist(err) {
@@ -184,7 +184,7 @@ func TestMLProducerWiring_UnreadableRetentionSkipsPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 	ts := time.Now().Add(-200 * 24 * time.Hour).UnixMilli()
-	if _, err := w.local.Commit(ctx, activity.Write{
+	if _, err := w.rec.LocalStore().Commit(ctx, activity.Write{
 		Source: "harness.agent",
 		Events: []activity.Event{{Kind: "phase_change", TS: ts, Payload: map[string]any{"task": "agent-x", "phase": "coding"}}},
 		Task:   &activity.Task{ID: "agent-x", RepoRoot: "r", StartedAt: ts, LastActive: ts},
@@ -198,7 +198,7 @@ func TestMLProducerWiring_UnreadableRetentionSkipsPrune(t *testing.T) {
 	if err == nil || ev != 0 || tk != 0 {
 		t.Fatalf("prune with an unreadable setting = %d/%d, %v; want the pass skipped with an error", ev, tk, err)
 	}
-	st, _ := w.local.Stats(ctx)
+	st, _ := w.rec.LocalStore().Stats(ctx)
 	if st.Events != 1 || st.Tasks != 1 {
 		t.Fatalf("rows after the skipped pass = %+v; the 200-day-old activity was purged", st)
 	}

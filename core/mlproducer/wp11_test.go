@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -391,5 +392,58 @@ func TestWP11_IdleSweepCompletesLocalTask(t *testing.T) {
 	lt, _, _ := lh.local.LoadTask(ctx, lh.taskID("s1"))
 	if lt.CompletedAt == 0 || lt.CompletedAt != lt.LastActive {
 		t.Fatalf("local task after sweep = %+v", lt)
+	}
+}
+
+// Review finding 3 (#429): a local store that failed to open at boot is
+// reopened lazily on a later record (throttled by ReopenEvery), instead of
+// the process recording nothing locally until restart.
+func TestWP11_LocalStoreReopensLazily(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.rec.Close()
+	path := activity.Path(h.dir)
+	var attempts int
+	fail := true
+	var opened *activity.Store
+	h.rec = NewRecorder(Config{
+		Store: h.store, Hasher: NewHasher(h.dir),
+		Gate: KindGateFunc{Record: func() bool { return false }},
+		OpenLocal: func() (*activity.Store, error) {
+			attempts++
+			if fail {
+				return nil, fmt.Errorf("activity: open: database is locked")
+			}
+			s, err := activity.Open(path)
+			opened = s
+			return s, err
+		},
+		ReopenEvery: time.Minute,
+		Workspace:   func() string { return workspace }, Now: h.clock.Now, SweepInterval: -1,
+	})
+	rec := h.rec
+	t.Cleanup(func() {
+		rec.Close()
+		if opened != nil {
+			_ = opened.Close()
+		}
+	})
+	ctx := context.Background()
+	h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+	h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+	h.flush()
+	if attempts != 1 || h.rec.LocalStore() != nil {
+		t.Fatalf("attempts = %d (want 1: throttled), store = %v", attempts, h.rec.LocalStore())
+	}
+	fail = false
+	h.clock.advance(2 * time.Minute)
+	h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+	h.flush()
+	if h.rec.LocalStore() == nil || attempts != 2 {
+		t.Fatalf("store not reopened (attempts %d)", attempts)
+	}
+	st, err := h.rec.LocalStore().Stats(ctx)
+	if err != nil || st.Events != 2 || st.Tasks != 1 {
+		t.Fatalf("local after reopen = %+v, %v; want the post-reopen call's file + phase_change", st, err)
 	}
 }

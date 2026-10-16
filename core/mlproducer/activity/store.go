@@ -44,6 +44,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite" // the "sqlite" driver (same as core/storage/sqlite)
 )
@@ -163,7 +164,32 @@ type Store struct {
 // schema to SchemaVersion. The file and its directory are owner-only. A
 // file written by a NEWER harness (ledger above SchemaVersion) still
 // opens: its migrations are additive, so this build's statements work.
+//
+// Open retries a failed attempt a few times with a short backoff
+// (openAttempts, openBackoff): several processes opening a fresh file at
+// once contend for the first write, and busy_timeout alone does not cover
+// every lock-upgrade path sqlite can report as SQLITE_BUSY.
 func Open(path string) (*Store, error) {
+	var err error
+	for i := 0; i < openAttempts; i++ {
+		var s *Store
+		if s, err = openOnce(path); err == nil {
+			return s, nil
+		}
+		if i < openAttempts-1 {
+			time.Sleep(openBackoff << i)
+		}
+	}
+	return nil, err
+}
+
+// Open's retry bounds: 5 attempts, 25 ms doubling (≤ ~400 ms in all).
+const (
+	openAttempts = 5
+	openBackoff  = 25 * time.Millisecond
+)
+
+func openOnce(path string) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("activity: empty path")
 	}
@@ -177,8 +203,12 @@ func Open(path string) (*Store, error) {
 	} else {
 		return nil, fmt.Errorf("activity: create: %w", err)
 	}
+	// busy_timeout FIRST: the driver runs the _pragma values in order on
+	// every new connection, and switching journal_mode to WAL takes a
+	// lock — run before busy_timeout it fails at once with SQLITE_BUSY
+	// when another process holds the file.
 	dsn := "file:" + url.PathEscape(path) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate"
+		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("activity: open: %w", err)
@@ -201,9 +231,20 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	for v := cur; v < len(migrations); v++ {
-		tx, err := s.db.BeginTx(ctx, nil)
+		tx, err := s.db.BeginTx(ctx, nil) // IMMEDIATE (_txlock): holds the write lock
 		if err != nil {
 			return fmt.Errorf("activity: migrate begin: %w", err)
+		}
+		// Re-check under the write lock: another opener may have applied
+		// this version between our read and our lock.
+		var applied int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM harness_activity_schema WHERE version = ?`, v+1).Scan(&applied); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("activity: migrate check v%d: %w", v+1, err)
+		}
+		if applied > 0 {
+			_ = tx.Rollback()
+			continue
 		}
 		for _, stmt := range migrations[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {

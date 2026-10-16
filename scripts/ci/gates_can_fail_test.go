@@ -5550,8 +5550,8 @@ func TestMLMinimisationGate_PlantedLocalBranchNameFires(t *testing.T) {
 // is never written would make every local check vacuous).
 func TestMLMinimisationGate_PlantedLocalStoreSkippedFires(t *testing.T) {
 	mlMinimisationPlant(t, "recorder.go",
-		"if r.localOn() {\n\t\tout = append(out, r.local)",
-		"if false && r.localOn() {\n\t\tout = append(out, r.local)",
+		"if r.localOn() && r.ensureLocal() != nil {\n\t\tout = append(out, r.local)",
+		"if false && r.localOn() && r.ensureLocal() != nil {\n\t\tout = append(out, r.local)",
 		`the local activity store holds no`)
 }
 

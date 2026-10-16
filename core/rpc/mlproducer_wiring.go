@@ -82,8 +82,7 @@ type mlProducerWiring struct {
 	settings *settings.API
 
 	store   *mlstore.Store
-	local   *activity.Store  // nil when activity.db could not be opened
-	pruner  *activity.Pruner // nil with local
+	pruner  *activity.Pruner
 	rec     *mlproducer.Recorder
 	gate    *mlproducer.ConsentGate
 	shipper *mlproducer.Shipper
@@ -116,12 +115,15 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 	}
 	w := &mlProducerWiring{dataDir: c.DataDir(), settings: settingsImpl}
 	w.store = mlstore.New(h.SQL())
-	if local, err := activity.Open(activityDBPath(c.DataDir())); err != nil {
-		// Shipping still works; nothing is kept locally. Logged, not fatal.
+	// The local store: opened now when possible; a failed first open (a
+	// busy file, a full disk) is retried lazily by the recorder on later
+	// records (OpenLocal) instead of leaving the process without local
+	// recording.
+	localPath := activityDBPath(c.DataDir())
+	local, err := activity.Open(localPath)
+	if err != nil {
 		logging.L().Warn("mlproducer.activity.open_failed", "err", err.Error())
-	} else {
-		w.local = local
-		w.pruner = activity.NewPruner(local, settingsImpl.MLLocalActivityRetentionDays, nil, logging.L())
+		local = nil
 	}
 	w.source = &fleetMLConsentSource{settings: settingsImpl}
 	w.gate = mlproducer.NewConsentGate(mlproducer.GateConfig{
@@ -140,7 +142,8 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 	w.source.invalidate = w.gate.Invalidate
 	w.rec = mlproducer.NewRecorder(mlproducer.Config{
 		Store:     w.store,
-		Local:     w.local,
+		Local:     local,
+		OpenLocal: func() (*activity.Store, error) { return activity.Open(localPath) },
 		Hasher:    mlproducer.NewHasher(c.DataDir()),
 		Gate:      w.gate,
 		Workspace: c.WorkspaceDir,
@@ -154,6 +157,8 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 		ReEnroll:  w.reEnroll,
 		EnrollGen: w.enrollGen.Load,
 	})
+
+	w.pruner = activity.NewLazyPruner(w.rec.LocalStore, settingsImpl.MLLocalActivityRetentionDays, nil, logging.L())
 
 	settingsImpl.OnFleetSessionReset(w.onSessionReset)
 	settingsImpl.OnOrgUnpaused(w.gate.Invalidate)
@@ -234,9 +239,7 @@ func (w *mlProducerWiring) start(ctx context.Context) {
 	}
 	w.appCtx = ctx
 	w.lifeMu.Unlock()
-	if w.pruner != nil {
-		w.pruner.Start()
-	}
+	w.pruner.Start()
 	w.gate.Start(ctx)
 	logging.L().Info("mlproducer.started")
 }
@@ -317,11 +320,9 @@ func (w *mlProducerWiring) shutdown() {
 		scancel()
 	}
 	w.rec.Close()
-	if w.pruner != nil {
-		w.pruner.Stop()
-	}
-	if w.local != nil {
-		if err := w.local.Close(); err != nil {
+	w.pruner.Stop()
+	if local := w.rec.LocalStore(); local != nil {
+		if err := local.Close(); err != nil {
 			logging.L().Warn("mlproducer.activity.close_failed", "err", err.Error())
 		}
 	}
@@ -381,10 +382,11 @@ func (w *mlProducerWiring) localActivity(ctx context.Context) (MLLocalActivityVi
 	v.RetentionDays = days
 	v.EffectiveRetentionDays = activity.EffectiveRetentionDays(v.RetentionDays)
 	v.SharingWithFleet = w.gate.Last().Open
-	if w.local == nil {
+	local := w.rec.LocalStore()
+	if local == nil {
 		return v, nil
 	}
-	st, err := w.local.Stats(ctx)
+	st, err := local.Stats(ctx)
 	if err != nil {
 		return v, err
 	}

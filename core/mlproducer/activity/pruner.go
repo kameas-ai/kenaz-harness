@@ -37,7 +37,7 @@ const pruneInterval = 6 * time.Hour
 // read fails deletes nothing: an unreadable setting is never treated as
 // the default, which could be far shorter than what the member chose.
 type Pruner struct {
-	store         *Store
+	store         func() *Store
 	retentionDays func() (int, error)
 	logger        *slog.Logger
 	now           func() time.Time
@@ -52,6 +52,12 @@ type Pruner struct {
 // (0, nil) is the default, an error skips the pass. nil = always the
 // default. now is the clock (nil = time.Now).
 func NewPruner(store *Store, retentionDays func() (int, error), now func() time.Time, logger *slog.Logger) *Pruner {
+	return NewLazyPruner(func() *Store { return store }, retentionDays, now, logger)
+}
+
+// NewLazyPruner is NewPruner over a store that may open later: store()
+// is read on every pass, and a pass with no open store does nothing.
+func NewLazyPruner(store func() *Store, retentionDays func() (int, error), now func() time.Time, logger *slog.Logger) *Pruner {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -75,13 +81,17 @@ var ErrRetentionUnreadable = fmt.Errorf("activity: retention setting unreadable;
 // the setting cannot be read it deletes nothing and returns
 // ErrRetentionUnreadable.
 func (p *Pruner) PruneOnce(ctx context.Context) (events, tasks int64, err error) {
+	st := p.store()
+	if st == nil {
+		return 0, 0, nil
+	}
 	raw, err := p.retentionDays()
 	if err != nil {
 		return 0, 0, ErrRetentionUnreadable
 	}
 	days := EffectiveRetentionDays(raw)
 	cutoff := p.now().Add(-time.Duration(days) * 24 * time.Hour).UnixMilli()
-	return p.store.PruneBefore(ctx, cutoff)
+	return st.PruneBefore(ctx, cutoff)
 }
 
 // Start runs a pass now and then every pruneInterval until Stop.

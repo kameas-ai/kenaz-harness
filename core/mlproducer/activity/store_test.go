@@ -420,3 +420,46 @@ func TestPruner_ReadErrorSkipsPass(t *testing.T) {
 		t.Fatalf("rows after skipped passes = %+v", st)
 	}
 }
+
+// Review finding 3 (#429): N processes' first opens of the same fresh
+// file at once all succeed — busy_timeout is set before journal_mode, the
+// migration re-checks the ledger inside its write transaction, and Open
+// retries a transient failure. Run under -race -count=20.
+func TestOpen_ConcurrentFirstOpensAllSucceed(t *testing.T) {
+	path := Path(t.TempDir())
+	const n = 8
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make(chan error, n)
+	stores := make(chan *Store, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			s, err := Open(path)
+			if err != nil {
+				errs <- err
+				return
+			}
+			stores <- s
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	close(stores)
+	for err := range errs {
+		t.Errorf("concurrent first open failed: %v", err)
+	}
+	for s := range stores {
+		if v, err := s.SchemaVersion(context.Background()); err != nil || v != SchemaVersion {
+			t.Errorf("schema = %d, %v", v, err)
+		}
+		_ = s.Close()
+	}
+	db := rawDB(t, path)
+	if got := count(t, db, `SELECT COUNT(*) FROM harness_activity_schema`); got != SchemaVersion {
+		t.Fatalf("ledger rows = %d, want %d (a migration applied twice)", got, SchemaVersion)
+	}
+}
