@@ -956,6 +956,11 @@ type Settings struct {
 	// which gates Push and Pull. Restoring is NOT upload consent: uploads
 	// still wait for SettingsSyncUploadsConfirmed.
 	SettingsSyncEnabledCategories []string `json:"settingsSyncEnabledCategories,omitempty"`
+
+	// gates:settings-struct-end — keep this marker the LAST line of the
+	// struct and add new fields ABOVE it. scripts/ci/gates_can_fail_test.go
+	// plants a probe field here, so it no longer re-anchors on whichever
+	// field happens to be last.
 }
 
 // ModelCallTelemetrySettings is the wire shape of the three model-call

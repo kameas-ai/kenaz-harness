@@ -4139,23 +4139,18 @@ func TestKnobCoverageGate_UnregisteredSettingsFieldFires(t *testing.T) {
 	root := repoRoot(t)
 	apiPath := filepath.Join(root, "core", "rpc", "views", "settings", "api.go")
 
-	// Anchored on the struct's OPENING line, not its last field. The
-	// previous last-field anchors (AdvisorModel -> AdviceEscalateModelDisabled
-	// -> ShareModelCallTelemetryWithFleet) broke every time a later change
-	// appended a field, most recently when SettingsSyncUploadsConfirmed and
-	// SettingsSyncEnabledCategories landed after
-	// ShareModelCallTelemetryWithFleet, turning this proof red for a reason
-	// unrelated to the gate. "type Settings struct {" occurs exactly once in
-	// api.go and does not move when fields are appended, so the planted
-	// field always lands inside settings.Settings. Content-anchored, not
-	// order-anchored (findings #67/#92).
-	const target = "type Settings struct {\n"
-	const mutated = "type Settings struct {\n" +
-		"\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
+	// Anchored on the stable end-of-struct marker in settings.Settings
+	// ("gates:settings-struct-end", views/settings/api.go). It replaces the
+	// old last-field anchor, which broke every time a WP appended a field
+	// (findings #67/#92; #419/#422, 2026-10-16). New fields go above the
+	// marker, so this target never moves.
+	const marker = "\t// gates:settings-struct-end"
+	const target = marker
+	const mutated = "\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
 		"\t// to prove check-knob-coverage.sh's real settings.Settings guard\n" +
 		"\t// (TestKnobCoverage_Settings) fails when a field has no\n" +
 		"\t// knobcoverage.Register/RegisterDeferred entry. Never a real field.\n" +
-		"\tZZGateProbeUnregisteredField string `json:\"zzGateProbeUnregisteredField,omitempty\"`\n\n"
+		"\tZZGateProbeUnregisteredField string `json:\"zzGateProbeUnregisteredField,omitempty\"`\n\n" + marker
 
 	cleanup := plantReplace(t, apiPath, target, mutated)
 	defer cleanup()
