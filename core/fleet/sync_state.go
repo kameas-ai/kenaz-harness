@@ -29,6 +29,8 @@ const syncStateFileName = "settings_sync_state.json"
 type PersistedSyncState struct {
 	// LWWTs is CategoryState.lwwTS as RFC 3339 (empty: nothing seen).
 	LWWTs string `json:"lww_ts,omitempty"`
+	// Conflict is an unresolved 409 (sync_conflict.go).
+	Conflict bool `json:"conflict,omitempty"`
 }
 
 // SyncStateStore persists per-category LWW state.
@@ -156,6 +158,7 @@ func applyPersisted(st *CategoryState, p PersistedSyncState) {
 	if ts > st.lwwTS {
 		st.lwwTS = ts
 	}
+	st.conflict = p.Conflict
 	st.mu.Unlock()
 }
 
@@ -163,7 +166,7 @@ func applyPersisted(st *CategoryState, p PersistedSyncState) {
 func persistedFor(st *CategoryState) (PersistedSyncState, bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	p := PersistedSyncState{}
+	p := PersistedSyncState{Conflict: st.conflict}
 	if st.lwwTS > 0 {
 		p.LWWTs = formatLWW(st.lwwTS)
 	}

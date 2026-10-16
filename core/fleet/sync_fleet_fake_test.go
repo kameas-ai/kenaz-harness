@@ -72,6 +72,8 @@ type fakeFleetSync struct {
 	// and error code instead of storing (for error-path tests).
 	putStatusOverride int
 	putCodeOverride   string
+	// omitDate suppresses the Date header (net/http adds one otherwise).
+	omitDate bool
 }
 
 func newFakeFleetSync(t *testing.T) *fakeFleetSync {
@@ -104,7 +106,15 @@ func (f *fakeFleetSync) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.requests = append(f.requests, fakeFleetRequest{
 		Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: string(bodyBytes),
 	})
+	serverNow, omitDate := f.now(), f.omitDate
 	f.mu.Unlock()
+	// Every Fleet response carries the server clock in Date (net/http adds
+	// it); send the fake's own clock so a test can skew it.
+	if omitDate {
+		w.Header()["Date"] = nil
+	} else {
+		w.Header().Set("Date", serverNow.UTC().Format(http.TimeFormat))
+	}
 
 	switch r.Method {
 	case http.MethodPut:

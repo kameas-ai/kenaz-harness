@@ -5247,6 +5247,13 @@ export interface SyncStatusView {
   awaiting_confirmation?: boolean;
   /** True when Fleet does not accept this category; it stays on this device. */
   local_only?: boolean;
+  /**
+   * True when another device changed this category after this one last
+   * synced, so this device's change was not uploaded. Push
+   * (Sync_ForcePush) keeps this device's settings; Pull (Sync_ForcePull)
+   * takes the other device's. Automatic sync leaves it alone until then.
+   */
+  conflict?: boolean;
 }
 
 /**

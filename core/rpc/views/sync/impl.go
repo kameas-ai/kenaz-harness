@@ -231,7 +231,9 @@ func (a *API) Sync_ForcePush(ctx context.Context, category string) error {
 	if a.syncer == nil {
 		return corefleet.ErrFleetDisabled
 	}
-	return a.syncer.Push(ctx, corefleet.SyncCategory(category))
+	// The user's explicit Push: also resolves a conflict in favour of
+	// this device (fleet.Syncer.ForcePush).
+	return a.syncer.ForcePush(ctx, corefleet.SyncCategory(category))
 }
 
 // Sync_ForcePull implements SyncAPI.
@@ -239,7 +241,9 @@ func (a *API) Sync_ForcePull(ctx context.Context, category string) error {
 	if a.syncer == nil {
 		return corefleet.ErrFleetDisabled
 	}
-	return a.syncer.Pull(ctx, corefleet.SyncCategory(category))
+	// The user's explicit Pull: also resolves a conflict in favour of
+	// the other device (fleet.Syncer.ForcePull).
+	return a.syncer.ForcePull(ctx, corefleet.SyncCategory(category))
 }
 
 // Sync_PendingMCPSecrets implements SyncAPI.
@@ -268,6 +272,7 @@ func syncStatusToView(s corefleet.SyncStatus) SyncStatusView {
 		LastError:            s.LastError,
 		AwaitingConfirmation: s.AwaitingConfirmation,
 		LocalOnly:            s.LocalOnly,
+		Conflict:             s.Conflict,
 	}
 	if !s.LastPushAt.IsZero() {
 		v.LastPushAt = s.LastPushAt.UTC().Format(time.RFC3339)

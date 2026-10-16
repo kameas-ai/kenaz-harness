@@ -206,13 +206,20 @@ func TestSyncWire_PushIsPUTAndRoundTrips(t *testing.T) {
 	if n := fake.countMethod(http.MethodPost); n != 0 {
 		t.Fatalf("%d POSTs; Fleet routes only PUT", n)
 	}
-	reqs := fake.snapshot()
-	if len(reqs) != 1 || reqs[0].Method != http.MethodPut || reqs[0].Path != "/api/v1/sync/ui_theme" {
-		t.Fatalf("requests = %+v, want one PUT /api/v1/sync/ui_theme", reqs)
+	// The first push of a run is preceded by one GET that reads Fleet's
+	// clock (checkClock); then exactly one PUT.
+	var puts []fakeFleetRequest
+	for _, r := range fake.snapshot() {
+		if r.Method == http.MethodPut {
+			puts = append(puts, r)
+		}
+	}
+	if len(puts) != 1 || puts[0].Path != "/api/v1/sync/ui_theme" {
+		t.Fatalf("PUTs = %+v, want one PUT /api/v1/sync/ui_theme", puts)
 	}
 	var body fleetPutSyncRequest
-	if err := json.Unmarshal([]byte(reqs[0].Body), &body); err != nil {
-		t.Fatalf("body is not Fleet's PutSyncRequest: %v (%s)", err, reqs[0].Body)
+	if err := json.Unmarshal([]byte(puts[0].Body), &body); err != nil {
+		t.Fatalf("body is not Fleet's PutSyncRequest: %v (%s)", err, puts[0].Body)
 	}
 	if _, err := time.Parse(time.RFC3339Nano, body.LWWTs); err != nil {
 		t.Fatalf("lww_ts %q is not RFC 3339", body.LWWTs)
@@ -270,29 +277,34 @@ func TestSyncWire_AbsentRowNotApplied(t *testing.T) {
 	}
 }
 
-// TestSyncWire_StaleWritePullsOnceNoRetry: 409 stale_lww_ts → exactly one
-// pull (the newer remote write wins by LWW), no second PUT.
-func TestSyncWire_StaleWritePullsOnceNoRetry(t *testing.T) {
+// TestSyncWire_StaleWriteIsAConflictNoRetry: 409 stale_lww_ts → the
+// category is marked in conflict and nothing is pulled, applied or retried.
+// (It used to pull and apply the remote write silently, reverting this
+// device's change; sync_conflict_test.go covers resolution.)
+func TestSyncWire_StaleWriteIsAConflictNoRetry(t *testing.T) {
 	var applied atomic.Value
 	s, fake := newWireRig(t, SyncCategoryUITheme, `{"theme":"dark"}`, &applied)
 	fake.put(SyncCategoryUITheme, time.Now().Add(2*time.Minute), `{"theme":"light"}`)
-	if err := s.Push(context.Background(), SyncCategoryUITheme); err != nil {
-		t.Fatalf("Push after 409: %v", err)
+	if err := s.Push(context.Background(), SyncCategoryUITheme); !errors.Is(err, ErrSyncConflict) {
+		t.Fatalf("Push after 409 = %v, want ErrSyncConflict", err)
 	}
-	if p, g := fake.countMethod(http.MethodPut), fake.countMethod(http.MethodGet); p != 1 || g != 1 {
-		t.Errorf("PUTs=%d GETs=%d, want 1 and 1 (no retry)", p, g)
+	if p := fake.countMethod(http.MethodPut); p != 1 {
+		t.Errorf("PUTs=%d, want 1 (no retry)", p)
 	}
-	if got, _ := applied.Load().(string); got != `{"theme":"light"}` {
-		t.Errorf("remote newer write not applied: %q", got)
+	if got := applied.Load(); got != nil {
+		t.Errorf("a conflict must not apply the remote write; applied %v", got)
 	}
 }
 
 // TestSyncWire_ClockSkewNoRetry: 422 lww_ts_in_future → ErrSyncClockSkew,
-// one PUT, a plain-language LastError.
+// one PUT, a plain-language LastError. The fake omits Date here so the
+// harness's own clock check (checkClock) has nothing to compare and Fleet's
+// 422 path is what gets exercised.
 func TestSyncWire_ClockSkewNoRetry(t *testing.T) {
 	s, fake := newWireRig(t, SyncCategoryUITheme, `{"theme":"dark"}`, nil)
 	fake.mu.Lock()
 	fake.now = func() time.Time { return time.Now().Add(-10 * time.Minute) }
+	fake.omitDate = true
 	fake.mu.Unlock()
 	err := s.Push(context.Background(), SyncCategoryUITheme)
 	if !errors.Is(err, ErrSyncClockSkew) {
@@ -334,10 +346,14 @@ func TestSyncWire_UnknownCategoryRemembered(t *testing.T) {
 	if err := s.Push(context.Background(), SyncCategoryUITheme); !errors.Is(err, ErrSyncCategoryLocalOnly) {
 		t.Fatalf("Push = %v", err)
 	}
+	before := len(fake.snapshot()) // the clock-check GET and the PUT
 	_ = s.Push(context.Background(), SyncCategoryUITheme)
 	_ = s.Pull(context.Background(), SyncCategoryUITheme)
-	if n := len(fake.snapshot()); n != 1 {
-		t.Errorf("%d requests after unknown_category, want 1", n)
+	if n := len(fake.snapshot()) - before; n != 0 {
+		t.Errorf("%d requests after unknown_category, want 0", n)
+	}
+	if n := fake.countMethod(http.MethodPut); n != 1 {
+		t.Errorf("%d PUTs, want 1", n)
 	}
 }
 

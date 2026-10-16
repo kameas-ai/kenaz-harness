@@ -38,6 +38,11 @@ type SyncStatusView struct {
 	// LocalOnly is true when Fleet does not accept this category
 	// (fleet.FleetAcceptsSyncCategory), so it never leaves this device.
 	LocalOnly bool `json:"local_only,omitempty"`
+	// Conflict is true when another device changed this category after
+	// this one last synced, so this device's change was not uploaded.
+	// Sync_ForcePush keeps this device's settings; Sync_ForcePull takes
+	// the other device's.
+	Conflict bool `json:"conflict,omitempty"`
 }
 
 // UploadConsent persists the one-time "settings may be uploaded" answer

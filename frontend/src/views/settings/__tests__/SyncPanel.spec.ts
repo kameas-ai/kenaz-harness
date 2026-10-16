@@ -367,6 +367,30 @@ describe('SyncPanel', () => {
     expect(confirmFn).toHaveBeenCalledTimes(1);
   });
 
+  // A 409 from Fleet is a conflict the user resolves, not a silent revert
+  // (fleet.Syncer, sync_conflict.go): the row says so and names the way out,
+  // instead of repeating the message as an "Error:".
+  it('shows a conflicted category with how Push and Pull resolve it', async () => {
+    const statuses: SyncStatusView[] = [
+      {
+        category: 'model_prefs',
+        enabled: true,
+        conflict: true,
+        last_error: 'Another device changed these settings after this device last synced.',
+      },
+    ];
+    const { client } = buildClient({ statuses });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+    const row = wrapper.find('[data-testid="sync-conflict-model_prefs"]');
+    expect(row.exists()).toBe(true);
+    expect(row.text()).toContain('Push keeps this device');
+    expect(row.text()).toContain('Pull takes the other device');
+    expect(wrapper.find('[data-testid="sync-last-error-model_prefs"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="sync-force-push-model_prefs"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="sync-force-pull-model_prefs"]').exists()).toBe(true);
+  });
+
   it('marks a local-only category as not syncing and offers no push/pull', async () => {
     const statuses: SyncStatusView[] = [
       { category: 'slash_commands', enabled: true, local_only: true },

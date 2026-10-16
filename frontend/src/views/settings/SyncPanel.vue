@@ -208,7 +208,14 @@ function lastSyncLabel(id: string): string {
   }
 }
 
+function inConflict(id: string): boolean {
+  return statusFor(id)?.conflict ?? false;
+}
+
 function lastError(id: string): string {
+  // A conflict has its own notice with the way out; don't repeat it as an
+  // error.
+  if (inConflict(id)) return '';
   return statusFor(id)?.last_error ?? '';
 }
 
@@ -472,6 +479,15 @@ function goToMCPTools() {
                 :data-testid="`sync-local-only-${s.category}`"
               >
                 Not syncing yet: this stays on this device until Kenaz's sync service supports it.
+              </p>
+              <p
+                v-if="inConflict(s.category)"
+                class="mt-0.5 text-xs text-signal-warn"
+                :data-testid="`sync-conflict-${s.category}`"
+              >
+                Another device changed this after this device last synced, so this device's
+                change was not uploaded. ↑ Push keeps this device's settings; ↓ Pull takes the
+                other device's. Sync pauses for this category until you choose.
               </p>
 
               <!-- Last synced + error + org provenance -->
