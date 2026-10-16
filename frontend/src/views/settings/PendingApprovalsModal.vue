@@ -103,6 +103,12 @@ onUnmounted(() => {
 const currentDeferral = computed(() => (current.value ? deferredUntil(current.value, now.value) : null));
 
 function approveLabel(it: PendingApprovalItem): string {
+  // The opt-in offer's approve action IS its dismissal (member-private,
+  // legal option a, 2026-10-16), so it reads "Not now", never "I agree".
+  // approveAllowed is true for that kind only when it carries the dismissal
+  // path: the backend binds kind and path both ways
+  // (fleet.ApproveActionAllowedFor). Otherwise there is no approve button.
+  if (it.kind === 'ml_opt_in_available' && it.approveAllowed) return 'Not now';
   if (it.kind === 'ml_exclusions_change') return 'Dismiss';
   if (needsCheckbox(it)) return 'Accept';
   return it.required ? 'I agree' : 'Got it';
@@ -120,6 +126,27 @@ function setAccepted(id: string, ev: Event) {
 
 function openDocument(it: PendingApprovalItem) {
   if (it.documentUrl) props.client.openExternalURL(it.documentUrl);
+}
+
+/**
+ * "Not now" on an informational item: hidden on this device until its
+ * version changes. Nothing reaches Fleet (legal, 2026-10-16: a decline is
+ * never recorded).
+ */
+async function dismissLocally() {
+  const it = current.value;
+  if (!it || !it.localDismiss || busy.value) return;
+  busy.value = true;
+  errorMsg.value = '';
+  try {
+    const v = await props.client.fleet.dismissItemLocally(it.id);
+    items.value = v.items ?? [];
+    clampIndex();
+  } catch (e) {
+    errorMsg.value = errorText(e);
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function approve() {
@@ -211,7 +238,10 @@ function next() {
           </button>
         </div>
 
-        <p v-if="!current.approveAllowed" class="text-ink-muted" data-testid="pending-approval-not-allowed">
+        <p v-if="current.localDismiss" class="text-ink-muted" data-testid="pending-approval-local-dismiss-note">
+          “Not now” hides this on this device only. Your organization isn’t told.
+        </p>
+        <p v-else-if="!current.approveAllowed" class="text-ink-muted" data-testid="pending-approval-not-allowed">
           This item can’t be approved from this app. Open your Kenaz Fleet dashboard to review it.
         </p>
 
@@ -264,6 +294,16 @@ function next() {
             @click="emit('close')"
           >
             Close
+          </button>
+          <button
+            v-if="current && current.localDismiss"
+            type="button"
+            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] hover:bg-surface-2 disabled:opacity-50"
+            :disabled="busy"
+            data-testid="pending-approval-dismiss-local"
+            @click="dismissLocally"
+          >
+            Not now
           </button>
           <button
             v-if="current && current.approveAllowed"
