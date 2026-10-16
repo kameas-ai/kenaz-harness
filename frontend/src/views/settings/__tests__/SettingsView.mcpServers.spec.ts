@@ -1,7 +1,7 @@
 /**
  * SettingsView.mcpServers.spec.ts — MCPHealthSettingsPanel is mounted and
  * reachable through the real parent. The panel was kept when the Health tab
- * was deleted (#405, ruling G-5) with zero mount sites; its own component
+ * was deleted (PR 405, ruling G-5) with zero mount sites; its own component
  * spec passing said nothing about whether a user could reach it. This goes
  * through SettingsView via ?tab=mcp-servers exactly as the SettingsTabs nav
  * entry does, and asserts the toggle reflects the real client read.

@@ -139,7 +139,7 @@ const groups: ReadonlyArray<TabGroup> = [
       { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets', icon: KeyRound },
       { to: '/settings?tab=llm-routing', label: 'LLM Routing', query: 'llm-routing', icon: Route },
       // MCP auto-restart dial (MCPHealthSettingsPanel). Kept when the Health
-      // tab was deleted (#405, ruling G-5); mounted here once its Go knob was
+      // tab was deleted (PR 405, ruling G-5); mounted here once its Go knob was
       // verified to gate the stdio healthPinger's restart trip. Desktop-only:
       // Settings_{Get,Set}MCPAutoRestart have no serve dispatch case.
       {
