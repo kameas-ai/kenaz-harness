@@ -434,7 +434,9 @@ func TestFleetMLAckNotice_SurfaceAndActionByPolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newMLRig(t, true)
 			r.fleet.set(func(f *mlFakeFleet) {
-				f.state = mlBody(true, tc.policy, true, true, false, 4, "", 90, false)
+				// Opted in, ack owed for a newer notice, text rev 1 acked
+				// earlier: the re-ack state.
+				f.state = withTextRevisions(mlBody(true, tc.policy, true, true, false, 4, "", 90, false), 1, 1)
 				f.ackBody = mlBody(true, tc.policy, true, false, true, 4, "2026-10-09T13:00:00Z", 90, false)
 			})
 			if _, err := r.api.FleetMLAckNotice(context.Background(), 4, tc.button); err != nil {
@@ -486,6 +488,46 @@ func TestFleetMLAckNotice_NoActionForPolicyPostsNothing(t *testing.T) {
 	}
 }
 
+// A first Member Choice can only be turn_on: "I have read this" under
+// member_choice is refused (nothing posted) unless the fresh read is a
+// re-ack — opt-in already on AND an earlier notice acknowledged.
+func TestFleetMLAckNotice_MemberChoiceReadRequiresReack(t *testing.T) {
+	cases := []struct {
+		name  string
+		state string
+	}{
+		{"not opted in, never acked", mlBody(true, "member_choice", false, true, false, 4, "", 90, false)},
+		{"opted in, never acked (acked_text_revision 0)", withTextRevisions(mlBody(true, "member_choice", true, true, false, 4, "", 90, false), 1, 0)},
+		{"older Fleet: no acked_text_revision", mlBody(true, "member_choice", true, true, false, 4, "", 90, false)},
+		{"not opted in, acked earlier", withTextRevisions(mlBody(true, "member_choice", false, true, false, 4, "", 90, false), 1, 1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newMLRig(t, true)
+			r.fleet.set(func(f *mlFakeFleet) { f.state = tc.state })
+			if _, err := r.api.FleetMLAckNotice(context.Background(), 4, MLNoticeActionRead); err == nil {
+				t.Fatal("member_choice \"I have read this\" without re-ack state succeeded, want refusal")
+			}
+			if bodies := r.fleet.ackBodies(); len(bodies) != 0 {
+				t.Errorf("ack bodies = %v, want none", bodies)
+			}
+		})
+	}
+	// The same states render "Turn on Offload" / "Not now", never "I have
+	// read this" (the label and the action agree).
+	for _, tc := range cases {
+		r := newMLRig(t, true)
+		r.fleet.set(func(f *mlFakeFleet) { f.state = tc.state })
+		v, err := r.api.FleetMLStatus(context.Background())
+		if err != nil || v.Notice == nil {
+			t.Fatalf("%s: FleetMLStatus: %+v, %v", tc.name, v, err)
+		}
+		if got := strings.Join(v.Notice.Actions, "|"); got != "Turn on Offload|Not now" {
+			t.Errorf("%s: actions = %q, want Turn on Offload|Not now", tc.name, got)
+		}
+	}
+}
+
 // Legal's fixed labels (kameas-ai-11, 2026-10-16): a required policy, or
 // re-acknowledging under member_choice (Offload already on), reads "I have
 // read this"; a first member_choice notice keeps "Turn on Offload" / "Not
@@ -509,10 +551,11 @@ func TestRenderMLNotice_ButtonLabels(t *testing.T) {
 		})
 	}
 
-	// The status view: member_choice + opted in + ack required is a re-ack.
+	// The status view: member_choice + opted in + ack owed for a newer
+	// notice than one already acknowledged is a re-ack.
 	r := newMLRig(t, true)
 	r.fleet.set(func(f *mlFakeFleet) {
-		f.state = mlBody(true, "member_choice", true, true, false, 5, "", 90, false)
+		f.state = withTextRevisions(mlBody(true, "member_choice", true, true, false, 5, "", 90, false), 1, 1)
 	})
 	v, err := r.api.FleetMLStatus(context.Background())
 	if err != nil || v.Notice == nil {
