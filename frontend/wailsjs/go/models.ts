@@ -1382,6 +1382,26 @@ export namespace cedar {
 	        this.dangerous = source["dangerous"];
 	    }
 	}
+	export class PolicyEvalError {
+	    policy_id: string;
+	    file?: string;
+	    effect: string;
+	    message: string;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PolicyEvalError(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.policy_id = source["policy_id"];
+	        this.file = source["file"];
+	        this.effect = source["effect"];
+	        this.message = source["message"];
+	        this.count = source["count"];
+	    }
+	}
 	export class PolicyFile {
 	    name: string;
 	    path: string;
@@ -1389,6 +1409,7 @@ export namespace cedar {
 	    embedded: boolean;
 	    parse_ok: boolean;
 	    parse_err?: string;
+	    eval_errors?: PolicyEvalError[];
 	
 	    static createFrom(source: any = {}) {
 	        return new PolicyFile(source);
@@ -1402,7 +1423,26 @@ export namespace cedar {
 	        this.embedded = source["embedded"];
 	        this.parse_ok = source["parse_ok"];
 	        this.parse_err = source["parse_err"];
+	        this.eval_errors = this.convertValues(source["eval_errors"], PolicyEvalError);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ToolPromptSurface {
 	    tool_name: string;
@@ -1520,6 +1560,7 @@ export namespace cedarpolicy {
 	    embedded: boolean;
 	    parse_ok: boolean;
 	    parse_err?: string;
+	    eval_errors?: cedar.PolicyEvalError[];
 	    source: string;
 	    read_only: boolean;
 	
@@ -1535,9 +1576,28 @@ export namespace cedarpolicy {
 	        this.embedded = source["embedded"];
 	        this.parse_ok = source["parse_ok"];
 	        this.parse_err = source["parse_err"];
+	        this.eval_errors = this.convertValues(source["eval_errors"], cedar.PolicyEvalError);
 	        this.source = source["source"];
 	        this.read_only = source["read_only"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

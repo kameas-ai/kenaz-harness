@@ -121,6 +121,35 @@ describe('PolicyView (cedar-policy-editor-ui-01KQ8TD6 WP02)', () => {
     it('shows no load-failure banner when every policy parsed', async () => {
       const { wrapper } = await mountView();
       expect(wrapper.find('[data-testid="policy-load-failed"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="policy-eval-failed"]').exists()).toBe(false);
+    });
+
+    // An erroring forbid denies (fail-closed); the view must name it.
+    it('surfaces a policy that failed to evaluate', async () => {
+      const { wrapper } = await mountView({
+        listPolicies: vi.fn().mockResolvedValue([
+          {
+            name: 'org.cedar',
+            bytes: 90,
+            embedded: false,
+            parse_ok: true,
+            eval_errors: [
+              {
+                policy_id: 'org.cedar#12#0',
+                file: 'org.cedar',
+                effect: 'forbid',
+                message: 'record does not have the attribute `device_kind`',
+                count: 4,
+              },
+            ],
+          },
+        ] satisfies PolicyFile[]),
+      });
+      const banner = wrapper.find('[data-testid="policy-eval-failed"]');
+      expect(banner.exists()).toBe(true);
+      expect(banner.text()).toContain('org.cedar');
+      expect(banner.text()).toContain('forbid');
+      expect(banner.text()).toContain('device_kind');
     });
   });
 

@@ -64,8 +64,8 @@ type DecisionStore interface {
 // the back. The buffer size is a constructor argument so the harness
 // can tune memory pressure without touching this file.
 type MemoryDecisionStore struct {
-	mu       sync.Mutex
-	cap      int
+	mu        sync.Mutex
+	cap       int
 	decisions []Decision
 }
 
@@ -117,12 +117,31 @@ func (s *MemoryDecisionStore) Recent(limit int) []Decision {
 // fromCedar converts a cedar-go authorization result + the request
 // context the engine constructed into a harness-shaped Decision. The
 // helper is package-private — Engine is the only legitimate caller.
+//
+// ps is the PolicySet Authorize evaluated; it resolves the effect of
+// each policy listed in diag.Errors.
+//
+// Erroring policies. cedar-go SKIPS a policy whose evaluation errors
+// (e.g. a `when` clause reading a context attribute the request does
+// not carry) and records it only in diag.Errors. Left at that, an
+// erroring forbid is silently inert — the request falls through to a
+// permit, or to NotApplicable, i.e. fails OPEN. So:
+//
+//   - any erroring forbid → Deny, "forbid policy could not be
+//     evaluated (fail-closed)", MatchedPolicy = that forbid's id. This
+//     wins over a matching permit, exactly as a matching forbid would.
+//     A forbid that actually matched still reports as "forbid policy
+//     matched" (the more informative record).
+//   - an erroring permit stays skipped — "did not match" is already the
+//     safe reading of a permit that could not be evaluated, so the
+//     outcome is whatever the remaining policies decide.
 func fromCedar(
 	action string,
 	principal cedar.EntityUID,
 	resource cedar.EntityUID,
 	dec cedar.Decision,
 	diag cedar.Diagnostic,
+	ps *cedar.PolicySet,
 	defaultDeny bool,
 ) Decision {
 	out := Decision{
@@ -131,18 +150,23 @@ func fromCedar(
 		Resource:    resource.String(),
 		EvaluatedAt: time.Now().UTC(),
 	}
+	forbidErr := erroringForbid(ps, diag.Errors)
 	switch {
+	case dec != cedar.Allow && len(diag.Reasons) > 0:
+		// A forbid policy explicitly matched.
+		out.Outcome = Deny
+		out.MatchedPolicy = string(diag.Reasons[0].PolicyID)
+		out.Reason = "forbid policy matched"
+	case forbidErr != "":
+		out.Outcome = Deny
+		out.MatchedPolicy = forbidErr
+		out.Reason = "forbid policy could not be evaluated (fail-closed)"
 	case dec == cedar.Allow:
 		out.Outcome = Allow
 		if len(diag.Reasons) > 0 {
 			out.MatchedPolicy = string(diag.Reasons[0].PolicyID)
 			out.Reason = "permit policy matched"
 		}
-	case len(diag.Reasons) > 0:
-		// A forbid policy explicitly matched.
-		out.Outcome = Deny
-		out.MatchedPolicy = string(diag.Reasons[0].PolicyID)
-		out.Reason = "forbid policy matched"
 	default:
 		// No policy matched. Cedar reports Deny by default; the
 		// harness layer reinterprets that as Allow (default-allow)
