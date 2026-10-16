@@ -684,7 +684,9 @@ func toLocalTask(t mlstore.TaskRow, branch string) activity.Task {
 		files[k] = n
 	}
 	return activity.Task{
-		ID: t.TaskID, RepoRoot: t.RepoRootHash, Branch: branch, Phase: t.Phase, Files: files,
+		ID: t.TaskID, RepoRoot: t.RepoRootHash,
+		Branch: branch, // already the "x"×len placeholder (branch.go)
+		Phase:  t.Phase, Files: files,
 		StartedAt: t.StartedAt, LastActive: t.LastActive, CompletedAt: t.CompletedAt,
 		CommitCount: t.CommitCount, TestRuns: t.TestRuns, TestFails: t.TestFails,
 	}

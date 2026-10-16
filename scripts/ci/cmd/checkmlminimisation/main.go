@@ -82,6 +82,7 @@ import (
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer/activity"
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
@@ -616,6 +617,14 @@ func dynamicHalf() ([]string, error) {
 		return nil, fmt.Errorf("storage.DB has no SQL()")
 	}
 	store := mlstore.New(h.SQL())
+	// WP11 (spec §12 A-16): the recorder also writes the LOCAL activity
+	// store, unconditionally. It must hold the same minimised form as the
+	// wire, so every one of its rows is checked by the same rules.
+	local, err := activity.Open(activity.Path(tmp))
+	if err != nil {
+		return nil, fmt.Errorf("open temp activity store: %w", err)
+	}
+	defer func() { _ = local.Close() }()
 
 	// WP07: the workspace's branch is a canary name, served from a fake
 	// repository through the real HEAD reader. Only "x"×len may ship.
@@ -635,6 +644,7 @@ func dynamicHalf() ([]string, error) {
 	openGate := mlproducer.KindGateFunc{Record: func() bool { return true }, AIUsage: func() bool { return true }}
 	rec := mlproducer.NewRecorder(mlproducer.Config{
 		Store:         store,
+		Local:         local,
 		Hasher:        mlproducer.NewHasherWithKey(fixedKey),
 		Gate:          openGate, // ai_usage_allowed too: agent.turn records and is checked
 		Workspace:     func() string { return workspace },
@@ -745,9 +755,106 @@ func dynamicHalf() ([]string, error) {
 		seen = append(seen, fmt.Sprintf("%s×%d", k, n))
 	}
 	sort.Strings(seen)
-	stats.dynamic = fmt.Sprintf("%d fixture call(s) through the real recorder → %d outbox record(s) [%s, task×%d] all within §7",
-		len(fx), len(recs), strings.Join(seen, " "), tasks)
+	localEvents, localTasks, err := checkLocalStore(activity.Path(tmp), allCanaries, wantRepoRoot, &v)
+	if err != nil {
+		return nil, err
+	}
+	stats.dynamic = fmt.Sprintf("%d fixture call(s) through the real recorder → %d outbox record(s) [%s, task×%d] "+
+		"and %d local event(s) + %d local task(s) all within §7",
+		len(fx), len(recs), strings.Join(seen, " "), tasks, localEvents, localTasks)
 	return v, nil
+}
+
+// checkLocalStore applies the record rules to every row of the local
+// activity store (WP11): each events row is rebuilt into the wire body
+// shape and checked like an outbox event, each tasks row like a task
+// upsert, and both are canary-scanned. Floors: every contract kind and a
+// non-empty branch placeholder must appear locally too.
+func checkLocalStore(path string, canaries []string, wantRepoRoot string, v *[]string) (int, int, error) {
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return 0, 0, fmt.Errorf("open local store: %w", err)
+	}
+	defer db.Close()
+	scan := func(where, body string) {
+		for _, c := range append(canaries, globalCanaries...) {
+			if c != "" && strings.Contains(strings.ToLower(body), strings.ToLower(c)) {
+				*v = append(*v, fmt.Sprintf("%s: carries fixture canary %q verbatim (a raw path, repo root, command or secret leaked)", where, c))
+			}
+		}
+	}
+	rows, err := db.Query(`SELECT id, kind, source, payload, ts, device_event_id, producer FROM events ORDER BY id`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read local events: %w", err)
+	}
+	kinds := map[string]int{}
+	nEvents := 0
+	for rows.Next() {
+		var id, ts, dev int64
+		var kind, source, payload, producer string
+		if err := rows.Scan(&id, &kind, &source, &payload, &ts, &dev, &producer); err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		nEvents++
+		where := fmt.Sprintf("local events id %d", id)
+		if producer != "harness" {
+			*v = append(*v, fmt.Sprintf("%s: producer %q", where, producer))
+		}
+		if dev != id {
+			*v = append(*v, fmt.Sprintf("%s: device_event_id %d != id", where, dev))
+		}
+		body := fmt.Sprintf(`{"id":%d,"kind":%s,"source":%s,"ts":%d,"payload":%s}`, id, strconv.Quote(kind), strconv.Quote(source), ts, payload)
+		scan(where, body)
+		k, _ := checkEvent(where, mlstore.Record{Seq: id, Table: mlstore.TableEvents, Op: mlstore.OpInsert,
+			RowID: strconv.FormatInt(id, 10), Body: []byte(body)}, v)
+		if k != "" {
+			kinds[k]++
+		}
+	}
+	rows.Close()
+	trows, err := db.Query(`SELECT id, repo_root, branch, phase, files, started_at, last_active, completed_at,
+		commit_count, test_runs, test_fails FROM tasks ORDER BY id`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read local tasks: %w", err)
+	}
+	defer trows.Close()
+	nTasks, branches := 0, 0
+	for trows.Next() {
+		var id, repo, branch, phase, files string
+		var started, last int64
+		var completed sql.NullInt64
+		var cc, tr, tf int
+		if err := trows.Scan(&id, &repo, &branch, &phase, &files, &started, &last, &completed, &cc, &tr, &tf); err != nil {
+			return 0, 0, err
+		}
+		nTasks++
+		where := fmt.Sprintf("local tasks %s", id)
+		body := fmt.Sprintf(`{"id":%s,"repo_root":%s,"branch":%s,"phase":%s,"files":%s,"started_at":%d,"last_active":%d,`+
+			`"commit_count":%d,"test_runs":%d,"test_fails":%d}`,
+			strconv.Quote(id), strconv.Quote(repo), strconv.Quote(branch), strconv.Quote(phase), files, started, last, cc, tr, tf)
+		scan(where, body)
+		if checkTask(where, mlstore.Record{Table: mlstore.TableTasks, Op: mlstore.OpUpsert, RowID: id, Body: []byte(body)}, wantRepoRoot, v) {
+			branches++
+		}
+	}
+	var missing []string
+	for k := range contract {
+		if kinds[k] == 0 {
+			missing = append(missing, k)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		*v = append(*v, fmt.Sprintf("dynamic floor: the local activity store holds no %s row(s) — the recorder "+
+			"stopped writing it locally (spec §12 A-16: every record is kept on the device)", strings.Join(missing, ", ")))
+	}
+	if nTasks == 0 {
+		*v = append(*v, "dynamic floor: the local activity store holds no task row")
+	} else if branches == 0 {
+		*v = append(*v, "dynamic floor: no local task row carried a non-empty branch placeholder")
+	}
+	return nEvents, nTasks, nil
 }
 
 func hmacHex(x string) string {

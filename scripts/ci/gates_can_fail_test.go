@@ -5525,6 +5525,34 @@ func TestMLMinimisationGate_PlantedFullBackgroundCmdFires(t *testing.T) {
 		`terminal.cmd`, `has 4 tokens`, `canary`)
 }
 
+// WP11 (spec §12 A-16): the local activity store gets the same rules as
+// the wire. A kind outside the A-10 table written only to the local store
+// is caught on the local row.
+func TestMLMinimisationGate_PlantedLocalStoreKindFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"activity.Event{Kind: e.kind, TS: e.at, Payload: e.payload}",
+		"activity.Event{Kind: e.kind + \"zz\", TS: e.at, Payload: e.payload}",
+		`local events id`, `is outside the A-10 table`)
+}
+
+// WP11: the real branch name in the LOCAL tasks row (the wire stays
+// clean). The ^x*$ rule fires on the local row.
+func TestMLMinimisationGate_PlantedLocalBranchNameFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"Branch: branch, // already the",
+		"Branch: branch + \"zzbranch\", // already the",
+		`local tasks agent-`, `does not match ^x*$`)
+}
+
+// WP11: local recording switched off. The local floor fires (a store that
+// is never written would make every local check vacuous).
+func TestMLMinimisationGate_PlantedLocalStoreSkippedFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"if r.localOn() {\n\t\tout = append(out, r.local)",
+		"if false && r.localOn() {\n\t\tout = append(out, r.local)",
+		`the local activity store holds no`)
+}
+
 // Negative control: the unmutated tree is clean, and says what it looked at.
 func TestMLMinimisationGate_CleanOnUnmutatedTree(t *testing.T) {
 	root := repoRoot(t)
@@ -5532,7 +5560,7 @@ func TestMLMinimisationGate_CleanOnUnmutatedTree(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("check-ml-producer-minimisation.sh exited %d on the unmutated tree:\n%s", code, out)
 	}
-	if !strings.Contains(out, "clean") || !strings.Contains(out, "through the real recorder") {
+	if !strings.Contains(out, "clean") || !strings.Contains(out, "through the real recorder") || !strings.Contains(out, "local event(s)") {
 		t.Fatalf("gate exited 0 without its clean summary:\n%s", out)
 	}
 }
