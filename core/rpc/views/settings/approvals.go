@@ -43,6 +43,10 @@ type PendingApprovalView struct {
 	// ApproveAllowed is false when Fleet's approve action is outside the
 	// harness allowlist: the item is shown but cannot be approved here.
 	ApproveAllowed bool `json:"approveAllowed"`
+	// LocalDismiss: an informational item the harness does not send an
+	// action for (e.g. ml_opt_in_available) can be hidden on this device
+	// with "Not now" (FleetDismissItemLocally). Nothing reaches Fleet.
+	LocalDismiss bool `json:"localDismiss"`
 }
 
 // PendingApprovalsView is the hub as Settings renders it.
@@ -93,6 +97,7 @@ func approvalsView(p fleet.PendingApprovals) PendingApprovalsView {
 			Version: it.Version, Blocking: it.Blocking, Required: it.Required,
 			ApproveAllowed: fleet.ApproveActionAllowed(it.Approve.Method, it.Approve.Path),
 		}
+		iv.LocalDismiss = !iv.Required && !iv.ApproveAllowed
 		if !it.DeferrableUntil.IsZero() {
 			iv.DeferrableUntil = it.DeferrableUntil.Format(time.RFC3339)
 		}
@@ -136,7 +141,7 @@ func (a *API) FleetPendingApprovals(ctx context.Context) (PendingApprovalsView, 
 		return PendingApprovalsView{Items: []PendingApprovalView{}}, nil
 	}
 	v, _ := readApprovals(ctx, c)
-	return v, nil
+	return a.applyLocalDismissals(v), nil
 }
 
 // FleetApproveItem implements SettingsAPI: approves the item with id. The
@@ -172,13 +177,13 @@ func (a *API) FleetApproveItem(ctx context.Context, id string) (PendingApprovals
 	if errors.Is(err, fleet.ErrApprovalStale) {
 		fresh, _ := readApprovals(ctx, c)
 		fresh.Changed = true
-		return fresh, nil
+		return a.applyLocalDismissals(fresh), nil
 	}
 	if err != nil {
-		return v, err
+		return a.applyLocalDismissals(v), err
 	}
 	fresh, _ := readApprovals(ctx, c)
-	return fresh, nil
+	return a.applyLocalDismissals(fresh), nil
 }
 
 // hubMLNotice returns the hub's ml_notice item when the hub is served and

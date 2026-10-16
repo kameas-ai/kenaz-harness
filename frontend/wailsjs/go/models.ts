@@ -8366,6 +8366,7 @@ export namespace settings {
 	    required: boolean;
 	    deferrableUntil: string;
 	    approveAllowed: boolean;
+	    localDismiss: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new PendingApprovalView(source);
@@ -8385,6 +8386,7 @@ export namespace settings {
 	        this.required = source["required"];
 	        this.deferrableUntil = source["deferrableUntil"];
 	        this.approveAllowed = source["approveAllowed"];
+	        this.localDismiss = source["localDismiss"];
 	    }
 	}
 	export class PendingApprovalsView {

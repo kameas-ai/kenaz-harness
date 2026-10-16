@@ -173,7 +173,6 @@ func TestApproveActionAllowed_ExactMatch(t *testing.T) {
 		{"POST", "/api/v1/me/legal-acceptances"},
 		{"POST", "/api/v1/me/ml/notice-ack"},
 		{"POST", "/api/v1/me/ml/exclusions-seen"},
-		{"POST", "/api/v1/me/ml/opt-in-prompt-dismissed"},
 	}
 	for _, a := range allowed {
 		if !ApproveActionAllowed(a[0], a[1]) {
@@ -189,6 +188,8 @@ func TestApproveActionAllowed_ExactMatch(t *testing.T) {
 		{"POST", "/api/v1/me/ml/../ml/notice-ack"},
 		{"POST", "https://evil.example/api/v1/me/ml/notice-ack"},
 		{"POST", "/api/v1/me/ml/opt-in-prompt-dismissed/"},
+		// Legal (kameas-ai-11, 2026-10-16): a "Not now" is never recorded.
+		{"POST", "/api/v1/me/ml/opt-in-prompt-dismissed"},
 		{"POST", "/api/v1/me/telemetry-opt-ins"},
 		{"POST", ""},
 	}

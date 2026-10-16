@@ -351,3 +351,55 @@ func TestFleetApproveItem_MLNoticeAckThenMeMLEffective(t *testing.T) {
 		t.Errorf("after = %+v", v)
 	}
 }
+
+func hubOptInOffer(version string) map[string]any {
+	return map[string]any{
+		"id": "ml_opt_in_available:o1", "kind": "ml_opt_in_available", "title": "Turn on offload?",
+		"summary": "Your organization lets you choose.", "version": version,
+		"blocking": "Nothing is paused", "required": false,
+		"approve": map[string]any{"method": "POST", "path": "/api/v1/me/ml/opt-in-prompt-dismissed",
+			"body": map[string]any{"version": version}},
+	}
+}
+
+// Legal (kameas-ai-11, 2026-10-16): "Not now" on an ML offer is never
+// recorded. The opt-in-offer dismissal is not approvable (nothing is sent);
+// "Not now" hides it on this device until its version changes; required
+// items can't be dismissed at all.
+func TestFleetDismissItemLocally_NeverSentAndVersionScoped(t *testing.T) {
+	r := newMLRig(t, true)
+	r.fleet.set(func(f *mlFakeFleet) { f.hubStatus, f.hubBody = 200, hubBody(hubOptInOffer("1")) })
+	ctx := context.Background()
+
+	v, err := r.api.FleetPendingApprovals(ctx)
+	if err != nil || len(v.Items) != 1 {
+		t.Fatalf("view = %+v, %v", v, err)
+	}
+	if it := v.Items[0]; it.ApproveAllowed || !it.LocalDismiss {
+		t.Fatalf("opt-in offer: approveAllowed=%v localDismiss=%v, want false/true", it.ApproveAllowed, it.LocalDismiss)
+	}
+	// Approving it sends nothing (the path is not in the allowlist).
+	if _, err := r.api.FleetApproveItem(ctx, "ml_opt_in_available:o1"); !errors.Is(err, fleet.ErrApproveActionNotAllowed) {
+		t.Fatalf("approve opt-in offer err = %v, want ErrApproveActionNotAllowed", err)
+	}
+	v, err = r.api.FleetDismissItemLocally(ctx, "ml_opt_in_available:o1")
+	if err != nil || len(v.Items) != 0 {
+		t.Fatalf("after Not now = %+v, %v; want the item hidden", v, err)
+	}
+	if _, posts, _ := r.fleet.hubSnapshot(); len(posts) != 0 {
+		t.Fatalf("a Not now reached Fleet: %v", posts)
+	}
+	if v, _ := r.api.FleetPendingApprovals(ctx); len(v.Items) != 0 {
+		t.Fatalf("dismissed item came back at the same version: %+v", v)
+	}
+	// A revised offer shows again.
+	r.fleet.set(func(f *mlFakeFleet) { f.hubBody = hubBody(hubOptInOffer("2")) })
+	if v, _ := r.api.FleetPendingApprovals(ctx); len(v.Items) != 1 {
+		t.Fatalf("revised offer hidden: %+v", v)
+	}
+	// Required items cannot be dismissed.
+	r.fleet.set(func(f *mlFakeFleet) { f.hubBody = hubBody(hubLegal()) })
+	if _, err := r.api.FleetDismissItemLocally(ctx, "legal:terms:v1.1"); !errors.Is(err, ErrNotLocallyDismissible) {
+		t.Fatalf("dismiss required err = %v", err)
+	}
+}

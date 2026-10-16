@@ -40,6 +40,9 @@ const (
 	ApprovalKindLegalAcceptance    = "legal_acceptance"
 	ApprovalKindMLNotice           = "ml_notice"
 	ApprovalKindMLExclusionsChange = "ml_exclusions_change"
+	// ApprovalKindMLOptInAvailable is the informational "you can turn on
+	// offload" offer. It is dismissed locally only (see approveAllowlist).
+	ApprovalKindMLOptInAvailable = "ml_opt_in_available"
 )
 
 // Approve paths the harness will POST to (contract "Client behaviour" 3;
@@ -49,19 +52,22 @@ const (
 	ApprovePathLegalAcceptances = "/api/v1/me/legal-acceptances"
 	ApprovePathMLNoticeAck      = "/api/v1/me/ml/notice-ack"
 	ApprovePathMLExclusionsSeen = "/api/v1/me/ml/exclusions-seen"
-	// ApprovePathMLOptInPromptDismissed dismisses the informational
-	// ml_opt_in_available item (contract: Fleet's own approve allowlist
-	// includes it; added 2026-10-09).
-	ApprovePathMLOptInPromptDismissed = "/api/v1/me/ml/opt-in-prompt-dismissed"
 )
+
+// The ml_opt_in_available offer's "dismiss" action
+// (POST /api/v1/me/ml/opt-in-prompt-dismissed) is deliberately NOT allowed.
+// Legal ruling (kameas-ai-11, 2026-10-16): "Not now" on ML notices is
+// never recorded on any client. A server-side record of who declined is new
+// personal data that could be used to pressure members under Member Choice.
+// The harness dismisses that offer locally instead (views/settings
+// FleetDismissItemLocally).
 
 // approveAllowlist is method + " " + path for every approve action the harness
 // may send.
 var approveAllowlist = map[string]struct{}{
-	http.MethodPost + " " + ApprovePathLegalAcceptances:       {},
-	http.MethodPost + " " + ApprovePathMLNoticeAck:            {},
-	http.MethodPost + " " + ApprovePathMLExclusionsSeen:       {},
-	http.MethodPost + " " + ApprovePathMLOptInPromptDismissed: {},
+	http.MethodPost + " " + ApprovePathLegalAcceptances: {},
+	http.MethodPost + " " + ApprovePathMLNoticeAck:      {},
+	http.MethodPost + " " + ApprovePathMLExclusionsSeen: {},
 }
 
 // ApproveActionAllowed reports whether an approve action's method + path is

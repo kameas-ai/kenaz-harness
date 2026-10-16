@@ -42,6 +42,7 @@ const LEGAL: PendingApprovalItem = {
   required: true,
   deferrableUntil: '',
   approveAllowed: true,
+  localDismiss: false,
 };
 const NOTICE: PendingApprovalItem = {
   id: 'ml_notice:o1:4',
@@ -56,6 +57,7 @@ const NOTICE: PendingApprovalItem = {
   required: true,
   deferrableUntil: '',
   approveAllowed: true,
+  localDismiss: false,
 };
 const EXCL: PendingApprovalItem = {
   id: 'ml_exclusions_change:o1:5',
@@ -70,6 +72,7 @@ const EXCL: PendingApprovalItem = {
   required: false,
   deferrableUntil: '',
   approveAllowed: true,
+  localDismiss: false,
 };
 const FUTURE: PendingApprovalItem = {
   id: 'future:1',
@@ -84,6 +87,7 @@ const FUTURE: PendingApprovalItem = {
   required: false,
   deferrableUntil: '',
   approveAllowed: false,
+  localDismiss: false,
 };
 
 function view(items: PendingApprovalItem[], over: Partial<PendingApprovals> = {}): PendingApprovals {
@@ -320,6 +324,28 @@ describe('PendingApprovalsModal', () => {
     await q(w, 'pending-approval-approve').trigger('click');
     await flushPromises();
     expect(approveItem).toHaveBeenCalledWith('ml_exclusions_change:o1:5');
+  });
+
+  it('ML opt-in offer: "Not now" hides it locally; nothing is approved', async () => {
+    const OFFER: PendingApprovalItem = {
+      ...FUTURE,
+      id: 'ml_opt_in_available:o1',
+      kind: 'ml_opt_in_available',
+      title: 'Turn on offload?',
+      approveAllowed: false,
+      localDismiss: true,
+    };
+    const { client, approveItem } = makeClient([view([OFFER])]);
+    const dismissItemLocally = vi.fn(async () => view([]));
+    client.fleet.dismissItemLocally = dismissItemLocally;
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approval-approve').exists()).toBe(false);
+    expect(q(w, 'pending-approval-local-dismiss-note').text()).toContain('this device only');
+    await q(w, 'pending-approval-dismiss-local').trigger('click');
+    await flushPromises();
+    expect(dismissItemLocally).toHaveBeenCalledWith('ml_opt_in_available:o1');
+    expect(approveItem).not.toHaveBeenCalled();
+    expect(q(w, 'pending-approvals-empty').exists()).toBe(true);
   });
 
   it('unknown kind rendered generically; a non-allowlisted action offers no approve', async () => {
