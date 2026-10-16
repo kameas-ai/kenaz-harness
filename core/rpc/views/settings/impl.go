@@ -1600,10 +1600,14 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 	// SettingsSyncUploadsConfirmed is one-way: only Sync_ConfirmUploads
 	// sets it, and a whole-settings save from a copy loaded before the
 	// confirmation must not clear it again.
-	if !s.SettingsSyncUploadsConfirmed {
-		if cur, err := a.store.LoadAll(); err == nil && cur.SettingsSyncUploadsConfirmed {
+	// SettingsSyncEnabledCategories is owned by Sync_Toggle: a whole-settings
+	// save always keeps the stored opt-ins, so a copy loaded before a toggle
+	// cannot silently revert it.
+	if cur, err := a.store.LoadAll(); err == nil {
+		if cur.SettingsSyncUploadsConfirmed {
 			s.SettingsSyncUploadsConfirmed = true
 		}
+		s.SettingsSyncEnabledCategories = cur.SettingsSyncEnabledCategories
 	}
 	if err := a.store.SaveAll(s); err != nil {
 		return err

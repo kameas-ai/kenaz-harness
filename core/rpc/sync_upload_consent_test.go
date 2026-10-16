@@ -26,6 +26,7 @@ import (
 type consentFakeFleet struct {
 	mu   sync.Mutex
 	puts []string
+	gets int
 }
 
 func (f *consentFakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +54,9 @@ func (f *consentFakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"updated_at": time.Now().UTC().Format(time.RFC3339Nano),
 		})
 	case http.MethodGet:
+		f.mu.Lock()
+		f.gets++
+		f.mu.Unlock()
 		w.WriteHeader(http.StatusNotModified)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)

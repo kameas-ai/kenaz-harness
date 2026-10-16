@@ -8549,6 +8549,7 @@ export namespace settings {
 	    modelCallRetentionDays?: number;
 	    shareModelCallTelemetryWithFleet?: boolean;
 	    settingsSyncUploadsConfirmed?: boolean;
+	    settingsSyncEnabledCategories?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8651,6 +8652,7 @@ export namespace settings {
 	        this.modelCallRetentionDays = source["modelCallRetentionDays"];
 	        this.shareModelCallTelemetryWithFleet = source["shareModelCallTelemetryWithFleet"];
 	        this.settingsSyncUploadsConfirmed = source["settingsSyncUploadsConfirmed"];
+	        this.settingsSyncEnabledCategories = source["settingsSyncEnabledCategories"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

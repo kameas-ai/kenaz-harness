@@ -17,6 +17,52 @@ type API struct {
 	mu       sync.RWMutex
 	registry *corefleet.KindRegistry
 	consent  UploadConsent
+	optIns   OptInStore
+}
+
+// SetOptInStore wires persistence for the per-category opt-ins
+// (Settings.SettingsSyncEnabledCategories). Called once from rpc.New(),
+// followed by RestoreOptIns.
+func (a *API) SetOptInStore(o OptInStore) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.optIns = o
+}
+
+func (a *API) optInStore() OptInStore {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.optIns
+}
+
+// RestoreOptIns re-applies the persisted opt-ins to the syncer. rpc.New
+// calls it at boot, after every category is registered and the upload gate
+// is installed, and before the first poll (StartPolling's first tick is
+// syncBaseInterval away). It never uploads (fleet.Syncer.RestoreEnabled):
+// a restored opt-in is not upload consent, so held categories keep waiting
+// for Sync_ConfirmUploads. A persisted category this build does not
+// register (e.g. slash_commands with its feature gate off) is skipped and
+// kept on disk, so it comes back when the category does.
+func (a *API) RestoreOptIns() (restored []string, err error) {
+	o := a.optInStore()
+	if o == nil || a.syncer == nil {
+		return nil, nil
+	}
+	cats, err := o.EnabledCategories()
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range cats {
+		cat := corefleet.SyncCategory(c)
+		if !a.syncer.HasCategory(cat) {
+			continue
+		}
+		if err := a.syncer.RestoreEnabled(cat, true); err != nil {
+			return restored, err
+		}
+		restored = append(restored, c)
+	}
+	return restored, nil
 }
 
 // SetUploadConsent wires the persisted upload confirmation
@@ -97,7 +143,20 @@ func (a *API) Sync_Toggle(ctx context.Context, category string, enabled bool) er
 	if a.syncer == nil {
 		return corefleet.ErrFleetDisabled
 	}
-	return a.syncer.SetEnabled(ctx, corefleet.SyncCategory(category), enabled)
+	cat := corefleet.SyncCategory(category)
+	if !a.syncer.HasCategory(cat) {
+		return fmt.Errorf("fleet/sync: unknown category %q", category)
+	}
+	// Persist first: the choice must survive a restart even when the
+	// immediate push below fails (offline, signed out, uploads held), and a
+	// choice that could not be saved must not take effect, or the panel
+	// would show a state the next launch silently drops.
+	if o := a.optInStore(); o != nil {
+		if err := o.SetCategoryEnabled(category, enabled); err != nil {
+			return fmt.Errorf("sync: save %s choice: %w", category, err)
+		}
+	}
+	return a.syncer.SetEnabled(ctx, cat, enabled)
 }
 
 // Sync_Status implements SyncAPI.

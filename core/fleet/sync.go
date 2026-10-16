@@ -193,7 +193,10 @@ func nextLWW(prev int64) int64 {
 
 // CategoryState holds the per-category runtime state.
 type CategoryState struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// enabled is the user's opt-in. It is persisted by the rpc layer
+	// (Settings.SettingsSyncEnabledCategories, written by Sync_Toggle) and
+	// re-applied at boot through RestoreEnabled; this field is the live copy.
 	enabled  bool
 	lastPush time.Time
 	lastPull time.Time
@@ -348,6 +351,38 @@ func (s *Syncer) SetEnabled(ctx context.Context, cat SyncCategory, enabled bool)
 		}
 		return err
 	}
+	return nil
+}
+
+// HasCategory reports whether cat has runtime state on this Syncer (a
+// built-in category, or one registered through RegisterCategory), i.e.
+// whether SetEnabled / RestoreEnabled would accept it.
+func (s *Syncer) HasCategory(cat SyncCategory) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.categories[cat]
+	return ok
+}
+
+// RestoreEnabled re-applies a persisted opt-in at boot (the user's choice
+// from a previous launch, Settings.SettingsSyncEnabledCategories). Unlike
+// SetEnabled it never pushes: restoring a choice is not a new action by the
+// user, and in particular is not upload consent. Uploads for a restored
+// category still go through Push, so they stay held by the upload gate
+// until Settings.SettingsSyncUploadsConfirmed is true, and otherwise wait
+// for the next local change (NotifyMutation) — a boot-time push would stamp
+// possibly stale local state with a fresh LWW timestamp and overwrite a
+// newer write made from another device. Pulls resume on the next poll.
+func (s *Syncer) RestoreEnabled(cat SyncCategory, enabled bool) error {
+	s.mu.RLock()
+	st, ok := s.categories[cat]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("fleet/sync: unknown category %q", cat)
+	}
+	st.mu.Lock()
+	st.enabled = enabled
+	st.mu.Unlock()
 	return nil
 }
 

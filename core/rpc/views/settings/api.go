@@ -944,6 +944,18 @@ type Settings struct {
 	// Sync_ConfirmUploads; Set never clears it (one-way, so a stale
 	// whole-settings save cannot re-arm the prompt).
 	SettingsSyncUploadsConfirmed bool `json:"settingsSyncUploadsConfirmed,omitempty"`
+
+	// SettingsSyncEnabledCategories is the persisted set of settings-sync
+	// categories the user has turned on under Settings › Sync (sorted,
+	// unique). Before this field the opt-in lived only in fleet.Syncer's
+	// memory, so every launch silently turned every category off again.
+	// Written only by Sync_Toggle (core/rpc/sync_optins.go); Set always
+	// keeps the stored value, so a whole-settings save from an older copy
+	// cannot undo a toggle. Consumer: syncview.API.RestoreOptIns at boot
+	// (rpc.New) re-applies each entry through fleet.Syncer.RestoreEnabled,
+	// which gates Push and Pull. Restoring is NOT upload consent: uploads
+	// still wait for SettingsSyncUploadsConfirmed.
+	SettingsSyncEnabledCategories []string `json:"settingsSyncEnabledCategories,omitempty"`
 }
 
 // ModelCallTelemetrySettings is the wire shape of the three model-call

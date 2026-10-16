@@ -48,6 +48,14 @@ type UploadConsent interface {
 	ConfirmUploads() error
 }
 
+// OptInStore persists the user's per-category opt-ins
+// (Settings.SettingsSyncEnabledCategories). The rpc layer implements it over
+// the settings store. Without one, toggles last only until the app quits.
+type OptInStore interface {
+	EnabledCategories() ([]string, error)
+	SetCategoryEnabled(category string, enabled bool) error
+}
+
 // ErrUploadConsentUnavailable is returned by Sync_ConfirmUploads when no
 // settings store is wired, so the answer could not be saved.
 var ErrUploadConsentUnavailable = errors.New("sync: settings are unavailable, so the confirmation could not be saved")

@@ -166,6 +166,11 @@ describe('SyncPanel', () => {
     expect(wrapper.find('[data-testid="sync-pro-gate"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="sync-category-list"]').exists()).toBe(true);
     expect(vi.mocked(capability)).toHaveBeenCalledWith(SYNC_CAPABILITY);
+    // Opt-ins persist (Settings.SettingsSyncEnabledCategories); the intro
+    // says so, and still says nothing uploads before the confirmation.
+    const intro = wrapper.find('[data-testid="sync-panel-intro"]').text();
+    expect(intro).toContain('Your choices stay set when you restart the app.');
+    expect(intro).toContain('Nothing is uploaded until you confirm once');
   });
 
   it('3. shows pro-gate when the sync entitlement is absent', async () => {

@@ -4329,6 +4329,12 @@ func New(c *core.Core, opts ...Option) *API {
 			// Settings.SettingsSyncUploadsConfirmed. Fails closed when
 			// syncStore is nil (no store, no upload).
 			syncAPI.SetUploadConsent(settingsUploadConsent{store: syncStore})
+			// Persist per-category opt-ins and re-apply last launch's
+			// choices now: every category (incl. slash_commands) is
+			// registered and the upload gate is installed, and the first
+			// poll is syncBaseInterval away. RestoreOptIns never uploads,
+			// so the gate above still holds for restored categories.
+			wireSyncOptIns(syncAPI, syncStore)
 		}
 
 		// Connect settings mutations to the Syncer's debounced push so a theme

@@ -806,6 +806,14 @@ func init() {
 			"ErrSyncUploadNotConfirmed and sends nothing while it is false "+
 			"(sync_upload_consent_test.go drives it through a real FileStore).",
 	)
+	knobcoverage.Register[settings.Settings](
+		"SettingsSyncEnabledCategories",
+		"persisted per-category sync opt-ins: written by Sync_Toggle via "+
+			"settingsSyncOptIns (sync_optins.go); rpc.New re-applies them "+
+			"through syncview.API.RestoreOptIns -> fleet.Syncer.RestoreEnabled, "+
+			"whose enabled flag gates Push and Pull (sync_optins_test.go "+
+			"restarts over a real FileStore).",
+	)
 	knobcoverage.RegisterDeferred[settings.Settings](
 		"KeyboardShortcutsPreset",
 		"documented reserved field (api.go doc comment): 'reserved for a "+

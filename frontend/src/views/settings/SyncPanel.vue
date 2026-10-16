@@ -322,8 +322,9 @@ function goToMCPTools() {
       <!-- Header -->
       <div>
         <h2 class="text-sm font-semibold text-ink mb-1">Cross-device sync</h2>
-        <p class="text-xs text-ink-muted">
-          Toggle categories to sync between your devices. API keys and other
+        <p class="text-xs text-ink-muted" data-testid="sync-panel-intro">
+          Toggle categories to sync between your devices. Your choices stay
+          set when you restart the app. API keys and other
           credentials are not part of settings sync; only settings are.
           Nothing is uploaded until you confirm once with “Start syncing”.
           Theme changes upload within a few seconds; other categories upload
