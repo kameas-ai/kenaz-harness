@@ -487,7 +487,7 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			gate:       "check-no-credential-in-fleet-logs.sh",
 			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
 			content:    "package secrets\n\nfunc zzGateProbe(plaintext string) {\n\tmsg := fmt.Sprintf(\"%s\", plaintext)\n\tlogger.Info(msg)\n}\n",
-			wantOutput: "via fmt.Sprint* into msg",
+			wantOutput: "\"msg\" assigned from fmt.Sprintf",
 		},
 		{
 			// Review shape 9: logger.With(...) attrs.
@@ -504,6 +504,70 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
 			content:    "package secrets\n\nfunc zzGateProbe(locator string) { log.Printf(\"%s\", locator); fmt.Fprintf(os.Stderr, \"%s\", locator) }\n",
 			wantOutput: "raw-secret identifier locator",
+		},
+		{
+			// Round-2 review 1: a struct with a secret field rendered whole by %+v.
+			name:       "fleet-cred-logs/round2-1a-struct-sprintf-v",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\ntype zzProbeCfg struct {\n\tName   string\n\tAPIKey string\n}\n\nfunc zzGateProbe(c zzProbeCfg) { slog.Info(fmt.Sprintf(\"cfg %+v\", c)) }\n",
+			wantOutput: "secret field APIKey",
+		},
+		{
+			// Round-2 review 1: the same struct as a slog value, secret only by its json tag.
+			name:       "fleet-cred-logs/round2-1b-struct-slog-value-json-tag",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\ntype zzProbeCfg struct {\n\tName string\n\tCred string `json:\"access_token\"`\n}\n\nfunc zzGateProbe(c *zzProbeCfg) { slog.Info(\"cfg\", \"c\", c) }\n",
+			wantOutput: "secret field Cred",
+		},
+		{
+			// Round-2 review 2: an error built from a key, logged later.
+			name:       "fleet-cred-logs/round2-2a-errors-new",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nfunc zzGateProbe(apiKey string) {\n\terr := errors.New(apiKey)\n\tslog.Warn(\"failed\", \"err\", err)\n}\n",
+			wantOutput: "\"err\" assigned from errors.New(...) of raw-secret identifier apiKey",
+		},
+		{
+			// Round-2 review 2: fmt.Errorf wrapping a key, logged via .Error().
+			name:       "fleet-cred-logs/round2-2b-errorf-error-string",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nfunc zzGateProbe(plaintext string) {\n\terr := fmt.Errorf(\"bad key %s\", plaintext)\n\tslog.Warn(\"failed\", \"e\", err.Error())\n}\n",
+			wantOutput: "Error() of \"err\" assigned from fmt.Errorf",
+		},
+		{
+			// Round-2 review 3: s := string(buf); log(s).
+			name:       "fleet-cred-logs/round2-3a-string-conversion-assigned",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nfunc zzGateProbe(buf []byte) {\n\ts := string(buf)\n\tslog.Info(\"read\", \"s\", s)\n}\n",
+			wantOutput: "\"s\" assigned from bytes-to-text conversion",
+		},
+		{
+			// Round-2 review 3: taint through :=, var and = in one function.
+			name:       "fleet-cred-logs/round2-3b-alias-chain",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nfunc zzGateProbe(key string) {\n\tx := key\n\tvar y = x\n\tvar z string\n\tz = y\n\tslog.Info(\"x\", \"v\", z)\n}\n",
+			wantOutput: "\"z\" assigned from \"y\" assigned from \"x\" assigned from raw-secret identifier key",
+		},
+		{
+			// Round-2 review 4: a key literal split with + (folded by the type checker before shape-matching).
+			name:       "fleet-cred-logs/round2-4-split-literal",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nconst zzPrefix = \"sk-\" + \"ant-\"\n\nfunc zzGateProbe() { slog.Info(\"loaded \" + zzPrefix + \"" + zzFakeAnthropicKeyTail() + "\") }\n",
+			wantOutput: "key-shaped literal",
+		},
+		{
+			// Round-2 review 5: a method value, f := l.Info; f(..., key).
+			name:       "fleet-cred-logs/round2-5-method-value",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nfunc zzGateProbe(apiKey string) {\n\tf := slog.Default().Info\n\tf(\"k\", \"v\", apiKey)\n}\n",
+			wantOutput: "raw-secret identifier apiKey",
 		},
 		{
 			name: "agentgraph-convergence/I5-second-ask-store",
@@ -5877,6 +5941,35 @@ func TestGenAISpanGate_StructuralVerdictIsCWDIndependent(t *testing.T) {
 // file never carries one (#413 pattern).
 func zzFakeAnthropicKey() string {
 	return "sk" + "-" + "ant" + "-" + "api03" + "-" + strings.Repeat("Q", 32)
+}
+
+// zzFakeAnthropicKeyTail is the part of a fake Anthropic key after the
+// "sk-ant-" prefix, assembled at runtime.
+func zzFakeAnthropicKeyTail() string { return "api03" + "-" + strings.Repeat("Q", 32) }
+
+// TestFleetCredLogsGate_TypedBenignPass is the round-2 negative control,
+// in a file that type-checks: a struct with no secret fields rendered by
+// %+v and as a slog value, an error built from a constant, a constant
+// assigned and logged, and a comparison on a key all pass.
+func TestFleetCredLogsGate_TypedBenignPass(t *testing.T) {
+	root := repoRoot(t)
+	full := filepath.Join(root, "core/secrets/fleet_credentials_zz_gate_probe.go")
+	defer plant(t, full, "package secrets\n\n"+
+		"import (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\n"+
+		"type zzProbePlain struct {\n\tName  string\n\tCount int\n\tKeyID string\n}\n\n"+
+		"func zzGateProbe(p zzProbePlain, key string) {\n"+
+		"\tslog.Info(fmt.Sprintf(\"cfg %+v\", p))\n"+
+		"\tslog.Info(\"cfg\", \"p\", p)\n"+
+		"\terr := errors.New(\"credential store unavailable\")\n"+
+		"\tslog.Warn(\"failed\", \"err\", err)\n"+
+		"\tslog.Warn(\"failed\", \"err\", fmt.Errorf(\"purge %d keys: %w\", p.Count, err).Error())\n"+
+		"\tx := \"static\"\n"+
+		"\tslog.Info(\"x\", \"v\", x)\n"+
+		"\tslog.Info(\"has a key\", \"present\", key != \"\", \"len\", len(key))\n"+
+		"}\n", "")()
+	if code, out := runGate(t, "check-no-credential-in-fleet-logs.sh", root); code != 0 {
+		t.Fatalf("typed benign namespace logging tripped the gate (exit %d):\n%s", code, out)
+	}
 }
 
 // TestFleetCredLogsGate_BenignLogsPass is the negative control for the

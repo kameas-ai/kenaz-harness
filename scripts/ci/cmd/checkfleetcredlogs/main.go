@@ -12,6 +12,11 @@
 // word for (apiKey, key, pt, token). A reviewer planted ten violations and
 // it caught none. Walking the AST gets the receiver shape right for free.
 //
+// Round 2 (analyze.go) adds go/types and intraprocedural taint: structs
+// with secret fields rendered whole, errors built from tainted values,
+// taint through assignments, folded constant concatenations and method
+// values. See analyze.go's header.
+//
 // WHAT IS A LOG SINK
 // ------------------
 //   - <any receiver>.{Debug,Info,Warn,Error}[Context](…) with ≥1 argument
@@ -130,13 +135,9 @@ func main() {
 	if len(files) < 2 {
 		fail("scope resolved to %d file(s); expected at least core/secrets/fleet_credentials.go and core/llm/credref/credref.go — a gate with nothing in scope passes vacuously", len(files))
 	}
-	var hits []string
-	for _, f := range files {
-		h, err := scanFile(root, f, patterns)
-		if err != nil {
-			fail("%s: %v", f, err)
-		}
-		hits = append(hits, h...)
+	hits, err := analyze(root, files, patterns)
+	if err != nil {
+		fail("%v", err)
 	}
 	if len(hits) > 0 {
 		for _, h := range hits {
@@ -267,185 +268,6 @@ func scope(root string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, err
-}
-
-func scanFile(root, rel string, patterns []*regexp.Regexp) ([]string, error) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, parser.ParseComments)
-	if err != nil {
-		return nil, err
-	}
-	allow := map[int]bool{}
-	for _, cg := range f.Comments {
-		for _, c := range cg.List {
-			if strings.Contains(c.Text, "cred-log-allow:") {
-				allow[fset.Position(c.Pos()).Line] = true
-			}
-		}
-	}
-	var hits []string
-	report := func(call *ast.CallExpr, why []string) {
-		start, end := fset.Position(call.Pos()).Line, fset.Position(call.End()).Line
-		for l := start; l <= end; l++ {
-			if allow[l] {
-				return
-			}
-		}
-		hits = append(hits, fmt.Sprintf("%s:%d: %s: %s", rel, start, strings.Join(dedupe(why), "; "), truncate(exprString(call), 160)))
-	}
-
-	// Per function: variables bound to fmt.Sprint* results.
-	for _, d := range f.Decls {
-		var body ast.Node = d
-		sprintVars := map[string]*ast.CallExpr{}
-		ast.Inspect(body, func(n ast.Node) bool {
-			as, ok := n.(*ast.AssignStmt)
-			if !ok {
-				if vs, ok := n.(*ast.ValueSpec); ok {
-					for i, v := range vs.Values {
-						if c, ok := v.(*ast.CallExpr); ok && isSprint(c) && i < len(vs.Names) {
-							sprintVars[vs.Names[i].Name] = c
-						}
-					}
-				}
-				return true
-			}
-			for i, r := range as.Rhs {
-				if c, ok := r.(*ast.CallExpr); ok && isSprint(c) && i < len(as.Lhs) {
-					if id, ok := as.Lhs[i].(*ast.Ident); ok {
-						sprintVars[id.Name] = c
-					}
-				}
-			}
-			return true
-		})
-		ast.Inspect(body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok || !isSink(call) {
-				return true
-			}
-			var why []string
-			for _, a := range call.Args {
-				why = append(why, scanArg(a, patterns, sprintVars)...)
-			}
-			if len(why) > 0 {
-				report(call, why)
-			}
-			return true
-		})
-	}
-	return hits, nil
-}
-
-func isSprint(c *ast.CallExpr) bool {
-	switch exprString(c.Fun) {
-	case "fmt.Sprintf", "fmt.Sprint", "fmt.Sprintln":
-		return true
-	}
-	return false
-}
-
-func isSink(c *ast.CallExpr) bool {
-	sel, ok := c.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	if id, ok := sel.X.(*ast.Ident); ok {
-		if m, ok := pkgSinks[id.Name]; ok {
-			if id.Name == "fmt" && strings.HasPrefix(sel.Sel.Name, "Fprint") {
-				// Only a write to the process's own streams is a log;
-				// Fprintf into a strings.Builder is formatting.
-				if len(c.Args) == 0 {
-					return false
-				}
-				w := exprString(c.Args[0])
-				return m[sel.Sel.Name] && (w == "os.Stderr" || w == "os.Stdout")
-			}
-			return m[sel.Sel.Name]
-		}
-	}
-	name := sel.Sel.Name
-	if levelMethods[name] {
-		return len(c.Args) > 0
-	}
-	if loggerOnlyMethods[name] {
-		return loggerRecv.MatchString(exprString(sel.X))
-	}
-	return false
-}
-
-// scanArg walks one sink argument. Function literals are not entered: their
-// bodies are scanned as code in their own right.
-func scanArg(e ast.Expr, patterns []*regexp.Regexp, sprintVars map[string]*ast.CallExpr) []string {
-	var why []string
-	ast.Inspect(e, func(n ast.Node) bool {
-		switch t := n.(type) {
-		case *ast.FuncLit:
-			return false
-		case *ast.BasicLit:
-			if t.Kind != token.STRING {
-				return true
-			}
-			s, err := strconv.Unquote(t.Value)
-			if err != nil {
-				return true
-			}
-			if forbiddenKeys[strings.ToLower(s)] {
-				why = append(why, fmt.Sprintf("forbidden attribute key %q", s))
-			}
-			for _, re := range patterns {
-				if re.MatchString(s) {
-					why = append(why, "key-shaped literal (core/fleet/secretshape.go pattern)")
-					break
-				}
-			}
-		case *ast.CallExpr:
-			if id, ok := t.Fun.(*ast.Ident); ok {
-				switch id.Name {
-				case "len", "cap":
-					// A length is not the value.
-					return false
-				case "string":
-					if len(t.Args) == 1 && byteish(t.Args[0]) {
-						why = append(why, "bytes-to-text conversion string(...)")
-					}
-				}
-			}
-			if sel, ok := t.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "Bytes" || sel.Sel.Name == "Use") {
-				why = append(why, "borrowed secret view ."+sel.Sel.Name+"(")
-			}
-			// Do not treat the called function's own name as data.
-			for _, a := range t.Args {
-				why = append(why, scanArg(a, patterns, sprintVars)...)
-			}
-			if sel, ok := t.Fun.(*ast.SelectorExpr); ok {
-				why = append(why, scanArg(sel.X, patterns, sprintVars)...)
-			}
-			return false
-		case *ast.SelectorExpr:
-			if secretName(t.Sel.Name) {
-				why = append(why, "secret-named field "+t.Sel.Name)
-			}
-			why = append(why, scanArg(t.X, patterns, sprintVars)...)
-			return false
-		case *ast.KeyValueExpr:
-			why = append(why, scanArg(t.Value, patterns, sprintVars)...)
-			return false
-		case *ast.Ident:
-			if secretName(t.Name) {
-				why = append(why, "raw-secret identifier "+t.Name)
-			}
-			if c, ok := sprintVars[t.Name]; ok {
-				for _, a := range c.Args {
-					for _, w := range scanArg(a, patterns, nil) {
-						why = append(why, "via fmt.Sprint* into "+t.Name+": "+w)
-					}
-				}
-			}
-		}
-		return true
-	})
-	return why
 }
 
 // byteish reports whether string(e) plausibly renders secret bytes: a

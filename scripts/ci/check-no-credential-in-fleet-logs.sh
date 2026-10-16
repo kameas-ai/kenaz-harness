@@ -42,12 +42,26 @@
 #   (c) a secret-named identifier or field (plaintext, pt, secret, value,
 #       key, apiKey, token, locator, …, or *Key/*Token/*Secret/*Password);
 #   (d) string(…), .Bytes() or .Use(.
+# Round 2 (type-aware, intraprocedural taint — analyze.go):
+#   (e) a struct whose field name or json tag is secret-like (…Token,
+#       …Secret, APIKey, Password, PrivateKey, …) rendered whole by %v /
+#       %+v / %#v or as a slog value, unless it has String/LogValue/Format;
+#   (f) an error built from a tainted value (errors.New, fmt.Errorf) and
+#       logged, including via .Error();
+#   (g) taint through :=, = and var within one function (s := string(buf);
+#       x := key; …), and helper calls returning text from a tainted
+#       argument;
+#   (h) a key literal split with + (constant-folded before matching);
+#   (i) a method value: f := l.Info; f(…).
+# A level method (Info/Warn/Error…) counts only on a logger type when the
+# type is known, so an audit emitter's .Error(…) is not a log call.
 # Opt-out: a `cred-log-allow: <reason>` comment on a line the call spans.
 #
 # HISTORY: the first version (2026-10-15) was a perl regex over
 # `ident.Info(`. Review planted ten violations — logging.L().Info, apiKey /
 # key / pt / token identifiers, a key-shaped message, Sprintf-built
 # messages, logger.With — and it caught none. The AST pass replaced it.
+# Round 2 review planted (e)–(i); the round-1 AST pass caught 0 of 8.
 #
 # Planted-violation proofs: scripts/ci/gates_can_fail_test.go cases
 # "fleet-cred-logs/*" (one per shape) and
