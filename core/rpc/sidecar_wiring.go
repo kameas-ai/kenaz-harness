@@ -74,7 +74,8 @@ func activityDBPath(dataDir string) string {
 // entry: the EFFECTIVE days (0 → 90, clamped to 1..3650), the same window
 // the harness prunes events/tasks to. On a read error (or no reader) it
 // returns nothing and logs a WARN: the engine then uses its own default,
-// and no fallback number ever shrinks a user's longer setting.
+// and no fallback number ever shrinks a user's longer setting (the
+// spawner's ScrubEnv keeps an inherited value from standing in for it).
 func activityRetentionEnv(read func() (int, error)) []string {
 	if read == nil {
 		return nil
@@ -148,6 +149,10 @@ func newSidecarStack(dataDir, buildVersion string, retentionDays func() (int, er
 			Layout:   layout,
 			ExtraEnv: []string{activity.EnvVar + "=" + activityDBPath(dataDir)},
 			EnvFunc:  func() []string { return activityRetentionEnv(retentionDays) },
+			// An unreadable setting omits the retention; the engine must
+			// then use its own default, never a value the harness merely
+			// inherited from its launcher's environment.
+			ScrubEnv: []string{activity.RetentionEnvVar},
 		},
 		"harness", buildVersion)
 	m.BasePort = mlsidecar.EnginePort(env)

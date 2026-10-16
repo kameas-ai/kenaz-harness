@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // RootEnvVar is the environment variable the harness sets on the engine
@@ -48,23 +49,61 @@ type ProcessSpawner struct {
 	// appended after ExtraEnv — for values read fresh at spawn time (the
 	// harness's local activity retention). nil adds nothing.
 	EnvFunc func() []string
+	// ScrubEnv names variables never inherited from the harness's own
+	// environment: the child sees them only when ExtraEnv / EnvFunc set
+	// them. For a harness-owned value whose read can fail (EnvFunc then
+	// omits it), so a stray export never stands in for the setting.
+	ScrubEnv []string
 }
 
 // SpawnEnv returns the environment the engine is launched with: the
 // inherited environment, with RootEnvVar forced to root (any inherited
 // value is dropped so a stray developer export can never redirect the
-// engine away from the verified install).
+// engine away from the verified install). An inherited variable that
+// extra also sets is dropped too, so the harness's value replaces it
+// rather than sitting beside it as a duplicate.
 func SpawnEnv(inherited []string, root string, extra ...string) []string {
-	prefix := RootEnvVar + "="
+	drop := map[string]bool{RootEnvVar: true}
+	for _, kv := range extra {
+		drop[envKey(kv)] = true
+	}
 	out := make([]string, 0, len(inherited)+1+len(extra))
 	for _, kv := range inherited {
-		if len(kv) >= len(prefix) && kv[:len(prefix)] == prefix {
+		if drop[envKey(kv)] {
 			continue
 		}
 		out = append(out, kv)
 	}
-	out = append(out, prefix+root)
+	out = append(out, RootEnvVar+"="+root)
 	return append(out, extra...)
+}
+
+// envKey is kv's name (everything before the first '=').
+func envKey(kv string) string {
+	if i := strings.IndexByte(kv, '='); i >= 0 {
+		return kv[:i]
+	}
+	return kv
+}
+
+// Env is the child environment Spawn uses, built from inherited (the
+// harness's own environment): ScrubEnv names removed, then SpawnEnv with
+// ExtraEnv and EnvFunc's entries, read now.
+func (p ProcessSpawner) Env(inherited []string) []string {
+	if len(p.ScrubEnv) > 0 {
+		scrub := make(map[string]bool, len(p.ScrubEnv))
+		for _, k := range p.ScrubEnv {
+			scrub[k] = true
+		}
+		kept := make([]string, 0, len(inherited))
+		for _, kv := range inherited {
+			if !scrub[envKey(kv)] {
+				kept = append(kept, kv)
+			}
+		}
+		inherited = kept
+	}
+	return SpawnEnv(inherited, p.Layout.Root, p.spawnExtra()...)
 }
 
 // spawnExtra is ExtraEnv followed by EnvFunc's entries, read now.
@@ -96,7 +135,7 @@ func (p ProcessSpawner) Spawn(_ context.Context, exePath string, port int) (int,
 	}
 	cmd := exec.Command(exePath, args...)
 	cmd.Dir = filepath.Dir(exePath)
-	cmd.Env = SpawnEnv(os.Environ(), p.Layout.Root, p.spawnExtra()...)
+	cmd.Env = p.Env(os.Environ())
 	cmd.Stdin = nil
 	cmd.Stdout = logf
 	cmd.Stderr = logf
