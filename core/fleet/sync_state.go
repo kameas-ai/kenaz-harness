@@ -31,6 +31,8 @@ type PersistedSyncState struct {
 	LWWTs string `json:"lww_ts,omitempty"`
 	// Conflict is an unresolved 409 (sync_conflict.go).
 	Conflict bool `json:"conflict,omitempty"`
+	// Dirty is a local change Fleet does not have yet (sync_dirty.go).
+	Dirty bool `json:"dirty,omitempty"`
 }
 
 // SyncStateStore persists per-category LWW state.
@@ -159,6 +161,7 @@ func applyPersisted(st *CategoryState, p PersistedSyncState) {
 		st.lwwTS = ts
 	}
 	st.conflict = p.Conflict
+	st.dirty = p.Dirty
 	st.mu.Unlock()
 }
 
@@ -166,7 +169,7 @@ func applyPersisted(st *CategoryState, p PersistedSyncState) {
 func persistedFor(st *CategoryState) (PersistedSyncState, bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	p := PersistedSyncState{Conflict: st.conflict}
+	p := PersistedSyncState{Conflict: st.conflict, Dirty: st.dirty}
 	if st.lwwTS > 0 {
 		p.LWWTs = formatLWW(st.lwwTS)
 	}

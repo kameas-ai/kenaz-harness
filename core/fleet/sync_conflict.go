@@ -10,7 +10,9 @@ package fleet
 // loop's pulls leave a conflicted category alone, so neither side is
 // overwritten behind the user's back, until the user picks one: ForcePush
 // keeps this device's settings (stamped above Fleet's row), ForcePull takes
-// the other device's. The flag is persisted with the LWW stamp
+// the other device's. A pull that finds a newer remote while this device
+// holds an unsent change (sync_dirty.go) is a conflict the same way. The
+// flag is persisted with the LWW stamp
 // (sync_state.go), so a restart does not quietly resolve it either.
 //
 // Clock skew. Fleet accepts any lww_ts up to five minutes ahead of its own

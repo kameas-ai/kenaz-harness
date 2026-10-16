@@ -220,6 +220,21 @@ type CategoryState struct {
 	// automatic pushes and polls skip the category until ForcePush or
 	// ForcePull. Persisted with lwwTS.
 	conflict bool
+	// dirty marks a local change Fleet does not have yet (sync_dirty.go):
+	// set by NotifyMutation and by a PUT that failed in transit, cleared
+	// only by a successful PUT (or ForcePull). Persisted, so an edit made
+	// offline survives a restart. While dirty, the poll retries the upload,
+	// and a pull that finds a newer remote marks a conflict instead of
+	// applying it over the unsent edit.
+	dirty bool
+	// dirtyGen counts markDirty calls, so a PUT of an older collect does not
+	// clear the mark of an edit made while it was in flight.
+	dirtyGen uint64
+	// retryHeld stops the poll retrying a PUT Fleet refused for its content
+	// (422 schema/secret, 413, 403): sending it again would only repeat the
+	// refusal. The next local change clears it. Not persisted: one retry per
+	// launch is bounded.
+	retryHeld bool
 }
 
 // SyncStatus is the read-only view of a category's sync state,
@@ -387,7 +402,18 @@ func (s *Syncer) SetEnabled(ctx context.Context, cat SyncCategory, enabled bool)
 	st.mu.Lock()
 	wasEnabled := st.enabled
 	st.enabled = enabled
+	clearedDirty := !enabled && st.dirty
+	if !enabled {
+		// Turning a category off ends its pending upload. Turning it back on
+		// pulls first (pullThenPush), so a stale mark must not turn that pull
+		// into a conflict.
+		st.dirty = false
+		st.retryHeld = false
+	}
 	st.mu.Unlock()
+	if clearedDirty {
+		s.persist()
+	}
 
 	if enabled && !wasEnabled {
 		// FR-102 (push current local state on enable), after taking any
@@ -516,6 +542,9 @@ func (s *Syncer) PushHeld(ctx context.Context) error {
 // category's local state. It triggers a debounced push after 5s (FR-104,
 // NFR-002).
 func (s *Syncer) NotifyMutation(cat SyncCategory) {
+	// Record the unsent change before debouncing, so it survives a crash or
+	// a quit inside the debounce window as well as a failed PUT.
+	s.markDirty(cat)
 	s.debounceMu.Lock()
 	defer s.debounceMu.Unlock()
 	if _, ok := s.debounce[cat]; ok {
@@ -693,6 +722,9 @@ func (s *Syncer) push(ctx context.Context, cat SyncCategory, force bool) error {
 		}
 	}
 
+	st.mu.Lock()
+	gen := st.dirtyGen
+	st.mu.Unlock()
 	raw, err := cfg.Collector(ctx)
 	if err != nil {
 		return fmt.Errorf("fleet/sync: collect %s: %w", cat, err)
@@ -708,9 +740,13 @@ func (s *Syncer) push(ctx context.Context, cat SyncCategory, force bool) error {
 	resp, err := s.client.doWithContentType(ctx, http.MethodPut,
 		"/api/v1/sync/"+url.PathEscape(string(cat)), "application/json", bytes.NewReader(body))
 	if err != nil {
+		// Offline or a transport failure: Fleet does not have this change.
+		// Keep it marked so the poll retries it and a pull cannot overwrite
+		// it (sync_dirty.go).
 		st.mu.Lock()
 		st.lastErr = err.Error()
 		st.mu.Unlock()
+		s.markUnsent(st)
 		return fmt.Errorf("fleet/sync: push %s: %w", cat, err)
 	}
 	defer resp.Body.Close()
@@ -719,6 +755,14 @@ func (s *Syncer) push(ctx context.Context, cat SyncCategory, force bool) error {
 	setErr := func(msg string) {
 		st.mu.Lock()
 		st.lastErr = msg
+		st.mu.Unlock()
+	}
+	// holdRetry: Fleet refused this content; retrying unchanged would only
+	// be refused again. The change stays unsent (dirty) until the next local
+	// edit.
+	holdRetry := func() {
+		st.mu.Lock()
+		st.retryHeld = true
 		st.mu.Unlock()
 	}
 	switch resp.StatusCode {
@@ -738,12 +782,18 @@ func (s *Syncer) push(ctx context.Context, cat SyncCategory, force bool) error {
 		if ts > st.lwwTS {
 			st.lwwTS = ts
 		}
+		// Clear the unsent mark only when no edit landed after this collect.
+		if st.dirtyGen == gen {
+			st.dirty = false
+		}
+		st.retryHeld = false
 		st.mu.Unlock()
 		s.persist()
 		logging.L().Info("fleet.sync.push.ok", "category", string(cat))
 		return nil
 	case http.StatusForbidden:
 		setErr(ErrCapabilityNotInTier.Error())
+		holdRetry()
 		return ErrCapabilityNotInTier
 	case http.StatusConflict:
 		// stale_lww_ts. Not retried, and not silently pulled either: the
@@ -767,10 +817,18 @@ func (s *Syncer) push(ctx context.Context, cat SyncCategory, force bool) error {
 		}
 		msg := e.describe(resp.StatusCode)
 		setErr(msg)
+		holdRetry()
 		return fmt.Errorf("fleet/sync: push %s: %s", cat, msg)
-	default:
+	case http.StatusRequestEntityTooLarge:
 		msg := readFleetError(resp).describe(resp.StatusCode)
 		setErr(msg)
+		holdRetry()
+		return fmt.Errorf("fleet/sync: push %s: %s", cat, msg)
+	default:
+		// 5xx and anything unexpected: Fleet did not store the change.
+		msg := readFleetError(resp).describe(resp.StatusCode)
+		setErr(msg)
+		s.markUnsent(st)
 		return fmt.Errorf("fleet/sync: push %s: %s", cat, msg)
 	}
 }
@@ -784,7 +842,9 @@ func (s *Syncer) push(ctx context.Context, cat SyncCategory, force bool) error {
 //
 // A category in conflict is skipped (nil, nothing applied): applying Fleet's
 // state would silently discard the change this device could not upload.
-// ForcePull applies it on the user's say-so.
+// ForcePull applies it on the user's say-so. A category holding an unsent
+// local change (dirty, sync_dirty.go) whose remote is newer is marked in
+// conflict instead of applied, for the same reason.
 func (s *Syncer) Pull(ctx context.Context, cat SyncCategory) error {
 	_, err := s.pull(ctx, cat)
 	return err
@@ -882,6 +942,13 @@ func (s *Syncer) pullMode(ctx context.Context, cat SyncCategory, force bool) (ap
 		}
 		return false, nil
 	}
+	// Another device wrote while this one holds an unsent change: applying
+	// Fleet's state would silently discard it. Surface a conflict instead;
+	// the user resolves it with ForcePush or ForcePull.
+	if !force && isDirty(st) {
+		s.markConflict(cat, st)
+		return false, nil
+	}
 
 	// Apply.
 	if cfgOk && cfg.Applier != nil {
@@ -898,6 +965,10 @@ func (s *Syncer) pullMode(ctx context.Context, cat SyncCategory, force bool) (ap
 	st.lwwTS = remoteTS
 	st.lastErr = ""
 	st.conflict = false
+	// Local now equals Fleet's state (a ForcePull discards the unsent edit
+	// on the user's say-so), so nothing is left to upload.
+	st.dirty = false
+	st.retryHeld = false
 	st.mu.Unlock()
 	s.persist()
 	logging.L().Info("fleet.sync.pull.applied",
@@ -909,6 +980,7 @@ func (s *Syncer) pullMode(ctx context.Context, cat SyncCategory, force bool) (ap
 
 // StartPolling begins a background 60s poll loop for all enabled categories.
 // Implements FR-103 (60s) and NFR-003 (backoff on failures: 60s → 300s → 1800s).
+// The same backoff bounds the retry of an unsent local change (syncOnce).
 // Context cancellation stops the loop.
 func (s *Syncer) StartPolling(ctx context.Context) {
 	s.once.Do(func() {
@@ -1000,8 +1072,9 @@ func (s *Syncer) pollLoop(ctx context.Context) {
 				// A local-only category (Fleet does not accept it) is
 				// skipped, not failed: counting it would drive every
 				// category's poll into backoff.
-				if err := s.Pull(ctx, cat); err != nil && !errors.Is(err, ErrSyncCategoryLocalOnly) &&
-					!errors.Is(err, ErrSyncCategoryNotSyncingYet) {
+				// syncOnce pulls and then retries an unsent local change
+				// (sync_dirty.go); a failure of either backs the loop off.
+				if err := s.syncOnce(ctx, cat); err != nil {
 					consecutiveErrors[cat]++
 					logging.L().Warn("fleet.sync.poll.pull_failed",
 						"category", string(cat),
