@@ -189,17 +189,20 @@ func TestFleetApproveItem_MLNoticeSendsVerbatimBody(t *testing.T) {
 	if _, err := r.api.FleetApproveItem(context.Background(), "ml_notice:o1:4"); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	if _, _, acks := r.fleet.hubSnapshot(); len(acks) != 1 || acks[0] != `{"notice_version":4,"text_revision":2}` {
+	// Served body + "surface":"desktop" (it had none); nothing else changes.
+	if _, _, acks := r.fleet.hubSnapshot(); len(acks) != 1 || acks[0] != `{"notice_version":4,"text_revision":2,"surface":"desktop"}` {
 		t.Errorf("notice-ack bodies = %q", acks)
 	}
 }
 
 // kenaz-fleet #235: the rev-2 ml_notice approve body carries
 // ai_usage_epoch. The hub path forwards Fleet's body byte for byte (key
-// order and all) — the harness never rebuilds it, so the epoch it echoes
-// is exactly the one Fleet put there.
+// order and all) — the harness never rebuilds it, so the epoch and the
+// action it echoes are exactly the ones Fleet put there. The one addition
+// (legal, kameas-ai-11, 2026-10-16) is "surface":"desktop" when the served
+// body has no surface; a served surface is left alone (byte-identical).
 func TestFleetApproveItem_MLNoticeForwardsHubBodyByteForByte(t *testing.T) {
-	const approveBody = `{"notice_version":4,"text_revision":2,"ai_usage_epoch":9}`
+	const approveBody = `{"notice_version":4,"text_revision":2,"ai_usage_epoch":9,"action":"read","surface":"desktop"}`
 	item, _ := json.Marshal(map[string]any{
 		"id": "ml_notice:o1:4", "kind": "ml_notice", "title": "Your organization has enabled workflow data offload",
 		"summary": "Read how your activity is uploaded.", "body_text": "What's new\n\nAI usage is now included.",
