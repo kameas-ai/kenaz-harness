@@ -75,10 +75,26 @@ async function load() {
 
 onMounted(load);
 
-/** Legal acceptance, or any item that points at an external document. */
+/**
+ * Legal acceptance, or any item that points at an external document. Never
+ * an exclusions change: it is informational and records only "I have read
+ * this", so it gets no checkbox or accept wording (legal, 2026-10-16).
+ */
 function needsCheckbox(it: PendingApprovalItem): boolean {
+  if (it.kind === 'ml_exclusions_change') return false;
   return it.kind === 'legal_acceptance' || !!it.documentUrl;
 }
+
+/**
+ * Dialog title. "Approval" only when every item shown is required. With any
+ * informational item (e.g. an exclusions change) the title is neutral, so
+ * an informational card never carries consent-adjacent wording.
+ */
+const dialogTitle = computed(() =>
+  items.value.length > 0 && items.value.every((it) => it.required)
+    ? 'Items that need your approval'
+    : 'Items that need your attention',
+);
 
 function checkboxLabel(it: PendingApprovalItem): string {
   return `I have read and accept ${it.title} (${it.version})`;
@@ -188,14 +204,14 @@ function next() {
 <template>
   <BaseDialog
     :open="true"
-    title="Items that need your approval"
+    :title="dialogTitle"
     panel-class="w-[560px] max-w-[92vw] max-h-[85vh] overflow-y-auto rounded-sm border border-border-muted bg-surface-1 p-5 text-ink"
     :close-on-overlay-click="false"
     @close="emit('close')"
   >
     <div class="space-y-3" data-testid="pending-approvals-modal">
       <div class="flex items-baseline justify-between gap-3">
-        <h2 class="font-ui text-[13px] font-medium">Items that need your approval</h2>
+        <h2 class="font-ui text-[13px] font-medium" data-testid="pending-approvals-title">{{ dialogTitle }}</h2>
         <span v-if="items.length > 1" class="text-[11px] text-ink-muted" data-testid="pending-approvals-step">
           {{ index + 1 }} of {{ items.length }}
         </span>
