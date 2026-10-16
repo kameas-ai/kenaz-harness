@@ -90,6 +90,11 @@ type ConfigPollStatus struct {
 	// judges a served bundle differently (a verified bundle, a 304, or a
 	// different hard rejection); transient fetch errors preserve it.
 	SigningKeyUnknown bool `json:"signingKeyUnknown"`
+	// UpdateRequired is true when Fleet's last answer was 406
+	// bundle_format_unsupported (Fleet ruling 4): this build asked for a
+	// bundle form Fleet no longer serves. The last applied bundle stays in
+	// force. Cleared by the next verified bundle, 304, or other rejection.
+	UpdateRequired bool `json:"updateRequired"`
 }
 
 // ConfigPoller polls the fleet config endpoint, verifies bundles, and drives
@@ -108,6 +113,8 @@ type ConfigPoller struct {
 	checksum      string // SHA-256 hex of last-seen bundle JSON (for 304)
 	source        string
 	keyUnknown    bool // last rejection was ErrSigningKeyUnknown
+	// updateRequired: the last answer was 406 bundle_format_unsupported.
+	updateRequired bool
 	// orgPaused: the last fetch was refused 403 org_paused (kenaz-fleet
 	// #206) — transient; the last applied bundle stays in force, and
 	// ResumeAfterOrgUnpause clears the "org_paused" lastError it set. The
@@ -338,6 +345,7 @@ func (p *ConfigPoller) Status() ConfigPollStatus {
 		Source:            p.source,
 		BundleChecksum:    p.checksum,
 		SigningKeyUnknown: p.keyUnknown,
+		UpdateRequired:    p.updateRequired,
 	}
 	if !p.lastAppliedAt.IsZero() {
 		s.LastAppliedAt = p.lastAppliedAt.UTC().Format(time.RFC3339)
@@ -361,8 +369,10 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	urlPath := fmt.Sprintf("/api/v1/configs?machine=%s&checksum=%s", url.QueryEscape(nodeID), url.QueryEscape(cs))
 
 	// We need to inspect the status code before letting the fleet http.Client
-	// discard non-2xx bodies, so we call Get directly.
-	resp, err := p.client.Get(ctx, urlPath)
+	// discard non-2xx bodies, so we call GetAccept directly. The Accept header
+	// asks for the v2 signed-bytes envelope (Fleet ruling 2); an older Fleet
+	// ignores it and answers with the legacy bundle, which has no "format".
+	resp, err := p.client.GetAccept(ctx, urlPath, BundleAcceptV2)
 	if err != nil {
 		if errors.Is(err, ErrNotSignedIn) {
 			// Not signed in — skip silently; don't backoff.
@@ -406,6 +416,20 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return nil
 	}
 
+	if resp.StatusCode == http.StatusNotAcceptable {
+		// 406 bundle_format_unsupported (Fleet ruling 4): Fleet stopped
+		// serving the form this build asked for. Nothing to verify; the last
+		// applied bundle stays in force; the status says "update required".
+		e := fmt.Errorf("%w: fleet answered 406", ErrBundleFormatUnsupported)
+		p.mu.Lock()
+		p.lastError = "This version of Kenaz can no longer receive your organization's settings. Update Kenaz to keep them current."
+		p.orgPaused = false
+		p.keyUnknown = false
+		p.updateRequired = true
+		p.mu.Unlock()
+		return e
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		e := fmt.Errorf("fleet: config status %d", resp.StatusCode)
 		p.setError(e.Error())
@@ -427,8 +451,8 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return e
 	}
 
-	var b Bundle
-	if err := json.Unmarshal(body, &b); err != nil {
+	format, err := envelopeFormat(body)
+	if err != nil {
 		e := fmt.Errorf("fleet: parse config bundle: %w", err)
 		p.setRejection(e.Error())
 		return e
@@ -445,15 +469,51 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	}
 	p.mu.RUnlock()
 
-	if err := VerifyWithKeySet(&b, keys, lastID); err != nil {
+	// Two verification paths during the transition (spec §6 R2):
+	//   v2     — verify the exact signed bytes P, THEN decode leniently;
+	//   legacy — decode, then verify over our re-marshal (no "format": an
+	//            older Fleet). Deleted at cutover (spec §4.6, WP04).
+	var (
+		b           *Bundle
+		vb          *VerifiedBundle
+		newChecksum string
+		verr        error
+	)
+	switch format {
+	case BundleEnvelopeFormatV2:
+		vb, verr = VerifyEnvelopeBytes(body, keys)
+		if verr == nil {
+			verr = checkBundleIDMonotonic(vb.Bundle.BundleID, lastID)
+		}
+		if verr == nil {
+			b = vb.Bundle
+			newChecksum = vb.Checksum() // hex(SHA-256(P)), Fleet ruling 3
+		}
+	case "":
+		var lb Bundle
+		if err := json.Unmarshal(body, &lb); err != nil {
+			e := fmt.Errorf("fleet: parse config bundle: %w", err)
+			p.setRejection(e.Error())
+			return e
+		}
+		verr = VerifyWithKeySet(&lb, keys, lastID)
+		b = &lb
+		newChecksum = hexChecksumOf(body)
+	default:
+		e := fmt.Errorf("fleet: config bundle envelope format %q is not supported by this build", format)
+		p.setRejection(e.Error())
+		return e
+	}
+	if verr != nil {
 		// Hard-reject: do NOT apply; do NOT advance bundle_id; DO set error.
 		// Error text and the unknown-key flag are set under ONE lock so a
 		// concurrent Status() never sees one without the other.
 		p.mu.Lock()
-		p.lastError = fmt.Sprintf("bundle verification failed (hard-reject): %v", err)
-		p.keyUnknown = errors.Is(err, ErrSigningKeyUnknown)
+		p.lastError = fmt.Sprintf("bundle verification failed (hard-reject): %v", verr)
+		p.keyUnknown = errors.Is(verr, ErrSigningKeyUnknown)
+		p.updateRequired = false
 		p.mu.Unlock()
-		return err // also triggers backoff
+		return verr // also triggers backoff
 	}
 
 	// Apply the bundle through the registered applier.
@@ -463,13 +523,10 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		itemStats []MandatedItemStatus
 	)
 	if ia, ok := p.applier.(ConfigItemApplier); ok {
-		applyErrs, itemStats = ia.ApplyBundleItems(ctx, &b)
+		applyErrs, itemStats = ia.ApplyBundleItems(ctx, b)
 	} else {
-		applyErrs = p.applier.ApplyBundle(ctx, &b)
+		applyErrs = p.applier.ApplyBundle(ctx, b)
 	}
-
-	// Compute new checksum of the raw body (for 304 on next poll).
-	newChecksum := hexChecksumOf(body)
 
 	// FR-012: only advance lastAppliedID when the apply is fully clean.
 	// On partial failure the ID stays at the previous value so the bundle is
@@ -477,6 +534,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	// the next GET returns the same bundle (no 304 short-circuit).
 	p.mu.Lock()
 	p.keyUnknown = false // the bundle verified under a pinned key
+	p.updateRequired = false
 	hadRefusals := false
 	for _, st := range itemStats {
 		if st.Status == MandatedStatusRefused {
@@ -484,7 +542,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		}
 	}
 	// tool_exposure entries this build refused (WP07) re-apply the same way.
-	if len(ToolExposureRefusals(&b)) > 0 {
+	if len(ToolExposureRefusals(b)) > 0 {
 		hadRefusals = true
 	}
 	buildVersion := p.buildVersion
@@ -574,6 +632,7 @@ func (p *ConfigPoller) setRejection(msg string) {
 	p.lastError = msg
 	p.orgPaused = false
 	p.keyUnknown = false
+	p.updateRequired = false
 	p.mu.Unlock()
 }
 
@@ -582,6 +641,7 @@ func (p *ConfigPoller) clearError() {
 	p.lastError = ""
 	p.orgPaused = false
 	p.keyUnknown = false
+	p.updateRequired = false
 	p.mu.Unlock()
 }
 

@@ -294,6 +294,19 @@ type BundleModelPrefs struct {
 	// ProviderAllowlist is the set of provider names the fleet admin permits.
 	// nil means "no fleet restriction".
 	ProviderAllowlist []string `json:"provider_allowlist,omitempty"`
+
+	// AllowUserCredentials and CredentialRefs are CARRIED ONLY: decoded and
+	// covered by both signature paths (the legacy bundleSigningPayload
+	// embeds *BundleModelPrefs, so they marshal in this order after
+	// provider_allowlist, and omitempty keeps a bundle without them
+	// byte-identical to before), but nothing in this build reads them yet.
+	// Consumer: provider-credentials-client-01PCCLI01 WP08 (allow/deny a
+	// member's own provider key; resolve org credential references).
+	// Landed with signed-bundle-bytes-01SBBYT01 so Fleet can populate them
+	// without a minimum-version gate (spec "Sequencing"). Ledger entry:
+	// docs/unwired-ledger.md, 2026-10-15.
+	AllowUserCredentials *bool             `json:"allow_user_credentials,omitempty"`
+	CredentialRefs       map[string]string `json:"credential_refs,omitempty"`
 }
 
 // bundleSigningPayload is the shape marshalled to produce the signature input.
@@ -409,32 +422,15 @@ func VerifyWithKeySet(b *Bundle, keys []ed25519.PublicKey, lastAppliedID int64) 
 	}
 
 	// Select candidate keys by the signed key_id.
-	candidates := keys
-	if b.KeyID != "" {
-		candidates = nil
-		for _, key := range keys {
-			if len(key) == ed25519.PublicKeySize && SigningKeyID(key) == b.KeyID {
-				candidates = []ed25519.PublicKey{key}
-				break
-			}
-		}
-		if candidates == nil {
-			return fmt.Errorf("%w: key_id %q matches none of the %d key(s) pinned in this build — this install's pins predate the fleet's current signing key; update the harness",
-				ErrSigningKeyUnknown, b.KeyID, len(keys))
-		}
+	candidates, err := selectSigningKeys(b.KeyID, keys)
+	if err != nil {
+		return err
 	}
 
 	// Decode the signature field.
-	sig, err := base64.RawStdEncoding.DecodeString(b.Signature)
+	sig, err := decodeBundleSignature(b.Signature)
 	if err != nil {
-		// Also accept standard base64 with padding.
-		sig, err = base64.StdEncoding.DecodeString(b.Signature)
-		if err != nil {
-			return fmt.Errorf("%w: cannot decode signature: %v", ErrInvalidSignature, err)
-		}
-	}
-	if len(sig) != ed25519.SignatureSize {
-		return fmt.Errorf("%w: signature length %d != %d", ErrInvalidSignature, len(sig), ed25519.SignatureSize)
+		return err
 	}
 
 	// Build the signing payload and hash it.
@@ -457,10 +453,53 @@ func VerifyWithKeySet(b *Bundle, keys []ed25519.PublicKey, lastAppliedID int64) 
 		return ErrInvalidSignature
 	}
 
-	// Monotonic bundle_id guard.
-	if b.BundleID <= lastAppliedID {
-		return fmt.Errorf("%w: received %d, last applied %d", ErrBundleIDNonMonotonic, b.BundleID, lastAppliedID)
-	}
+	return checkBundleIDMonotonic(b.BundleID, lastAppliedID)
+}
 
+// checkBundleIDMonotonic is the replay guard shared by the legacy and v2
+// verification paths: a bundle_id must be strictly greater than the last
+// applied one.
+func checkBundleIDMonotonic(id, lastAppliedID int64) error {
+	if id <= lastAppliedID {
+		return fmt.Errorf("%w: received %d, last applied %d", ErrBundleIDNonMonotonic, id, lastAppliedID)
+	}
 	return nil
+}
+
+// selectSigningKeys applies the key-selection rules VerifyWithKeySet
+// documents (shared with the v2 envelope path, signed-bundle-bytes-01SBBYT01
+// WP01): an empty set is ErrSigningKeyNotConfigured; a non-empty keyID
+// selects the one pinned key with that SigningKeyID or fails with
+// ErrSigningKeyUnknown; an empty keyID selects every pinned key.
+func selectSigningKeys(keyID string, keys []ed25519.PublicKey) ([]ed25519.PublicKey, error) {
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("%w: cannot verify without a signing key", ErrSigningKeyNotConfigured)
+	}
+	if keyID == "" {
+		return keys, nil
+	}
+	for _, key := range keys {
+		if len(key) == ed25519.PublicKeySize && SigningKeyID(key) == keyID {
+			return []ed25519.PublicKey{key}, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: key_id %q matches none of the %d key(s) pinned in this build — this install's pins predate the fleet's current signing key; update the harness",
+		ErrSigningKeyUnknown, keyID, len(keys))
+}
+
+// decodeBundleSignature decodes a base64 ed25519 signature (raw standard
+// encoding, or standard with padding) and checks its length.
+func decodeBundleSignature(s string) ([]byte, error) {
+	sig, err := base64.RawStdEncoding.DecodeString(s)
+	if err != nil {
+		// Also accept standard base64 with padding.
+		sig, err = base64.StdEncoding.DecodeString(s)
+		if err != nil {
+			return nil, fmt.Errorf("%w: cannot decode signature: %v", ErrInvalidSignature, err)
+		}
+	}
+	if len(sig) != ed25519.SignatureSize {
+		return nil, fmt.Errorf("%w: signature length %d != %d", ErrInvalidSignature, len(sig), ed25519.SignatureSize)
+	}
+	return sig, nil
 }

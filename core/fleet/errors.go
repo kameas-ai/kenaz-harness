@@ -45,6 +45,18 @@ var (
 	// config-pull status carries this error.
 	ErrConfigBundleTooLarge = errors.New("fleet: config bundle too large")
 
+	// ErrBundleKeyIDMismatch is returned by VerifyEnvelope when a v2
+	// envelope verified but the key_id signed inside its payload differs
+	// from the envelope's (unsigned, routing-hint) key_id — Fleet ruling 7.
+	// Hard reject (signed-bundle-bytes-01SBBYT01 WP01).
+	ErrBundleKeyIDMismatch = errors.New("fleet: config bundle key_id does not match its envelope")
+
+	// ErrBundleFormatUnsupported is returned by the config poller when Fleet
+	// answers 406 bundle_format_unsupported (Fleet ruling 4): this build asked
+	// for a bundle form Fleet no longer serves. The last applied bundle stays
+	// in force; the status reports "update required".
+	ErrBundleFormatUnsupported = errors.New("fleet: config bundle format unsupported by fleet (update required)")
+
 	// ErrInvalidSignature is returned by Verify when the ed25519 signature in a
 	// config bundle does not match the canonical JSON payload.
 	ErrInvalidSignature = errors.New("fleet: config bundle signature invalid")

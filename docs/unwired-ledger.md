@@ -6531,6 +6531,25 @@ declares the names, plus the one-line rename of
 `fleet.ModelCallTelemetryClass` if Fleet picks another name, deletes this
 entry.
 
+### 2026-10-15 (signed-bundle-bytes-01SBBYT01) — `model_prefs.allow_user_credentials` / `credential_refs` are carried, not consumed
+
+`BundleModelPrefs.AllowUserCredentials` (`*bool`) and
+`BundleModelPrefs.CredentialRefs` (`map[string]string`) decode on both
+verification paths (the v2 envelope, and the legacy re-marshal via
+`bundleSigningPayload`'s `*BundleModelPrefs`, where `omitempty` keeps a
+bundle without them byte-identical), but nothing in the harness reads them:
+`llmview.ApplyFleetModelPrefs` still applies only `default_model` and
+`provider_allowlist`. They landed early on purpose (spec "Sequencing") so
+Fleet can populate them without a minimum-version gate. Until the consumer
+lands, `allow_user_credentials: false` is not enforced; Fleet ruling 6
+lists it as restriction-bearing, so Fleet should name it in
+`min_client_versions`, and this build then reports "can't enforce" for it
+instead of claiming compliance. `BundleModelPrefs` is not a
+knob-coverage-tracked type (only `Bundle` is), so no allowlist holds this.
+**Blocker:** the credential consumer. **Owner:**
+provider-credentials-client-01PCCLI01 WP08, which wires both fields into
+the LLM stack and deletes this entry.
+
 ## Drained
 
 ### 2026-10-09 · CLOSED — owner-accepted extensions of FR-K4's `tool_exposure` shape (tool-context-budget-01TCBUD01 WP07)

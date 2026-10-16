@@ -39,6 +39,13 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 // Fleet's OTLP receiver picks protobuf vs JSON decoding from Content-Type
 // alone (ml-producer-01MLPRD01 WP03).
 func (c *Client) doWithContentType(ctx context.Context, method, path, contentType string, body io.Reader) (*http.Response, error) {
+	return c.doWithHeaders(ctx, method, path, contentType, "", body)
+}
+
+// doWithHeaders is doWithContentType plus an Accept header on every attempt
+// ("" sends none). The config poller uses it to ask for the v2 signed-bytes
+// envelope (signed-bundle-bytes-01SBBYT01 WP01, Fleet ruling 2).
+func (c *Client) doWithHeaders(ctx context.Context, method, path, contentType, accept string, body io.Reader) (*http.Response, error) {
 	if c == nil || c.isNop {
 		return nil, ErrFleetDisabled
 	}
@@ -116,6 +123,9 @@ func (c *Client) doWithContentType(ctx context.Context, method, path, contentTyp
 			req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
 			if contentType != "" {
 				req.Header.Set("Content-Type", contentType)
+			}
+			if accept != "" {
+				req.Header.Set("Accept", accept)
 			}
 
 			resp, err := c.httpClient.Do(req)
@@ -283,6 +293,11 @@ func (c *Client) emitSessionExpired(reason string) {
 // Get performs a GET against the fleet server path.
 func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
 	return c.do(ctx, http.MethodGet, path, nil)
+}
+
+// GetAccept performs a GET with an Accept header (content negotiation).
+func (c *Client) GetAccept(ctx context.Context, path, accept string) (*http.Response, error) {
+	return c.doWithHeaders(ctx, http.MethodGet, path, "", accept, nil)
 }
 
 // Post performs a POST with a raw body, sent with contentType as its
