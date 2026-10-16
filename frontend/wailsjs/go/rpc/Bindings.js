@@ -578,6 +578,10 @@ export function Fleet_ApproveItem(arg1) {
   return window['go']['rpc']['Bindings']['Fleet_ApproveItem'](arg1);
 }
 
+export function Fleet_DismissItemLocally(arg1) {
+  return window['go']['rpc']['Bindings']['Fleet_DismissItemLocally'](arg1);
+}
+
 export function Fleet_GetTelemetryConsent() {
   return window['go']['rpc']['Bindings']['Fleet_GetTelemetryConsent']();
 }

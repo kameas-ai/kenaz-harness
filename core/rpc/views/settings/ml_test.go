@@ -187,6 +187,7 @@ func newMLFakeFleet(t *testing.T) *mlFakeFleet {
 	}
 	mux.HandleFunc("/api/v1/me/legal-acceptances", hubPost)
 	mux.HandleFunc("/api/v1/me/ml/exclusions-seen", hubPost)
+	mux.HandleFunc("/api/v1/me/ml/opt-in-prompt-dismissed", hubPost)
 	mux.HandleFunc("/api/v1/me/telemetry-opt-ins", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()

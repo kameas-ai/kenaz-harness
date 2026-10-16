@@ -334,3 +334,29 @@ func TestPendingApprovals_NopClient(t *testing.T) {
 		t.Errorf("approve: %v", err)
 	}
 }
+
+// Legal (kameas-ai-11, 2026-10-16): the opt-in prompt's dismissal route is
+// bound to the ml_opt_in_available kind. An ml_notice (the Offload ML
+// notice) or any other kind carrying that path is refused, and nothing is
+// sent.
+func TestApproveActionAllowedFor_OptInDismissalBoundToItsKind(t *testing.T) {
+	if !ApproveActionAllowedFor(ApprovalKindMLOptInAvailable, "POST", ApprovePathMLOptInPromptDismissed) {
+		t.Fatal("the opt-in offer's dismissal must be allowed")
+	}
+	for _, kind := range []string{ApprovalKindMLNotice, ApprovalKindMLExclusionsChange, ApprovalKindLegalAcceptance, "future_kind", ""} {
+		if ApproveActionAllowedFor(kind, "POST", ApprovePathMLOptInPromptDismissed) {
+			t.Errorf("kind %q may call the opt-in dismissal route", kind)
+		}
+	}
+	if !ApproveActionAllowedFor(ApprovalKindMLNotice, "POST", ApprovePathMLNoticeAck) {
+		t.Fatal("the notice ack must stay allowed for ml_notice")
+	}
+	// Reverse binding (#427 re-review): the opt-in offer, whose button reads
+	// "Not now", may carry ONLY the dismissal path. A malformed offer
+	// pointing at an ack or acceptance route must not record one.
+	for _, path := range []string{ApprovePathMLNoticeAck, ApprovePathLegalAcceptances, ApprovePathMLExclusionsSeen} {
+		if ApproveActionAllowedFor(ApprovalKindMLOptInAvailable, "POST", path) {
+			t.Errorf("ml_opt_in_available may call %s", path)
+		}
+	}
+}
