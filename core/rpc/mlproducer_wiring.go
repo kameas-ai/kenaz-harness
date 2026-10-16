@@ -374,7 +374,11 @@ func (w *mlProducerWiring) localActivity(ctx context.Context) (MLLocalActivityVi
 	if w == nil {
 		return v, nil
 	}
-	v.RetentionDays = w.settings.MLLocalActivityRetentionDays()
+	days, err := w.settings.MLLocalActivityRetentionDays()
+	if err != nil {
+		return v, err
+	}
+	v.RetentionDays = days
 	v.EffectiveRetentionDays = activity.EffectiveRetentionDays(v.RetentionDays)
 	v.SharingWithFleet = w.gate.Last().Open
 	if w.local == nil {

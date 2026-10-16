@@ -11,6 +11,7 @@ import (
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer/activity"
 	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
+	settingsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 )
 
 // mlproducer_local_wiring_test.go — ml-producer-01MLPRD01 WP11 through
@@ -156,5 +157,53 @@ func TestActivityDBPath_StandardShape(t *testing.T) {
 	// store moves aside.
 	if got := activityDBPath(d); got != filepath.Join(d, "ml-activity", "activity.db") {
 		t.Fatalf("activityDBPath(custom) = %q", got)
+	}
+}
+
+// Review finding 1 (#429): an unreadable settings file must never be read
+// as the 90-day default. A member who chose 3650 days keeps a 200-day-old
+// row through a pass that runs while settings.json does not parse; the
+// pass deletes nothing. (Before the fix the read error folded into 0 →
+// 90 days, and the row was purged.)
+func TestMLProducerWiring_UnreadableRetentionSkipsPrune(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	c, err := core.New(core.Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	store, err := settingsview.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(c, WithSettingsStore(store))
+	t.Cleanup(a.Shutdown)
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 3650); err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Now().Add(-200 * 24 * time.Hour).UnixMilli()
+	if _, err := w.local.Commit(ctx, activity.Write{
+		Source: "harness.agent",
+		Events: []activity.Event{{Kind: "phase_change", TS: ts, Payload: map[string]any{"task": "agent-x", "phase": "coding"}}},
+		Task:   &activity.Task{ID: "agent-x", RepoRoot: "r", StartedAt: ts, LastActive: ts},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.Path(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ev, tk, err := w.pruner.PruneOnce(ctx)
+	if err == nil || ev != 0 || tk != 0 {
+		t.Fatalf("prune with an unreadable setting = %d/%d, %v; want the pass skipped with an error", ev, tk, err)
+	}
+	st, _ := w.local.Stats(ctx)
+	if st.Events != 1 || st.Tasks != 1 {
+		t.Fatalf("rows after the skipped pass = %+v; the 200-day-old activity was purged", st)
+	}
+	// The readout reports the failure rather than a made-up retention.
+	if _, err := a.MLLocalActivity(ctx); err == nil {
+		t.Fatal("status with an unreadable setting returned no error")
 	}
 }

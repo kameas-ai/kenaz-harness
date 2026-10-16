@@ -1681,16 +1681,20 @@ func (a *API) ModelCallStatsPullEnabled() bool {
 }
 
 // MLLocalActivityRetentionDays reads the local ML activity retention
-// fresh (activity.Pruner's closure; 0 = default). A read error yields 0.
-func (a *API) MLLocalActivityRetentionDays() int {
+// fresh (activity.Pruner's closure). Only a SUCCESSFUL read of 0 means the
+// 90-day default: a read or parse error is returned, never folded into 0,
+// because the pruner deletes on this value and a member who chose 3650
+// days must not lose everything past 90 to an unreadable settings file.
+// No settings store at all (a test chassis) is (0, nil): the default.
+func (a *API) MLLocalActivityRetentionDays() (int, error) {
 	if a == nil || a.store == nil {
-		return 0
+		return 0, nil
 	}
 	s, err := a.store.LoadAll()
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	return s.MLLocalActivityRetentionDays
+	return s.MLLocalActivityRetentionDays, nil
 }
 
 // SetMLLocalActivityRetentionDays validates and persists the local ML

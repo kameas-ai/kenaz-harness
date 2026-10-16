@@ -250,7 +250,7 @@ func TestPruneBefore_AndPruner(t *testing.T) {
 		t.Fatal(err)
 	}
 	days := 0 // unset → 90
-	p := NewPruner(s, func() int { return days }, func() time.Time { return now }, nil)
+	p := NewPruner(s, func() (int, error) { return days, nil }, func() time.Time { return now }, nil)
 	ev, tk, err := p.PruneOnce(ctx)
 	if err != nil || ev != 2 || tk != 1 {
 		t.Fatalf("90-day prune = %d events %d tasks, %v; want 2, 1", ev, tk, err)
@@ -400,5 +400,23 @@ func TestDDL_MatchesWhatOpenApplies(t *testing.T) {
 		if b[k] != v {
 			t.Errorf("%s differs:\nDDL():%s\nOpen: %s", k, v, b[k])
 		}
+	}
+}
+
+// A pass whose retention read fails deletes nothing (review finding 1).
+func TestPruner_ReadErrorSkipsPass(t *testing.T) {
+	s := openAt(t, Path(t.TempDir()))
+	ctx := context.Background()
+	now := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	if _, err := s.Commit(ctx, sampleWrite(now.Add(-200*24*time.Hour).UnixMilli(), "agent-ffffffffffffffff")); err != nil {
+		t.Fatal(err)
+	}
+	p := NewPruner(s, func() (int, error) { return 0, fmt.Errorf("settings: parse: boom") }, func() time.Time { return now }, nil)
+	if ev, tk, err := p.PruneOnce(ctx); err != ErrRetentionUnreadable || ev != 0 || tk != 0 {
+		t.Fatalf("PruneOnce = %d/%d, %v; want skipped with ErrRetentionUnreadable", ev, tk, err)
+	}
+	p.pass() // logs the skip; must not delete either
+	if st, _ := s.Stats(ctx); st.Events != 2 || st.Tasks != 1 {
+		t.Fatalf("rows after skipped passes = %+v", st)
 	}
 }

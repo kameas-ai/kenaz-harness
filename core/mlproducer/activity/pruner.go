@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -32,10 +33,12 @@ const pruneInterval = 6 * time.Hour
 
 // Pruner deletes local activity older than the retention window. The
 // window is read from RetentionDays on EVERY pass (dials-to-consumer: a
-// changed setting applies at the next pass with no restart).
+// changed setting applies at the next pass with no restart). A pass whose
+// read fails deletes nothing: an unreadable setting is never treated as
+// the default, which could be far shorter than what the member chose.
 type Pruner struct {
 	store         *Store
-	retentionDays func() int
+	retentionDays func() (int, error)
 	logger        *slog.Logger
 	now           func() time.Time
 
@@ -45,14 +48,15 @@ type Pruner struct {
 	done      chan struct{}
 }
 
-// NewPruner returns a Pruner over store. retentionDays reads the setting
-// (nil = always the default); now is the clock (nil = time.Now).
-func NewPruner(store *Store, retentionDays func() int, now func() time.Time, logger *slog.Logger) *Pruner {
+// NewPruner returns a Pruner over store. retentionDays reads the setting:
+// (0, nil) is the default, an error skips the pass. nil = always the
+// default. now is the clock (nil = time.Now).
+func NewPruner(store *Store, retentionDays func() (int, error), now func() time.Time, logger *slog.Logger) *Pruner {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if retentionDays == nil {
-		retentionDays = func() int { return 0 }
+		retentionDays = func() (int, error) { return 0, nil }
 	}
 	if now == nil {
 		now = time.Now
@@ -63,9 +67,19 @@ func NewPruner(store *Store, retentionDays func() int, now func() time.Time, log
 	}
 }
 
-// PruneOnce runs one pass and returns the events and tasks deleted.
+// ErrRetentionUnreadable: the retention setting could not be read, so the
+// pass deleted nothing.
+var ErrRetentionUnreadable = fmt.Errorf("activity: retention setting unreadable; prune pass skipped")
+
+// PruneOnce runs one pass and returns the events and tasks deleted. When
+// the setting cannot be read it deletes nothing and returns
+// ErrRetentionUnreadable.
 func (p *Pruner) PruneOnce(ctx context.Context) (events, tasks int64, err error) {
-	days := EffectiveRetentionDays(p.retentionDays())
+	raw, err := p.retentionDays()
+	if err != nil {
+		return 0, 0, ErrRetentionUnreadable
+	}
+	days := EffectiveRetentionDays(raw)
 	cutoff := p.now().Add(-time.Duration(days) * 24 * time.Hour).UnixMilli()
 	return p.store.PruneBefore(ctx, cutoff)
 }
@@ -95,6 +109,11 @@ func (p *Pruner) pass() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	ev, tk, err := p.PruneOnce(ctx)
+	if err == ErrRetentionUnreadable {
+		// No values logged: only that the pass was skipped.
+		p.logger.Warn("mlproducer.activity.prune_skipped_retention_unreadable")
+		return
+	}
 	if err != nil {
 		p.logger.Warn("mlproducer.activity.prune_failed", "err", err.Error())
 		return
