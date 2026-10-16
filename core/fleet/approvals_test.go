@@ -408,3 +408,23 @@ func TestApproveActionAllowedFor_OptInDismissalBoundToItsKind(t *testing.T) {
 		}
 	}
 }
+
+// Legal (kameas-ai-11, 2026-10-16): an exclusions change records only
+// "I have read this" via exclusions-seen, bound both ways, so a malformed
+// item can't turn that button into a notice ack or a legal acceptance, and
+// exclusions-seen can't be sent for another kind.
+func TestApproveActionAllowedFor_ExclusionsSeenBoundBothWays(t *testing.T) {
+	if !ApproveActionAllowedFor(ApprovalKindMLExclusionsChange, "POST", ApprovePathMLExclusionsSeen) {
+		t.Fatal("the exclusions change must be able to post exclusions-seen")
+	}
+	for _, path := range []string{ApprovePathMLNoticeAck, ApprovePathLegalAcceptances, ApprovePathMLOptInPromptDismissed} {
+		if ApproveActionAllowedFor(ApprovalKindMLExclusionsChange, "POST", path) {
+			t.Errorf("ml_exclusions_change may call %s", path)
+		}
+	}
+	for _, kind := range []string{ApprovalKindMLNotice, ApprovalKindLegalAcceptance, ApprovalKindMLOptInAvailable, "future_kind"} {
+		if ApproveActionAllowedFor(kind, "POST", ApprovePathMLExclusionsSeen) {
+			t.Errorf("kind %q may call exclusions-seen", kind)
+		}
+	}
+}
