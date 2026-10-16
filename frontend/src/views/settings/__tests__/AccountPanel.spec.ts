@@ -365,3 +365,52 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
   });
 });
 
+// signed-bundle-bytes-01SBBYT01 WP03: organization settings this build
+// can't fully apply, in plain language, on the signed-in panel.
+describe('AccountPanel — organization settings notices', () => {
+  beforeEach(() => _resetFleetSessionForTest());
+
+  const pull = {
+    lastAppliedId: 7, lastAppliedAt: '', lastError: '', source: 'fleet', bundleChecksum: 'x',
+    configDistributionEnabled: true,
+  };
+
+  it('shows unknown-setting and cannot-enforce notices', async () => {
+    const client = buildClient(session('signed_in'), {
+      fleetConfigPullStatus: vi.fn(async () => ({
+        ...pull,
+        unknownSettingsCount: 2,
+        unknownSettings: ['future_section', 'model_prefs.future_knob'],
+        unenforceableSettings: [{ name: 'model_prefs.allow_user_credentials', minVersion: '99.0.0' }],
+      })),
+    });
+    const wrapper = mount(AccountPanel, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+
+    const unknown = wrapper.find('[data-testid="fleet-unknown-settings"]');
+    expect(unknown.text()).toContain('2 newer settings from your organization need a Kenaz update');
+    expect(unknown.text()).toContain('model_prefs.future_knob');
+    const cant = wrapper.find('[data-testid="fleet-unenforceable-settings"]');
+    expect(cant.text()).toContain('can’t enforce');
+    expect(cant.text()).toContain('the rule on using your own AI provider keys');
+  });
+
+  it('shows "update required" after a 406', async () => {
+    const client = buildClient(session('signed_in'), {
+      fleetConfigPullStatus: vi.fn(async () => ({ ...pull, updateRequired: true })),
+    });
+    const wrapper = mount(AccountPanel, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="fleet-update-required"]').text()).toContain(
+      'Update Kenaz to keep receiving your organization’s settings',
+    );
+  });
+
+  it('shows nothing when the status is clean', async () => {
+    const client = buildClient(session('signed_in'), { fleetConfigPullStatus: vi.fn(async () => pull) });
+    const wrapper = mount(AccountPanel, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="account-org-settings"]').exists()).toBe(false);
+  });
+});
+

@@ -23,6 +23,7 @@ import type { HarnessClient, LogRow } from '@/lib/harnessClient';
 import type { DriftEntry, DriftReport } from '@/lib/types';
 import { deferredUntil, formatAcceptByDate } from '@/lib/approvalDeferral';
 import { openPendingApprovalsDialog } from '@/lib/pendingApprovalsDialog';
+import { fleetBundleNotices, FLEET_UPDATE_STEPS } from '@/lib/fleetBundleCompat';
 
 export interface SettingsIssueFix {
   /** Button label, e.g. "Repair". */
@@ -276,8 +277,46 @@ const pendingApprovalsIssues: SettingsIssueProvider = {
   },
 };
 
+// ── provider: organization settings this build can't fully apply ─────────
+
+/**
+ * signed-bundle-bytes-01SBBYT01 WP03: the config poller's decode report —
+ * Fleet stopped serving this build (406, "update required"), settings this
+ * build does not recognise, and rules it is too old to enforce
+ * (min_client_versions). The fix is always updating Kenaz, which is manual,
+ * so each issue carries instructions and no fix button. Diagnostics carry
+ * the raw setting names (never values). Settings_FleetConfigPullStatus has
+ * no served dispatch, hence desktopOnly.
+ */
+const fleetBundleIssues: SettingsIssueProvider = {
+  id: 'fleet-bundle-compat',
+  desktopOnly: true,
+  async collect(client) {
+    const st = await client.settings.fleetConfigPullStatus();
+    return fleetBundleNotices(st).map((n) => ({
+      id: n.id,
+      severity: n.severity,
+      title: n.title,
+      body: n.body,
+      instructions: [...FLEET_UPDATE_STEPS],
+      diagnostics: () =>
+        buildDiagnostics(client, 'Organization settings status', {
+          updateRequired: st.updateRequired ?? false,
+          unknownSettings: st.unknownSettings ?? [],
+          unenforceableSettings: st.unenforceableSettings ?? [],
+          lastAppliedId: st.lastAppliedId,
+          source: st.source,
+        }),
+    }));
+  },
+};
+
 /** Every issue provider the banner consults, in display order. */
-const SETTINGS_ISSUE_PROVIDERS: readonly SettingsIssueProvider[] = [pendingApprovalsIssues, databaseIssues];
+const SETTINGS_ISSUE_PROVIDERS: readonly SettingsIssueProvider[] = [
+  pendingApprovalsIssues,
+  fleetBundleIssues,
+  databaseIssues,
+];
 
 /**
  * Runs every provider that can run in this build and concatenates their

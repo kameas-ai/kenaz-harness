@@ -9,13 +9,15 @@
 //   - 200 → verify signature → apply each section → ACK → persist
 //   - Signature failure → hard-reject; previous applied bundle is kept
 //   - Backoff on error: 5 / 15 / 60 min ceiling
-//   - Disk cache: <DataDir>/fleet/bundle.json + bundle_checksum.txt
+//   - Disk cache: <DataDir>/fleet/bundle.json (the response body as
+//     received, re-verified on Start) + bundle_id.txt + bundle_checksum.txt
 //
 // (fleet-config-pull-01NDFSEX10 WP02)
 package fleet
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -29,10 +31,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"golang.org/x/mod/semver"
 )
 
 // configPollInterval is the normal interval between config bundle fetches.
@@ -90,6 +95,61 @@ type ConfigPollStatus struct {
 	// judges a served bundle differently (a verified bundle, a 304, or a
 	// different hard rejection); transient fetch errors preserve it.
 	SigningKeyUnknown bool `json:"signingKeyUnknown"`
+	// UpdateRequired is true when Fleet's last answer was 406
+	// bundle_format_unsupported (Fleet ruling 4): this build asked for a
+	// bundle form Fleet no longer serves. The last applied bundle stays in
+	// force. Cleared by the next verified bundle, 304, or other rejection.
+	UpdateRequired bool `json:"updateRequired"`
+	// UnknownFieldCount / UnknownFields describe the last verified v2 bundle:
+	// the NAMES (never values) of settings in it this build does not
+	// recognise ("N newer settings from your organization need a Kenaz
+	// update", spec §4.5). Ignoring them never relaxes a restriction this
+	// build knows; restriction-bearing additions are covered by
+	// UnenforceableFields instead (spec §6 R1).
+	UnknownFieldCount int      `json:"unknownFieldCount"`
+	UnknownFields     []string `json:"unknownFields"`
+	// UnenforceableFields lists the min_client_versions entries of the last
+	// verified v2 bundle whose minimum is above this build's version: "this
+	// device can't enforce <name> until it updates" (Fleet ruling 6). All
+	// fields this build knows still apply.
+	UnenforceableFields []UnenforceableField `json:"unenforceableFields"`
+}
+
+// UnenforceableField is one min_client_versions entry this build is too old
+// to enforce.
+type UnenforceableField struct {
+	// Name is the section or field Fleet named ("model_prefs.allow_user_credentials").
+	Name string `json:"name"`
+	// MinVersion is the minimum harness version that can enforce it.
+	MinVersion string `json:"minVersion"`
+}
+
+// unenforceableFields compares a bundle's min_client_versions against this
+// build's version. A build version that is not semver ("dev", "", a local
+// build) is treated as current: it reports nothing, since it cannot be
+// placed on the release line. A malformed minimum IS reported — the build
+// cannot show it meets a minimum it cannot read.
+func unenforceableFields(mins map[string]string, buildVersion string) []UnenforceableField {
+	bv := ensureSemverV(buildVersion)
+	if len(mins) == 0 || !semver.IsValid(bv) {
+		return nil
+	}
+	var out []UnenforceableField
+	for name, minV := range mins {
+		mv := ensureSemverV(minV)
+		if !semver.IsValid(mv) || semver.Compare(bv, mv) < 0 {
+			out = append(out, UnenforceableField{Name: name, MinVersion: minV})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func ensureSemverV(v string) string {
+	if v != "" && v[0] != 'v' {
+		return "v" + v
+	}
+	return v
 }
 
 // ConfigPoller polls the fleet config endpoint, verifies bundles, and drives
@@ -108,6 +168,12 @@ type ConfigPoller struct {
 	checksum      string // SHA-256 hex of last-seen bundle JSON (for 304)
 	source        string
 	keyUnknown    bool // last rejection was ErrSigningKeyUnknown
+	// updateRequired: the last answer was 406 bundle_format_unsupported.
+	updateRequired bool
+	// unknownFields / unenforceable: the decode report of the last
+	// verified v2 bundle (WP03); nil for a legacy bundle.
+	unknownFields []string
+	unenforceable []UnenforceableField
 	// orgPaused: the last fetch was refused 403 org_paused (kenaz-fleet
 	// #206) — transient; the last applied bundle stays in force, and
 	// ResumeAfterOrgUnpause clears the "org_paused" lastError it set. The
@@ -222,11 +288,14 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 	// never-started from running instead of blocking forever.
 	p.done = make(chan struct{})
 
-	// Restore state from disk cache.
-	if id, cs, err := loadBundleState(p.dataDir); err == nil {
+	// Restore state from disk cache. The cached envelope is re-verified
+	// first (signed-bundle-bytes-01SBBYT01 WP02); a cache that fails to
+	// verify is discarded and restores nothing.
+	if id, cs, vb, err := restoreBundleCache(p.dataDir, FleetSigningKeys()); err == nil {
 		p.mu.Lock()
 		p.lastAppliedID = id
 		p.checksum = cs
+		p.setDecodeReportLocked(vb)
 		if id > 0 {
 			p.source = "cache"
 			meta := loadBundleApplyMeta(p.dataDir)
@@ -338,6 +407,14 @@ func (p *ConfigPoller) Status() ConfigPollStatus {
 		Source:            p.source,
 		BundleChecksum:    p.checksum,
 		SigningKeyUnknown: p.keyUnknown,
+		UpdateRequired:    p.updateRequired,
+		UnknownFieldCount: len(p.unknownFields),
+	}
+	if len(p.unknownFields) > 0 {
+		s.UnknownFields = append([]string(nil), p.unknownFields...)
+	}
+	if len(p.unenforceable) > 0 {
+		s.UnenforceableFields = append([]UnenforceableField(nil), p.unenforceable...)
 	}
 	if !p.lastAppliedAt.IsZero() {
 		s.LastAppliedAt = p.lastAppliedAt.UTC().Format(time.RFC3339)
@@ -361,8 +438,10 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	urlPath := fmt.Sprintf("/api/v1/configs?machine=%s&checksum=%s", url.QueryEscape(nodeID), url.QueryEscape(cs))
 
 	// We need to inspect the status code before letting the fleet http.Client
-	// discard non-2xx bodies, so we call Get directly.
-	resp, err := p.client.Get(ctx, urlPath)
+	// discard non-2xx bodies, so we call GetAccept directly. The Accept header
+	// asks for the v2 signed-bytes envelope (Fleet ruling 2); an older Fleet
+	// ignores it and answers with the legacy bundle, which has no "format".
+	resp, err := p.client.GetAccept(ctx, urlPath, BundleAcceptV2)
 	if err != nil {
 		if errors.Is(err, ErrNotSignedIn) {
 			// Not signed in — skip silently; don't backoff.
@@ -406,6 +485,20 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return nil
 	}
 
+	if resp.StatusCode == http.StatusNotAcceptable {
+		// 406 bundle_format_unsupported (Fleet ruling 4): Fleet stopped
+		// serving the form this build asked for. Nothing to verify; the last
+		// applied bundle stays in force; the status says "update required".
+		e := fmt.Errorf("%w: fleet answered 406", ErrBundleFormatUnsupported)
+		p.mu.Lock()
+		p.lastError = "This version of Kenaz can no longer receive your organization's settings. Update Kenaz to keep them current."
+		p.orgPaused = false
+		p.keyUnknown = false
+		p.updateRequired = true
+		p.mu.Unlock()
+		return e
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		e := fmt.Errorf("fleet: config status %d", resp.StatusCode)
 		p.setError(e.Error())
@@ -427,8 +520,8 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return e
 	}
 
-	var b Bundle
-	if err := json.Unmarshal(body, &b); err != nil {
+	format, err := envelopeFormat(body)
+	if err != nil {
 		e := fmt.Errorf("fleet: parse config bundle: %w", err)
 		p.setRejection(e.Error())
 		return e
@@ -445,15 +538,51 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	}
 	p.mu.RUnlock()
 
-	if err := VerifyWithKeySet(&b, keys, lastID); err != nil {
+	// Two verification paths during the transition (spec §6 R2):
+	//   v2     — verify the exact signed bytes P, THEN decode leniently;
+	//   legacy — decode, then verify over our re-marshal (no "format": an
+	//            older Fleet). Deleted at cutover (spec §4.6, WP04).
+	var (
+		b           *Bundle
+		vb          *VerifiedBundle
+		newChecksum string
+		verr        error
+	)
+	switch format {
+	case BundleEnvelopeFormatV2:
+		vb, verr = VerifyEnvelopeBytes(body, keys)
+		if verr == nil {
+			verr = checkBundleIDMonotonic(vb.Bundle.BundleID, lastID)
+		}
+		if verr == nil {
+			b = vb.Bundle
+			newChecksum = vb.Checksum() // hex(SHA-256(P)), Fleet ruling 3
+		}
+	case "":
+		var lb Bundle
+		if err := json.Unmarshal(body, &lb); err != nil {
+			e := fmt.Errorf("fleet: parse config bundle: %w", err)
+			p.setRejection(e.Error())
+			return e
+		}
+		verr = VerifyWithKeySet(&lb, keys, lastID)
+		b = &lb
+		newChecksum = hexChecksumOf(body)
+	default:
+		e := fmt.Errorf("fleet: config bundle envelope format %q is not supported by this build", format)
+		p.setRejection(e.Error())
+		return e
+	}
+	if verr != nil {
 		// Hard-reject: do NOT apply; do NOT advance bundle_id; DO set error.
 		// Error text and the unknown-key flag are set under ONE lock so a
 		// concurrent Status() never sees one without the other.
 		p.mu.Lock()
-		p.lastError = fmt.Sprintf("bundle verification failed (hard-reject): %v", err)
-		p.keyUnknown = errors.Is(err, ErrSigningKeyUnknown)
+		p.lastError = fmt.Sprintf("bundle verification failed (hard-reject): %v", verr)
+		p.keyUnknown = errors.Is(verr, ErrSigningKeyUnknown)
+		p.updateRequired = false
 		p.mu.Unlock()
-		return err // also triggers backoff
+		return verr // also triggers backoff
 	}
 
 	// Apply the bundle through the registered applier.
@@ -463,13 +592,10 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		itemStats []MandatedItemStatus
 	)
 	if ia, ok := p.applier.(ConfigItemApplier); ok {
-		applyErrs, itemStats = ia.ApplyBundleItems(ctx, &b)
+		applyErrs, itemStats = ia.ApplyBundleItems(ctx, b)
 	} else {
-		applyErrs = p.applier.ApplyBundle(ctx, &b)
+		applyErrs = p.applier.ApplyBundle(ctx, b)
 	}
-
-	// Compute new checksum of the raw body (for 304 on next poll).
-	newChecksum := hexChecksumOf(body)
 
 	// FR-012: only advance lastAppliedID when the apply is fully clean.
 	// On partial failure the ID stays at the previous value so the bundle is
@@ -477,6 +603,8 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	// the next GET returns the same bundle (no 304 short-circuit).
 	p.mu.Lock()
 	p.keyUnknown = false // the bundle verified under a pinned key
+	p.updateRequired = false
+	p.setDecodeReportLocked(vb) // nil (legacy) clears it
 	hadRefusals := false
 	for _, st := range itemStats {
 		if st.Status == MandatedStatusRefused {
@@ -484,7 +612,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		}
 	}
 	// tool_exposure entries this build refused (WP07) re-apply the same way.
-	if len(ToolExposureRefusals(&b)) > 0 {
+	if len(ToolExposureRefusals(b)) > 0 {
 		hadRefusals = true
 	}
 	buildVersion := p.buildVersion
@@ -510,6 +638,13 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 
 	// Persist state to disk only on full success.
 	if len(applyErrs) == 0 {
+		// The cache is the response body exactly as received: the v2
+		// envelope (re-verified on Start), or the legacy body from an older
+		// Fleet (read through the legacy decoder, then replaced by the next
+		// successful v2 pull — spec §6 R3).
+		if saveErr := saveBundleCache(p.dataDir, body); saveErr != nil {
+			log.Printf("fleet: save bundle cache: %v", saveErr)
+		}
 		if saveErr := saveBundleState(p.dataDir, b.BundleID, newChecksum); saveErr != nil {
 			log.Printf("fleet: save bundle state: %v", saveErr)
 		}
@@ -532,6 +667,29 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return applyErrs[0] // triggers backoff; all errors already in lastError
 	}
 	return nil
+}
+
+// setDecodeReportLocked records what this build could not interpret in the
+// verified bundle vb (nil → a legacy bundle, nothing known): unknown field
+// names, and min_client_versions entries above this build. Names are logged
+// at debug — never values. Caller holds p.mu.
+func (p *ConfigPoller) setDecodeReportLocked(vb *VerifiedBundle) {
+	p.unknownFields, p.unenforceable = nil, nil
+	if vb == nil {
+		return
+	}
+	p.unknownFields = vb.UnknownFields
+	p.unenforceable = unenforceableFields(vb.MinClientVersions, p.buildVersion)
+	if len(p.unknownFields) > 0 {
+		logging.L().Debug("fleet.config_poller.unknown_fields",
+			"bundle_id", vb.Bundle.BundleID,
+			"count", len(p.unknownFields),
+			"names", strings.Join(p.unknownFields, ","))
+	}
+	for _, u := range p.unenforceable {
+		logging.L().Info("fleet.config_poller.cannot_enforce",
+			"bundle_id", vb.Bundle.BundleID, "name", u.Name, "min_version", u.MinVersion)
+	}
 }
 
 // setError records a TRANSIENT failure (fetch, non-200 status, body read).
@@ -574,6 +732,7 @@ func (p *ConfigPoller) setRejection(msg string) {
 	p.lastError = msg
 	p.orgPaused = false
 	p.keyUnknown = false
+	p.updateRequired = false
 	p.mu.Unlock()
 }
 
@@ -582,6 +741,7 @@ func (p *ConfigPoller) clearError() {
 	p.lastError = ""
 	p.orgPaused = false
 	p.keyUnknown = false
+	p.updateRequired = false
 	p.mu.Unlock()
 }
 
@@ -595,6 +755,90 @@ func bundleIDPath(dataDir string) string {
 // bundleChecksumPath returns the path to the last-seen bundle checksum.
 func bundleChecksumPath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", "bundle_checksum.txt")
+}
+
+// bundleCachePath returns the path to the cached config response body: the
+// v2 envelope bytes as received (or, from an older Fleet, the legacy body).
+func bundleCachePath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "bundle.json")
+}
+
+// saveBundleCache atomically persists the received response body.
+func saveBundleCache(dataDir string, body []byte) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		return fmt.Errorf("fleet: mkdir bundle cache: %w", err)
+	}
+	return atomicWriteFile(bundleCachePath(dataDir), string(body))
+}
+
+// discardBundleCache removes the cached body and the state derived from it,
+// so a cache that failed verification restores nothing now or next launch.
+func discardBundleCache(dataDir string) {
+	for _, path := range []string{bundleCachePath(dataDir), bundleIDPath(dataDir), bundleChecksumPath(dataDir)} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("fleet: discard bundle cache: %v", err)
+		}
+	}
+}
+
+// restoreBundleCache recovers (lastAppliedID, checksum) for Start, verifying
+// the cached body before trusting anything derived from it (spec §4.4):
+//
+//   - bundle.json is a v2 envelope → VerifyEnvelope (signature + key_id
+//     cross-check; no monotonic guard — there is nothing to compare with);
+//     id and checksum come from the verified P. vb is returned for the
+//     decode report (WP03).
+//   - bundle.json is a legacy body (an older Fleet answered last) → read
+//     once through the legacy decoder + VerifyWithKeySet (spec §6 R3); it
+//     is replaced by the next successful pull.
+//   - either fails → the cache is discarded (same as a corrupt cache):
+//     (0, "", nil, nil).
+//   - no bundle.json → a pre-v2 install that only ever wrote bundle_id.txt
+//     and bundle_checksum.txt: those are restored as before, once; the next
+//     successful pull writes the envelope.
+func restoreBundleCache(dataDir string, keys []ed25519.PublicKey) (int64, string, *VerifiedBundle, error) {
+	if dataDir == "" {
+		return 0, "", nil, nil
+	}
+	raw, err := os.ReadFile(bundleCachePath(dataDir))
+	if errors.Is(err, os.ErrNotExist) {
+		id, cs, lerr := loadBundleState(dataDir)
+		return id, cs, nil, lerr
+	}
+	discard := func(why error) (int64, string, *VerifiedBundle, error) {
+		logging.L().Warn("fleet.config_poller.cache_discarded", "reason", why.Error())
+		discardBundleCache(dataDir)
+		return 0, "", nil, nil
+	}
+	if err != nil {
+		return discard(err)
+	}
+	format, err := envelopeFormat(raw)
+	if err != nil {
+		return discard(fmt.Errorf("parse cached bundle: %w", err))
+	}
+	switch format {
+	case BundleEnvelopeFormatV2:
+		vb, verr := VerifyEnvelopeBytes(raw, keys)
+		if verr != nil {
+			return discard(verr)
+		}
+		return vb.Bundle.BundleID, vb.Checksum(), vb, nil
+	case "":
+		var b Bundle
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return discard(fmt.Errorf("parse cached legacy bundle: %w", err))
+		}
+		if verr := VerifyWithKeySet(&b, keys, 0); verr != nil {
+			return discard(verr)
+		}
+		return b.BundleID, hexChecksumOf(raw), nil, nil
+	default:
+		return discard(fmt.Errorf("cached bundle has unsupported format %q", format))
+	}
 }
 
 // loadBundleState reads (lastAppliedID, checksum) from disk. Returns (0, "", nil)

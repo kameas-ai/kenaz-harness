@@ -5077,6 +5077,24 @@ export interface FleetConfigPullStatusView {
   bundleChecksum: string;
   /** true when a fleet signing key is injected in this binary (FR-002). */
   configDistributionEnabled: boolean;
+  /**
+   * Fleet answered 406 bundle_format_unsupported: this build can no longer
+   * receive organization settings; the last applied ones stay in force
+   * (signed-bundle-bytes-01SBBYT01).
+   */
+  updateRequired?: boolean;
+  /** How many settings in the latest bundle this build does not recognise. */
+  unknownSettingsCount?: number;
+  /** Their names (never values), e.g. "model_prefs.future_knob". null when none. */
+  unknownSettings?: string[] | null;
+  /** Settings the organization requires a newer Kenaz to enforce. null when none. */
+  unenforceableSettings?: FleetUnenforceableSettingView[] | null;
+}
+
+/** One setting this build is too old to enforce (min_client_versions). */
+export interface FleetUnenforceableSettingView {
+  name: string;
+  minVersion: string;
 }
 
 /**

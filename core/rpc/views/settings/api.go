@@ -1933,6 +1933,25 @@ type FleetConfigPullStatusView struct {
 	// in this binary (FR-002). When false the fleet config distribution is
 	// silently disabled (safe fail-closed), and the UI shows a degraded state.
 	ConfigDistributionEnabled bool `json:"configDistributionEnabled"`
+	// UpdateRequired: Fleet answered 406 bundle_format_unsupported — this
+	// build can no longer receive bundles; the last applied one stays in
+	// force (signed-bundle-bytes-01SBBYT01, Fleet ruling 4).
+	UpdateRequired bool `json:"updateRequired"`
+	// UnknownSettingsCount / UnknownSettings: names (never values) of
+	// settings in the latest verified bundle this build does not recognise
+	// ("N newer settings from your organization need a Kenaz update").
+	UnknownSettingsCount int      `json:"unknownSettingsCount"`
+	UnknownSettings      []string `json:"unknownSettings"`
+	// UnenforceableSettings: min_client_versions entries this build is too
+	// old to enforce ("can't enforce <name> until it updates"; spec §6 R1).
+	UnenforceableSettings []FleetUnenforceableSettingView `json:"unenforceableSettings"`
+}
+
+// FleetUnenforceableSettingView is one setting the organization requires a
+// newer Kenaz to enforce (fleet.UnenforceableField).
+type FleetUnenforceableSettingView struct {
+	Name       string `json:"name"`
+	MinVersion string `json:"minVersion"`
 }
 
 // FleetHealthView is the wire-safe projection of overall fleet health

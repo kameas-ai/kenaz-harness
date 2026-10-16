@@ -138,11 +138,12 @@ func TestApplyBundle_ProvisionedMCP_SubsequentEmptyBundleClearsOverlay(t *testin
 // from this seam's point of view.
 //
 // What this does NOT prove (see docs/unwired-ledger.md's 2026-09-12 entry,
-// item 2): survival across a process RESTART. config_pull.go only persists
-// bundle_id.txt + bundle_checksum.txt to disk, never the full bundle body,
-// so the recipes.MergedCatalog org overlay (like llmview's model-prefs
-// store) is rebuilt from nothing at boot until the next successful fleet
-// poll. That is a core/fleet architecture gap this mission's WP05 does not
+// item 2): survival across a process RESTART. config_pull.go persists the
+// received bundle body as bundle.json (signed-bundle-bytes-01SBBYT01 WP02),
+// but Start only re-verifies it to restore lastAppliedID / source — it never
+// re-applies it — so the recipes.MergedCatalog org overlay (like llmview's
+// model-prefs store) is rebuilt from nothing at boot until the next
+// successful fleet poll. That is a core/fleet architecture gap this mission's WP05 does not
 // own — tracked separately, unassigned, cross-cutting to
 // fleet-config-pull-01NDFSEX10.
 func TestApplyBundle_ProvisionedMCP_StaysAppliedWhenFleetGoesUnreachable(t *testing.T) {

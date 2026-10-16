@@ -1778,14 +1778,21 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 		}, nil
 	}
 	st := p.Status()
-	return FleetConfigPullStatusView{
+	view := FleetConfigPullStatusView{
 		LastAppliedID:             st.LastAppliedID,
 		LastAppliedAt:             st.LastAppliedAt,
 		LastError:                 st.LastError,
 		Source:                    st.Source,
 		BundleChecksum:            st.BundleChecksum,
 		ConfigDistributionEnabled: enabled,
-	}, nil
+		UpdateRequired:            st.UpdateRequired,
+		UnknownSettingsCount:      st.UnknownFieldCount,
+		UnknownSettings:           st.UnknownFields,
+	}
+	for _, u := range st.UnenforceableFields {
+		view.UnenforceableSettings = append(view.UnenforceableSettings, FleetUnenforceableSettingView{Name: u.Name, MinVersion: u.MinVersion})
+	}
+	return view, nil
 }
 
 // FleetHealth returns a compact fleet-health summary for the global health
