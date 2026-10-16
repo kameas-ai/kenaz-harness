@@ -404,8 +404,10 @@ func TestSyncWire_UploadGate(t *testing.T) {
 	if err := s.Pull(context.Background(), SyncCategoryUITheme); err != nil {
 		t.Fatalf("Pull while gated: %v", err)
 	}
-	if n := fake.countMethod(http.MethodGet); n != 1 {
-		t.Errorf("GETs = %d while gated, want 1 (pulls are not gated)", n)
+	// Two GETs: SetEnabled pulls before it would push (pullThenPush), and
+	// the explicit Pull. Both run while gated: pulls are not gated.
+	if n := fake.countMethod(http.MethodGet); n != 2 {
+		t.Errorf("GETs = %d while gated, want 2 (pulls are not gated)", n)
 	}
 
 	open.Store(true)

@@ -4267,6 +4267,14 @@ func New(c *core.Core, opts ...Option) *API {
 		// The Syncer is a lightweight object; we create it unconditionally but
 		// its Push/Pull methods short-circuit via ErrFleetDisabled when flCl is nil.
 		syncer := corefleet.NewSyncer(flCl)
+		// Persist each category's LWW stamp in the Fleet data dir, loaded
+		// before anything pulls or pushes, so a restart remembers what this
+		// device last agreed with Fleet on. No data dir: in memory only.
+		if flDataDir != "" {
+			if err := syncer.SetStateStore(corefleet.NewFileSyncStateStore(flDataDir)); err != nil {
+				logging.L().Warn("rpc.settings_sync.state_load_failed", "err", err.Error())
+			}
+		}
 		syncPending := &corefleet.SecretPromptQueue{}
 		a.syncAPI = syncview.NewAPI(syncer, syncPending)
 

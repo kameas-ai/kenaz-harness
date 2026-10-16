@@ -108,12 +108,14 @@ func TestSyncOptIns_SurviveRestart_StillHeldUntilConfirmed(t *testing.T) {
 	if n := fake.putCount(); n != 0 {
 		t.Fatalf("%d PUTs after restart without confirmation, want 0", n)
 	}
-	// Pulls are not gated: a restored category pulls again.
+	// Pulls are not gated: a restored category pulls again. (Earlier GETs
+	// come from enable and PushHeld, which pull before they would push.)
+	gets := fake.getCount()
 	if err := api2.Sync_ForcePull(ctx, string(theme)); err != nil {
 		t.Fatalf("Sync_ForcePull: %v", err)
 	}
-	if n := fake.getCount(); n != 1 {
-		t.Errorf("GETs after restored pull = %d, want 1", n)
+	if n := fake.getCount() - gets; n != 1 {
+		t.Errorf("GETs from the restored pull = %d, want 1", n)
 	}
 
 	// Confirming uploads the restored category.
