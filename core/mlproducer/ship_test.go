@@ -134,6 +134,24 @@ func (r *shipRig) seedEvents(n, pad int) {
 	}
 }
 
+// seedEventsWithPad is seedEvents with a caller-chosen pad string (a
+// content marker a test can look for).
+func (r *shipRig) seedEventsWithPad(n int, pad string) {
+	r.t.Helper()
+	drafts := make([]mlstore.EventDraft, n)
+	for i := range drafts {
+		drafts[i] = mlstore.EventDraft{CreatedAt: 1_760_000_000_000, Body: func(seq int64) ([]byte, error) {
+			return encodeEvent(seq, KindTool, 1_760_000_000_000, map[string]any{
+				"task": "agent-0123456789abcdef", "tool": "kenaz__read_file", "outcome": "ok",
+				"dur_ms": int64(1), "pad": pad,
+			})
+		}}
+	}
+	if _, err := r.store.Commit(context.Background(), mlstore.Write{Events: drafts}); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
 func (r *shipRig) pending() int {
 	r.t.Helper()
 	n, err := r.store.Pending(context.Background())
