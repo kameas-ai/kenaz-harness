@@ -448,3 +448,29 @@ func TestFleetDismissItemLocally_NeverSentAndVersionScoped(t *testing.T) {
 		t.Fatalf("dismiss required err = %v", err)
 	}
 }
+
+// #427 re-review: a malformed opt-in offer whose approve action points at
+// an ack or acceptance route must not turn "Not now" into a recorded ack. It
+// is not approvable; "Not now" is local only, and nothing is sent.
+func TestFleetApproveItem_MalformedOptInOfferCannotRecordAnAck(t *testing.T) {
+	r := newMLRig(t, true)
+	bad := hubOptInOffer("1")
+	bad["approve"] = map[string]any{"method": "POST", "path": "/api/v1/me/ml/notice-ack",
+		"body": map[string]any{"notice_version": 4, "text_revision": 2}}
+	r.fleet.set(func(f *mlFakeFleet) { f.hubStatus, f.hubBody = 200, hubBody(bad) })
+	ctx := context.Background()
+
+	v, err := r.api.FleetPendingApprovals(ctx)
+	if err != nil || len(v.Items) != 1 || v.Items[0].ApproveAllowed || !v.Items[0].LocalDismiss {
+		t.Fatalf("malformed offer view = %+v, %v; want not approvable, local dismiss only", v, err)
+	}
+	if _, err := r.api.FleetApproveItem(ctx, "ml_opt_in_available:o1"); !errors.Is(err, fleet.ErrApproveActionNotAllowed) {
+		t.Fatalf("approve malformed offer err = %v, want ErrApproveActionNotAllowed", err)
+	}
+	if _, _, acks := r.fleet.hubSnapshot(); len(acks) != 0 {
+		t.Fatalf("a Not now on a malformed offer recorded a notice ack: %v", acks)
+	}
+	if _, posts, _ := r.fleet.hubSnapshot(); len(posts) != 0 {
+		t.Fatalf("a malformed offer sent: %v", posts)
+	}
+}

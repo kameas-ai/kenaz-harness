@@ -346,6 +346,21 @@ describe('PendingApprovalsModal', () => {
     expect(dismissItemLocally).not.toHaveBeenCalled();
   });
 
+  it('a malformed opt-in offer (not approvable) gets no approve button, only the local Not now', async () => {
+    const BAD: PendingApprovalItem = {
+      ...FUTURE,
+      id: 'ml_opt_in_available:o1',
+      kind: 'ml_opt_in_available',
+      approveAllowed: false,
+      localDismiss: true,
+    };
+    const { client, approveItem } = makeClient([view([BAD])]);
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approval-approve').exists()).toBe(false);
+    expect(q(w, 'pending-approval-dismiss-local').exists()).toBe(true);
+    expect(approveItem).not.toHaveBeenCalled();
+  });
+
   it('informational item the app sends nothing for: Not now hides it on this device only', async () => {
     const INFO: PendingApprovalItem = { ...FUTURE, id: 'future_info:1', kind: 'future_info', approveAllowed: false, localDismiss: true };
     const { client, approveItem } = makeClient([view([INFO])]);

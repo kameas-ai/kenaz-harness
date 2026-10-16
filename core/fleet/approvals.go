@@ -88,13 +88,25 @@ var kindBoundPaths = map[string]string{
 	ApprovePathMLOptInPromptDismissed: ApprovalKindMLOptInAvailable,
 }
 
-// ApproveActionAllowedFor is ApproveActionAllowed plus the kind binding:
-// a kind-bound path is allowed only for its own kind.
+// pathBoundKinds is the reverse binding: these kinds may carry ONLY their
+// own path. The opt-in offer's button reads "Not now", so a malformed offer
+// carrying, say, notice-ack or legal-acceptances must never turn that click
+// into a recorded acknowledgement or acceptance.
+var pathBoundKinds = map[string]string{
+	ApprovalKindMLOptInAvailable: ApprovePathMLOptInPromptDismissed,
+}
+
+// ApproveActionAllowedFor is ApproveActionAllowed plus the two-way kind
+// binding: a kind-bound path is allowed only for its own kind, and a
+// path-bound kind only with its own path.
 func ApproveActionAllowedFor(kind, method, path string) bool {
 	if !ApproveActionAllowed(method, path) {
 		return false
 	}
 	if want, bound := kindBoundPaths[path]; bound && kind != want {
+		return false
+	}
+	if want, bound := pathBoundKinds[kind]; bound && path != want {
 		return false
 	}
 	return true

@@ -351,4 +351,12 @@ func TestApproveActionAllowedFor_OptInDismissalBoundToItsKind(t *testing.T) {
 	if !ApproveActionAllowedFor(ApprovalKindMLNotice, "POST", ApprovePathMLNoticeAck) {
 		t.Fatal("the notice ack must stay allowed for ml_notice")
 	}
+	// Reverse binding (#427 re-review): the opt-in offer, whose button reads
+	// "Not now", may carry ONLY the dismissal path. A malformed offer
+	// pointing at an ack or acceptance route must not record one.
+	for _, path := range []string{ApprovePathMLNoticeAck, ApprovePathLegalAcceptances, ApprovePathMLExclusionsSeen} {
+		if ApproveActionAllowedFor(ApprovalKindMLOptInAvailable, "POST", path) {
+			t.Errorf("ml_opt_in_available may call %s", path)
+		}
+	}
 }

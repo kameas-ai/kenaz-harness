@@ -105,7 +105,10 @@ const currentDeferral = computed(() => (current.value ? deferredUntil(current.va
 function approveLabel(it: PendingApprovalItem): string {
   // The opt-in offer's approve action IS its dismissal (member-private,
   // legal option a, 2026-10-16), so it reads "Not now", never "I agree".
-  if (it.kind === 'ml_opt_in_available') return 'Not now';
+  // approveAllowed is true for that kind only when it carries the dismissal
+  // path: the backend binds kind and path both ways
+  // (fleet.ApproveActionAllowedFor). Otherwise there is no approve button.
+  if (it.kind === 'ml_opt_in_available' && it.approveAllowed) return 'Not now';
   if (it.kind === 'ml_exclusions_change') return 'Dismiss';
   if (needsCheckbox(it)) return 'Accept';
   return it.required ? 'I agree' : 'Got it';
