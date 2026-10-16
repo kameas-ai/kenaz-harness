@@ -469,7 +469,8 @@ function onOptInChange(ev: Event) {
       </p>
       <template v-if="local">
         <p v-if="!local.available" class="text-[12px] text-ink-muted" data-testid="ml-local-unavailable">
-          The local activity store could not be opened, so nothing is being kept on this device.
+          Local recording is paused because the local activity store can't be opened. Kenaz tries again as new
+          activity comes in. Activity already recorded on this device is unchanged.
         </p>
         <template v-else>
           <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-[12px]" data-testid="ml-local-fields">

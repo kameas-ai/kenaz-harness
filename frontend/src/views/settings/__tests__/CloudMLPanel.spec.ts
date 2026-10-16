@@ -616,5 +616,12 @@ describe('CloudMLPanel — local activity', () => {
     await flushPromises();
     expect(q(wrapper, 'ml-local-unavailable').exists()).toBe(true);
     expect(q(wrapper, 'ml-local-delete').exists()).toBe(false);
+    // Review nit 4 (PR 429): activity.db may still hold earlier rows; the
+    // copy must not claim nothing is kept on the device.
+    const text = q(wrapper, 'ml-local-unavailable').text();
+    expect(text).toContain('recording is paused');
+    expect(text).toContain("can't be opened");
+    expect(text).toContain('already recorded on this device is unchanged');
+    expect(text).not.toMatch(/nothing is being kept/i);
   });
 });
