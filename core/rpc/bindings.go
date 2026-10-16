@@ -3802,6 +3802,13 @@ func (b *Bindings) Fleet_ApproveItem(id string) (settings.PendingApprovalsView, 
 	return b.api.Settings().FleetApproveItem(b.ctx(), id)
 }
 
+// Fleet_DismissItemLocally hides an informational hub item ("Not now") on
+// this device until the item's version changes. Nothing is sent to Fleet.
+func (b *Bindings) Fleet_DismissItemLocally(id string) (settings.PendingApprovalsView, error) {
+	defer sentry.WrapBinding("Fleet_DismissItemLocally")()
+	return b.api.Settings().FleetDismissItemLocally(b.ctx(), id)
+}
+
 // ── Phase-3 unit collaboration bindings (unified-context-artifacts-01NCTXU01) ─
 
 // Unit_PromoteAsMergeRequest promotes a unit UP a classification level:

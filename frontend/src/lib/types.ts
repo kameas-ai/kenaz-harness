@@ -5009,6 +5009,8 @@ export interface PendingApprovalItem {
   deferrableUntil: string;
   /** False when Fleet's action is outside the harness allowlist: not approvable here. */
   approveAllowed: boolean;
+  /** Informational item the harness sends nothing for: "Not now" hides it on this device only. */
+  localDismiss: boolean;
 }
 
 /** Mirrors settings.PendingApprovalsView. */
