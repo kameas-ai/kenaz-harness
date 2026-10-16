@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/advice"
@@ -13,6 +14,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer/activity"
 	"github.com/kameas-ai/kenaz-harness/core/mlsidecar"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
 	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 )
@@ -68,6 +70,32 @@ func activityDBPath(dataDir string) string {
 	return p
 }
 
+// activityRetentionEnv is the engine's KENAZ_ML_ACTIVITY_RETENTION_DAYS
+// entry: the EFFECTIVE days (0 → 90, clamped to 1..3650), the same window
+// the harness prunes events/tasks to. On a read error (or no reader) it
+// returns nothing and logs a WARN: the engine then uses its own default,
+// and no fallback number ever shrinks a user's longer setting.
+func activityRetentionEnv(read func() (int, error)) []string {
+	if read == nil {
+		return nil
+	}
+	days, err := read()
+	if err != nil {
+		slog.Warn("mlsidecar.spawn.activity_retention_unreadable")
+		return nil
+	}
+	return []string{activity.RetentionEnvVar + "=" + strconv.Itoa(activity.EffectiveRetentionDays(days))}
+}
+
+// settingsRetentionReader adapts the settings API (nil-safe: nil = no
+// reader, so the env var is omitted).
+func settingsRetentionReader(s *settings.API) func() (int, error) {
+	if s == nil {
+		return nil
+	}
+	return s.MLLocalActivityRetentionDays
+}
+
 // newSidecarStack constructs the process's single *mlsidecar.Manager and
 // its advisor-facing probe (laya-advisors-01LAYA001 WP13) — replacing the
 // dated nil sidecarProbe WP12 left behind. dataDir == "" (nil-core test
@@ -84,7 +112,11 @@ func activityDBPath(dataDir string) string {
 // Registry / Creds / VerifierFunc are attached later by New()
 // (attachSidecarInstallDeps) once the bundle channel registry and trust
 // engine exist — they are only read by the explicit install path.
-func newSidecarStack(dataDir, buildVersion string) (*mlsidecar.Manager, advice.SidecarProbe) {
+//
+// retentionDays reads the local activity retention setting
+// (settings.API.MLLocalActivityRetentionDays; nil = unknown, the env var
+// is omitted). It is read on every spawn.
+func newSidecarStack(dataDir, buildVersion string, retentionDays func() (int, error)) (*mlsidecar.Manager, advice.SidecarProbe) {
 	if dataDir == "" {
 		return nil, nil
 	}
@@ -108,7 +140,15 @@ func newSidecarStack(dataDir, buildVersion string) (*mlsidecar.Manager, advice.S
 		// WP11 (spec §12 A-16): the engine reads the harness's local
 		// activity store as a second source — and only that file, never
 		// data.db (least privilege).
-		mlsidecar.ProcessSpawner{Layout: layout, ExtraEnv: []string{activity.EnvVar + "=" + activityDBPath(dataDir)}},
+		// The retention rides along, read fresh on each spawn: a change to
+		// the setting reaches the engine at its next start (the engine is
+		// shared with Kenaz and lease-managed, so the harness does not
+		// restart it for a settings change).
+		mlsidecar.ProcessSpawner{
+			Layout:   layout,
+			ExtraEnv: []string{activity.EnvVar + "=" + activityDBPath(dataDir)},
+			EnvFunc:  func() []string { return activityRetentionEnv(retentionDays) },
+		},
 		"harness", buildVersion)
 	m.BasePort = mlsidecar.EnginePort(env)
 	// A real PyInstaller engine needs seconds to bind its port.

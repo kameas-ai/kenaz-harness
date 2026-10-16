@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,5 +206,59 @@ func TestMLProducerWiring_UnreadableRetentionSkipsPrune(t *testing.T) {
 	// The readout reports the failure rather than a made-up retention.
 	if _, err := a.MLLocalActivity(ctx); err == nil {
 		t.Fatal("status with an unreadable setting returned no error")
+	}
+}
+
+// kenaz-ml agreement (#429): the engine is spawned with
+// KENAZ_ML_ACTIVITY_RETENTION_DAYS = the EFFECTIVE local retention, read
+// fresh on each spawn, and with no such entry when the setting cannot be
+// read (never a fallback number that could shrink a longer setting).
+func TestMLProducerWiring_SidecarGetsEffectiveRetention(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	c, err := core.New(core.Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	store, err := settingsview.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(c, WithSettingsStore(store))
+	t.Cleanup(a.Shutdown)
+	sp, ok := a.sidecarMgr.Spawner.(mlsidecar.ProcessSpawner)
+	if !ok || sp.EnvFunc == nil {
+		t.Fatalf("Spawner = %T with no EnvFunc", a.sidecarMgr.Spawner)
+	}
+	retention := func() []string {
+		var out []string
+		for _, kv := range sp.EnvFunc() {
+			if strings.HasPrefix(kv, activity.RetentionEnvVar+"=") {
+				out = append(out, kv)
+			}
+		}
+		return out
+	}
+	if got := retention(); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=90" {
+		t.Fatalf("unset retention → %v, want =90 (the effective default)", got)
+	}
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 3650); err != nil {
+		t.Fatal(err)
+	}
+	if got := retention(); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=3650" {
+		t.Fatalf("3650 → %v", got)
+	}
+	if err := os.WriteFile(store.Path(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := retention(); len(got) != 0 {
+		t.Fatalf("unreadable setting → %v, want the variable omitted", got)
+	}
+	if got := activityRetentionEnv(nil); got != nil {
+		t.Fatalf("no reader → %v", got)
+	}
+	if got := activityRetentionEnv(func() (int, error) { return 99999, nil }); got[0] != activity.RetentionEnvVar+"=3650" {
+		t.Fatalf("clamp → %v", got)
 	}
 }

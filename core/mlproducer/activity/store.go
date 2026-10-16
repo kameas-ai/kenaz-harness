@@ -60,6 +60,13 @@ const (
 // means no store, and there is no default).
 const EnvVar = "KENAZ_ML_ACTIVITY_DB"
 
+// RetentionEnvVar carries the effective local retention in days (0 → 90,
+// clamped to 1..3650) to the engine, which prunes ml_predictions and
+// ml_events to the same window at startup and daily (agreed with
+// kenaz-ml). Omitted when the harness cannot read the setting: the engine
+// then uses its own 90-day default rather than a guessed number.
+const RetentionEnvVar = "KENAZ_ML_ACTIVITY_RETENTION_DAYS"
+
 // Producer is every harness row's producer value.
 const Producer = "harness"
 

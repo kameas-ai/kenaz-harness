@@ -79,3 +79,38 @@ func TestProcessSpawner_RealProcessSeesRootAndLeaseDir(t *testing.T) {
 		t.Errorf("engine.log not created: %v", err)
 	}
 }
+
+// EnvFunc is read on every spawn and reaches the real child, after
+// ExtraEnv (the harness's KENAZ_ML_ACTIVITY_RETENTION_DAYS rides on it).
+func TestProcessSpawner_EnvFuncReadPerSpawnReachesChild(t *testing.T) {
+	root := t.TempDir()
+	l := NewLayout(root)
+	if err := os.MkdirAll(l.LeaseDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(root, "engine.sh")
+	body := "#!/bin/sh\necho \"x=$ZZ_EXTRA y=$ZZ_FRESH\" > \"$ZZ_OUT.tmp\"\nmv \"$ZZ_OUT.tmp\" \"$ZZ_OUT\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, want := range []string{"x=e y=1", "x=e y=2"} {
+		out := filepath.Join(root, "out"+want[len(want)-1:])
+		sp := ProcessSpawner{Layout: l, ExtraEnv: []string{"ZZ_EXTRA=e", "ZZ_OUT=" + out},
+			EnvFunc: func() []string { n++; return []string{"ZZ_FRESH=" + strconv.Itoa(n)} }}
+		if _, err := sp.Spawn(context.Background(), script, 0); err != nil {
+			t.Fatal(err)
+		}
+		var got []byte
+		for i := 0; i < 200; i++ {
+			if b, rerr := os.ReadFile(out); rerr == nil {
+				got = b
+				break
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		if strings.TrimSpace(string(got)) != want {
+			t.Fatalf("child saw %q, want %q", got, want)
+		}
+	}
+}

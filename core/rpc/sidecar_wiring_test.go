@@ -146,7 +146,7 @@ func TestSidecarWiring_NilCore_NoManagerAndNilInterfaceProbe(t *testing.T) {
 	if err != nil || v.Available || v.State != "not_installed" {
 		t.Fatalf("nil-core Status = %+v, %v", v, err)
 	}
-	if m, p := newSidecarStack("", "v"); m != nil || p != nil {
+	if m, p := newSidecarStack("", "v", nil); m != nil || p != nil {
 		t.Fatalf("newSidecarStack(\"\") = %v, %v; want (nil, nil-interface)", m, p)
 	}
 }

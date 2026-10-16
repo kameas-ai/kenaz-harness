@@ -342,7 +342,10 @@ func init() {
 			"MLLocalActivityRetentionDays to activity.NewPruner, read on every "+
 			"pass through EffectiveRetentionDays (0 = 90 days) — decides which "+
 			"events / tasks rows of <dataDir>/ml/activity.db PruneBefore deletes "+
-			"(TestMLProducerWiring_LocalActivityRetentionReachesPruner).",
+			"(TestMLProducerWiring_LocalActivityRetentionReachesPruner); "+
+			"sidecar_wiring.go also passes the effective value to the ML engine "+
+			"as KENAZ_ML_ACTIVITY_RETENTION_DAYS on every spawn "+
+			"(TestMLProducerWiring_SidecarGetsEffectiveRetention).",
 	)
 	knobcoverage.Register[settings.Settings](
 		"ShareModelCallTelemetryWithFleet",

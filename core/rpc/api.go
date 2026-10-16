@@ -6837,7 +6837,7 @@ func newLLMStack(
 		var sidecarMgr *mlsidecar.Manager
 		var sidecarProbe advice.SidecarProbe
 		if c != nil {
-			sidecarMgr, sidecarProbe = newSidecarStack(c.DataDir(), c.BuildVersion())
+			sidecarMgr, sidecarProbe = newSidecarStack(c.DataDir(), c.BuildVersion(), settingsRetentionReader(settingsImpl))
 		}
 		var sidecarBootProbe advice.SidecarProbe
 		if sidecarMgr != nil {

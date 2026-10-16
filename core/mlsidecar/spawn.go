@@ -44,6 +44,10 @@ type ProcessSpawner struct {
 	// ExtraEnv is appended after the inherited environment (and after
 	// RootEnvVar), for tests and for LAYA_THREADS-style tuning.
 	ExtraEnv []string
+	// EnvFunc, when set, is called on EVERY spawn and its entries are
+	// appended after ExtraEnv — for values read fresh at spawn time (the
+	// harness's local activity retention). nil adds nothing.
+	EnvFunc func() []string
 }
 
 // SpawnEnv returns the environment the engine is launched with: the
@@ -61,6 +65,15 @@ func SpawnEnv(inherited []string, root string, extra ...string) []string {
 	}
 	out = append(out, prefix+root)
 	return append(out, extra...)
+}
+
+// spawnExtra is ExtraEnv followed by EnvFunc's entries, read now.
+func (p ProcessSpawner) spawnExtra() []string {
+	out := append([]string(nil), p.ExtraEnv...)
+	if p.EnvFunc != nil {
+		out = append(out, p.EnvFunc()...)
+	}
+	return out
 }
 
 // Spawn implements Spawner. port is the loopback port the engine is told
@@ -83,7 +96,7 @@ func (p ProcessSpawner) Spawn(_ context.Context, exePath string, port int) (int,
 	}
 	cmd := exec.Command(exePath, args...)
 	cmd.Dir = filepath.Dir(exePath)
-	cmd.Env = SpawnEnv(os.Environ(), p.Layout.Root, p.ExtraEnv...)
+	cmd.Env = SpawnEnv(os.Environ(), p.Layout.Root, p.spawnExtra()...)
 	cmd.Stdin = nil
 	cmd.Stdout = logf
 	cmd.Stderr = logf
