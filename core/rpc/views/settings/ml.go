@@ -112,7 +112,8 @@ type MLNoticeView struct {
 	// Policy is the org_policy the notice was rendered for.
 	Policy string `json:"policy"`
 	// Actions are the button labels for that policy, in order:
-	// member_choice → [Turn on Offload, Not now]; on → [I have read this];
+	// member_choice → [Turn on Offload, Not now], or [I have read this]
+	// when re-acknowledging (Offload already on); on → [I have read this];
 	// none otherwise.
 	Actions []string `json:"actions"`
 }
@@ -147,7 +148,13 @@ const mlOrgFallback = "Your organization"
 
 // RenderMLNotice fills the fallback notice for display: the org name, the
 // retention period and the policy block (member_choice or on).
-func RenderMLNotice(orgName string, retentionDays int, policy string) MLNoticeView {
+//
+// Buttons are legal's fixed labels (kameas-ai-11, 2026-10-16): a required
+// policy (on), or re-acknowledging an earlier notice (reack: member_choice
+// with Offload already turned on), reads "I have read this"; a first
+// member_choice notice reads "Turn on Offload" / "Not now". Never "I
+// agree", "Accept" or "Consent".
+func RenderMLNotice(orgName string, retentionDays int, policy string, reack bool) MLNoticeView {
 	org := strings.TrimSpace(orgName)
 	if org == "" {
 		org = mlOrgFallback
@@ -170,6 +177,9 @@ func RenderMLNotice(orgName string, retentionDays int, policy string) MLNoticeVi
 	case fleet.MLPolicyMemberChoice:
 		n.PolicyText = mlNoticeMemberChoice
 		n.Actions = []string{MLNoticeActionTurnOn, MLNoticeActionNotNow}
+		if reack {
+			n.Actions = []string{MLNoticeActionRead}
+		}
 	case fleet.MLPolicyOn:
 		n.PolicyText = mlNoticeRequired
 		n.Actions = []string{MLNoticeActionRead}
@@ -377,7 +387,7 @@ func mlFill(v *MLStatusView, m fleet.MeML, fleetBaseURL string) {
 		// Never show the local (older) text for a newer required revision.
 		v.NoticeDashboardURL = mlDashboardConsentURL(fleetBaseURL)
 	} else {
-		n := RenderMLNotice(v.OrgName, m.RetentionDays, m.OrgPolicy)
+		n := RenderMLNotice(v.OrgName, m.RetentionDays, m.OrgPolicy, mlNoticeReack(m))
 		v.Notice = &n
 		v.NoticeText = n.PlainText()
 	}
@@ -386,6 +396,13 @@ func mlFill(v *MLStatusView, m fleet.MeML, fleetBaseURL string) {
 	v.ExcludeBrowser = m.Exclusions.ExcludeBrowser
 	v.ExclusionsVersion = m.ExclusionsVersion
 	v.LegacyExclusionNotes = append([]string{}, m.LegacyExclusionNotes...)
+}
+
+// mlNoticeReack reports whether a member_choice notice is a
+// re-acknowledgement: Offload is already on for the member, so the notice
+// asks them to read the (changed) text, not to turn Offload on.
+func mlNoticeReack(m fleet.MeML) bool {
+	return m.OrgPolicy == fleet.MLPolicyMemberChoice && m.UserWorkflowEventsOptedIn
 }
 
 // mlBase builds the view's session/capability part and reports whether a
@@ -466,7 +483,8 @@ func applyHubNotice(v *MLStatusView, item PendingApprovalView) {
 }
 
 // FleetMLAckNotice implements SettingsAPI: acknowledges the notice version
-// the panel showed, with the text revision this harness rendered
+// the panel showed, through the notice button the member clicked (button:
+// MLNoticeActionTurnOn or MLNoticeActionRead; it picks the ack action), with the text revision this harness rendered
 // (localNoticeTextRevision). It first re-reads /me/ml: when Fleet requires
 // a NEWER notice text (NoticeNeedsDashboard) nothing is posted — that text
 // was never shown here — and the view is returned for the panel to route
@@ -475,7 +493,7 @@ func applyHubNotice(v *MLStatusView, item PendingApprovalView) {
 // A 409 policy_changed is not an error to the caller: the state is re-read
 // and returned with NoticeChanged set, so the panel shows the new notice
 // again.
-func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatusView, error) {
+func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int, button string) (MLStatusView, error) {
 	v, c, ok := a.mlBase(ctx)
 	if !ok {
 		return v, ErrMLNotWired
@@ -493,7 +511,7 @@ func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatus
 	if cur.NoticeTextRevision > 0 {
 		textRevision = localNoticeTextRevision
 	}
-	action, err := mlNoticeAckAction(cur.OrgPolicy)
+	action, err := mlNoticeAckAction(cur.OrgPolicy, button)
 	if err != nil {
 		return base, err
 	}
@@ -514,18 +532,21 @@ func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatus
 	return v, nil
 }
 
-// mlNoticeAckAction maps the org_policy the notice was shown for to the
-// explicit notice-ack action (legal, kameas-ai-11, 2026-10-16): member_choice
-// ("Turn on Offload") → turn_on; on (required, "I have read this") → read.
-// Any other policy has no notice button, so nothing is acknowledged.
-func mlNoticeAckAction(policy string) (string, error) {
-	switch policy {
-	case fleet.MLPolicyMemberChoice:
+// mlNoticeAckAction maps the org_policy the notice was shown for, and the
+// notice button the member clicked, to the explicit notice-ack action
+// (legal, kameas-ai-11, 2026-10-16): member_choice "Turn on Offload" →
+// turn_on; on (required) "I have read this" → read; member_choice "I have
+// read this" (a re-acknowledgement, Offload already on) → read. Any other
+// pairing — a policy with no notice button, or a button that policy never
+// shows — is refused and nothing is acknowledged.
+func mlNoticeAckAction(policy, button string) (string, error) {
+	switch {
+	case policy == fleet.MLPolicyMemberChoice && button == MLNoticeActionTurnOn:
 		return fleet.MLNoticeAckActionTurnOn, nil
-	case fleet.MLPolicyOn:
+	case (policy == fleet.MLPolicyOn || policy == fleet.MLPolicyMemberChoice) && button == MLNoticeActionRead:
 		return fleet.MLNoticeAckActionRead, nil
 	}
-	return "", fmt.Errorf("settings: ml notice: no acknowledgement action for org_policy %q", policy)
+	return "", fmt.Errorf("settings: ml notice: no acknowledgement action for org_policy %q and button %q", policy, button)
 }
 
 // FleetSetWorkflowEventsOptIn implements SettingsAPI: writes the member's

@@ -292,7 +292,7 @@ func TestFleetMLStatus_FallbackWhenHubUnavailable(t *testing.T) {
 			f.state = withTextRevisions(mlBody(true, "on", false, true, false, 4, "", 90, false), 1, 0)
 		})
 		v, _ := r.api.FleetMLStatus(context.Background())
-		if v.NoticeFromHub || v.NoticeItemID != "" || v.NoticeText != RenderMLNotice("Acme Corp", 90, "on").PlainText() {
+		if v.NoticeFromHub || v.NoticeItemID != "" || v.NoticeText != RenderMLNotice("Acme Corp", 90, "on", false).PlainText() {
 			t.Errorf("view = %+v", v)
 		}
 	})
@@ -313,7 +313,7 @@ func TestFleetMLStatus_FallbackWhenHubUnavailable(t *testing.T) {
 			f.hubStatus, f.hubBody = 200, hubBody(hubLegal())
 		})
 		v, _ := r.api.FleetMLStatus(context.Background())
-		if v.NoticeFromHub || v.NoticeText != RenderMLNotice("Acme Corp", 90, "on").PlainText() {
+		if v.NoticeFromHub || v.NoticeText != RenderMLNotice("Acme Corp", 90, "on", false).PlainText() {
 			t.Errorf("view = %+v", v)
 		}
 	})

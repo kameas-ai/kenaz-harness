@@ -9,16 +9,16 @@
  * toggle appears only when offload is on and the policy is member_choice.
  * When a notice acknowledgement is required, the contract's notice text
  * (rendered by the backend: org, retention, retain_on_withdrawal variant)
- * is shown with an Acknowledge button that posts the version shown; a 409
+ * is shown with an "I have read this" button that posts the version shown; a 409
  * policy_changed comes back as noticeChanged and the new notice is shown
  * again. When Fleet requires a newer notice TEXT revision than the one the
- * backend renders (noticeNeedsDashboard), no notice and no Acknowledge are
+ * backend renders (noticeNeedsDashboard), no notice and no acknowledge button are
  * shown; the panel points the user to the Fleet dashboard's consent card.
  *
  * WP06: when Fleet's pending-approvals hub lists an ml_notice
  * (noticeFromHub), noticeText is the hub's server-rendered body_text, shown
  * verbatim (line breaks kept, including any "Changed since you last
- * approved" section), and Acknowledge approves that hub item by id — the
+ * approved" section), and "I have read this" approves that hub item by id — the
  * harness acknowledges exactly the text it showed. The local template and
  * the dashboard routing above are only the fallback for a Fleet without the
  * hub.
@@ -28,7 +28,10 @@
  * intro, bold-labelled paragraphs and the policy paragraph, laid out here
  * with the policy's buttons — member_choice: "Turn on Offload" (set the
  * workflow_events opt-in, then acknowledge the version shown) and "Not now"
- * (close, no request); required (policy on): "I have read this" (ack).
+ * (close, no request); required (policy on), or re-acknowledging with
+ * Offload already on: "I have read this" (ack). The hub branch's button reads
+ * "I have read this" too — legal's fixed labels (kameas-ai-11, 2026-10-16);
+ * never "I agree", "Accept" or "Consent" on the ML notice.
  * With the hub, the item's title (`noticeTitle`) is the heading above its
  * verbatim body_text (Fleet's rev-2 notice keeps the heading out of it).
  *
@@ -70,7 +73,7 @@ const showOptIn = computed(
 /**
  * kenaz-fleet PR 225: an ack is owed for a notice text NEWER than the one this
  * harness renders. The user never saw that text here, so it must not be
- * acknowledged from this panel: no notice text, no Acknowledge button —
+ * acknowledged from this panel: no notice text, no acknowledge button —
  * route them to the Fleet dashboard's consent card instead.
  */
 const DASHBOARD_NOTICE =
@@ -167,7 +170,7 @@ async function acknowledge() {
       await refresh();
       return;
     }
-    const next = await client.fleet.mlAckNotice(s.noticeVersion);
+    const next = await client.fleet.mlAckNotice(s.noticeVersion, ACTION_READ);
     status.value = next;
     noticeChanged.value = !!next.noticeChanged;
   } catch (err) {
@@ -199,7 +202,7 @@ async function turnOnOffload() {
     const next = await client.fleet.setWorkflowEventsOptIn(true);
     status.value = next;
     if (next.noticeFromHub || next.noticeNeedsDashboard || !next.noticeAckRequired) return;
-    const acked = await client.fleet.mlAckNotice(shownVersion);
+    const acked = await client.fleet.mlAckNotice(shownVersion, ACTION_TURN_ON);
     status.value = acked;
     noticeChanged.value = !!acked.noticeChanged;
   } catch (err) {
@@ -324,7 +327,7 @@ function onOptInChange(ev: Event) {
             data-testid="cloud-ml-ack"
             @click="acknowledge"
           >
-            Acknowledge
+            {{ ACTION_READ }}
           </button>
         </template>
       </div>

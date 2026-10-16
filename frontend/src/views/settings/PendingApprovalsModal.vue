@@ -13,7 +13,8 @@
  *     per-document box "I have read and accept <title> (<version>)" is
  *     ticked. The document opens in the system browser; it is not fetched.
  *   - ml_notice: the server-rendered notice, including any "Changed since
- *     you last approved" section; "I agree" sends the hub's approve action.
+ *     you last approved" section; "I have read this" sends the hub's approve
+ *     action (legal's fixed label, 2026-10-16: never agree/accept/consent).
  *   - ml_exclusions_change: informational ("Dismiss"); the backend lists it
  *     only while nothing required is pending.
  *   - unknown kinds: rendered generically ("I agree" / "Got it").
@@ -109,6 +110,9 @@ function approveLabel(it: PendingApprovalItem): string {
   // path: the backend binds kind and path both ways
   // (fleet.ApproveActionAllowedFor). Otherwise there is no approve button.
   if (it.kind === 'ml_opt_in_available' && it.approveAllowed) return 'Not now';
+  // Legal (kameas-ai-11, 2026-10-16): the ML notice reads "I have read
+  // this" — never "I agree", "Accept" or "Consent".
+  if (it.kind === 'ml_notice') return 'I have read this';
   if (it.kind === 'ml_exclusions_change') return 'Dismiss';
   if (needsCheckbox(it)) return 'Accept';
   return it.required ? 'I agree' : 'Got it';

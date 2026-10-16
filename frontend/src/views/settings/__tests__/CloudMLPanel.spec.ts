@@ -244,7 +244,7 @@ describe('CloudMLPanel', () => {
     expect(q(wrapper, 'cloud-ml-policy').text()).toContain('On for every member');
   });
 
-  it('notice required: shows the notice verbatim + harness line; Acknowledge posts the shown version', async () => {
+  it('notice required: shows the notice verbatim + harness line; "I have read this" posts the shown version', async () => {
     const effective = status({
       orgOffloadEnabled: true,
       orgPolicy: 'on',
@@ -262,7 +262,7 @@ describe('CloudMLPanel', () => {
     expect(q(wrapper, 'cloud-ml-harness-line').text()).toBe(HARNESS_LINE);
     await q(wrapper, 'cloud-ml-ack').trigger('click');
     await flushPromises();
-    expect(mlAckNotice).toHaveBeenCalledWith(3);
+    expect(mlAckNotice).toHaveBeenCalledWith(3, 'I have read this');
     expect(q(wrapper, 'cloud-ml-notice').exists()).toBe(false);
     expect(q(wrapper, 'cloud-ml-effective').text()).toContain('agent activity is sent');
   });
@@ -300,7 +300,7 @@ describe('CloudMLPanel', () => {
     await flushPromises();
     await q(wrapper, 'cloud-ml-ack').trigger('click');
     await flushPromises();
-    expect(mlAckNotice).toHaveBeenCalledWith(3);
+    expect(mlAckNotice).toHaveBeenCalledWith(3, 'I have read this');
     expect(q(wrapper, 'cloud-ml-notice-changed').exists()).toBe(true);
     expect(q(wrapper, 'cloud-ml-notice-text').text()).toBe(NOTICE_V4);
     expect(q(wrapper, 'cloud-ml-notice-status').text()).toContain('version 4');
@@ -460,7 +460,7 @@ describe('CloudMLPanel', () => {
       await flushPromises();
       await q(wrapper, 'cloud-ml-ack').trigger('click');
       await flushPromises();
-      expect(mlAckNotice).toHaveBeenCalledWith(3);
+      expect(mlAckNotice).toHaveBeenCalledWith(3, 'I have read this');
       expect(approveItem).not.toHaveBeenCalled();
     });
 
@@ -547,7 +547,7 @@ describe('CloudMLPanel', () => {
       await actions(wrapper)[0].trigger('click');
       await flushPromises();
       expect(setWorkflowEventsOptIn).toHaveBeenCalledWith(true);
-      expect(mlAckNotice).toHaveBeenCalledWith(3);
+      expect(mlAckNotice).toHaveBeenCalledWith(3, 'Turn on Offload');
       expect(setWorkflowEventsOptIn.mock.invocationCallOrder[0]).toBeLessThan(mlAckNotice.mock.invocationCallOrder[0]);
       expect(approveItem).not.toHaveBeenCalled();
       expect(q(wrapper, 'cloud-ml-effective').text()).toContain('On');
@@ -572,8 +572,62 @@ describe('CloudMLPanel', () => {
       expect(actions(wrapper).map((b: any) => b.text())).toEqual(['I have read this']);
       await actions(wrapper)[0].trigger('click');
       await flushPromises();
-      expect(mlAckNotice).toHaveBeenCalledWith(3);
+      expect(mlAckNotice).toHaveBeenCalledWith(3, 'I have read this');
       expect(setWorkflowEventsOptIn).not.toHaveBeenCalled();
+    });
+
+    it('re-acknowledging (member_choice, Offload already on): "I have read this" acks, no opt-in write', async () => {
+      const { wrapper, mlAckNotice, setWorkflowEventsOptIn } = mountWith(
+        memberChoice({
+          userWorkflowEventsOptedIn: true,
+          noticeAckRequired: true,
+          notice: notice('member_choice', MEMBER, ['I have read this']),
+        }),
+      );
+      await flushPromises();
+      expect(actions(wrapper).map((b: any) => b.text())).toEqual(['I have read this']);
+      await actions(wrapper)[0].trigger('click');
+      await flushPromises();
+      expect(mlAckNotice).toHaveBeenCalledWith(3, 'I have read this');
+      expect(setWorkflowEventsOptIn).not.toHaveBeenCalled();
+    });
+
+    it('the ML notice card never says agree / accept / consent (legal, 2026-10-16)', async () => {
+      for (const s of [
+        memberChoice(),
+        required(),
+        status({
+          orgOffloadEnabled: true,
+          orgPolicy: 'on',
+          noticeAckRequired: true,
+          noticeVersion: 3,
+          noticeText: 'Hub body',
+          noticeFromHub: true,
+          noticeItemId: 'ml_notice:o1:3',
+        }),
+      ]) {
+        const { wrapper } = mountWith(s);
+        await flushPromises();
+        const card = q(wrapper, 'cloud-ml-notice');
+        expect(card.exists()).toBe(true);
+        expect(card.text()).not.toMatch(/agree|accept|consent/i);
+      }
+    });
+
+    it('hub branch: the acknowledge button reads "I have read this"', async () => {
+      const { wrapper } = mountWith(
+        status({
+          orgOffloadEnabled: true,
+          orgPolicy: 'on',
+          noticeAckRequired: true,
+          noticeVersion: 3,
+          noticeText: 'Hub body',
+          noticeFromHub: true,
+          noticeItemId: 'ml_notice:o1:3',
+        }),
+      );
+      await flushPromises();
+      expect(q(wrapper, 'cloud-ml-ack').text()).toBe('I have read this');
     });
 
     it('a 409 on the ack re-shows the notice with the "changed" line', async () => {
