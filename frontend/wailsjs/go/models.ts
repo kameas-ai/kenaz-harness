@@ -8020,6 +8020,7 @@ export namespace settings {
 	    emailSource?: string;
 	    nameSource?: string;
 	    tokensUsable: boolean;
+	    accountKey?: string;
 	    claims: FleetSessionClaims;
 	    capabilities: CapabilitiesView;
 	    profile?: FleetProfileInfo;
@@ -8046,6 +8047,7 @@ export namespace settings {
 	        this.emailSource = source["emailSource"];
 	        this.nameSource = source["nameSource"];
 	        this.tokensUsable = source["tokensUsable"];
+	        this.accountKey = source["accountKey"];
 	        this.claims = this.convertValues(source["claims"], FleetSessionClaims);
 	        this.capabilities = this.convertValues(source["capabilities"], CapabilitiesView);
 	        this.profile = this.convertValues(source["profile"], FleetProfileInfo);

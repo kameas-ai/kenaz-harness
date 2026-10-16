@@ -371,11 +371,13 @@ binds one, and every reader below reports exactly what exists.
   `UserSelectable`. **Owner:** WP05, which fetches the policy
   (`GET /me/credentials/policy`) and org/team names; WP12 then narrows
   `llm.userKeySelectionAllowed` further with the Cedar Credential family.
-- `writeSessionCredential` / `SessionModelConfig.credentialId`
-  (`frontend/src/lib/sessionModelStash.ts`) — the per-chat key selection is
-  persisted next to the chat's provider and model, but only the spec reaches
-  the writer and no send path reads it. **Owner:** WP07 (precedence + the
-  per-chat key picker that writes it and passes it to the turn).
+- `readSessionCredential` / `writeSessionCredential`
+  (`frontend/src/lib/sessionModelStash.ts`) — the per-chat key selection,
+  stored per Fleet account (`FleetSessionView.accountKey`) and bound to the
+  provider it was made for; `clearSessionCredentials` is live (sign-out and
+  account change, from `lib/fleetSession.ts`), but only the spec reaches the
+  reader and writer. **Owner:** WP07 (the per-chat key picker, and the send
+  path that re-checks the selection against policy on every use).
 
 ### 2026-10-09 (ml-producer-01MLPRD01 WP03) · Fleet's OTLP-JSON decode — the ML shipper sends protobuf
 

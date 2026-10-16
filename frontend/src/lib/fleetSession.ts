@@ -24,6 +24,7 @@
 import { computed, effectScope, ref, type EffectScope } from 'vue';
 import { useEventStream } from './useEventStream';
 import { ORG_PAUSED_REASON } from './orgPausedCopy';
+import { clearSessionCredentials } from './sessionModelStash';
 import type {
   FleetIdentity,
   FleetSessionState,
@@ -68,8 +69,34 @@ let _seeded = false;
 /** Install a snapshot (the event handler; tests seed through it too). */
 export function applyFleetSession(v: FleetSessionView | null): void {
   _seeded = false;
+  dropAccountStateOnChange(v);
   _session.value = v;
 }
+
+/**
+ * The account the last real snapshot named ('' = signed out, null = none
+ * seen yet). Per-account local state (the per-chat key selection,
+ * provider-credentials-client-01PCCLI01 WP04) is cleared whenever a
+ * snapshot names a different account — a sign-out, a node removal, or a
+ * sign-in as someone else — so it never outlives the account it was made
+ * under. The first snapshot of a run also drops selections stored under
+ * any OTHER account (a sign-out or switch that happened while the app was
+ * closed). A re-auth (signing_in with usable tokens) keeps its accountKey
+ * and is not a change.
+ */
+let _lastAccountKey: string | null = null;
+
+function dropAccountStateOnChange(v: FleetSessionView | null): void {
+  if (!v) return;
+  const next = v.accountKey ?? '';
+  if (_lastAccountKey === null) {
+    clearSessionCredentials(next);
+  } else if (next !== _lastAccountKey) {
+    clearSessionCredentials();
+  }
+  _lastAccountKey = next;
+}
+
 
 /**
  * seedFleetSessionFromAppInfo installs the capability map boot AppInfo

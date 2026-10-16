@@ -153,7 +153,12 @@ type FleetSessionView struct {
 	// TokensUsable is true when the stored tokens can still authenticate
 	// and no definite rejection is recorded. A signing_in snapshot with
 	// usable tokens is a RE-auth: gates stay open (review F5).
-	TokensUsable bool               `json:"tokensUsable"`
+	TokensUsable bool `json:"tokensUsable"`
+	// AccountKey is an opaque, non-PII key for the signed-in Fleet account
+	// (hashed realm + subject, secrets.FleetPrincipal), or "" when signed
+	// out. The frontend scopes per-account local state by it (the per-chat
+	// key selection) and drops that state when it changes.
+	AccountKey   string             `json:"accountKey,omitempty"`
 	Claims       FleetSessionClaims `json:"claims"`
 	Capabilities CapabilitiesView   `json:"capabilities"`
 	Profile      *FleetProfileInfo  `json:"profile,omitempty"`
@@ -271,6 +276,11 @@ func (a *API) fleetSessionSnapshot() FleetSessionView {
 	}
 	v.AutoRetry = !tr.autoRetryStopped
 	v.TokensUsable = ts.Usable() && !tr.expired
+	if v.TokensUsable {
+		if p, err := fleet.CredentialPrincipal(); err == nil {
+			v.AccountKey = p.Realm + "." + p.Subject
+		}
+	}
 
 	switch {
 	case tr.signingIn:
@@ -281,6 +291,7 @@ func (a *API) fleetSessionSnapshot() FleetSessionView {
 		v.Message = fleetNodeRemovedCopy
 		v.AutoRetry = false
 		v.TokensUsable = false
+		v.AccountKey = ""
 	case !ts.Usable():
 		v.State = FleetSessionSignedOut
 		if ts.Present {

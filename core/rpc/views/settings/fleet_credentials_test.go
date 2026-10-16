@@ -89,3 +89,25 @@ func TestFleetSessionReset_DifferentAccountPurgesThePrevious(t *testing.T) {
 		t.Error("reconcile removed the signed-in account's key")
 	}
 }
+
+// TestFleetSession_AccountKeyIsOpaqueAndPerAccount: the snapshot names the
+// signed-in account by a hashed key (never the subject), a different
+// account gets a different key, and signed out there is none.
+func TestFleetSession_AccountKeyIsOpaqueAndPerAccount(t *testing.T) {
+	r, _ := newRemovalRig(t)
+	if _, err := r.api.FleetRefreshIdentity(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	alice := snap(t, r.api).AccountKey
+	if alice == "" || strings.Contains(alice, "alice") {
+		t.Fatalf("accountKey = %q, want an opaque non-empty key", alice)
+	}
+	r.setToken(jwtFor("sub-bob", "zitadel-org-1"))
+	if bob := snap(t, r.api).AccountKey; bob == "" || bob == alice {
+		t.Fatalf("bob's accountKey = %q (alice %q)", bob, alice)
+	}
+	r.setToken("")
+	if k := snap(t, r.api).AccountKey; k != "" {
+		t.Fatalf("signed out accountKey = %q, want empty", k)
+	}
+}

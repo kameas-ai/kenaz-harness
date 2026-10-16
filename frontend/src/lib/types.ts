@@ -5057,6 +5057,12 @@ export interface FleetSessionView {
   nameSource?: string;
   /** Stored tokens still authenticate (signing_in + true = a re-auth). */
   tokensUsable: boolean;
+  /**
+   * Opaque, non-PII key for the signed-in Fleet account (hashed realm +
+   * subject); absent when signed out. Per-account local state is scoped by
+   * it and dropped when it changes.
+   */
+  accountKey?: string;
   claims: { hasSubject: boolean; hasOrgClaim: boolean };
   capabilities: CapabilitiesView;
   profile?: FleetProfileInfo;
