@@ -130,7 +130,7 @@ async function save() {
         <span>
           <span class="text-sm text-ink font-medium">Share model-call telemetry with Fleet</span>
           <span class="block text-xs text-ink-muted" data-testid="model-call-share-explainer">
-            <!-- Counsel-approved text (kameas-ai-8f, B4a / D54, package doc 02), VERBATIM. Do not edit without legal review. -->
+            <!-- B4a text: decided (legal D82, package doc 02); counsel review pending; text revision 1. VERBATIM. Do not edit without legal review, and bump ModelCallOptInTextRevision (core/rpc/views/settings/api.go) when it changes. -->
             Off by default, and separate from the Fleet Telemetry level above. This setting applies to
             this device only. When it is on and you are signed in, each model call you make from then
             on is sent to your organization's Fleet account, attributed to you: model and provider IDs,

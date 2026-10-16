@@ -48,6 +48,5 @@ func TestOpenAIAdapter_GenAISpan_ExactAttributes(t *testing.T) {
 		"gen_ai.response.finish_reasons":       []string{"tool_calls"},
 		"gen_ai.response.model":                "gpt-4o-2024-08-06",
 		"kenaz.provider.system_fingerprint":    "fp_abc123",
-		"kenaz.provider.request_id":            "req_openai_123",
 	}), spantest.Content...)
 }

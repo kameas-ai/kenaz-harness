@@ -50,6 +50,5 @@ func TestAzureAdapter_GenAISpan_ExactAttributes(t *testing.T) {
 		"gen_ai.response.finish_reasons":       []string{"stop"},
 		"gen_ai.response.model":                "gpt-4o-2024-11-20",
 		"kenaz.provider.system_fingerprint":    "fp_azure1",
-		"kenaz.provider.request_id":            "4b1e2d3c-apim",
 	}), spantest.Content...)
 }

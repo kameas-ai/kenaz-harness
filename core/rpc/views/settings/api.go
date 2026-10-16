@@ -932,7 +932,26 @@ type Settings struct {
 	// at pipeline wiring; the consumer is fleet.closableSpanExporter's
 	// model-call filter. Never content.
 	ShareModelCallTelemetryWithFleet bool `json:"shareModelCallTelemetryWithFleet,omitempty"`
+
+	// ShareModelCallTelemetryTextRevision is the revision of the opt-in
+	// text the user saw when they last turned sharing on (consent
+	// evidence; ModelCallOptInTextRevision is the current one), and
+	// ShareModelCallTelemetryAcceptedAt is when (RFC 3339 UTC). Both are
+	// written ONLY by SetModelCallTelemetry. Sharing takes effect only
+	// while the stored revision is the current one
+	// (Settings.modelCallSharingEffective), so a text change requires a new
+	// opt-in.
+	ShareModelCallTelemetryTextRevision int    `json:"shareModelCallTelemetryTextRevision,omitempty"`
+	ShareModelCallTelemetryAcceptedAt   string `json:"shareModelCallTelemetryAcceptedAt,omitempty"`
 }
+
+// ModelCallOptInTextRevision is the revision of the inline text under
+// "Share model-call telemetry with Fleet" (ModelCallTelemetryPanel.vue).
+// Revision 1 is the B4a text, legal D82 (kameas-ai-8f, 2026-10-16; counsel
+// review pending; a counsel change ships as revision 2). Bump it
+// whenever that text changes, so earlier opt-ins stop taking effect until
+// the user agrees to the new wording.
+const ModelCallOptInTextRevision = 1
 
 // ModelCallTelemetrySettings is the wire shape of the three model-call
 // telemetry settings (llm-call-telemetry-01LLMTEL01 WP02).

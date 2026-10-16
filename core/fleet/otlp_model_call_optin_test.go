@@ -21,6 +21,10 @@ const optInPrompt = "SECRET-OPTIN-PROMPT-TEXT"
 // assertNoResponseID checks the payload for the prefix and the key.
 const respIDPrefix = "respid-"
 
+// reqIDPrefix prefixes every fixture provider request-id header. Like the
+// response id it is stored-record only (legal D82 (e), 2026-10-16).
+const reqIDPrefix = "reqid-"
+
 // modelCall drives one real provider call through genaitrace.Instrument
 // and returns a func that finishes it (Final), so a test can start a call
 // on one side of a toggle and end it on the other. marker identifies the
@@ -33,7 +37,7 @@ func modelCall(t *testing.T, marker string) (finish func()) {
 	}, llm.ProviderProfile{ID: "p-or", Kind: "openrouter", Model: "probe/" + marker})
 	s, err := genaitrace.Instrument(context.Background(), call, nil, func(context.Context) (llm.Stream, error) {
 		return &doneStream{resp: llm.Response{FinishReason: "stop", Usage: llm.Usage{InputTokens: 7, OutputTokens: 2},
-			Meta: &llm.CallMeta{ResponseID: respIDPrefix + marker}}}, nil
+			Meta: &llm.CallMeta{ResponseID: respIDPrefix + marker, RequestID: reqIDPrefix + marker}}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -76,6 +80,11 @@ func assertNoResponseID(t *testing.T, body []byte) {
 	for _, leak := range []string{"gen_ai.response.id", respIDPrefix} {
 		if bytes.Contains(body, []byte(leak)) {
 			t.Errorf("the provider response id (%q) reached Fleet — it is stored-record only (Fleet/counsel D32)", leak)
+		}
+	}
+	for _, leak := range []string{"kenaz.provider.request_id", reqIDPrefix} {
+		if bytes.Contains(body, []byte(leak)) {
+			t.Errorf("the provider request id (%q) reached Fleet — it is stored-record only (legal D82 (e))", leak)
 		}
 	}
 }

@@ -45,6 +45,9 @@ func TestAttrSet_ScopeRefusesKeysOffTheirSpan(t *testing.T) {
 			t.Errorf("%s: stored-only keys are the provider stats-pull keys (kenaz.provider.*) and gen_ai.response.id", s.Key)
 		}
 	}
+	if s := specByKey["kenaz.provider.request_id"]; s.carriedOn(SpanNameChat) || s.carriedOn(SpanNameTurn) || !s.carriedOn(StoredRecord) {
+		t.Fatalf("kenaz.provider.request_id Spans = %v, want stored record only (legal D82 (e))", s.Spans)
+	}
 	if s := specByKey["gen_ai.response.id"]; s.carriedOn(SpanNameChat) || s.carriedOn(SpanNameTurn) || !s.carriedOn(StoredRecord) {
 		t.Fatalf("gen_ai.response.id Spans = %v, want stored record only (Fleet/counsel D32)", s.Spans)
 	}

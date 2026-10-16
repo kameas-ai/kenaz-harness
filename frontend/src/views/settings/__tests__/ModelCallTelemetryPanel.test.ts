@@ -43,7 +43,7 @@ describe('ModelCallTelemetryPanel', () => {
     expect(pull.checked).toBe(true);
     expect(share.checked).toBe(false);
     expect(w.text()).toContain('now 30');
-    // Counsel-approved text (B4a / D54), verbatim; whitespace normalised.
+    // B4a text, legal D82 (counsel review pending), text revision 1: verbatim; whitespace normalised.
     expect(w.find('[data-testid="model-call-share-explainer"]').text().replace(/\s+/g, ' ').trim()).toBe(
       "Off by default, and separate from the Fleet Telemetry level above. This setting applies to this device only. " +
         "When it is on and you are signed in, each model call you make from then on is sent to your organization's " +

@@ -8550,6 +8550,8 @@ export namespace settings {
 	    modelCallStatsPullDisabled?: boolean;
 	    modelCallRetentionDays?: number;
 	    shareModelCallTelemetryWithFleet?: boolean;
+	    shareModelCallTelemetryTextRevision?: number;
+	    shareModelCallTelemetryAcceptedAt?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8651,6 +8653,8 @@ export namespace settings {
 	        this.modelCallStatsPullDisabled = source["modelCallStatsPullDisabled"];
 	        this.modelCallRetentionDays = source["modelCallRetentionDays"];
 	        this.shareModelCallTelemetryWithFleet = source["shareModelCallTelemetryWithFleet"];
+	        this.shareModelCallTelemetryTextRevision = source["shareModelCallTelemetryTextRevision"];
+	        this.shareModelCallTelemetryAcceptedAt = source["shareModelCallTelemetryAcceptedAt"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
