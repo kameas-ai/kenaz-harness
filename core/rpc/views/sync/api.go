@@ -47,6 +47,11 @@ type SyncStatusView struct {
 	// built yet (fleet.SyncKind.UserSyncNotBuilt): nothing is uploaded or
 	// applied, so the UI offers no toggle and never lists it as uploading.
 	NotSyncingYet bool `json:"not_syncing_yet,omitempty"`
+	// UploadsBlockedReason is non-empty when this category's uploads are
+	// held because the settings that record the upload confirmation could
+	// not be read (UploadConsent.UploadState). Confirming cannot fix that,
+	// so AwaitingConfirmation is false on such a row.
+	UploadsBlockedReason string `json:"uploads_blocked_reason,omitempty"`
 }
 
 // UploadConsent persists the one-time "settings may be uploaded" answer
@@ -55,6 +60,11 @@ type SyncStatusView struct {
 type UploadConsent interface {
 	UploadsConfirmed() bool
 	ConfirmUploads() error
+	// UploadState reads the answer and reports why it could not be read.
+	// A non-nil error means uploads are blocked because the settings are
+	// unreadable (or missing), not because the user has not confirmed;
+	// Sync_Status surfaces it instead of the "Start syncing" prompt.
+	UploadState() (confirmed bool, err error)
 }
 
 // OptInStore persists the user's per-category opt-ins

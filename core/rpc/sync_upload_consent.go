@@ -29,15 +29,25 @@ var _ syncview.UploadConsent = settingsUploadConsent{}
 // UploadsConfirmed reads the persisted answer. It fails closed: a store that
 // cannot be read means no upload.
 func (c settingsUploadConsent) UploadsConfirmed() bool {
-	if c.store == nil {
-		return false
-	}
-	s, err := c.store.LoadAll()
+	ok, err := c.UploadState()
 	if err != nil {
 		logging.L().Warn("rpc.settings_sync.consent_read_failed", "err", err.Error())
 		return false
 	}
-	return s.SettingsSyncUploadsConfirmed
+	return ok
+}
+
+// UploadState reads the persisted answer, reporting a read failure (or a
+// missing store) as an error so Sync_Status can say why uploads are held.
+func (c settingsUploadConsent) UploadState() (bool, error) {
+	if c.store == nil {
+		return false, syncview.ErrUploadConsentUnavailable
+	}
+	s, err := c.store.LoadAll()
+	if err != nil {
+		return false, err
+	}
+	return s.SettingsSyncUploadsConfirmed, nil
 }
 
 // ConfirmUploads persists the confirmation.

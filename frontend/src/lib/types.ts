@@ -5261,6 +5261,12 @@ export interface SyncStatusView {
    * upload confirmation never lists it.
    */
   not_syncing_yet?: boolean;
+  /**
+   * Non-empty when this category's uploads are held because the settings
+   * that record the upload confirmation could not be read. Confirming
+   * cannot fix it, so awaiting_confirmation is false on such a row.
+   */
+  uploads_blocked_reason?: string;
 }
 
 /**

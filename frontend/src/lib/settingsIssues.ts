@@ -314,6 +314,20 @@ const settingsSyncConfirmIssues: SettingsIssueProvider = {
   desktopOnly: true,
   async collect(client) {
     const rows = await client.sync.status();
+    // Uploads held because the settings file cannot be read: "Start
+    // syncing" cannot help, so say what is wrong instead of asking.
+    const blocked = rows.find((r) => r.uploads_blocked_reason);
+    if (blocked) {
+      return [
+        {
+          id: 'settings-sync-blocked',
+          severity: 'error',
+          title: 'Settings sync is paused',
+          body: blocked.uploads_blocked_reason!,
+          link: { label: 'Open Sync settings', to: '/settings?tab=sync' },
+        },
+      ];
+    }
     // Name only categories that really upload something: a not-built kind
     // (provider_profiles, mcp_recipes) sends nothing, so "uploads them so
     // your other devices can use them" would be false for it.

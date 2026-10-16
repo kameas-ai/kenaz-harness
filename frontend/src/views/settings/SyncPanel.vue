@@ -242,6 +242,9 @@ const awaitingConfirmation = computed(() =>
     .filter((s) => s.awaiting_confirmation && !s.not_syncing_yet)
     .map((s) => labelFor(s.category)),
 );
+const uploadsBlockedReason = computed(
+  () => statusList.value.find((s) => s.uploads_blocked_reason)?.uploads_blocked_reason ?? '',
+);
 const confirming = ref(false);
 
 async function confirmUploads() {
@@ -350,6 +353,18 @@ function goToMCPTools() {
           when you turn them on or press Push. Changes from your other devices
           are checked every 60 seconds.
         </p>
+      </div>
+
+      <!-- Uploads held because the settings file cannot be read: confirming
+           cannot help, so say what is wrong (backend: Sync_Status
+           uploads_blocked_reason). -->
+      <div
+        v-if="uploadsBlockedReason"
+        class="rounded-md border border-signal-danger px-4 py-3"
+        data-testid="sync-uploads-blocked"
+      >
+        <p class="text-sm font-medium text-signal-danger">Settings sync is paused</p>
+        <p class="text-xs text-signal-danger">{{ uploadsBlockedReason }}</p>
       </div>
 
       <!-- One-time upload confirmation (owner ruling H1). -->

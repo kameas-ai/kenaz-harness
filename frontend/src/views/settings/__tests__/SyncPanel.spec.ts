@@ -390,6 +390,18 @@ describe('SyncPanel', () => {
     expect(confirmFn).toHaveBeenCalledTimes(1);
   });
 
+  it('says why uploads are paused when the settings file cannot be read', async () => {
+    const reason = 'Settings sync is paused: Kenaz could not read your settings file.';
+    const statuses: SyncStatusView[] = [
+      { category: 'ui_theme', enabled: true, uploads_blocked_reason: reason },
+    ];
+    const { client } = buildClient({ statuses });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="sync-uploads-blocked"]').text()).toContain(reason);
+    expect(wrapper.find('[data-testid="sync-confirm-uploads-notice"]').exists()).toBe(false);
+  });
+
   // A 409 from Fleet is a conflict the user resolves, not a silent revert
   // (fleet.Syncer, sync_conflict.go): the row says so and names the way out,
   // instead of repeating the message as an "Error:".

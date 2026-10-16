@@ -9164,6 +9164,7 @@ export namespace sync {
 	    local_only?: boolean;
 	    conflict?: boolean;
 	    not_syncing_yet?: boolean;
+	    uploads_blocked_reason?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SyncStatusView(source);
@@ -9182,6 +9183,7 @@ export namespace sync {
 	        this.local_only = source["local_only"];
 	        this.conflict = source["conflict"];
 	        this.not_syncing_yet = source["not_syncing_yet"];
+	        this.uploads_blocked_reason = source["uploads_blocked_reason"];
 	    }
 	}
 

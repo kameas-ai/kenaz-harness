@@ -101,6 +101,21 @@ describe('settings-sync-confirm provider', () => {
     expect(none).toBeUndefined();
   });
 
+  // The settings file cannot be read, so uploads are held for a reason
+  // "Start syncing" cannot fix: one error naming it, and no confirm prompt.
+  it('reports unreadable settings instead of asking to confirm', async () => {
+    const reason = 'Settings sync is paused: Kenaz could not read your settings file.';
+    const { client } = makeClient([
+      { category: 'ui_theme', enabled: true, uploads_blocked_reason: reason },
+    ]);
+    const issues = await collectSettingsIssues(client, false);
+    expect(issues.find((i) => i.id === 'settings-sync-confirm')).toBeUndefined();
+    const blocked = issues.find((i) => i.id === 'settings-sync-blocked');
+    expect(blocked?.severity).toBe('error');
+    expect(blocked?.body).toBe(reason);
+    expect(blocked?.fix).toBeUndefined();
+  });
+
   it('is skipped in served mode', async () => {
     const { client, status } = makeClient(HELD);
     const issues = await collectSettingsIssues(client, true);

@@ -199,10 +199,32 @@ func (a *API) Sync_Status(_ context.Context) ([]SyncStatusView, error) {
 	}
 	raw := a.syncer.Status()
 	out := make([]SyncStatusView, len(raw))
+	blocked := a.uploadsBlockedReason()
 	for i, s := range raw {
-		out[i] = enrichWithRegistry(syncStatusToView(s), registry, string(s.Category))
+		v := enrichWithRegistry(syncStatusToView(s), registry, string(s.Category))
+		if blocked != "" && v.Enabled && !v.LocalOnly && !v.NotSyncingYet {
+			v.UploadsBlockedReason = blocked
+			v.AwaitingConfirmation = false
+		}
+		out[i] = v
 	}
 	return out, nil
+}
+
+// uploadsBlockedReason is non-empty when the upload confirmation cannot be
+// read, so uploads are held for a reason the user cannot fix by
+// confirming. Without this the gate failed closed silently: the panel
+// asked the user to "Start syncing", and confirming could not take effect.
+func (a *API) uploadsBlockedReason() string {
+	c := a.uploadConsent()
+	if c == nil {
+		return "Settings sync cannot upload: this build has no settings store to record your confirmation."
+	}
+	if _, err := c.UploadState(); err != nil {
+		return "Settings sync is paused: Kenaz could not read your settings file, so it cannot tell whether you confirmed uploads (" +
+			err.Error() + "). Uploads resume as soon as the file can be read again."
+	}
+	return ""
 }
 
 // enrichWithRegistry adds Scopes + OrgAppliedAt to v from registry, when a
