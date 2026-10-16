@@ -660,16 +660,29 @@ func (r *Recorder) Purge(ctx context.Context) error {
 	return r.cfg.Store.Purge(ctx)
 }
 
+// ErrRecorderClosed is DeleteLocal's answer once the recorder has shut
+// down: the owner closes the local store after Close, so a delete then
+// would have to open a fresh handle nothing would ever close.
+var ErrRecorderClosed = errors.New("mlproducer: recorder is shut down; local activity was not deleted")
+
 // DeleteLocal is "Delete local activity data" (A-16 item 4): it wipes the
 // local activity store, the ship outbox and the ship task state, and
 // forgets both views' cached state. Work observed before the call is
-// written first (Flush) so it is wiped too.
+// written first (Flush) so it is wiped too. After Close it refuses with
+// ErrRecorderClosed and opens nothing.
 func (r *Recorder) DeleteLocal(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
 	if err := r.Flush(ctx); err != nil {
 		return err
+	}
+	// Held for the whole delete: Close (and so the owner's close of the
+	// local store) waits for it, and a closed recorder opens nothing.
+	r.closeMu.RLock()
+	defer r.closeMu.RUnlock()
+	if r.closed {
+		return ErrRecorderClosed
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -445,5 +447,50 @@ func TestWP11_LocalStoreReopensLazily(t *testing.T) {
 	st, err := h.rec.LocalStore().Stats(ctx)
 	if err != nil || st.Events != 2 || st.Tasks != 1 {
 		t.Fatalf("local after reopen = %+v, %v; want the post-reopen call's file + phase_change", st, err)
+	}
+}
+
+// Review nit 1 (#429): after shutdown, DeleteLocal must not open a store
+// handle (the owner closed the local store right after Close; a new one
+// would leak). Boot open failed, so the recorder has no store and only
+// OpenLocal.
+func TestWP11_DeleteLocalAfterClose_OpensNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.rec.Close()
+	path := activity.Path(h.dir)
+	var mu sync.Mutex
+	var opened []*activity.Store
+	rec := NewRecorder(Config{
+		Store: h.store, Hasher: NewHasher(h.dir),
+		Gate: KindGateFunc{Record: func() bool { return false }},
+		OpenLocal: func() (*activity.Store, error) {
+			s, err := activity.Open(path)
+			if err == nil {
+				mu.Lock()
+				opened = append(opened, s)
+				mu.Unlock()
+			}
+			return s, err
+		},
+		Workspace: func() string { return workspace }, Now: h.clock.Now, SweepInterval: -1,
+	})
+	rec.Close()
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, s := range opened {
+			_ = s.Close()
+		}
+	})
+	err := rec.DeleteLocal(context.Background())
+	if !errors.Is(err, ErrRecorderClosed) {
+		t.Fatalf("DeleteLocal after Close = %v, want ErrRecorderClosed", err)
+	}
+	mu.Lock()
+	n := len(opened)
+	mu.Unlock()
+	if n != 0 || rec.LocalStore() != nil {
+		t.Fatalf("DeleteLocal after Close opened %d store handle(s) (LocalStore %v); want none", n, rec.LocalStore())
 	}
 }
