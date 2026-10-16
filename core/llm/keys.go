@@ -16,8 +16,8 @@ import "sort"
 //     (frontend/src/lib/sessionModelStash.ts, key credentialId) next to the
 //     chat's provider and model.
 //
-// Enforcement of org policy against a selection is NOT here yet; see
-// userKeySelectionAllowed.
+// Whether the user may pick at all is decided by userKeySelectionAllowed,
+// which fails closed until an explicit policy allows it.
 
 // CredentialKey is display metadata for one key a profile can use. It never
 // carries key material or a keychain locator.
@@ -39,20 +39,37 @@ type CredentialKey struct {
 	// Preselected marks the key the UI preselects for Provider: the org
 	// default when there is one, otherwise the first personal key.
 	Preselected bool `json:"preselected,omitempty"`
-	// UserSelectable reports whether the user may pick this key.
+	// UserSelectable reports whether the user may pick this key. False
+	// unless an explicit org policy allows user selection (fail closed).
 	UserSelectable bool `json:"user_selectable"`
 }
 
 // LocalKeyID is the CredentialKey.ID of the local key bound to profileID.
 func LocalKeyID(profileID string) string { return "local:" + profileID }
 
+// CredentialPolicy is the org's credential policy as Fleet's
+// GET /me/credentials/policy returns it (delivered from WP05). A nil
+// *CredentialPolicy means the policy is not known, and every decision that
+// depends on it fails closed.
+type CredentialPolicy struct {
+	// AllowUserSelection is the contract's allow_user_selection. It
+	// defaults to FALSE: unless the org explicitly allows it, the user
+	// does not pick among keys.
+	AllowUserSelection bool
+	// OrgDefaults maps a provider kind to the credential id the org
+	// designated as that provider's default.
+	OrgDefaults map[string]string
+}
+
 // BuildKeyList returns every key the given profiles reference, one row per
-// distinct key, grouped by provider. orgDefaults maps a provider kind to
-// the credential id the org designated as that provider's default
-// (Fleet's GET /me/credentials/policy, delivered from WP05); nil means no
-// org default is known. scopeNames maps a Fleet credential id to the org
+// distinct key, grouped by provider. policy is the org credential policy,
+// or nil when it is not known (WP04 passes nil: nothing fetches it yet). scopeNames maps a Fleet credential id to the org
 // or team display name; nil is fine.
-func BuildKeyList(profs []ProviderProfile, orgDefaults map[string]string, scopeNames map[string]string) []CredentialKey {
+func BuildKeyList(profs []ProviderProfile, policy *CredentialPolicy, scopeNames map[string]string) []CredentialKey {
+	var orgDefaults map[string]string
+	if policy != nil {
+		orgDefaults = policy.OrgDefaults
+	}
 	byID := map[string]*CredentialKey{}
 	var order []string
 	for _, p := range profs {
@@ -80,7 +97,7 @@ func BuildKeyList(profs []ProviderProfile, orgDefaults map[string]string, scopeN
 	for _, id := range order {
 		k := byID[id]
 		sort.Strings(k.ProfileIDs)
-		k.UserSelectable = userKeySelectionAllowed(*k)
+		k.UserSelectable = userKeySelectionAllowed(policy, *k)
 		out = append(out, *k)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -119,10 +136,15 @@ func markPreselected(keys []CredentialKey) {
 }
 
 // userKeySelectionAllowed is the enforcement hook for org policy over key
-// selection: Fleet's allow_user_selection (GET /me/credentials/policy) and
-// the Cedar Credential family's "user-chosen keys forbidden" policy
-// (spec §5 WP12, §7a H2). No such policy is evaluated today, so every key
-// is selectable; this reports that truthfully rather than guessing. WP12
-// replaces this body with the Cedar evaluation; it is the one place
-// UserSelectable is decided.
-func userKeySelectionAllowed(CredentialKey) bool { return true }
+// selection (spec §5 WP12, §7a H2, §8 "a user override only if org
+// allow_user_selection is set").
+//
+// FAIL CLOSED: the contract's allow_user_selection defaults to false, so a
+// key is user-selectable only when an explicit policy says so. With no
+// policy (nil — the state of every install until WP05 fetches it) nothing
+// is selectable and the default key is used. WP12 adds the Cedar
+// Credential family's "user-chosen keys forbidden" evaluation here; it can
+// only narrow what this allows, never widen it.
+func userKeySelectionAllowed(policy *CredentialPolicy, _ CredentialKey) bool {
+	return policy != nil && policy.AllowUserSelection
+}

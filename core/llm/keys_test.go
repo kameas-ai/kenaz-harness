@@ -12,7 +12,7 @@ func TestBuildKeyList_ManyKeysPerProvider(t *testing.T) {
 		{ID: "anth", Kind: "anthropic", Cred: CredentialReference{Kind: "keychain", Locator: "kenaz-harness/anth"}},
 		{ID: "local-runtime", Kind: "ollama"},
 	}
-	keys := BuildKeyList(profs, map[string]string{"openai": "c-org"}, map[string]string{"c-org": "Acme", "c-team": "Research"})
+	keys := BuildKeyList(profs, &CredentialPolicy{AllowUserSelection: true, OrgDefaults: map[string]string{"openai": "c-org"}}, map[string]string{"c-org": "Acme", "c-team": "Research"})
 	byID := map[string]CredentialKey{}
 	for _, k := range keys {
 		byID[k.ID] = k
@@ -66,5 +66,27 @@ func TestCredentialSource_ZeroValueIsLocal(t *testing.T) {
 	}
 	if CredentialSource("partner").Valid() {
 		t.Fatal("unknown source accepted")
+	}
+}
+
+// TestBuildKeyList_SelectionFailsClosed: allow_user_selection defaults to
+// false, so with no policy, or a policy that does not allow it, no key is
+// user-selectable. The old hook returned true unconditionally.
+func TestBuildKeyList_SelectionFailsClosed(t *testing.T) {
+	profs := []ProviderProfile{
+		{ID: "mine", Kind: "openai", Cred: CredentialReference{Kind: "keychain", Locator: "kenaz-harness/mine"}},
+		{ID: "org-1", Kind: "openai", Cred: CredentialReference{Kind: "keychain", Source: CredSourceOrg, CredentialID: "c-org"}},
+	}
+	for name, pol := range map[string]*CredentialPolicy{"nil policy": nil, "explicit false": {}} {
+		for _, k := range BuildKeyList(profs, pol, nil) {
+			if k.UserSelectable {
+				t.Errorf("%s: %s is user-selectable", name, k.ID)
+			}
+		}
+	}
+	for _, k := range BuildKeyList(profs, &CredentialPolicy{AllowUserSelection: true}, nil) {
+		if !k.UserSelectable {
+			t.Errorf("explicit allow: %s not selectable", k.ID)
+		}
 	}
 }

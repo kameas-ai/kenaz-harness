@@ -361,16 +361,15 @@ binds one, and every reader below reports exactly what exists.
   tombstone, lockdown, `node_removed`, sign-out and org change →
   `Purge(FleetNamespaceOrg)`) and WP06 (synced user keys →
   `Put`/`Purge(FleetNamespaceUser)`).
-- `llm.BuildKeyList`'s `orgDefaults` and `scopeNames` arguments — the one
-  production caller (`views/llm.CredentialKeys`, behind
+- `llm.BuildKeyList`'s `policy` (`*llm.CredentialPolicy`) and `scopeNames`
+  arguments — the one production caller (`views/llm.CredentialKeys`, behind
   `LLM_ListCredentialKeys`) passes nil for both, so `CredentialKey.OrgDefault`
-  is never true and `ScopeName` is always empty; the Providers view falls
-  back to "Provided by your organization". **Owner:** WP05, which receives
-  the defaults (`GET /me/credentials/policy`) and org/team names.
-- `llm.userKeySelectionAllowed` returns true for every key: no policy is
-  evaluated, and `CredentialKey.UserSelectable` says so rather than
-  guessing. **Owner:** WP12 (Cedar Credential family, "user-chosen keys
-  forbidden") replaces its body.
+  is never true, `ScopeName` is always empty (the Providers view falls back
+  to "Provided by your organization") and — failing closed, since the
+  contract's `allow_user_selection` defaults to false — no key is
+  `UserSelectable`. **Owner:** WP05, which fetches the policy
+  (`GET /me/credentials/policy`) and org/team names; WP12 then narrows
+  `llm.userKeySelectionAllowed` further with the Cedar Credential family.
 - `writeSessionCredential` / `SessionModelConfig.credentialId`
   (`frontend/src/lib/sessionModelStash.ts`) — the per-chat key selection is
   persisted next to the chat's provider and model, but only the spec reaches
