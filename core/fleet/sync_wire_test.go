@@ -144,9 +144,9 @@ func TestSyncWire_ResponsesDecode(t *testing.T) {
 	}
 }
 
-// TestSyncWire_Int64LWWRejectedOnTheWire: Fleet has no int64 path (its
-// compatibility shim was dropped, kenaz-fleet PR #266), so an int64 lww_ts
-// in a response is malformed, not a legacy form to honour. Nothing local
+// TestSyncWire_Int64LWWRejectedOnTheWire: Fleet main has no int64 lww_ts
+// form (and no POST route) in any release, so an int64 lww_ts in a
+// response is malformed, not a legacy form to honour. Nothing local
 // holds an int64 form either (lwwTS is never persisted), so no decoder for
 // one exists.
 func TestSyncWire_Int64LWWRejectedOnTheWire(t *testing.T) {

@@ -128,10 +128,11 @@ type fleetErrorBody struct {
 // form. It is monotonic and directly comparable, and 0 means "nothing seen".
 //
 // On the wire it is RFC 3339 only, because Fleet's user_sync_state.lww_ts
-// column is TIMESTAMPTZ and Fleet has no int64 compatibility path (its
-// POST/int64 shim was dropped before release, kenaz-fleet PR #266, so
-// that pre-A2 builds could not upload without the H1 confirmation). A bare
-// JSON integer on the wire is rejected. Fleet's "nothing stored yet" answer
+// column is TIMESTAMPTZ. Fleet main routes only PUT and parses lww_ts as
+// RFC 3339 only: it has no POST route and no int64 form, in this or any
+// release, so a pre-A2 harness build cannot upload at all (which is what
+// lets the H1 confirmation be the only way settings first leave a device).
+// A bare JSON integer on the wire is rejected. Fleet's "nothing stored yet" answer
 // carries the zero time ("0001-01-01T00:00:00Z"), which decodes to 0.
 //
 // No int64 form survives anywhere locally: CategoryState.lwwTS is
@@ -260,8 +261,8 @@ type Syncer struct {
 	// (core/rpc/sync_upload_consent.go). nil means CLOSED: a Syncer with no
 	// gate never uploads, so no path (boot order, the first poll cycle, a
 	// debounced push fired before wiring finishes) can upload before the
-	// acknowledgement. Fleet has no other consent path: it dropped its
-	// pre-A2 compatibility shim for exactly this reason.
+	// acknowledgement. Fleet has no other consent path: Fleet main has no
+	// POST or int64 route a pre-A2 build could upload through.
 	gateMu     sync.RWMutex
 	uploadGate func() bool
 	// stopOnce guards close(stopCh). Stop is reachable from more than one

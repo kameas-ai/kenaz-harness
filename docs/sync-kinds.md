@@ -245,7 +245,9 @@ The wire is kenaz-fleet contract §2b: `PUT` with body
 `{"lww_ts": "<RFC 3339>", "payload": {…}}`, and
 `GET ?since=<RFC 3339>`, which answers 200 or 304. Before A2 the harness
 sent `POST` with an int64 `lww_ts`, so settings sync had never
-round-tripped. The contract test is `core/fleet/sync_wire_test.go`, run
+round-tripped. Fleet main has no `POST` route and no int64 `lww_ts` form
+(no compatibility path, in any release), so only an A2 or later harness
+can upload. The contract test is `core/fleet/sync_wire_test.go`, run
 against fixtures in `core/fleet/testdata/sync/` (see `PROVENANCE.md`).
 
 Because nothing had ever been uploaded, the first upload waits for a
