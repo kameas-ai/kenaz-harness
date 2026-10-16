@@ -36,14 +36,20 @@ var knownCodes = map[string]bool{
 const UnknownCode = "unknown_error"
 
 // zitadelID is the only error_description shape kept: Zitadel's message
-// IDs, e.g. "Errors.User.NotFound". Anything else is dropped.
-var zitadelID = regexp.MustCompile(`^Errors(\.[A-Za-z0-9]+){1,6}$`)
+// IDs, e.g. "Errors.User.NotFound". Each segment is letters only and starts
+// upper case, at most 32 characters, with at most 4 segments, so hex,
+// JWT-style and vendor tokens can't hide in a segment. Anything else is
+// dropped.
+var zitadelID = regexp.MustCompile(`^Errors(\.[A-Z][A-Za-z]{0,31}){1,4}$`)
+
+// maxDescLen caps a kept Zitadel ID.
+const maxDescLen = 64
 
 // Fields extracts RFC 6749 §5.2 `error` and `error_description` from body,
 // keeping only allowlisted values:
 //   - code is a known RFC code, UnknownCode for any other non-empty
 //     `error`, or "" when the body is not an OAuth error object;
-//   - desc is kept only if it is a Zitadel message ID (≤ 80 chars), else "".
+//   - desc is kept only if it is a Zitadel message ID (≤ 64 chars), else "".
 //
 // Nothing else from the body is ever returned.
 func Fields(body []byte) (code, desc string) {
@@ -58,7 +64,7 @@ func Fields(body []byte) (code, desc string) {
 	if knownCodes[e.Error] {
 		code = e.Error
 	}
-	if len(e.ErrorDescription) <= 80 && zitadelID.MatchString(e.ErrorDescription) {
+	if len(e.ErrorDescription) <= maxDescLen && zitadelID.MatchString(e.ErrorDescription) {
 		desc = e.ErrorDescription
 	}
 	return code, desc

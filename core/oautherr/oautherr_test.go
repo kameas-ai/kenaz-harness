@@ -26,16 +26,21 @@ func randomToken(t *testing.T) string {
 func TestFields_AllowlistOnly(t *testing.T) {
 	b32 := base32.StdEncoding.EncodeToString([]byte("secret-refresh-token-value"))
 	bypasses := map[string]string{
-		"stray JWT":           strayJWT(),
-		"random 40-char":      randomToken(t),
-		"colon-split":         "rt:AbCdEfGhIj:KlMnOpQrSt:UvWxYz0123",
-		"unequal chunks":      "AbCd EfGhIjK LmN OpQrStUvW XyZ",
-		"base32 split":        strings.Join([]string{b32[:8], b32[8:16], b32[16:24], b32[24:]}, " "),
-		"long prose + token":  "The refresh token you supplied could not be validated by the server: " + randomToken(t),
-		"url-encoded":         "tok%2Bab%2Fcd%3D",
-		"plain prose":         "The refresh token is expired",
-		"control chars":       `bad\u001b[31m client`,
-		"zitadel id + suffix": "Errors.User.NotFound " + randomToken(t),
+		"stray JWT":             strayJWT(),
+		"random 40-char":        randomToken(t),
+		"colon-split":           "rt:AbCdEfGhIj:KlMnOpQrSt:UvWxYz0123",
+		"unequal chunks":        "AbCd EfGhIjK LmN OpQrStUvW XyZ",
+		"base32 split":          strings.Join([]string{b32[:8], b32[8:16], b32[16:24], b32[24:]}, " "),
+		"long prose + token":    "The refresh token you supplied could not be validated by the server: " + randomToken(t),
+		"url-encoded":           "tok%2Bab%2Fcd%3D",
+		"plain prose":           "The refresh token is expired",
+		"control chars":         `bad\u001b[31m client`,
+		"zitadel id + suffix":   "Errors.User.NotFound " + randomToken(t),
+		"Errors + 72 hex":       "Errors." + strings.Repeat("a1b2c3d4", 9),
+		"Errors + JWT parts":    "Errors.eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w",
+		"Errors + ghp token":    "Errors.Token.ghp" + strings.Repeat("A1", 20),
+		"Errors + long segment": "Errors." + strings.Repeat("Ab", 20),
+		"Errors + 5 segments":   "Errors.A.B.C.D.E",
 	}
 	for name, d := range bypasses {
 		code, desc := Fields([]byte(`{"error":"invalid_grant","error_description":"` + d + `"}`))
@@ -43,7 +48,7 @@ func TestFields_AllowlistOnly(t *testing.T) {
 			t.Errorf("%s: got %q, %q; want invalid_grant with the description dropped", name, code, desc)
 		}
 	}
-	for _, id := range []string{"Errors.User.NotFound", "Errors.Token.Invalid", "Errors.App.NotExisting"} {
+	for _, id := range []string{"Errors.User.NotFound", "Errors.Token.Invalid", "Errors.App.NotExisting", "Errors.OIDCSession.RefreshTokenInvalid"} {
 		if _, desc := Fields([]byte(`{"error":"invalid_grant","error_description":"` + id + `"}`)); desc != id {
 			t.Errorf("Zitadel ID %q was dropped (%q)", id, desc)
 		}
