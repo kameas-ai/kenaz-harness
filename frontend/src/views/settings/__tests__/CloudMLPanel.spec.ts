@@ -106,6 +106,73 @@ describe('CloudMLPanel', () => {
     ]);
   });
 
+  describe('exclusions sit inside the notice, before any action button (legal, 2026-10-16)', () => {
+    const EXCL = {
+      exclusionPaths: ['hr/**'],
+      exclusionCommands: ['ssh'],
+      legacyExclusionNotes: ['Nothing from the HR share'],
+    };
+    const before = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const assertOrder = (wrapper: any, buttonSel: string) => {
+      const card = q(wrapper, 'cloud-ml-notice');
+      expect(card.exists()).toBe(true);
+      const excl = card.find('[data-testid="cloud-ml-exclusions"]');
+      const notes = card.find('[data-testid="cloud-ml-legacy-notes"]');
+      expect(excl.exists()).toBe(true);
+      expect(notes.exists()).toBe(true);
+      const firstButton = card.find(buttonSel);
+      expect(firstButton.exists()).toBe(true);
+      expect(before(excl.element, firstButton.element)).toBe(true);
+      expect(before(notes.element, firstButton.element)).toBe(true);
+      // Rendered once: not repeated below the card.
+      expect(wrapper.findAll('[data-testid="cloud-ml-exclusions"]').length).toBe(1);
+      expect(wrapper.findAll('[data-testid="cloud-ml-legacy-notes"]').length).toBe(1);
+    };
+
+    it('local (fallback) notice: after the notice text, before "Turn on Offload"', async () => {
+      const { wrapper } = mountWith(
+        status({
+          ...EXCL,
+          orgOffloadEnabled: true,
+          orgPolicy: 'member_choice',
+          noticeVersion: 3,
+          noticeText: 'plain',
+          notice: {
+            heading: 'Your organization has enabled workflow data offload',
+            intro: 'intro',
+            sections: [],
+            policyText: 'You decide.',
+            policy: 'member_choice',
+            actions: ['Turn on Offload', 'Not now'],
+          },
+        }),
+      );
+      await flushPromises();
+      const policy = q(wrapper, 'cloud-ml-notice-policy');
+      expect(before(policy.element, q(wrapper, 'cloud-ml-exclusions').element)).toBe(true);
+      assertOrder(wrapper, '[data-testid="cloud-ml-notice-action"]');
+    });
+
+    it('hub notice: after the body text, before the acknowledge button', async () => {
+      const { wrapper } = mountWith(
+        status({
+          ...EXCL,
+          orgOffloadEnabled: true,
+          orgPolicy: 'on',
+          noticeAckRequired: true,
+          noticeVersion: 3,
+          noticeText: 'Hub body',
+          noticeFromHub: true,
+          noticeItemId: 'ml_notice:o1:3',
+        }),
+      );
+      await flushPromises();
+      const text = q(wrapper, 'cloud-ml-notice-text');
+      expect(before(text.element, q(wrapper, 'cloud-ml-exclusions').element)).toBe(true);
+      assertOrder(wrapper, '[data-testid="cloud-ml-ack"]');
+    });
+  });
+
   it('shows no exclusions block when the org excludes nothing', async () => {
     const { wrapper } = mountWith(status({ effective: true, excludeBrowser: true }));
     await flushPromises();

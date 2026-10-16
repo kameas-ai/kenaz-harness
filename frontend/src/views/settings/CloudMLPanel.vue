@@ -37,6 +37,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MLStatus } from '@/lib/types';
+import CloudMLExclusions from './CloudMLExclusions.vue';
 
 /** Spec §5: the fixed harness line, verbatim. */
 const HARNESS_LINE =
@@ -109,17 +110,16 @@ function openDashboard() {
 }
 
 /**
- * WP05: the org's exclusions, read-only. Paths and command prefixes are
- * enforced on this device; legacy notes are the org's old free text and are
- * shown only (never matched). exclude_browser changes nothing here (the
- * harness sends no browser data), so it is not listed.
+ * WP05: the org's exclusions, read-only (CloudMLExclusions). Paths and
+ * command prefixes are enforced on this device; legacy notes are the org's
+ * old free text and are shown only (never matched). exclude_browser changes
+ * nothing here (the harness sends no browser data), so it is not listed.
+ * While the notice is shown they render inside its card, before any action
+ * button (legal, kameas-ai-11, 2026-10-16); otherwise on their own.
  */
 const exclusionPaths = computed(() => status.value?.exclusionPaths ?? []);
 const exclusionCommands = computed(() => status.value?.exclusionCommands ?? []);
 const legacyNotes = computed(() => status.value?.legacyExclusionNotes ?? []);
-const showExclusions = computed(
-  () => loaded.value && (exclusionPaths.value.length > 0 || exclusionCommands.value.length > 0),
-);
 
 function policyLabel(p: string): string {
   switch (p) {
@@ -294,6 +294,8 @@ function onOptInChange(ev: Event) {
             <strong>{{ s.label }}</strong> {{ s.text }}
           </p>
           <p v-if="localNotice.policyText" data-testid="cloud-ml-notice-policy">{{ localNotice.policyText }}</p>
+          <!-- Exclusions are part of the notice: shown before any action button. -->
+          <CloudMLExclusions :paths="exclusionPaths" :commands="exclusionCommands" :legacy-notes="legacyNotes" />
           <div class="flex gap-2">
             <button
               v-for="a in localNotice.actions"
@@ -314,6 +316,7 @@ function onOptInChange(ev: Event) {
             {{ status.noticeTitle }}
           </h3>
           <p class="whitespace-pre-wrap" data-testid="cloud-ml-notice-text">{{ status.noticeText }}</p>
+          <CloudMLExclusions :paths="exclusionPaths" :commands="exclusionCommands" :legacy-notes="legacyNotes" />
           <button
             type="button"
             class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -345,27 +348,13 @@ function onOptInChange(ev: Event) {
         </template>
       </div>
 
-      <div v-if="showExclusions"class="space-y-1 text-[12px]" data-testid="cloud-ml-exclusions">
-        <p>Your organization excludes:</p>
-        <ul class="list-disc pl-5">
-          <li v-for="p in exclusionPaths" :key="'p:' + p" data-testid="cloud-ml-exclusion-path">
-            files matching <code>{{ p }}</code>
-          </li>
-          <li v-for="c in exclusionCommands" :key="'c:' + c" data-testid="cloud-ml-exclusion-command">
-            commands starting with <code>{{ c }}</code>
-          </li>
-        </ul>
-        <p class="text-ink-muted">
-          These are checked on this device. Matching files and commands are never sent; only that a
-          tool ran, its outcome and timing.
-        </p>
-      </div>
-      <div v-if="loaded && legacyNotes.length" class="space-y-1 text-[12px] text-ink-muted" data-testid="cloud-ml-legacy-notes">
-        <p>Earlier notes from your organization (for information; not applied as patterns):</p>
-        <ul class="list-disc pl-5">
-          <li v-for="(n, i) in legacyNotes" :key="i" data-testid="cloud-ml-legacy-note">{{ n }}</li>
-        </ul>
-      </div>
+      <!-- Not inside the notice card: the exclusions stand on their own. -->
+      <CloudMLExclusions
+        v-if="loaded && !showNotice"
+        :paths="exclusionPaths"
+        :commands="exclusionCommands"
+        :legacy-notes="legacyNotes"
+      />
 
       <p class="text-[12px] text-ink-muted" data-testid="cloud-ml-harness-line">{{ HARNESS_LINE }}</p>
     </template>
