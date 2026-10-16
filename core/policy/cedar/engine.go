@@ -187,6 +187,14 @@ type PolicyFile struct {
 
 // Options configures a new Engine.
 type Options struct {
+	// DeviceKind is stamped on every request's context as
+	// `context.device_kind` unless the caller set it ("desktop" when
+	// empty; the phone facade passes "mobile"). Admins can then write
+	// device-specific rules (provider-credentials-client-01PCCLI01 H6.3).
+	// It is always present, so a policy reading it can't error, and an
+	// erroring forbid fails closed.
+	DeviceKind string
+
 	// DataDir is the harness data root. The engine reads policy files
 	// from filepath.Join(DataDir, PolicyDir). Required when LoadFromDisk
 	// is true; ignored otherwise (in-memory engines for tests).
@@ -511,6 +519,7 @@ func (e *Engine) Evaluate(
 		ps = cedar.NewPolicySet()
 	}
 	contextAttrs = populateFamilyContext(action, resource, contextAttrs)
+	contextAttrs = withDeviceKind(contextAttrs, e.opts.DeviceKind)
 	req := cedar.Request{
 		Principal: principal,
 		Action:    ActionUID(action),
@@ -646,6 +655,31 @@ const (
 	CtxKeySecretBudget          = "budget"
 	CtxKeySecretAgentKind       = "agent_kind"
 )
+
+// CtxKeyDeviceKind is `context.device_kind`: "desktop" | "mobile"
+// (Options.DeviceKind). Present on every request.
+const CtxKeyDeviceKind = "device_kind"
+
+// DeviceKindDesktop is the default Options.DeviceKind.
+const DeviceKindDesktop = "desktop"
+
+// withDeviceKind returns attrs with device_kind set, unless the caller
+// already set it. The caller's map is never mutated.
+func withDeviceKind(attrs map[cedar.String]cedar.Value, kind string) map[cedar.String]cedar.Value {
+	k := cedar.String(CtxKeyDeviceKind)
+	if _, set := attrs[k]; set {
+		return attrs
+	}
+	if kind == "" {
+		kind = DeviceKindDesktop
+	}
+	out := make(map[cedar.String]cedar.Value, len(attrs)+1)
+	for key, v := range attrs {
+		out[key] = v
+	}
+	out[k] = cedar.String(kind)
+	return out
+}
 
 // populateFamilyContext fills in context-attribute defaults for the
 // four WP01 resource families. Caller-provided keys ALWAYS win — this
