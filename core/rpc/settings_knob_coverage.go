@@ -348,6 +348,22 @@ func init() {
 			"(TestMLProducerWiring_SidecarGetsEffectiveRetention).",
 	)
 	knobcoverage.Register[settings.Settings](
+		"ShareModelCallTelemetryTextRevision",
+		"views/settings Settings.modelCallSharingEffective: the opt-in "+
+			"takes effect only while this equals ModelCallOptInTextRevision, "+
+			"so a changed opt-in text needs a new agreement before any "+
+			"further sharing (legal D82). Written only by "+
+			"SetModelCallTelemetry (TestSettings_ModelCallSharingRequiresCurrentTextRevision).",
+	)
+	knobcoverage.RegisterDeferred[settings.Settings](
+		"ShareModelCallTelemetryAcceptedAt",
+		"2026-10-16: consent evidence, not a control. When the user agreed "+
+			"to the current opt-in text (legal D82, B4a). It is written only by "+
+			"SetModelCallTelemetry and no behaviour branches on it by design. "+
+			"Owner: legal (kameas-ai-8f). Delete it if the evidence trail "+
+			"moves to the audit log.",
+	)
+	knobcoverage.Register[settings.Settings](
 		"ShareModelCallTelemetryWithFleet",
 		"views/settings applyModelCallSharing (every Set / "+
 			"SetModelCallTelemetry, and SetFleetOTLPPipeline at wiring) calls "+

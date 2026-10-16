@@ -8576,6 +8576,8 @@ export namespace settings {
 	    modelCallStatsPullDisabled?: boolean;
 	    modelCallRetentionDays?: number;
 	    shareModelCallTelemetryWithFleet?: boolean;
+	    shareModelCallTelemetryTextRevision?: number;
+	    shareModelCallTelemetryAcceptedAt?: string;
 	    mlLocalActivityRetentionDays?: number;
 	
 	    static createFrom(source: any = {}) {
@@ -8678,6 +8680,8 @@ export namespace settings {
 	        this.modelCallStatsPullDisabled = source["modelCallStatsPullDisabled"];
 	        this.modelCallRetentionDays = source["modelCallRetentionDays"];
 	        this.shareModelCallTelemetryWithFleet = source["shareModelCallTelemetryWithFleet"];
+	        this.shareModelCallTelemetryTextRevision = source["shareModelCallTelemetryTextRevision"];
+	        this.shareModelCallTelemetryAcceptedAt = source["shareModelCallTelemetryAcceptedAt"];
 	        this.mlLocalActivityRetentionDays = source["mlLocalActivityRetentionDays"];
 	    }
 	

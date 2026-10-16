@@ -538,7 +538,9 @@ func responseAttrs(resp llm.Response, cost llm.Cost, ttftNS int64) attrSet {
 		// No gen_ai.response.id here: it is stored-record only
 		// (storedResponseAttrs), and this attrSet's scope refuses it.
 		a.str("gen_ai.response.model", m.ResponseModel)
-		a.str("kenaz.provider.request_id", m.RequestID)
+		// No kenaz.provider.request_id here either: an identifier the
+		// provider assigns to a response is stored-record only (legal,
+		// 2026-10-16), like gen_ai.response.id.
 		a.str("kenaz.provider.system_fingerprint", m.SystemFingerprint)
 		a.str("kenaz.provider.upstream", m.UpstreamProvider)
 		a.posInt("kenaz.provider.tool_use_prompt_tokens", m.ToolUsePromptTokens)
@@ -559,6 +561,10 @@ func storedResponseAttrs(resp llm.Response) attrSet {
 	a := attrSet{scope: StoredRecord}
 	if m := resp.Meta; m != nil {
 		a.str("gen_ai.response.id", m.ResponseID)
+		// The provider's request-id header: the same "identifier a provider
+		// assigns to a response" class (legal, kameas-ai-11, 2026-10-16;
+		// /telemetry "Never sent").
+		a.str("kenaz.provider.request_id", m.RequestID)
 	}
 	return a
 }

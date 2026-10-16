@@ -43,8 +43,16 @@ type supRig struct {
 
 func newSupRig(t *testing.T, st authbroker.State, identity string) *supRig {
 	t.Helper()
+	return newSupRigFailing(t, st, identity, 0)
+}
+
+// newSupRigFailing is newSupRig with the first failFirst enroll attempts
+// failing. Armed BEFORE Run starts, so the boot enroll can't race it.
+func newSupRigFailing(t *testing.T, st authbroker.State, identity string, failFirst int32) *supRig {
+	t.Helper()
 	r := &supRig{auth: newFakeAuth(st), waits: make(chan time.Duration, 64), tick: make(chan time.Time)}
 	r.identity.Store(identity)
+	r.failNext.Store(failFirst)
 	r.sup = NewFleetEnrollSupervisor(FleetEnrollConfig{
 		Auth:     r.auth,
 		Identity: func() string { return r.identity.Load().(string) },
@@ -99,9 +107,10 @@ func TestSupervisor_SignedInAtBoot_EnrollsOnce_ThenOnlyReconciles(t *testing.T) 
 }
 
 func TestSupervisor_FailedEnroll_RetriesWithBackoffUntilSuccess(t *testing.T) {
-	r := newSupRig(t, authbroker.StateSignedIn, "alice|org|iss")
-	r.failNext.Store(3)
-	r.enrolls.Store(0)
+	// failNext is armed before the supervisor starts. Setting it after
+	// newSupRig raced the boot enroll: about 1 run in 200 the first attempt
+	// succeeded and no failure was recorded.
+	r := newSupRigFailing(t, authbroker.StateSignedIn, "alice|org|iss", 3)
 	var got []time.Duration
 	for i := 0; i < 4; i++ {
 		got = append(got, r.nextWait(t))
@@ -109,8 +118,7 @@ func TestSupervisor_FailedEnroll_RetriesWithBackoffUntilSuccess(t *testing.T) {
 			r.fire()
 		}
 	}
-	// The first attempt may have raced failNext.Store; accept either start,
-	// but the tail must show doubling then the success gap.
+	// Three failures then success: doubling backoff, then the reconcile gap.
 	if got[len(got)-1] != time.Minute {
 		t.Fatalf("waits = %v, want the last to be the reconcile gap after success", got)
 	}

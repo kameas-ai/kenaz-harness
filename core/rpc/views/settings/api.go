@@ -933,6 +933,17 @@ type Settings struct {
 	// model-call filter. Never content.
 	ShareModelCallTelemetryWithFleet bool `json:"shareModelCallTelemetryWithFleet,omitempty"`
 
+	// ShareModelCallTelemetryTextRevision is the revision of the opt-in
+	// text the user saw when they last turned sharing on (consent
+	// evidence; ModelCallOptInTextRevision is the current one), and
+	// ShareModelCallTelemetryAcceptedAt is when (RFC 3339 UTC). Both are
+	// written ONLY by SetModelCallTelemetry. Sharing takes effect only
+	// while the stored revision is the current one
+	// (Settings.modelCallSharingEffective), so a text change requires a new
+	// opt-in.
+	ShareModelCallTelemetryTextRevision int    `json:"shareModelCallTelemetryTextRevision,omitempty"`
+	ShareModelCallTelemetryAcceptedAt   string `json:"shareModelCallTelemetryAcceptedAt,omitempty"`
+
 	// ── Local ML activity (ml-producer-01MLPRD01 WP11, spec §12 A-16) ──
 
 	// MLLocalActivityRetentionDays is how long the local activity store
@@ -943,7 +954,20 @@ type Settings struct {
 	// "Local activity", written through
 	// Settings_SetMLLocalActivityRetention or a whole-settings Set.
 	MLLocalActivityRetentionDays int `json:"mlLocalActivityRetentionDays,omitempty"`
+
+	// gates:settings-struct-end — keep this marker the LAST line of the
+	// struct and add new fields ABOVE it. scripts/ci/gates_can_fail_test.go
+	// plants a probe field here, so it no longer re-anchors on whichever
+	// field happens to be last.
 }
+
+// ModelCallOptInTextRevision is the revision of the inline text under
+// "Share model-call telemetry with Fleet" (ModelCallTelemetryPanel.vue).
+// Revision 1 is the B4a text, legal D82 (kameas-ai-8f, 2026-10-16; counsel
+// review pending; a counsel change ships as revision 2). Bump it
+// whenever that text changes, so earlier opt-ins stop taking effect until
+// the user agrees to the new wording.
+const ModelCallOptInTextRevision = 1
 
 // ModelCallTelemetrySettings is the wire shape of the three model-call
 // telemetry settings (llm-call-telemetry-01LLMTEL01 WP02).

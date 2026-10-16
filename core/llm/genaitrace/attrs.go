@@ -59,7 +59,8 @@ const (
 // never set on a span — attrSet refuses it on one. Those are the provider
 // stats-pull keys (they land after the span has ended) and
 // gen_ai.response.id (Fleet/counsel D32: never on any span; Instrument
-// hands it to the record directly).
+// hands it to the record directly), and kenaz.provider.request_id, for the
+// same reason (legal, 2026-10-16).
 const StoredRecord = "stored record"
 
 // AttrType is the OTel attribute value type.
@@ -203,8 +204,8 @@ var SpanAttributes = []AttrSpec{
 		Doc: "Upstream-native completion tokens from the OpenRouter generation-stats pull (native_tokens_completion)"},
 	{Key: "kenaz.provider.native_reasoning_tokens", Type: TypeInt, Min: 0, Max: maxInt, Spans: storedOnly,
 		Doc: "Upstream-native reasoning tokens from the OpenRouter generation-stats pull (native_tokens_reasoning)"},
-	{Key: "kenaz.provider.request_id", Type: TypeString, Class: ClassID, Spans: chatOnly,
-		Doc: "Provider request-id response header (Anthropic request-id, OpenAI x-request-id, Azure apim-request-id)"},
+	{Key: "kenaz.provider.request_id", Type: TypeString, Class: ClassID, Spans: storedOnly,
+		Doc: "Provider request-id response header (Anthropic request-id, OpenAI x-request-id, Azure apim-request-id). Stored record only: an identifier a provider assigns to a response, which /telemetry and SA §3.7.2 promise is never sent (legal, kameas-ai-11, 2026-10-16)"},
 	{Key: "kenaz.provider.system_fingerprint", Type: TypeString, Class: ClassID, Spans: chatOnly,
 		Doc: "OpenAI-family system_fingerprint"},
 	{Key: "kenaz.provider.tool_use_prompt_tokens", Type: TypeInt, Min: 0, Max: maxInt, Spans: chatOnly,
