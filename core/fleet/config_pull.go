@@ -9,13 +9,15 @@
 //   - 200 → verify signature → apply each section → ACK → persist
 //   - Signature failure → hard-reject; previous applied bundle is kept
 //   - Backoff on error: 5 / 15 / 60 min ceiling
-//   - Disk cache: <DataDir>/fleet/bundle.json + bundle_checksum.txt
+//   - Disk cache: <DataDir>/fleet/bundle.json (the response body as
+//     received, re-verified on Start) + bundle_id.txt + bundle_checksum.txt
 //
 // (fleet-config-pull-01NDFSEX10 WP02)
 package fleet
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -229,8 +231,10 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 	// never-started from running instead of blocking forever.
 	p.done = make(chan struct{})
 
-	// Restore state from disk cache.
-	if id, cs, err := loadBundleState(p.dataDir); err == nil {
+	// Restore state from disk cache. The cached envelope is re-verified
+	// first (signed-bundle-bytes-01SBBYT01 WP02); a cache that fails to
+	// verify is discarded and restores nothing.
+	if id, cs, _, err := restoreBundleCache(p.dataDir, FleetSigningKeys()); err == nil {
 		p.mu.Lock()
 		p.lastAppliedID = id
 		p.checksum = cs
@@ -568,6 +572,13 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 
 	// Persist state to disk only on full success.
 	if len(applyErrs) == 0 {
+		// The cache is the response body exactly as received: the v2
+		// envelope (re-verified on Start), or the legacy body from an older
+		// Fleet (read through the legacy decoder, then replaced by the next
+		// successful v2 pull — spec §6 R3).
+		if saveErr := saveBundleCache(p.dataDir, body); saveErr != nil {
+			log.Printf("fleet: save bundle cache: %v", saveErr)
+		}
 		if saveErr := saveBundleState(p.dataDir, b.BundleID, newChecksum); saveErr != nil {
 			log.Printf("fleet: save bundle state: %v", saveErr)
 		}
@@ -655,6 +666,90 @@ func bundleIDPath(dataDir string) string {
 // bundleChecksumPath returns the path to the last-seen bundle checksum.
 func bundleChecksumPath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", "bundle_checksum.txt")
+}
+
+// bundleCachePath returns the path to the cached config response body: the
+// v2 envelope bytes as received (or, from an older Fleet, the legacy body).
+func bundleCachePath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "bundle.json")
+}
+
+// saveBundleCache atomically persists the received response body.
+func saveBundleCache(dataDir string, body []byte) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		return fmt.Errorf("fleet: mkdir bundle cache: %w", err)
+	}
+	return atomicWriteFile(bundleCachePath(dataDir), string(body))
+}
+
+// discardBundleCache removes the cached body and the state derived from it,
+// so a cache that failed verification restores nothing now or next launch.
+func discardBundleCache(dataDir string) {
+	for _, path := range []string{bundleCachePath(dataDir), bundleIDPath(dataDir), bundleChecksumPath(dataDir)} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("fleet: discard bundle cache: %v", err)
+		}
+	}
+}
+
+// restoreBundleCache recovers (lastAppliedID, checksum) for Start, verifying
+// the cached body before trusting anything derived from it (spec §4.4):
+//
+//   - bundle.json is a v2 envelope → VerifyEnvelope (signature + key_id
+//     cross-check; no monotonic guard — there is nothing to compare with);
+//     id and checksum come from the verified P. vb is returned for the
+//     decode report (WP03).
+//   - bundle.json is a legacy body (an older Fleet answered last) → read
+//     once through the legacy decoder + VerifyWithKeySet (spec §6 R3); it
+//     is replaced by the next successful pull.
+//   - either fails → the cache is discarded (same as a corrupt cache):
+//     (0, "", nil, nil).
+//   - no bundle.json → a pre-v2 install that only ever wrote bundle_id.txt
+//     and bundle_checksum.txt: those are restored as before, once; the next
+//     successful pull writes the envelope.
+func restoreBundleCache(dataDir string, keys []ed25519.PublicKey) (int64, string, *VerifiedBundle, error) {
+	if dataDir == "" {
+		return 0, "", nil, nil
+	}
+	raw, err := os.ReadFile(bundleCachePath(dataDir))
+	if errors.Is(err, os.ErrNotExist) {
+		id, cs, lerr := loadBundleState(dataDir)
+		return id, cs, nil, lerr
+	}
+	discard := func(why error) (int64, string, *VerifiedBundle, error) {
+		logging.L().Warn("fleet.config_poller.cache_discarded", "reason", why.Error())
+		discardBundleCache(dataDir)
+		return 0, "", nil, nil
+	}
+	if err != nil {
+		return discard(err)
+	}
+	format, err := envelopeFormat(raw)
+	if err != nil {
+		return discard(fmt.Errorf("parse cached bundle: %w", err))
+	}
+	switch format {
+	case BundleEnvelopeFormatV2:
+		vb, verr := VerifyEnvelopeBytes(raw, keys)
+		if verr != nil {
+			return discard(verr)
+		}
+		return vb.Bundle.BundleID, vb.Checksum(), vb, nil
+	case "":
+		var b Bundle
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return discard(fmt.Errorf("parse cached legacy bundle: %w", err))
+		}
+		if verr := VerifyWithKeySet(&b, keys, 0); verr != nil {
+			return discard(verr)
+		}
+		return b.BundleID, hexChecksumOf(raw), nil, nil
+	default:
+		return discard(fmt.Errorf("cached bundle has unsupported format %q", format))
+	}
 }
 
 // loadBundleState reads (lastAppliedID, checksum) from disk. Returns (0, "", nil)
