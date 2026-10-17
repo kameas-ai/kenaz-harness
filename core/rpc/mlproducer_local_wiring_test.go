@@ -249,11 +249,27 @@ func TestMLProducerWiring_SidecarGetsEffectiveRetention(t *testing.T) {
 	if got := retention(); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=3650" {
 		t.Fatalf("3650 → %v", got)
 	}
+	var inheritedOver []string
+	for _, kv := range sp.Env([]string{activity.RetentionEnvVar + "=7"}) {
+		if strings.HasPrefix(kv, activity.RetentionEnvVar+"=") {
+			inheritedOver = append(inheritedOver, kv)
+		}
+	}
+	if len(inheritedOver) != 1 || inheritedOver[0] != activity.RetentionEnvVar+"=3650" {
+		t.Fatalf("readable setting over an inherited value → %v, want only =3650", inheritedOver)
+	}
 	if err := os.WriteFile(store.Path(), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got := retention(); len(got) != 0 {
 		t.Fatalf("unreadable setting → %v, want the variable omitted", got)
+	}
+	// Review nit 2 (#429): a value inherited from the harness's own
+	// environment must not reach the child in its place.
+	for _, kv := range sp.Env([]string{"PATH=/bin", activity.RetentionEnvVar + "=7"}) {
+		if strings.HasPrefix(kv, activity.RetentionEnvVar+"=") {
+			t.Fatalf("unreadable setting: child env carries inherited %q", kv)
+		}
 	}
 	if got := activityRetentionEnv(nil); got != nil {
 		t.Fatalf("no reader → %v", got)
