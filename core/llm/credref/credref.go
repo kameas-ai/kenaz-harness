@@ -23,6 +23,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
@@ -52,71 +54,118 @@ func New(b secrets.Backend) *Resolver { return &Resolver{backend: b} }
 // secret.Secret (Use/Destroy/ReferenceID) so the registry pipeline can
 // consume it without a separate adapter, and it exposes Bytes() for
 // callers that want a snapshot view.
+//
+// The key bytes live behind a pointer (credState) so a Cred value can be
+// copied — and so carry value-receiver String / GoString / Format /
+// LogValue methods without go vet's copylocks objection — and so that
+// even reflection-driven rendering that bypasses those methods (fmt on an
+// unexported field of an enclosing struct) never reaches the bytes. Every
+// formatting path renders RedactedForm; logging a Cred is still a
+// violation of scripts/ci/check-no-credential-in-fleet-logs.sh — the
+// redaction is a backstop, not permission.
 type Cred struct {
-	mu        sync.Mutex
-	buf       []byte
+	s *credState
+}
+
+type credState struct {
+	mu sync.Mutex
+	// box is one more pointer hop: fmt's bad-verb path (%s on an
+	// unexported field of an enclosing struct) dereferences the
+	// *credState once and prints its fields, but renders a nested
+	// pointer as an address, so the key bytes are never reached.
+	box       *keyBox
 	refID     string
 	destroyed bool
 }
+
+type keyBox struct{ b []byte }
+
+// RedactedForm is what every fmt verb and slog handler renders for a Cred.
+const RedactedForm = "credref.Cred(redacted)"
+
+func (c *Cred) state() *credState {
+	if c == nil {
+		return nil
+	}
+	return c.s
+}
+
+// String implements fmt.Stringer; it never returns key material.
+func (Cred) String() string { return RedactedForm }
+
+// GoString implements fmt.GoStringer (%#v); it never returns key material.
+func (Cred) GoString() string { return RedactedForm }
+
+// Format implements fmt.Formatter so every verb — %v, %+v, %#v, %s, %q,
+// %x, %X, %d … — renders RedactedForm, never the buffer.
+func (Cred) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, RedactedForm) }
+
+// LogValue implements slog.LogValuer so text and JSON handlers render
+// RedactedForm instead of reflecting over the struct.
+func (Cred) LogValue() slog.Value { return slog.StringValue(RedactedForm) }
 
 // Bytes returns the underlying buffer. After Destroy / Zeroize it
 // returns nil. The returned slice aliases the buffer; callers MUST NOT
 // retain it past the next Destroy call.
 func (c *Cred) Bytes() []byte {
-	if c == nil {
+	st := c.state()
+	if st == nil {
 		return nil
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.destroyed {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.destroyed {
 		return nil
 	}
-	return c.buf
+	return st.box.b
 }
 
 // Use grants fn a borrowed view of the credential bytes.
 func (c *Cred) Use(fn func([]byte) error) error {
-	if c == nil {
+	st := c.state()
+	if st == nil {
 		return errors.New("credref: nil Cred")
 	}
 	if fn == nil {
 		return errors.New("credref: nil Use closure")
 	}
-	c.mu.Lock()
-	if c.destroyed {
-		c.mu.Unlock()
+	st.mu.Lock()
+	if st.destroyed {
+		st.mu.Unlock()
 		return secret.ErrSecretDestroyed
 	}
-	buf := c.buf
-	c.mu.Unlock()
+	buf := st.box.b
+	st.mu.Unlock()
 	return fn(buf)
 }
 
 // Destroy zeroizes the underlying buffer and releases the handle.
 // Idempotent.
 func (c *Cred) Destroy() {
-	if c == nil {
+	st := c.state()
+	if st == nil {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.destroyed {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.destroyed {
 		return
 	}
-	for i := range c.buf {
-		c.buf[i] = 0
+	for i := range st.box.b {
+		st.box.b[i] = 0
 	}
-	c.buf = nil
-	c.destroyed = true
+	st.box.b = nil
+	st.destroyed = true
 }
 
 // ReferenceID returns the redaction-safe id from the originating
 // CredentialReference.
 func (c *Cred) ReferenceID() string {
-	if c == nil {
+	st := c.state()
+	if st == nil {
 		return ""
 	}
-	return c.refID
+	return st.refID
 }
 
 // Zeroize is an alias for (*Cred).Destroy that tolerates a nil pointer.
@@ -265,9 +314,10 @@ func (r *Resolver) Resolve(ctx context.Context, profileID string, lref llm.Crede
 		}
 	}
 	defer s.Destroy()
-	c := &Cred{refID: s.ReferenceID()}
+	st := &credState{box: &keyBox{}, refID: s.ReferenceID()}
+	c := &Cred{s: st}
 	if useErr := s.Use(func(value []byte) error {
-		c.buf = append([]byte(nil), value...)
+		st.box.b = append([]byte(nil), value...)
 		return nil
 	}); useErr != nil {
 		return nil, &llm.ErrCredentialResolution{
