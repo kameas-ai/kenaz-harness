@@ -1801,15 +1801,13 @@ func (a *API) MLLocalActivityRetentionDays() (int, error) {
 // SetMLLocalActivityRetentionDays validates and persists the local ML
 // activity retention (0 = default). The pruner reads it on its next pass.
 func (a *API) SetMLLocalActivityRetentionDays(_ context.Context, days int) error {
-	s, err := a.store.LoadAll()
-	if err != nil {
-		return err
-	}
-	s.MLLocalActivityRetentionDays = days
-	if err := validateMLLocalActivityFields(s); err != nil {
-		return err
-	}
-	return a.store.SaveAll(s)
+	// Under the store lock (Update), never a bare LoadAll → SaveAll: a
+	// stale copy written back here would revert a concurrent Update, e.g.
+	// a model-call opt-out (legal D82) or a settings-sync toggle.
+	return Update(a.store, func(s *Settings) error {
+		s.MLLocalActivityRetentionDays = days
+		return validateMLLocalActivityFields(*s)
+	})
 }
 
 // ModelCallRetentionDays reads the stored retention setting fresh (the
