@@ -331,6 +331,13 @@ func (r *Recorder) Flush(ctx context.Context) error {
 	}
 }
 
+// isClosed reports whether Close has run (a brief closeMu read).
+func (r *Recorder) isClosed() bool {
+	r.closeMu.RLock()
+	defer r.closeMu.RUnlock()
+	return r.closed
+}
+
 // Close stops accepting work, drains the queue and stops the worker.
 func (r *Recorder) Close() {
 	r.closeMu.Lock()
@@ -716,27 +723,43 @@ func (r *Recorder) DeleteLocal(ctx context.Context) error {
 	if err := r.Flush(ctx); err != nil {
 		return err
 	}
-	// Held for the whole delete: Close (and so the owner's close of the
-	// local store) waits for it, and a closed recorder opens nothing.
-	r.closeMu.RLock()
-	defer r.closeMu.RUnlock()
-	if r.closed {
+	if r.isClosed() {
 		return ErrRecorderClosed
 	}
 	var errs []error
 	// The user asked for the file's contents to go: with no store open
 	// yet, open it now (not the worker's throttled background retry).
-	s := r.loc()
-	if s == nil && r.cfg.OpenLocal != nil {
-		if opened, err := r.cfg.OpenLocal(); err != nil {
+	// The open runs OUTSIDE closeMu: activity.Open retries a locked file
+	// for seconds, and a read lock held across it would stall a pending
+	// Close — and, since a waiting writer blocks new readers, every
+	// enqueue (documented never to block) behind that Close.
+	var opened *activity.Store
+	if r.loc() == nil && r.cfg.OpenLocal != nil {
+		o, err := r.cfg.OpenLocal()
+		if err != nil {
 			errs = append(errs, fmt.Errorf("mlproducer: open local activity store: %w", err))
-		} else if r.localStore.CompareAndSwap(nil, opened) {
-			s = opened
 		} else {
-			_ = opened.Close() // a background reopen won
-			s = r.loc()
+			opened = o
 		}
 	}
+	// Held for the rest of the delete: Close (and so the owner's close of
+	// the local store) waits for it, and a closed recorder installs
+	// nothing.
+	r.closeMu.RLock()
+	defer r.closeMu.RUnlock()
+	if r.closed {
+		// Close won while the open ran: the owner has closed (or is
+		// about to close) the store it held, so the fresh handle must
+		// not outlive the recorder.
+		if opened != nil {
+			_ = opened.Close()
+		}
+		return ErrRecorderClosed
+	}
+	if opened != nil && !r.localStore.CompareAndSwap(nil, opened) {
+		_ = opened.Close() // another open (a background reopen) won: use theirs
+	}
+	s := r.loc()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ship = newView(true)

@@ -24,9 +24,13 @@ const ddlDocHeader = `-- Local ML activity store: <dataDir>/ml/activity.db (ml-p
 -- Connections: journal_mode=WAL, busy_timeout=5000. The engine is always handed the
 -- absolute path in KENAZ_ML_ACTIVITY_DB (a non-standard data dir uses
 -- <dataDir>/ml-activity/activity.db); it never derives one. KENAZ_ML_ACTIVITY_RETENTION_DAYS
--- carries the effective local retention (1..3650, default 90), read at each spawn and
--- omitted when the harness cannot read the setting; a change applies at the engine's
--- next start. The engine prunes ml_predictions / ml_events to it.
+-- is read once at spawn: a decimal integer 1..3650 (whitespace trimmed) prunes
+-- ml_predictions (created_at) and ml_events (ts) older than that many days; "hold"
+-- (case-insensitive) means do not prune this run; missing, empty or any other value
+-- means do not prune, with one warning. Never clamped; no 90-day default engine-side.
+-- The engine never prunes events / tasks. The harness sends the effective local
+-- retention (the last value it read successfully when a read fails) and "hold" when it
+-- has none; a change applies at the engine's next start.
 `
 
 func renderDDLDoc() string {

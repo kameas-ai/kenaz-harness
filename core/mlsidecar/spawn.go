@@ -51,8 +51,8 @@ type ProcessSpawner struct {
 	EnvFunc func() []string
 	// ScrubEnv names variables never inherited from the harness's own
 	// environment: the child sees them only when ExtraEnv / EnvFunc set
-	// them. For a harness-owned value whose read can fail (EnvFunc then
-	// omits it), so a stray export never stands in for the setting.
+	// them. For a harness-owned value, so a stray export never stands in
+	// for the setting (or sits beside the harness's own entry).
 	ScrubEnv []string
 }
 

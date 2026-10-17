@@ -6849,6 +6849,8 @@ export namespace rpc {
 	    retentionDays: number;
 	    effectiveRetentionDays: number;
 	    sharingWithFleet: boolean;
+	    retentionBlocked: boolean;
+	    lastGoodRetentionDays: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new MLLocalActivityView(source);
@@ -6863,6 +6865,8 @@ export namespace rpc {
 	        this.retentionDays = source["retentionDays"];
 	        this.effectiveRetentionDays = source["effectiveRetentionDays"];
 	        this.sharingWithFleet = source["sharingWithFleet"];
+	        this.retentionBlocked = source["retentionBlocked"];
+	        this.lastGoodRetentionDays = source["lastGoodRetentionDays"];
 	    }
 	}
 	export class ShellReadFileResult {
