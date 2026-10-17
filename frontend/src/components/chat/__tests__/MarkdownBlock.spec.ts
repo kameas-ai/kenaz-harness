@@ -15,8 +15,8 @@
  * Mermaid and KaTeX are lazy-imported; tests that cover them mock the
  * dynamic import at the module level.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mount, flushPromises } from '@vue/test-utils';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils';
 import MarkdownBlock from '@/components/rendering/MarkdownBlock.vue';
 import * as sanitizeModule from '@/lib/markdown/sanitize';
 
@@ -44,6 +44,16 @@ vi.mock('mermaid', () => ({
 }));
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+
+// Unmount every wrapper after each test, and let any in-flight async
+// upgrade (dynamic imports of CodeBlock/FilenameChip/KaTeX) settle first,
+// so nothing in MarkdownBlock runs after the environment is torn down.
+enableAutoUnmount(afterEach);
+afterEach(async () => {
+  await vi.dynamicImportSettled();
+  await flushPromises();
+});
 
 describe('MarkdownBlock (rendering)', () => {
   beforeEach(() => {

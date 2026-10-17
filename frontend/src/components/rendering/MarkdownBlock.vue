@@ -182,6 +182,17 @@ const mountedApps: App[] = [];
 // in flight, a late app.mount() would run against a torn-down document.
 let disposed = false;
 
+/**
+ * True once this instance can no longer touch the DOM: it was unmounted,
+ * or the DOM environment itself is gone (e.g. a test runner tore it down
+ * underneath a still-mounted component). Every async upgrade step
+ * re-checks this after each `await`, immediately before mutating the DOM
+ * or calling createApp/mount.
+ */
+function isTornDown(): boolean {
+  return disposed || typeof window === 'undefined' || typeof document === 'undefined';
+}
+
 function unmountAll() {
   for (const app of mountedApps) {
     try {
@@ -198,6 +209,8 @@ async function upgradeCodeBlocks(root: HTMLElement) {
   if (!nodes.length) return;
 
   for (const node of nodes) {
+    // Re-check per node: the previous iteration awaited an import.
+    if (isTornDown()) return;
     const lang = node.getAttribute('data-lang') ?? '';
     const b64 = node.getAttribute('data-source-b64') ?? '';
     let source = '';
@@ -242,7 +255,7 @@ async function upgradeCodeBlocks(root: HTMLElement) {
       };
     }
 
-    if (disposed) return;
+    if (isTornDown()) return;
     const app = createApp(componentDef, componentProps);
     app.mount(host);
     mountedApps.push(app);
@@ -295,6 +308,7 @@ async function upgradeMathBlocks(root: HTMLElement) {
     import('katex/dist/katex.min.css'),
   ]);
   const katex = katexModule.default;
+  if (isTornDown()) return;
 
   for (const node of blockNodes) {
     try {
@@ -448,7 +462,7 @@ async function upgradeMentions(root: HTMLElement) {
     for (const node of fileNodes) {
       const path = node.getAttribute('data-path') ?? '';
       if (!path) continue;
-      if (disposed) return;
+      if (isTornDown()) return;
       const host = document.createElement('span');
       node.replaceWith(host);
       const app = createApp(FilenameChip, { path });
@@ -458,6 +472,7 @@ async function upgradeMentions(root: HTMLElement) {
   }
 
   if (artifactNodes.length) {
+    if (isTornDown()) return;
     // Inline lightweight artifact chip — opens the artifact modal via
     // a custom event the host MessageBubble already handles.
     for (const node of artifactNodes) {
@@ -501,7 +516,7 @@ function upgradeTables(root: HTMLElement) {
 }
 
 async function runUpgrades() {
-  if (disposed) return;
+  if (isTornDown()) return;
   const root = containerRef.value;
   if (!root) return;
   unmountAll();
@@ -511,20 +526,36 @@ async function runUpgrades() {
   // exotic test environments). The walker only mutates text nodes.
   injectMentionPlaceholders(root);
   await upgradeMathBlocks(root);
+  if (isTornDown()) return;
   await upgradeCodeBlocks(root);
+  if (isTornDown()) return;
   await upgradeMentions(root);
+}
+
+/**
+ * Fire-and-forget entry point for the lifecycle hooks. Waits for the
+ * v-html commit, then upgrades. A failure after teardown is expected
+ * noise (the DOM is gone) and is dropped; any other failure is logged
+ * rather than escaping as an unhandled rejection.
+ */
+async function scheduleUpgrades(): Promise<void> {
+  try {
+    await nextTick();
+    await runUpgrades();
+  } catch (err) {
+    if (isTornDown()) return;
+    console.warn('[MarkdownBlock] post-render upgrade failed', err);
+  }
 }
 
 // Run upgrades whenever html changes (which fires on every text update).
 // flush: 'post' ensures the v-html DOM update has committed before we walk.
-watch(html, async () => {
-  await nextTick();
-  await runUpgrades();
+watch(html, () => {
+  void scheduleUpgrades();
 }, { flush: 'post' });
 
-onMounted(async () => {
-  await nextTick();
-  await runUpgrades();
+onMounted(() => {
+  void scheduleUpgrades();
 });
 
 onBeforeUnmount(() => {
