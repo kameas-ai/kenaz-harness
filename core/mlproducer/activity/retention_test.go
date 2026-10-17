@@ -112,9 +112,9 @@ func TestPruner_FirstPassReadFailsDeletesNothing(t *testing.T) {
 }
 
 // (d) Three consecutive failed passes, or more than 24 h since the last
-// good read, flip Blocked; once blocked the pruner deletes nothing even
-// with a last-good value; a good read clears it. The log carries counts
-// only.
+// good read, flip Blocked; once blocked the pruner KEEPS pruning to the
+// last good value (the member's own choice); a good read clears it. The
+// log carries counts only.
 func TestRetention_BlockedThresholds(t *testing.T) {
 	s := openAt(t, Path(t.TempDir()))
 	ctx := context.Background()
@@ -137,7 +137,7 @@ func TestRetention_BlockedThresholds(t *testing.T) {
 	if st, _ := s.Stats(ctx); st.Events != 0 || st.Tasks != 0 {
 		t.Fatalf("rows after an unblocked failed pass = %+v; want pruned to the last good 7 days", st)
 	}
-	// The third failure blocks: from then on nothing is deleted.
+	// The third failure blocks, and the last good window still applies.
 	if _, err := s.Commit(ctx, sampleWrite(clk.now().Add(-30*24*time.Hour).UnixMilli(), "agent-bbbbbbbbbbbbbbbb")); err != nil {
 		t.Fatal(err)
 	}
@@ -145,11 +145,11 @@ func TestRetention_BlockedThresholds(t *testing.T) {
 	if h := r.Health(); !h.Blocked || h.ConsecutiveFailedPasses != 3 {
 		t.Fatalf("after 3 failed passes: %+v; want blocked", h)
 	}
-	if ev, tk, err := p.PruneOnce(ctx); err != ErrRetentionUnreadable || ev != 0 || tk != 0 {
-		t.Fatalf("blocked PruneOnce = %d/%d, %v; want nothing deleted", ev, tk, err)
+	if st, _ := s.Stats(ctx); st.Events != 0 || st.Tasks != 0 {
+		t.Fatalf("rows after a blocked pass = %+v; want pruned to the last good 7 days", st)
 	}
-	if st, _ := s.Stats(ctx); st.Events != 2 || st.Tasks != 1 {
-		t.Fatalf("rows while blocked = %+v; want the second write kept", st)
+	if h := r.Health(); !h.HaveGood || h.LastGoodDays != 7 {
+		t.Fatalf("health = %+v; want last good 7", h)
 	}
 	out := logs.String()
 	if !strings.Contains(out, "mlproducer.activity.retention_blocked") || !strings.Contains(out, `"consecutive_failures":3`) || !strings.Contains(out, `"hours_since_last_good":0`) {
@@ -186,5 +186,28 @@ func TestRetention_BlockedThresholds(t *testing.T) {
 	clk.advance(BlockedAfter + time.Minute)
 	if h := never.Health(); !h.Blocked || h.HaveGood {
 		t.Fatalf("never-good after 24h: %+v; want blocked", h)
+	}
+}
+
+// Blocked with no last-good value: every pass deletes nothing.
+func TestPruner_BlockedWithoutLastGoodDeletesNothing(t *testing.T) {
+	s := openAt(t, Path(t.TempDir()))
+	ctx := context.Background()
+	clk := &clock{t: time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)}
+	if _, err := s.Commit(ctx, sampleWrite(clk.now().Add(-200*24*time.Hour).UnixMilli(), "agent-ffffffffffffffff")); err != nil {
+		t.Fatal(err)
+	}
+	p := NewPruner(s, (&flakyRetention{err: errSettingsSecret}).read, clk.now, slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+	for i := 0; i < 4; i++ {
+		clk.advance(13 * time.Hour)
+		if ev, tk, err := p.PruneOnce(ctx); err != ErrRetentionUnreadable || ev != 0 || tk != 0 {
+			t.Fatalf("pass %d = %d/%d, %v; want skipped", i, ev, tk, err)
+		}
+	}
+	if h := p.Retention().Health(); !h.Blocked || h.HaveGood {
+		t.Fatalf("health = %+v; want blocked with no last good", h)
+	}
+	if st, _ := s.Stats(ctx); st.Events != 2 || st.Tasks != 1 {
+		t.Fatalf("rows while blocked with no last good = %+v; want kept", st)
 	}
 }

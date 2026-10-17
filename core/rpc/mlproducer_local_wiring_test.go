@@ -210,8 +210,8 @@ func TestMLProducerWiring_UnreadableRetentionSkipsPrune(t *testing.T) {
 	if _, err := a.MLLocalActivity(ctx); err == nil {
 		t.Fatal("status with an unreadable setting returned no error")
 	}
-	// (d) Three consecutive failed passes: the readout flags it (with the
-	// last good values) and the pruner deletes nothing.
+	// (d) Three consecutive failed passes: the readout flags it with the
+	// last good window the pruner is still applying.
 	for i := 0; i < 2; i++ {
 		_, _, _ = w.pruner.PruneOnce(ctx)
 	}
@@ -219,14 +219,14 @@ func TestMLProducerWiring_UnreadableRetentionSkipsPrune(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status once blocked: %v; want the guard, not an error", err)
 	}
-	if !v.RetentionBlocked || v.RetentionDays != 3650 || v.EffectiveRetentionDays != 3650 || !v.Available || v.Events != 1 {
+	if !v.RetentionBlocked || v.LastGoodRetentionDays != 3650 || v.RetentionDays != 3650 || v.EffectiveRetentionDays != 3650 || !v.Available || v.Events != 1 {
 		t.Fatalf("status once blocked = %+v; want RetentionBlocked with the last good 3650", v)
 	}
 	// A good read clears it.
 	if err := os.WriteFile(store.Path(), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if v, err := a.MLLocalActivity(ctx); err != nil || v.RetentionBlocked {
+	if v, err := a.MLLocalActivity(ctx); err != nil || v.RetentionBlocked || v.LastGoodRetentionDays != 0 {
 		t.Fatalf("status once readable = %+v, %v; want not blocked", v, err)
 	}
 }
@@ -271,6 +271,17 @@ func TestMLProducerWiring_UnreadableFromBootSkipsPruneAndStripsEnv(t *testing.T)
 	}
 	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 1 || st.Tasks != 1 {
 		t.Fatalf("rows after the skipped pass = %+v", st)
+	}
+	// Blocked with no last good value: the readout says so (0 = nothing
+	// is being deleted) and the rows stay.
+	for i := 0; i < 2; i++ {
+		_, _, _ = w.pruner.PruneOnce(ctx)
+	}
+	if v, err := a.MLLocalActivity(ctx); err != nil || !v.RetentionBlocked || v.LastGoodRetentionDays != 0 {
+		t.Fatalf("status blocked without last good = %+v, %v", v, err)
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 1 || st.Tasks != 1 {
+		t.Fatalf("rows while blocked without last good = %+v", st)
 	}
 	sp, ok := a.sidecarMgr.Spawner.(mlsidecar.ProcessSpawner)
 	if !ok || sp.EnvFunc == nil {

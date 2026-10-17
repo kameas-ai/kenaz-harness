@@ -15,9 +15,11 @@ import (
 //     caller deletes nothing.
 //   - When reads keep failing — BlockedPasses consecutive failed prune
 //     passes, or more than BlockedAfter since the last good read (since
-//     construction when there has been none) — Health reports Blocked and
-//     the Pruner stops deleting even with a remembered value, so the
-//     Local activity panel's "nothing is being deleted" is true.
+//     construction when there has been none) — Health reports Blocked so
+//     the Local activity panel can say so. The Pruner keeps pruning to
+//     the last good value (the member's own choice; stopping would
+//     over-retain for as long as the file stays broken) and deletes
+//     nothing only when there is none.
 //
 // Safe for concurrent use.
 type Retention struct {
@@ -85,7 +87,8 @@ func (r *Retention) readCounted(pass bool) (int, bool, bool) {
 // the setting's content or the read error).
 type RetentionHealth struct {
 	// Blocked: the most recent read failed and the streak has reached a
-	// threshold; nothing is pruned until a read succeeds.
+	// threshold (visible guard; pruning continues to the last good value
+	// when there is one).
 	Blocked bool
 	// ConsecutiveFailedPasses is the current streak of prune passes whose
 	// read failed.
@@ -95,6 +98,9 @@ type RetentionHealth struct {
 	SinceLastGood time.Duration
 	// HaveGood: a read has succeeded in this process.
 	HaveGood bool
+	// LastGoodDays is the last good read's raw value (0 = default; only
+	// meaningful with HaveGood).
+	LastGoodDays int
 }
 
 // Health is the current failure state.
@@ -109,6 +115,7 @@ func (r *Retention) Health() RetentionHealth {
 		ConsecutiveFailedPasses: r.failedPasses,
 		SinceLastGood:           r.now().Sub(ref),
 		HaveGood:                r.haveGood,
+		LastGoodDays:            r.good,
 	}
 	h.Blocked = r.lastFailed && (r.failedPasses >= BlockedPasses || h.SinceLastGood > BlockedAfter)
 	return h

@@ -7311,6 +7311,7 @@ function fakeMLLocalActivity(retentionDays = 0): MLLocalActivity {
     effectiveRetentionDays: retentionDays > 0 ? retentionDays : 90,
     sharingWithFleet: false,
     retentionBlocked: false,
+    lastGoodRetentionDays: 0,
   };
 }
 

@@ -650,6 +650,7 @@ describe('CloudMLPanel — local activity', () => {
       effectiveRetentionDays: 90,
       sharingWithFleet: false,
       retentionBlocked: false,
+      lastGoodRetentionDays: 0,
       ...over,
     };
   }
@@ -728,11 +729,19 @@ describe('CloudMLPanel — local activity', () => {
     expect(q(wrapper, 'ml-local-delete-confirm').exists()).toBe(false);
   });
 
-  it('says retention is on hold, and nothing is deleted, when settings keep failing to read', async () => {
-    const { wrapper } = mountLocal(local({ retentionBlocked: true }));
+  it('says nothing is being deleted when settings keep failing to read and none was ever read', async () => {
+    const { wrapper } = mountLocal(local({ retentionBlocked: true, lastGoodRetentionDays: 0 }));
     await flushPromises();
     expect(q(wrapper, 'ml-local-retention-blocked').text()).toBe(
-      "Local activity retention can't be applied right now because settings can't be read. Nothing is being deleted until they can.",
+      "Settings can't be read. Nothing is being deleted until they can.",
+    );
+  });
+
+  it('says the last saved retention is still applied when settings keep failing to read', async () => {
+    const { wrapper } = mountLocal(local({ retentionBlocked: true, lastGoodRetentionDays: 30 }));
+    await flushPromises();
+    expect(q(wrapper, 'ml-local-retention-blocked').text()).toBe(
+      "Settings can't be read. Using your last saved retention (30 days).",
     );
   });
 

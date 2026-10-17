@@ -383,11 +383,13 @@ type MLLocalActivityView struct {
 	SharingWithFleet bool `json:"sharingWithFleet"`
 	// RetentionBlocked: the retention setting has kept failing to read
 	// (activity.BlockedPasses consecutive prune passes, or more than
-	// activity.BlockedAfter since the last good read), so the pruner is
-	// deleting nothing until it can. RetentionDays /
-	// EffectiveRetentionDays are then the last good values (0 / 90 when
-	// there has been none).
+	// activity.BlockedAfter since the last good read). The pruner keeps
+	// pruning to the last good value, or deletes nothing without one.
 	RetentionBlocked bool `json:"retentionBlocked"`
+	// LastGoodRetentionDays (with RetentionBlocked) is the EFFECTIVE
+	// window of the last good read the pruner is still applying; 0 when
+	// there has been no good read, so nothing is being deleted.
+	LastGoodRetentionDays int `json:"lastGoodRetentionDays"`
 }
 
 // errRetentionUnreadable is the status readout's answer when the
@@ -427,6 +429,9 @@ func (w *mlProducerWiring) localActivity(ctx context.Context) (MLLocalActivityVi
 	}
 	if ok {
 		v.RetentionDays = days
+		if v.RetentionBlocked {
+			v.LastGoodRetentionDays = activity.EffectiveRetentionDays(days)
+		}
 	}
 	v.EffectiveRetentionDays = activity.EffectiveRetentionDays(v.RetentionDays)
 	v.SharingWithFleet = w.gate.Last().Open

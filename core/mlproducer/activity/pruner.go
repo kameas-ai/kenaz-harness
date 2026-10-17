@@ -34,11 +34,11 @@ const pruneInterval = 6 * time.Hour
 // Pruner deletes local activity older than the retention window. The
 // window is read on EVERY pass (dials-to-consumer: a changed setting
 // applies at the next pass with no restart) through a Retention, which
-// fails safe: a pass whose read fails uses the last successfully read
-// window; with none yet in this process — or once failures have reached
-// the visible-guard threshold (Retention.Health().Blocked) — it deletes
-// nothing. An unreadable setting is never treated as the default, which
-// could be far shorter (or longer) than what the member chose.
+// fails safe: a pass whose read fails prunes to the last successfully
+// read window (also once the failures are visible as Blocked); with none
+// yet in this process it deletes nothing. An unreadable setting is never
+// treated as the default, which could be far shorter (or longer) than
+// what the member chose.
 type Pruner struct {
 	store     func() *Store
 	retention *Retention
@@ -91,21 +91,19 @@ func NewRetentionPruner(store func() *Store, retention *Retention, now func() ti
 func (p *Pruner) Retention() *Retention { return p.retention }
 
 // ErrRetentionUnreadable: the retention setting could not be read and no
-// usable last-good value exists (none yet, or the failures have reached
-// the blocked threshold), so the pass deleted nothing.
+// last-good value exists in this process, so the pass deleted nothing.
 var ErrRetentionUnreadable = fmt.Errorf("activity: retention setting unreadable; prune pass skipped")
 
 // PruneOnce runs one pass and returns the events and tasks deleted. When
 // the setting cannot be read it prunes to the last good window, or —
-// with none, or once blocked — deletes nothing and returns
-// ErrRetentionUnreadable.
+// with none — deletes nothing and returns ErrRetentionUnreadable.
 func (p *Pruner) PruneOnce(ctx context.Context) (events, tasks int64, err error) {
 	st := p.store()
 	if st == nil {
 		return 0, 0, nil
 	}
-	raw, fresh, ok := p.retention.readPass()
-	if !ok || (!fresh && p.retention.Health().Blocked) {
+	raw, _, ok := p.retention.readPass()
+	if !ok {
 		return 0, 0, ErrRetentionUnreadable
 	}
 	days := EffectiveRetentionDays(raw)
