@@ -31,9 +31,6 @@ import (
 	"context"
 	"encoding/json"
 	"time"
-
-	"github.com/kameas-ai/kenaz-harness/core/logging"
-	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
 )
 
 const (
@@ -84,54 +81,55 @@ func (r *Recorder) BackgroundEnded(_ context.Context, bgTaskID string, exitCode 
 	r.enqueue(func() { r.handleBackgroundEnd(bgTaskID, exitCode, at) })
 }
 
-// rememberSpawn stores p for bgTaskID and, when its exit was already
-// parked, ships the follow-up now. Caller holds r.mu.
-func (r *Recorder) rememberSpawn(ctx context.Context, bgTaskID string, p bgPending) {
+// rememberSpawn stores p for bgTaskID in view v and, when its exit was
+// already parked there, ships the follow-up now. Caller holds r.mu.
+func (r *Recorder) rememberSpawn(ctx context.Context, v *view, bgTaskID string, p bgPending) {
 	if bgTaskID == "" {
 		return
 	}
-	if parked, ok := r.bgParked[bgTaskID]; ok {
-		delete(r.bgParked, bgTaskID)
-		r.shipBackgroundExit(ctx, p, parked.exitCode, max(parked.at, p.at))
+	if parked, ok := v.bgParked[bgTaskID]; ok {
+		delete(v.bgParked, bgTaskID)
+		r.shipBackgroundExit(ctx, v, p, parked.exitCode, max(parked.at, p.at))
 		return
 	}
-	pruneByAge(r.bgPending, p.at, func(e bgPending) int64 { return e.at }, bgMaxPending)
-	r.bgPending[bgTaskID] = p
+	pruneByAge(v.bgPending, p.at, func(e bgPending) int64 { return e.at }, bgMaxPending)
+	v.bgPending[bgTaskID] = p
 }
 
+// handleBackgroundEnd applies an exit to every view live now: the local
+// view always, the ship view only while the gate is open (record time is
+// the exit) and only for a spawn it recorded itself.
 func (r *Recorder) handleBackgroundEnd(bgTaskID string, exitCode int, at int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	p, ok := r.bgPending[bgTaskID]
-	if !ok {
-		pruneByAge(r.bgParked, at, func(e bgParked) int64 { return e.at }, bgMaxParked)
-		r.bgParked[bgTaskID] = bgParked{at: at, exitCode: exitCode}
-		return
+	for _, v := range r.views(true) {
+		p, ok := v.bgPending[bgTaskID]
+		if !ok {
+			pruneByAge(v.bgParked, at, func(e bgParked) int64 { return e.at }, bgMaxParked)
+			v.bgParked[bgTaskID] = bgParked{at: at, exitCode: exitCode}
+			continue
+		}
+		delete(v.bgPending, bgTaskID)
+		r.shipBackgroundExit(context.Background(), v, p, exitCode, at)
 	}
-	delete(r.bgPending, bgTaskID)
-	r.shipBackgroundExit(context.Background(), p, exitCode, at)
 }
 
-// shipBackgroundExit writes the follow-up terminal (+ counters). Caller
-// holds r.mu.
-func (r *Recorder) shipBackgroundExit(ctx context.Context, p bgPending, exitCode int, at int64) {
-	if p.excluded || !r.recording() {
+// shipBackgroundExit writes the follow-up terminal (+ counters) to view
+// v. Caller holds r.mu.
+func (r *Recorder) shipBackgroundExit(ctx context.Context, v *view, p bgPending, exitCode int, at int64) {
+	if p.excluded {
 		return
 	}
-	var events []mlstore.EventDraft
+	var events []evDraft
 	add := func(kind string, payload map[string]any) {
-		events = append(events, mlstore.EventDraft{CreatedAt: at, Body: func(seq int64) ([]byte, error) {
-			return encodeEvent(seq, kind, at, payload)
-		}})
+		events = append(events, evDraft{kind: kind, at: at, payload: payload})
 	}
 	add(KindTerminal, map[string]any{"task": p.taskID, "cmd": p.cmd, "exit_code": exitCode})
-	prev := r.loadTask(ctx, p.taskID)
+	prev := r.loadTask(ctx, v, p.taskID)
 	if prev == nil || prev.CompletedAt != 0 {
 		// The task is gone or completed (session deleted, idle-swept):
 		// the exit still ships, its counters do not reopen the task.
-		if _, err := r.cfg.Store.Commit(ctx, mlstore.Write{Events: events}); err != nil {
-			logging.L().Warn("mlproducer.recorder.commit_failed", "err", err.Error())
-		}
+		r.commit(ctx, v, nil, events, false)
 		return
 	}
 	task := cloneTask(*prev)
@@ -145,7 +143,7 @@ func (r *Recorder) shipBackgroundExit(ctx context.Context, p bgPending, exitCode
 	// last_active stays the last tool call / turn end (spec §3.1): a job
 	// finishing is not the agent acting. The counters reach the wire on
 	// the next upsert (throttled, or the trailing flush).
-	r.commit(ctx, &task, events, at-task.LastUpsertAt >= r.cfg.UpsertEvery.Milliseconds())
+	r.commit(ctx, v, &task, events, at-task.LastUpsertAt >= r.cfg.UpsertEvery.Milliseconds())
 }
 
 // pruneByAge drops entries older than bgMaxAge relative to now, then the

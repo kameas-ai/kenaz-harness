@@ -214,6 +214,25 @@ export interface ModelCallTelemetrySettings {
   shareWithFleet: boolean;
 }
 
+/**
+ * The local ML activity store (ml-producer-01MLPRD01 WP11): what Kenaz keeps
+ * on this device to power local suggestions (rpc.MLLocalActivityView).
+ */
+export interface MLLocalActivity {
+  /** False when the store could not be opened; the counts are then 0. */
+  available: boolean;
+  events: number;
+  tasks: number;
+  /** The database file plus its write-ahead log. */
+  sizeBytes: number;
+  /** Retention as stored; 0 = the 90-day default. */
+  retentionDays: number;
+  /** Read-only: the window the pruner applies. */
+  effectiveRetentionDays: number;
+  /** New activity is also being copied to Fleet right now. */
+  sharingWithFleet: boolean;
+}
+
 export interface SessionUsage {
   /** Sum of all input tokens for the session. */
   promptTokens: number;

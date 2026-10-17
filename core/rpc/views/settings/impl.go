@@ -28,6 +28,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer/activity"
 	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
@@ -160,6 +161,9 @@ func validateFileSave(in Settings) error {
 	if err := validateModelCallFields(in); err != nil {
 		return err
 	}
+	if err := validateMLLocalActivityFields(in); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -167,6 +171,18 @@ func validateFileSave(in Settings) error {
 // retention window is negative or above modelcalls.MaxRetentionDays. Zero
 // is valid (the 30-day default).
 var ErrInvalidModelCallRetentionDays = fmt.Errorf("settings: invalid modelCallRetentionDays — must be 0 (default) or in [1, %d]", modelcalls.MaxRetentionDays)
+
+// ErrInvalidMLLocalActivityRetentionDays is returned when the local ML
+// activity retention is negative or above activity.MaxRetentionDays. Zero
+// is valid (the 90-day default).
+var ErrInvalidMLLocalActivityRetentionDays = fmt.Errorf("settings: invalid mlLocalActivityRetentionDays — must be 0 (default) or in [1, %d]", activity.MaxRetentionDays)
+
+func validateMLLocalActivityFields(in Settings) error {
+	if in.MLLocalActivityRetentionDays < 0 || in.MLLocalActivityRetentionDays > activity.MaxRetentionDays {
+		return ErrInvalidMLLocalActivityRetentionDays
+	}
+	return nil
+}
 
 func validateModelCallFields(in Settings) error {
 	if in.ModelCallRetentionDays < 0 || in.ModelCallRetentionDays > modelcalls.MaxRetentionDays {
@@ -1763,6 +1779,37 @@ func (a *API) ModelCallStatsPullEnabled() bool {
 		return true
 	}
 	return !s.ModelCallStatsPullDisabled
+}
+
+// MLLocalActivityRetentionDays reads the local ML activity retention
+// fresh (activity.Pruner's closure). Only a SUCCESSFUL read of 0 means the
+// 90-day default: a read or parse error is returned, never folded into 0,
+// because the pruner deletes on this value and a member who chose 3650
+// days must not lose everything past 90 to an unreadable settings file.
+// No settings store at all (a test chassis) is (0, nil): the default.
+func (a *API) MLLocalActivityRetentionDays() (int, error) {
+	if a == nil || a.store == nil {
+		return 0, nil
+	}
+	s, err := a.store.LoadAll()
+	if err != nil {
+		return 0, err
+	}
+	return s.MLLocalActivityRetentionDays, nil
+}
+
+// SetMLLocalActivityRetentionDays validates and persists the local ML
+// activity retention (0 = default). The pruner reads it on its next pass.
+func (a *API) SetMLLocalActivityRetentionDays(_ context.Context, days int) error {
+	s, err := a.store.LoadAll()
+	if err != nil {
+		return err
+	}
+	s.MLLocalActivityRetentionDays = days
+	if err := validateMLLocalActivityFields(s); err != nil {
+		return err
+	}
+	return a.store.SaveAll(s)
 }
 
 // ModelCallRetentionDays reads the stored retention setting fresh (the

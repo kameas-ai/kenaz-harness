@@ -1382,6 +1382,10 @@ export function SetSettingsStore(arg1) {
   return window['go']['rpc']['Bindings']['SetSettingsStore'](arg1);
 }
 
+export function Settings_DeleteMLLocalActivity() {
+  return window['go']['rpc']['Bindings']['Settings_DeleteMLLocalActivity']();
+}
+
 export function Settings_FleetCapabilities() {
   return window['go']['rpc']['Bindings']['Settings_FleetCapabilities']();
 }
@@ -1500,6 +1504,10 @@ export function Settings_GetLocalRuntimeRAMOverrideGB() {
 
 export function Settings_GetMCPAutoRestart() {
   return window['go']['rpc']['Bindings']['Settings_GetMCPAutoRestart']();
+}
+
+export function Settings_GetMLLocalActivity() {
+  return window['go']['rpc']['Bindings']['Settings_GetMLLocalActivity']();
 }
 
 export function Settings_GetMaxAgentTurns() {
@@ -1636,6 +1644,10 @@ export function Settings_SetLocalRuntimeRAMOverrideGB(arg1) {
 
 export function Settings_SetMCPAutoRestart(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMCPAutoRestart'](arg1);
+}
+
+export function Settings_SetMLLocalActivityRetention(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMLLocalActivityRetention'](arg1);
 }
 
 export function Settings_SetMaxAgentTurns(arg1) {

@@ -3,23 +3,27 @@ package mlproducer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer/activity"
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 )
 
-// Gate is the recording half of the consent gate (spec §4). Recording()
+// Gate is the SHIP half of the consent gate (spec §4, §12 A-16). Recording()
 // must be cheap and non-blocking — it is consulted on the tool-dispatch
 // path; WP03's implementation answers from its ≤60 s cache. false means
-// nothing is written. A nil Gate is closed.
+// nothing enters the ship outbox (the local activity store, Config.Local,
+// is written whatever it says). A nil Gate is closed.
 type Gate interface {
 	Recording() bool
 }
@@ -68,16 +72,31 @@ const (
 	DefaultUpsertEvery   = 60 * time.Second
 	DefaultIdleAfter     = 7 * 24 * time.Hour
 	DefaultSweepInterval = time.Hour
+	DefaultReopenEvery   = 30 * time.Second
 	maxLinkDepth         = 32
 )
 
 // Config wires a Recorder.
 type Config struct {
-	// Store is the durable outbox + task store. Required.
+	// Store is the durable SHIP outbox + ship task store (data.db).
+	// Required for shipping.
 	Store *mlstore.Store
+	// Local is the local activity store (<dataDir>/ml/activity.db; WP11,
+	// spec §12 A-16): every record is written to it whatever the Fleet
+	// gate says, with the org exclusions NOT applied (they govern only
+	// what leaves the device). nil = no local store (unless OpenLocal).
+	Local *activity.Store
+	// OpenLocal, when set, (re)opens the local store while Local is nil —
+	// a first open that failed at boot (a busy file, a full disk) is
+	// retried lazily on later records, at most once per ReopenEvery, so
+	// the process does not stay without local recording forever.
+	OpenLocal func() (*activity.Store, error)
+	// ReopenEvery throttles OpenLocal. 0 = DefaultReopenEvery.
+	ReopenEvery time.Duration
 	// Hasher computes h(x). Required; a key error records nothing.
 	Hasher *Hasher
-	// Gate decides whether anything is written. nil = closed.
+	// Gate decides whether a record is copied to the ship outbox, read at
+	// record time (no back-fill from the local store). nil = closed.
 	Gate Gate
 	// Workspace returns the process workspace root (Core.WorkspaceDir);
 	// repo_root = h(it) at a task's first tool call (spec §12 A-1), and
@@ -103,7 +122,18 @@ type Config struct {
 }
 
 // Recorder turns agent tool calls, turn ends and session deletes into
-// minimised outbox records (KindTable). It implements agentgraph.ToolCallObserver,
+// minimised records (KindTable), kept in two independent views:
+//
+//   - local: the activity store (Config.Local), written unconditionally,
+//     every kind, no org exclusions — its own task rows and counters;
+//   - ship:  the Fleet outbox + ml_tasks (Config.Store), written only
+//     while the gate is open AT RECORD TIME (observed open when the call
+//     was seen AND still open when it is written), with exclusions and the
+//     AI-usage kind gate applied. Its task state advances only while the
+//     gate is open, so a later opt-in never ships counters accumulated
+//     while it was closed. Purge clears only this view.
+//
+// It It implements agentgraph.ToolCallObserver,
 // the TurnEnded half of chat.TurnUsageObserver (TurnStarted / TurnFailed
 // are no-ops so it satisfies that interface structurally), a
 // session.DeleteObserver-shaped SessionDeleted, and ParentLinker.
@@ -121,15 +151,11 @@ type Recorder struct {
 	closeMu sync.RWMutex
 	closed  bool
 
-	// mu serialises the worker's store writes with Purge and guards tasks
-	// and dirty.
+	// mu serialises the worker's store writes with Purge / DeleteLocal and
+	// guards both views.
 	mu    sync.Mutex
-	tasks map[string]*mlstore.TaskRow
-	// dirty: cached tasks whose state moved since their last upsert (the
-	// trailing-upsert candidates flushStale writes). The store's
-	// last_active > last_upsert_at test covers tasks not in the cache
-	// after a restart; this set covers same-millisecond activity.
-	dirty map[string]bool
+	ship  *view
+	local *view
 
 	linkMu sync.RWMutex
 	parent map[string]string // child session -> parent session
@@ -139,12 +165,42 @@ type Recorder struct {
 	// excl is the newest org exclusion set (SetExclusions; WP05).
 	excl atomic.Pointer[ExclusionSet]
 
-	// WP07, guarded by mu (worker only): background bash spawns awaiting
-	// their exit, exits that arrived before their spawn, and the
-	// throttled branch read (background.go, branch.go).
+	// branch is the throttled branch read (branch.go), guarded by mu.
+	branch branchCache
+
+	// localStore is the open local activity store (Config.Local, or what
+	// OpenLocal returned); nil until one opens. lastOpenTry (unix ms,
+	// guarded by mu) throttles OpenLocal.
+	localStore  atomic.Pointer[activity.Store]
+	lastOpenTry int64
+}
+
+// view is one destination's task state (see Recorder). Guarded by
+// Recorder.mu.
+type view struct {
+	ship  bool
+	tasks map[string]*mlstore.TaskRow
+	// dirty (ship only): cached tasks whose state moved since their last
+	// upsert (the trailing-upsert candidates flushStale writes). The
+	// store's last_active > last_upsert_at test covers tasks not in the
+	// cache after a restart; this set covers same-millisecond activity.
+	dirty map[string]bool
+	// WP07: background bash spawns awaiting their exit and exits that
+	// arrived before their spawn (background.go).
 	bgPending map[string]bgPending
 	bgParked  map[string]bgParked
-	branch    branchCache
+}
+
+func newView(ship bool) *view {
+	return &view{ship: ship, tasks: map[string]*mlstore.TaskRow{}, dirty: map[string]bool{},
+		bgPending: map[string]bgPending{}, bgParked: map[string]bgParked{}}
+}
+
+// evDraft is one event a view will write; each view builds its own.
+type evDraft struct {
+	kind    string
+	at      int64
+	payload map[string]any
 }
 
 var _ coreag.ToolCallObserver = (*Recorder)(nil)
@@ -167,18 +223,21 @@ func NewRecorder(cfg Config) *Recorder {
 	if cfg.SweepInterval == 0 {
 		cfg.SweepInterval = DefaultSweepInterval
 	}
+	if cfg.ReopenEvery <= 0 {
+		cfg.ReopenEvery = DefaultReopenEvery
+	}
 	r := &Recorder{
 		cfg:    cfg,
 		min:    minimiser{hasher: cfg.Hasher},
 		queue:  make(chan func(), cfg.QueueSize),
 		done:   make(chan struct{}),
 		stop:   make(chan struct{}),
-		tasks:  map[string]*mlstore.TaskRow{},
-		dirty:  map[string]bool{},
+		ship:   newView(true),
+		local:  newView(false),
 		parent: map[string]string{},
-
-		bgPending: map[string]bgPending{},
-		bgParked:  map[string]bgParked{},
+	}
+	if cfg.Local != nil {
+		r.localStore.Store(cfg.Local)
 	}
 	go r.run()
 	return r
@@ -277,8 +336,62 @@ func (r *Recorder) Close() {
 	<-r.done
 }
 
-func (r *Recorder) recording() bool {
+// shipOn: the gate is open and a ship store exists.
+func (r *Recorder) shipOn() bool {
 	return r.cfg.Gate != nil && r.cfg.Gate.Recording() && r.cfg.Store != nil && r.cfg.Hasher != nil
+}
+
+// localOn: a local activity store exists, or can be (re)opened (always
+// written; A-16). Cheap: no I/O.
+func (r *Recorder) localOn() bool {
+	return (r.localStore.Load() != nil || r.cfg.OpenLocal != nil) && r.cfg.Hasher != nil
+}
+
+// loc is the open local store, or nil.
+func (r *Recorder) loc() *activity.Store { return r.localStore.Load() }
+
+// LocalStore is the open local activity store, or nil while none has
+// opened (the wiring's status readout, pruner and shutdown use it).
+func (r *Recorder) LocalStore() *activity.Store {
+	if r == nil {
+		return nil
+	}
+	return r.loc()
+}
+
+// ensureLocal tries OpenLocal when no store is open, at most once per
+// ReopenEvery. Caller holds r.mu (worker).
+func (r *Recorder) ensureLocal() *activity.Store {
+	if s := r.loc(); s != nil || r.cfg.OpenLocal == nil {
+		return s
+	}
+	now := r.nowMS()
+	if r.lastOpenTry != 0 && now-r.lastOpenTry < r.cfg.ReopenEvery.Milliseconds() {
+		return nil
+	}
+	r.lastOpenTry = now
+	s, err := r.cfg.OpenLocal()
+	if err != nil {
+		logging.L().Warn("mlproducer.activity.reopen_failed", "err", err.Error())
+		return nil
+	}
+	r.localStore.Store(s)
+	logging.L().Info("mlproducer.activity.reopened")
+	return s
+}
+
+// views returns the views a record goes to now: local whenever it
+// exists, ship only when ship (the decision taken when the activity was
+// observed) is true AND the gate is still open. Caller holds r.mu.
+func (r *Recorder) views(ship bool) []*view {
+	out := make([]*view, 0, 2)
+	if r.localOn() && r.ensureLocal() != nil {
+		out = append(out, r.local)
+	}
+	if ship && r.shipOn() {
+		out = append(out, r.ship)
+	}
+	return out
 }
 
 // shipEligible is the per-kind OUTBOX (ship) gate, checked after
@@ -286,7 +399,7 @@ func (r *Recorder) recording() bool {
 // outbox, not whether the activity may be observed at all. A Rev2Kinds
 // event needs the gate's latest consent to carry AIUsageAllowed; every
 // other kind needs nothing more. (A future local-only activity store,
-// spec A-16 / WP11, can take the same event unconditionally; this gate
+// spec A-16 / WP11, takes the same event unconditionally; this gate
 // only governs what is queued for Fleet.)
 func (r *Recorder) shipEligible(kind string) bool {
 	if !IsRev2Kind(kind) {
@@ -409,13 +522,17 @@ func excludedBy(seen, now *ExclusionSet, match func(*ExclusionSet) bool) bool {
 
 // ToolCallCompleted implements agentgraph.ToolCallObserver.
 func (r *Recorder) ToolCallCompleted(rec coreag.ToolCallRecord) {
-	if r == nil || !r.recording() {
+	if r == nil {
+		return
+	}
+	ship := r.shipOn()
+	if !ship && !r.localOn() {
 		return
 	}
 	unattended := runposture.IsUnattended(rec.Ctx)
 	at := r.nowMS()
 	seen := r.excl.Load()
-	r.enqueue(func() { r.handleTool(rec, unattended, at, seen) })
+	r.enqueue(func() { r.handleTool(rec, unattended, at, seen, ship) })
 }
 
 // TurnStarted is a no-op (chat.TurnUsageObserver shape).
@@ -428,12 +545,16 @@ func (r *Recorder) TurnFailed(context.Context, string, string, bool) {}
 // TurnEnded records a turn end (chat.TurnUsageObserver.TurnEnded): the
 // idle phase change, and agent.turn when shipEligible.
 func (r *Recorder) TurnEnded(ctx context.Context, sessionID, outcome string, modelCalls, toolCalls int, dur time.Duration) {
-	if r == nil || !r.recording() {
+	if r == nil {
+		return
+	}
+	ship := r.shipOn()
+	if !ship && !r.localOn() {
 		return
 	}
 	unattended := runposture.IsUnattended(ctx)
 	at := r.nowMS()
-	r.enqueue(func() { r.handleTurn(sessionID, unattended, outcome, modelCalls, toolCalls, dur, at) })
+	r.enqueue(func() { r.handleTurn(sessionID, unattended, outcome, modelCalls, toolCalls, dur, at, ship) })
 }
 
 // SessionDeleted completes the session's task (session.DeleteObserver
@@ -492,7 +613,7 @@ func (r *Recorder) FlushTasks(ctx context.Context) error {
 func (r *Recorder) flushStale(ctx context.Context, force bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.recording() {
+	if !r.shipOn() {
 		return
 	}
 	cutoff := r.nowMS() - r.cfg.UpsertEvery.Milliseconds()
@@ -508,8 +629,8 @@ func (r *Recorder) flushStale(ctx context.Context, force bool) {
 	for _, t := range rows {
 		due[t.TaskID] = t
 	}
-	for id := range r.dirty {
-		if t, ok := r.tasks[id]; ok && t.LastUpsertAt <= cutoff {
+	for id := range r.ship.dirty {
+		if t, ok := r.ship.tasks[id]; ok && t.LastUpsertAt <= cutoff {
 			due[id] = *t
 		}
 	}
@@ -520,24 +641,48 @@ func (r *Recorder) flushStale(ctx context.Context, force bool) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		task := cloneTask(due[id])
-		r.commit(ctx, &task, nil, true)
+		r.commit(ctx, r.ship, &task, nil, true)
 	}
 }
 
-// Purge wipes the outbox and the task table and forgets cached task state
-// (spec §4: on effective true→false). Seqs are never reused afterwards.
+// Purge wipes the SHIP outbox and the ship task table and forgets the
+// ship view's cached state (spec §4: on effective true→false; A-16 item
+// 3: withdrawal purges the unsent outbox only). The local activity store
+// is untouched. Seqs are never reused afterwards.
 func (r *Recorder) Purge(ctx context.Context) error {
 	if r == nil || r.cfg.Store == nil {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.tasks = map[string]*mlstore.TaskRow{}
-	r.dirty = map[string]bool{}
 	// A background exit never ships across a purge.
-	r.bgPending = map[string]bgPending{}
-	r.bgParked = map[string]bgParked{}
+	r.ship = newView(true)
 	return r.cfg.Store.Purge(ctx)
+}
+
+// DeleteLocal is "Delete local activity data" (A-16 item 4): it wipes the
+// local activity store, the ship outbox and the ship task state, and
+// forgets both views' cached state. Work observed before the call is
+// written first (Flush) so it is wiped too.
+func (r *Recorder) DeleteLocal(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if err := r.Flush(ctx); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ship = newView(true)
+	r.local = newView(false)
+	var errs []error
+	if s := r.ensureLocal(); s != nil {
+		errs = append(errs, s.DeleteAll(ctx))
+	}
+	if r.cfg.Store != nil {
+		errs = append(errs, r.cfg.Store.Purge(ctx))
+	}
+	return errors.Join(errs...)
 }
 
 // ---- worker ----
@@ -550,12 +695,21 @@ func (r *Recorder) taskID(root string) (string, string, bool) {
 	return TaskIDPrefix + sh, sh, true
 }
 
-// loadTask returns the cached / persisted task for root, or nil.
-func (r *Recorder) loadTask(ctx context.Context, id string) *mlstore.TaskRow {
-	if t, ok := r.tasks[id]; ok {
+// loadTask returns v's cached / persisted task for id, or nil.
+func (r *Recorder) loadTask(ctx context.Context, v *view, id string) *mlstore.TaskRow {
+	if t, ok := v.tasks[id]; ok {
 		return t
 	}
-	t, ok, err := r.cfg.Store.LoadTask(ctx, id)
+	var t mlstore.TaskRow
+	var ok bool
+	var err error
+	if v.ship {
+		t, ok, err = r.cfg.Store.LoadTask(ctx, id)
+	} else {
+		var lt activity.Task
+		lt, ok, err = r.loc().LoadTask(ctx, id)
+		t = fromLocalTask(lt)
+	}
 	if err != nil {
 		logging.L().Warn("mlproducer.recorder.load_task_failed", "err", err.Error())
 		return nil
@@ -563,18 +717,57 @@ func (r *Recorder) loadTask(ctx context.Context, id string) *mlstore.TaskRow {
 	if !ok {
 		return nil
 	}
-	r.tasks[id] = &t
+	v.tasks[id] = &t
 	return &t
 }
 
-func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int64, seen *ExclusionSet) {
+// fromLocalTask maps an activity.Task (Fleet's columns) onto the
+// recorder's task state.
+func fromLocalTask(t activity.Task) mlstore.TaskRow {
+	return mlstore.TaskRow{
+		TaskID: t.ID, SessionHash: strings.TrimPrefix(t.ID, TaskIDPrefix), RepoRootHash: t.RepoRoot,
+		Phase: t.Phase, Files: t.Files, StartedAt: t.StartedAt, LastActive: t.LastActive,
+		CompletedAt: t.CompletedAt, CommitCount: t.CommitCount, TestRuns: t.TestRuns, TestFails: t.TestFails,
+	}
+}
+
+// toLocalTask is the inverse; branch is already the placeholder.
+func toLocalTask(t mlstore.TaskRow, branch string) activity.Task {
+	files := make(map[string]int, len(t.Files))
+	for k, n := range t.Files {
+		files[k] = n
+	}
+	return activity.Task{
+		ID: t.TaskID, RepoRoot: t.RepoRootHash,
+		Branch: branch, // already the "x"×len placeholder (branch.go)
+		Phase:  t.Phase, Files: files,
+		StartedAt: t.StartedAt, LastActive: t.LastActive, CompletedAt: t.CompletedAt,
+		CommitCount: t.CommitCount, TestRuns: t.TestRuns, TestFails: t.TestFails,
+	}
+}
+
+// toolCall is one observed call, classified once and applied to each view.
+type toolCall struct {
+	rec           coreag.ToolCallRecord
+	id            string
+	sessionHash   string
+	workspace     string
+	args          map[string]any
+	outcome       coreag.ToolOutcome
+	ran           bool
+	bashDidNotRun bool
+	at            int64
+}
+
+func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int64, seen *ExclusionSet, ship bool) {
 	root, ok := r.attributeTo(rec.SessionID, unattended)
 	if !ok {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.recording() {
+	vs := r.views(ship)
+	if len(vs) == 0 {
 		return
 	}
 	ctx := context.Background()
@@ -586,20 +779,6 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 	if r.cfg.Workspace != nil {
 		workspace = r.cfg.Workspace()
 	}
-	prev := r.loadTask(ctx, id)
-	var task mlstore.TaskRow
-	if prev != nil {
-		task = cloneTask(*prev)
-	} else {
-		task = mlstore.TaskRow{
-			TaskID: id, SessionHash: sessionHash, Phase: string(PhaseIdle),
-			Files: map[string]int{}, StartedAt: at,
-		}
-		if workspace != "" {
-			task.RepoRootHash = r.min.h(workspace)
-		}
-	}
-	task.CompletedAt = 0 // activity reopens an idle-swept task
 
 	outcome := rec.Outcome
 	bashDidNotRun := false
@@ -622,9 +801,44 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 			bashDidNotRun = true
 		}
 	}
-	ran := (outcome == coreag.ToolOutcomeOK || outcome == coreag.ToolOutcomeError) && !bashDidNotRun
+	c := toolCall{
+		rec: rec, id: id, sessionHash: sessionHash, workspace: workspace,
+		args: parseArgs(rec.RawArgs), outcome: outcome,
+		ran:           (outcome == coreag.ToolOutcomeOK || outcome == coreag.ToolOutcomeError) && !bashDidNotRun,
+		bashDidNotRun: bashDidNotRun, at: at,
+	}
+	now := r.excl.Load()
+	for _, v := range vs {
+		if v.ship {
+			r.applyTool(ctx, v, c, seen, now)
+		} else {
+			// Spec §12 A-16 item 4: org exclusions govern only what leaves
+			// the device; the local store keeps every call (still in the
+			// minimised, hashed form).
+			r.applyTool(ctx, v, c, nil, nil)
+		}
+	}
+}
 
-	args := parseArgs(rec.RawArgs)
+// applyTool records one call into view v. seen / now are the exclusion
+// sets to honour (nil for the local view). Caller holds r.mu.
+func (r *Recorder) applyTool(ctx context.Context, v *view, c toolCall, seen, now *ExclusionSet) {
+	rec, id, workspace, args, outcome, ran, at := c.rec, c.id, c.workspace, c.args, c.outcome, c.ran, c.at
+	prev := r.loadTask(ctx, v, id)
+	var task mlstore.TaskRow
+	if prev != nil {
+		task = cloneTask(*prev)
+	} else {
+		task = mlstore.TaskRow{
+			TaskID: id, SessionHash: c.sessionHash, Phase: string(PhaseIdle),
+			Files: map[string]int{}, StartedAt: at,
+		}
+		if workspace != "" {
+			task.RepoRootHash = r.min.h(workspace)
+		}
+	}
+	task.CompletedAt = 0 // activity reopens an idle-swept task
+
 	type draft struct {
 		kind    string
 		payload map[string]any
@@ -636,7 +850,6 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 	// truncated. A match records the call only as agent.tool (tool,
 	// outcome, dur_ms): no file / terminal / commit / phase_change event,
 	// no files key, no test or commit counters.
-	now := r.excl.Load()
 	excluded := false
 	rawPath, abs := "", ""
 	switch {
@@ -762,81 +975,77 @@ func (r *Recorder) handleTool(rec coreag.ToolCallRecord, unattended bool, at int
 
 	// The ship-outbox gate: agent.tool is a Rev2Kinds event and enters the
 	// outbox only with the org's AI-usage instruction (shipEligible). The
-	// task state above (phase, files, counters, last_active) never depends
-	// on it. Bounded values are clamped to PayloadBounds.
-	events := make([]mlstore.EventDraft, 0, len(drafts))
+	// local view keeps it unconditionally. The task state above (phase,
+	// files, counters, last_active) never depends on it. Bounded values
+	// are clamped to PayloadBounds in both views.
+	events := make([]evDraft, 0, len(drafts))
 	for _, d := range drafts {
-		d := d
-		if !r.shipEligible(d.kind) {
+		if v.ship && !r.shipEligible(d.kind) {
 			continue
 		}
 		ClampPayload(d.kind, d.payload)
-		events = append(events, mlstore.EventDraft{CreatedAt: at, Body: func(seq int64) ([]byte, error) {
-			return encodeEvent(seq, d.kind, at, d.payload)
-		}})
+		events = append(events, evDraft{kind: d.kind, at: at, payload: d.payload})
 	}
-	r.commit(ctx, &task, events, prev == nil || at-task.LastUpsertAt >= r.cfg.UpsertEvery.Milliseconds())
+	r.commit(ctx, v, &task, events, prev == nil || at-task.LastUpsertAt >= r.cfg.UpsertEvery.Milliseconds())
 	if bgSpawn != nil {
-		r.rememberSpawn(ctx, bgSpawnID, *bgSpawn)
+		r.rememberSpawn(ctx, v, bgSpawnID, *bgSpawn)
 	}
 }
 
-func (r *Recorder) handleTurn(sessionID string, unattended bool, outcome string, modelCalls, toolCalls int, dur time.Duration, at int64) {
+func (r *Recorder) handleTurn(sessionID string, unattended bool, outcome string, modelCalls, toolCalls int, dur time.Duration, at int64, ship bool) {
 	root, ok := r.attributeTo(sessionID, unattended)
 	if !ok {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.recording() {
-		return
-	}
 	ctx := context.Background()
 	id, _, ok := r.taskID(root)
 	if !ok {
 		return
 	}
-	prev := r.loadTask(ctx, id)
-	if prev == nil {
-		// A task exists only once the agent made a tool call (spec §12
-		// A-1); a chat turn that never called a tool records nothing.
-		return
-	}
-	task := cloneTask(*prev)
-	task.CompletedAt = 0
 	switch outcome {
 	case "completed", "stopped", "failed":
 	default:
 		outcome = "failed"
 	}
-	var events []mlstore.EventDraft
-	add := func(kind string, payload map[string]any) {
-		events = append(events, mlstore.EventDraft{CreatedAt: at, Body: func(seq int64) ([]byte, error) {
-			return encodeEvent(seq, kind, at, payload)
-		}})
+	for _, v := range r.views(ship) {
+		prev := r.loadTask(ctx, v, id)
+		if prev == nil {
+			// A task exists only once the agent made a tool call (spec §12
+			// A-1); a chat turn that never called a tool records nothing.
+			continue
+		}
+		task := cloneTask(*prev)
+		task.CompletedAt = 0
+		var events []evDraft
+		add := func(kind string, payload map[string]any) {
+			events = append(events, evDraft{kind: kind, at: at, payload: payload})
+		}
+		// A root turn with no tool call is idle (§3.3). A child's turn does
+		// not idle the root: the parent may still be working.
+		if toolCalls == 0 && sessionID == root && task.Phase != string(PhaseIdle) {
+			task.Phase = string(PhaseIdle)
+			add(KindPhaseChange, map[string]any{"task": id, "phase": string(PhaseIdle)})
+		}
+		// agent.turn is a Rev2Kinds event: without the org's AI-usage
+		// instruction it does not enter the ship outbox (shipEligible); the
+		// local view always keeps it. The phase change above and the task's
+		// last_active below still record; agent.turn adds nothing to the
+		// task counters either way. Values are clamped to the bounds sent
+		// to Fleet (PayloadBounds).
+		if !v.ship || r.shipEligible(KindTurn) {
+			add(KindTurn, ClampPayload(KindTurn, map[string]any{
+				"task":        id,
+				"dur_ms":      dur.Milliseconds(),
+				"model_calls": modelCalls,
+				"tool_calls":  toolCalls,
+				"outcome":     outcome,
+			}))
+		}
+		task.LastActive = at
+		r.commit(ctx, v, &task, events, at-task.LastUpsertAt >= r.cfg.UpsertEvery.Milliseconds())
 	}
-	// A root turn with no tool call is idle (§3.3). A child's turn does
-	// not idle the root: the parent may still be working.
-	if toolCalls == 0 && sessionID == root && task.Phase != string(PhaseIdle) {
-		task.Phase = string(PhaseIdle)
-		add(KindPhaseChange, map[string]any{"task": id, "phase": string(PhaseIdle)})
-	}
-	// agent.turn is a Rev2Kinds event: without the org's AI-usage
-	// instruction it does not enter the ship outbox (shipEligible). The
-	// phase change above and the task's last_active below still record;
-	// agent.turn adds nothing to the task counters either way. Values are
-	// clamped to the bounds sent to Fleet (PayloadBounds).
-	if r.shipEligible(KindTurn) {
-		add(KindTurn, ClampPayload(KindTurn, map[string]any{
-			"task":        id,
-			"dur_ms":      dur.Milliseconds(),
-			"model_calls": modelCalls,
-			"tool_calls":  toolCalls,
-			"outcome":     outcome,
-		}))
-	}
-	task.LastActive = at
-	r.commit(ctx, &task, events, at-task.LastUpsertAt >= r.cfg.UpsertEvery.Milliseconds())
 }
 
 func (r *Recorder) handleDelete(sessionID string, at int64) {
@@ -846,54 +1055,75 @@ func (r *Recorder) handleDelete(sessionID string, at int64) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.recording() {
-		return
-	}
 	ctx := context.Background()
 	id, _, ok := r.taskID(sessionID)
 	if !ok {
 		return
 	}
-	prev := r.loadTask(ctx, id)
-	if prev == nil || prev.CompletedAt != 0 {
-		return
+	for _, v := range r.views(true) {
+		prev := r.loadTask(ctx, v, id)
+		if prev == nil || prev.CompletedAt != 0 {
+			continue
+		}
+		task := cloneTask(*prev)
+		task.CompletedAt = at
+		if task.LastActive > at {
+			task.CompletedAt = task.LastActive
+		}
+		r.commit(ctx, v, &task, nil, true)
+		delete(v.tasks, id)
 	}
-	task := cloneTask(*prev)
-	task.CompletedAt = at
-	if task.LastActive > at {
-		task.CompletedAt = task.LastActive
-	}
-	r.commit(ctx, &task, nil, true)
-	delete(r.tasks, id)
 }
 
 func (r *Recorder) sweepIdle(ctx context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.recording() {
-		return
-	}
 	cutoff := r.nowMS() - r.cfg.IdleAfter.Milliseconds()
-	rows, err := r.cfg.Store.OpenTasksIdleSince(ctx, cutoff)
-	if err != nil {
-		logging.L().Warn("mlproducer.recorder.sweep_failed", "err", err.Error())
-		return
-	}
-	for _, t := range rows {
-		task := cloneTask(t)
-		// The task ended when the agent last did something, not when the
-		// sweep noticed: completed_at = last_active keeps `duration` true.
-		task.CompletedAt = task.LastActive
-		r.commit(ctx, &task, nil, true)
-		delete(r.tasks, task.TaskID)
+	for _, v := range r.views(true) {
+		var rows []mlstore.TaskRow
+		var err error
+		if v.ship {
+			rows, err = r.cfg.Store.OpenTasksIdleSince(ctx, cutoff)
+		} else {
+			var lts []activity.Task
+			lts, err = r.loc().OpenTasksIdleSince(ctx, cutoff)
+			for _, lt := range lts {
+				rows = append(rows, fromLocalTask(lt))
+			}
+		}
+		if err != nil {
+			logging.L().Warn("mlproducer.recorder.sweep_failed", "err", err.Error())
+			continue
+		}
+		for _, t := range rows {
+			task := cloneTask(t)
+			// The task ended when the agent last did something, not when
+			// the sweep noticed: completed_at = last_active keeps
+			// `duration` true.
+			task.CompletedAt = task.LastActive
+			r.commit(ctx, v, &task, nil, true)
+			delete(v.tasks, task.TaskID)
+		}
 	}
 }
 
-// commit writes events + the task (+ an upsert record when due) in one
-// transaction and updates the cache. Caller holds r.mu.
-func (r *Recorder) commit(ctx context.Context, task *mlstore.TaskRow, events []mlstore.EventDraft, upsert bool) {
-	w := mlstore.Write{Events: events, Task: task}
-	if upsert {
+// commit writes events + the task (nil = events only) to view v in one
+// transaction and updates v's cache. In the ship view a task upsert
+// record is enqueued too when upsert is set; the local view's tasks row is
+// always current, so upsert does not apply to it. Caller holds r.mu.
+func (r *Recorder) commit(ctx context.Context, v *view, task *mlstore.TaskRow, events []evDraft, upsert bool) {
+	if !v.ship {
+		r.commitLocal(ctx, v, task, events)
+		return
+	}
+	w := mlstore.Write{Task: task}
+	for _, e := range events {
+		e := e
+		w.Events = append(w.Events, mlstore.EventDraft{CreatedAt: e.at, Body: func(seq int64) ([]byte, error) {
+			return encodeEvent(seq, e.kind, e.at, e.payload)
+		}})
+	}
+	if task != nil && upsert {
 		task.LastUpsertAt = task.LastActive
 		body, err := json.Marshal(taskWireBody(*task, r.currentBranch()))
 		if err != nil {
@@ -906,12 +1136,36 @@ func (r *Recorder) commit(ctx context.Context, task *mlstore.TaskRow, events []m
 		logging.L().Warn("mlproducer.recorder.commit_failed", "err", err.Error())
 		return
 	}
+	if task == nil {
+		return
+	}
 	cp := cloneTask(*task)
-	r.tasks[task.TaskID] = &cp
+	v.tasks[task.TaskID] = &cp
 	if upsert {
-		delete(r.dirty, task.TaskID)
+		delete(v.dirty, task.TaskID)
 	} else {
-		r.dirty[task.TaskID] = true
+		v.dirty[task.TaskID] = true
+	}
+}
+
+// commitLocal writes to the local activity store: each event as an events
+// row, the task as its tasks row (Fleet's column shape).
+func (r *Recorder) commitLocal(ctx context.Context, v *view, task *mlstore.TaskRow, events []evDraft) {
+	w := activity.Write{Source: EventSource}
+	for _, e := range events {
+		w.Events = append(w.Events, activity.Event{Kind: e.kind, TS: e.at, Payload: e.payload})
+	}
+	if task != nil {
+		lt := toLocalTask(*task, r.currentBranch())
+		w.Task = &lt
+	}
+	if _, err := r.loc().Commit(ctx, w); err != nil {
+		logging.L().Warn("mlproducer.recorder.local_commit_failed", "err", err.Error())
+		return
+	}
+	if task != nil {
+		cp := cloneTask(*task)
+		v.tasks[task.TaskID] = &cp
 	}
 }
 

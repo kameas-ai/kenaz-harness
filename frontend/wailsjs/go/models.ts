@@ -6841,6 +6841,30 @@ export namespace rpc {
 		    return a;
 		}
 	}
+	export class MLLocalActivityView {
+	    available: boolean;
+	    events: number;
+	    tasks: number;
+	    sizeBytes: number;
+	    retentionDays: number;
+	    effectiveRetentionDays: number;
+	    sharingWithFleet: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MLLocalActivityView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.events = source["events"];
+	        this.tasks = source["tasks"];
+	        this.sizeBytes = source["sizeBytes"];
+	        this.retentionDays = source["retentionDays"];
+	        this.effectiveRetentionDays = source["effectiveRetentionDays"];
+	        this.sharingWithFleet = source["sharingWithFleet"];
+	    }
+	}
 	export class ShellReadFileResult {
 	    dataBase64: string;
 	    mediaType: string;
@@ -8541,6 +8565,18 @@ export namespace settings {
 	        this.modelId = source["modelId"];
 	    }
 	}
+	export class ResetUnreadableResult {
+	    backupPath: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ResetUnreadableResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.backupPath = source["backupPath"];
+	    }
+	}
 	export class WindowSize {
 	    width: number;
 	    height: number;
@@ -8652,6 +8688,9 @@ export namespace settings {
 	    shareModelCallTelemetryWithFleet?: boolean;
 	    shareModelCallTelemetryTextRevision?: number;
 	    shareModelCallTelemetryAcceptedAt?: string;
+	    settingsSyncUploadsConfirmed?: boolean;
+	    settingsSyncEnabledCategories?: string[];
+	    mlLocalActivityRetentionDays?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8755,6 +8794,9 @@ export namespace settings {
 	        this.shareModelCallTelemetryWithFleet = source["shareModelCallTelemetryWithFleet"];
 	        this.shareModelCallTelemetryTextRevision = source["shareModelCallTelemetryTextRevision"];
 	        this.shareModelCallTelemetryAcceptedAt = source["shareModelCallTelemetryAcceptedAt"];
+	        this.settingsSyncUploadsConfirmed = source["settingsSyncUploadsConfirmed"];
+	        this.settingsSyncEnabledCategories = source["settingsSyncEnabledCategories"];
+	        this.mlLocalActivityRetentionDays = source["mlLocalActivityRetentionDays"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -9260,6 +9302,12 @@ export namespace sync {
 	    last_error?: string;
 	    scopes?: string[];
 	    org_applied_at?: string;
+	    awaiting_confirmation?: boolean;
+	    local_only?: boolean;
+	    conflict?: boolean;
+	    not_syncing_yet?: boolean;
+	    uploads_blocked_reason?: string;
+	    settings_unreadable?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SyncStatusView(source);
@@ -9274,6 +9322,12 @@ export namespace sync {
 	        this.last_error = source["last_error"];
 	        this.scopes = source["scopes"];
 	        this.org_applied_at = source["org_applied_at"];
+	        this.awaiting_confirmation = source["awaiting_confirmation"];
+	        this.local_only = source["local_only"];
+	        this.conflict = source["conflict"];
+	        this.not_syncing_yet = source["not_syncing_yet"];
+	        this.uploads_blocked_reason = source["uploads_blocked_reason"];
+	        this.settings_unreadable = source["settings_unreadable"];
 	    }
 	}
 

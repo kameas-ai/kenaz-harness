@@ -974,6 +974,17 @@ type Settings struct {
 	// still wait for SettingsSyncUploadsConfirmed.
 	SettingsSyncEnabledCategories []string `json:"settingsSyncEnabledCategories,omitempty"`
 
+	// ── Local ML activity (ml-producer-01MLPRD01 WP11, spec §12 A-16) ──
+
+	// MLLocalActivityRetentionDays is how long the local activity store
+	// (<dataDir>/ml/activity.db) keeps agent activity. 0 = the 90-day
+	// default; valid range 1..3650 (activity.EffectiveRetentionDays).
+	// Read on every pass of core/mlproducer/activity.Pruner
+	// (core/rpc/mlproducer_wiring.go). UI: Settings › Sync › Cloud ML ›
+	// "Local activity", written through
+	// Settings_SetMLLocalActivityRetention or a whole-settings Set.
+	MLLocalActivityRetentionDays int `json:"mlLocalActivityRetentionDays,omitempty"`
+
 	// gates:settings-struct-end — keep this marker the LAST line of the
 	// struct and add new fields ABOVE it. scripts/ci/gates_can_fail_test.go
 	// plants a probe field here, so it no longer re-anchors on whichever

@@ -169,7 +169,7 @@ func TestWP07_BackgroundExitFollowUp(t *testing.T) {
 		t.Errorf("task upsert test_fails = %d, want 1", task.TestFails)
 	}
 	h.rec.mu.Lock()
-	pending, parked := len(h.rec.bgPending), len(h.rec.bgParked)
+	pending, parked := len(h.rec.ship.bgPending), len(h.rec.ship.bgParked)
 	h.rec.mu.Unlock()
 	if pending != 0 || parked != 1 {
 		t.Errorf("pending/parked = %d/%d, want 0/1 (the unknown exit parked)", pending, parked)
@@ -214,7 +214,7 @@ func TestWP07_BackgroundExitSuppressed(t *testing.T) {
 		t.Fatalf("terminal events = %d, want 0", n)
 	}
 	h.rec.mu.Lock()
-	pending := len(h.rec.bgPending)
+	pending := len(h.rec.ship.bgPending)
 	h.rec.mu.Unlock()
 	if pending != 0 {
 		t.Errorf("pending = %d after the excluded exit, want 0", pending)

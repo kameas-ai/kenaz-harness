@@ -36,10 +36,17 @@
  * verbatim body_text (Fleet's rev-2 notice keeps the heading out of it).
  *
  * Hidden when signed out or without the hosted_inference capability.
+ *
+ * WP11 (spec §12 A-16, local-first): below it, ALWAYS shown (signed in or
+ * not), "Local activity" — what Kenaz keeps on this device in
+ * <dataDir>/ml/activity.db to power local suggestions: row counts, size,
+ * the retention setting (default 90 days) and "Delete local activity data"
+ * behind an inline confirm. The data stays on this device unless Fleet
+ * sharing is on.
  */
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import type { MLStatus } from '@/lib/types';
+import type { MLLocalActivity, MLStatus } from '@/lib/types';
 
 /** Spec §5: the fixed harness line, verbatim. */
 const HARNESS_LINE =
@@ -63,6 +70,70 @@ async function refresh() {
 }
 
 onMounted(refresh);
+
+// ── Local activity (WP11) ─────────────────────────────────────────────
+/** Spec §12 A-16 item 5, verbatim. */
+const LOCAL_LINE =
+  'Kenaz records agent activity on this device to power local suggestions. Nothing is sent to ' +
+  'Fleet unless you opt in.';
+const local = ref<MLLocalActivity | null>(null);
+const localBusy = ref(false);
+const localError = ref('');
+const confirmingDelete = ref(false);
+const retentionInput = ref<number>(0);
+
+function applyLocal(v: MLLocalActivity) {
+  local.value = v;
+  retentionInput.value = v.effectiveRetentionDays;
+}
+
+async function refreshLocal() {
+  try {
+    applyLocal(await client.settings.getMLLocalActivity());
+  } catch (err) {
+    localError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+onMounted(refreshLocal);
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function saveRetention() {
+  if (localBusy.value) return;
+  const days = Math.trunc(Number(retentionInput.value));
+  if (!Number.isFinite(days) || days < 1 || days > 3650) {
+    localError.value = 'Keep local activity for 1 to 3650 days.';
+    return;
+  }
+  localBusy.value = true;
+  localError.value = '';
+  try {
+    applyLocal(await client.settings.setMLLocalActivityRetention(days));
+  } catch (err) {
+    localError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    localBusy.value = false;
+  }
+}
+
+async function deleteLocal() {
+  if (localBusy.value) return;
+  localBusy.value = true;
+  localError.value = '';
+  try {
+    applyLocal(await client.settings.deleteMLLocalActivity());
+    confirmingDelete.value = false;
+  } catch (err) {
+    localError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    localBusy.value = false;
+  }
+}
 
 const visible = computed(() => !!status.value?.signedIn && !!status.value?.entitled);
 const loaded = computed(() => !!status.value?.loaded);
@@ -241,142 +312,231 @@ function onOptInChange(ev: Event) {
 </script>
 
 <template>
-  <section v-if="visible && status" class="space-y-3" data-testid="cloud-ml-panel">
-    <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">Cloud ML</h2>
+  <div class="space-y-6">
+    <section v-if="visible && status" class="space-y-3" data-testid="cloud-ml-panel">
+      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">Cloud ML</h2>
 
-    <p v-if="status.fleetError" class="text-[12px] text-ink-muted" data-testid="cloud-ml-fleet-error">
-      Could not read your Cloud ML settings from Fleet, so nothing is sent: {{ status.fleetError }}
-    </p>
+      <p v-if="status.fleetError" class="text-[12px] text-ink-muted" data-testid="cloud-ml-fleet-error">
+        Could not read your Cloud ML settings from Fleet, so nothing is sent: {{ status.fleetError }}
+      </p>
 
-    <template v-if="loaded">
-      <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-[12px]" data-testid="cloud-ml-fields">
-        <dt class="text-ink-muted">Organization offload</dt>
-        <dd data-testid="cloud-ml-offload">{{ status.orgOffloadEnabled ? 'On' : 'Off' }}</dd>
-        <dt class="text-ink-muted">Organization policy</dt>
-        <dd data-testid="cloud-ml-policy">{{ policyLabel(status.orgPolicy) }}</dd>
-        <dt class="text-ink-muted">Your opt-in</dt>
-        <dd data-testid="cloud-ml-optin-state">
-          {{ status.userWorkflowEventsOptedIn ? 'Opted in' : 'Not opted in' }}
-        </dd>
-        <dt class="text-ink-muted">Notice</dt>
-        <dd data-testid="cloud-ml-notice-status">{{ noticeLine }}</dd>
-        <dt class="text-ink-muted">Sending</dt>
-        <dd data-testid="cloud-ml-effective">
-          {{ status.effective ? 'On — agent activity is sent to Fleet' : 'Off — nothing is sent' }}
-        </dd>
-        <dt class="text-ink-muted">Retention</dt>
-        <dd data-testid="cloud-ml-retention">{{ status.retentionDays }} days</dd>
-      </dl>
+      <template v-if="loaded">
+        <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-[12px]" data-testid="cloud-ml-fields">
+          <dt class="text-ink-muted">Organization offload</dt>
+          <dd data-testid="cloud-ml-offload">{{ status.orgOffloadEnabled ? 'On' : 'Off' }}</dd>
+          <dt class="text-ink-muted">Organization policy</dt>
+          <dd data-testid="cloud-ml-policy">{{ policyLabel(status.orgPolicy) }}</dd>
+          <dt class="text-ink-muted">Your opt-in</dt>
+          <dd data-testid="cloud-ml-optin-state">
+            {{ status.userWorkflowEventsOptedIn ? 'Opted in' : 'Not opted in' }}
+          </dd>
+          <dt class="text-ink-muted">Notice</dt>
+          <dd data-testid="cloud-ml-notice-status">{{ noticeLine }}</dd>
+          <dt class="text-ink-muted">Sending</dt>
+          <dd data-testid="cloud-ml-effective">
+            {{ status.effective ? 'On — agent activity is sent to Fleet' : 'Off — nothing is sent' }}
+          </dd>
+          <dt class="text-ink-muted">Retention</dt>
+          <dd data-testid="cloud-ml-retention">{{ status.retentionDays }} days</dd>
+        </dl>
 
-      <label v-if="showOptIn" class="flex items-start gap-2 text-[12px]" data-testid="cloud-ml-optin">
-        <input
-          type="checkbox"
-          :checked="status.userWorkflowEventsOptedIn"
-          :disabled="busy"
-          data-testid="cloud-ml-optin-toggle"
-          @change="onOptInChange"
-        />
-        <span>Share what the agent does in my harness sessions with my organization's Cloud ML.</span>
-      </label>
+        <label v-if="showOptIn" class="flex items-start gap-2 text-[12px]" data-testid="cloud-ml-optin">
+          <input
+            type="checkbox"
+            :checked="status.userWorkflowEventsOptedIn"
+            :disabled="busy"
+            data-testid="cloud-ml-optin-toggle"
+            @change="onOptInChange"
+          />
+          <span>Share what the agent does in my harness sessions with my organization's Cloud ML.</span>
+        </label>
 
-      <div
-        v-if="showNotice"
-        class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
-        data-testid="cloud-ml-notice"
-      >
-        <p v-if="noticeChanged" class="text-signal-warn" data-testid="cloud-ml-notice-changed">
-          The notice changed since it was shown. Please read it again.
-        </p>
-        <!-- Fallback (no hub): counsel's rev-1 text, laid out from structured fields. -->
-        <template v-if="localNotice">
-          <h3 class="text-[13px] font-semibold" data-testid="cloud-ml-notice-heading">{{ localNotice.heading }}</h3>
-          <p data-testid="cloud-ml-notice-intro">{{ localNotice.intro }}</p>
-          <p v-for="s in localNotice.sections" :key="s.label" data-testid="cloud-ml-notice-section">
-            <strong>{{ s.label }}</strong> {{ s.text }}
+        <div
+          v-if="showNotice"
+          class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+          data-testid="cloud-ml-notice"
+        >
+          <p v-if="noticeChanged" class="text-signal-warn" data-testid="cloud-ml-notice-changed">
+            The notice changed since it was shown. Please read it again.
           </p>
-          <p v-if="localNotice.policyText" data-testid="cloud-ml-notice-policy">{{ localNotice.policyText }}</p>
-          <!-- Exclusions are part of the notice (Fleet's words): before any action button. -->
-          <p v-if="localNotice.exclusionsText" data-testid="cloud-ml-exclusions">{{ localNotice.exclusionsText }}</p>
-          <div class="flex gap-2">
+          <!-- Fallback (no hub): counsel's rev-1 text, laid out from structured fields. -->
+          <template v-if="localNotice">
+            <h3 class="text-[13px] font-semibold" data-testid="cloud-ml-notice-heading">{{ localNotice.heading }}</h3>
+            <p data-testid="cloud-ml-notice-intro">{{ localNotice.intro }}</p>
+            <p v-for="s in localNotice.sections" :key="s.label" data-testid="cloud-ml-notice-section">
+              <strong>{{ s.label }}</strong> {{ s.text }}
+            </p>
+            <p v-if="localNotice.policyText" data-testid="cloud-ml-notice-policy">{{ localNotice.policyText }}</p>
+            <!-- Exclusions are part of the notice (Fleet's words): before any action button. -->
+            <p v-if="localNotice.exclusionsText" data-testid="cloud-ml-exclusions">{{ localNotice.exclusionsText }}</p>
+            <div class="flex gap-2">
+              <button
+                v-for="a in localNotice.actions"
+                :key="a"
+                type="button"
+                class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="busy"
+                data-testid="cloud-ml-notice-action"
+                @click="onNoticeAction(a)"
+              >
+                {{ a }}
+              </button>
+            </div>
+          </template>
+          <!-- Hub: the item title is the heading; body_text verbatim below it. -->
+          <template v-else>
+            <h3 v-if="status.noticeTitle" class="text-[13px] font-semibold" data-testid="cloud-ml-notice-heading">
+              {{ status.noticeTitle }}
+            </h3>
+            <!-- The served body_text is the only exclusions source here: nothing of our own. -->
+            <p class="whitespace-pre-wrap" data-testid="cloud-ml-notice-text">{{ status.noticeText }}</p>
             <button
-              v-for="a in localNotice.actions"
-              :key="a"
               type="button"
               class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
               :disabled="busy"
-              data-testid="cloud-ml-notice-action"
-              @click="onNoticeAction(a)"
+              data-testid="cloud-ml-ack"
+              @click="acknowledge"
             >
-              {{ a }}
+              {{ ACTION_READ }}
+            </button>
+          </template>
+        </div>
+
+        <div
+          v-if="needsDashboard"
+          class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+          data-testid="cloud-ml-notice-dashboard"
+        >
+          <p data-testid="cloud-ml-notice-dashboard-text">{{ DASHBOARD_NOTICE }}</p>
+          <template v-if="dashboardUrl">
+            <p class="break-all text-ink-muted" data-testid="cloud-ml-notice-dashboard-url">{{ dashboardUrl }}</p>
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+              data-testid="cloud-ml-notice-dashboard-open"
+              @click="openDashboard"
+            >
+              Open Fleet dashboard
+            </button>
+          </template>
+        </div>
+
+        <!-- No notice shown: Fleet's exclusions paragraph on its own. -->
+        <p
+          v-if="loaded && !showNotice && exclusionsSummary"
+          class="text-[12px]"
+          data-testid="cloud-ml-exclusions"
+        >
+          {{ exclusionsSummary }}
+        </p>
+
+        <p class="text-[12px] text-ink-muted" data-testid="cloud-ml-harness-line">{{ HARNESS_LINE }}</p>
+      </template>
+
+      <!-- Shipping status: empty until the ML shipper reports. -->
+      <div class="text-[12px] text-ink-muted" data-testid="cloud-ml-shipping">
+        <template v-if="status.shipping">
+          <p data-testid="cloud-ml-shipping-last">
+            Last batch: {{ status.shipping.lastBatchAt ? formatTime(status.shipping.lastBatchAt) : 'none yet' }}
+          </p>
+          <p data-testid="cloud-ml-shipping-counts">
+            Accepted {{ status.shipping.accepted }}, duplicates {{ status.shipping.duplicates }},
+            rejected {{ status.shipping.rejected }}
+          </p>
+          <p v-if="status.shipping.stopReason" data-testid="cloud-ml-shipping-stop">
+            Last stop: {{ status.shipping.stopReason }}
+          </p>
+        </template>
+      </div>
+
+      <p v-if="errorMsg" class="text-[12px] text-signal-danger" data-testid="cloud-ml-error">{{ errorMsg }}</p>
+    </section>
+
+    <section class="space-y-3" data-testid="ml-local-activity">
+      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">Local activity</h2>
+      <p class="text-[12px]" data-testid="ml-local-line">{{ LOCAL_LINE }}</p>
+      <p v-if="local?.sharingWithFleet" class="text-[12px] text-ink-muted" data-testid="ml-local-sharing">
+        Fleet sharing is on, so new activity is also sent to your organization's Cloud ML.
+      </p>
+      <template v-if="local">
+        <p v-if="!local.available" class="text-[12px] text-ink-muted" data-testid="ml-local-unavailable">
+          The local activity store could not be opened, so nothing is being kept on this device.
+        </p>
+        <template v-else>
+          <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-[12px]" data-testid="ml-local-fields">
+            <dt class="text-ink-muted">Stored</dt>
+            <dd data-testid="ml-local-counts">{{ local.events }} events, {{ local.tasks }} tasks</dd>
+            <dt class="text-ink-muted">Size on disk</dt>
+            <dd data-testid="ml-local-size">{{ formatBytes(local.sizeBytes) }}</dd>
+            <dt class="text-ink-muted">Kept for</dt>
+            <dd data-testid="ml-local-retention">{{ local.effectiveRetentionDays }} days</dd>
+          </dl>
+          <label class="flex items-center gap-2 text-[12px]">
+            <span>Keep local activity for</span>
+            <input
+              v-model.number="retentionInput"
+              type="number"
+              min="1"
+              max="3650"
+              class="w-20 rounded-sm border border-border-muted bg-transparent px-2 py-1"
+              :disabled="localBusy"
+              data-testid="ml-local-retention-input"
+            />
+            <span>days</span>
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              :disabled="localBusy"
+              data-testid="ml-local-retention-save"
+              @click="saveRetention"
+            >
+              Save
+            </button>
+          </label>
+          <div v-if="!confirmingDelete">
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              :disabled="localBusy"
+              data-testid="ml-local-delete"
+              @click="confirmingDelete = true"
+            >
+              Delete local activity data
             </button>
           </div>
-        </template>
-        <!-- Hub: the item title is the heading; body_text verbatim below it. -->
-        <template v-else>
-          <h3 v-if="status.noticeTitle" class="text-[13px] font-semibold" data-testid="cloud-ml-notice-heading">
-            {{ status.noticeTitle }}
-          </h3>
-          <!-- The served body_text is the only exclusions source here: nothing of our own. -->
-          <p class="whitespace-pre-wrap" data-testid="cloud-ml-notice-text">{{ status.noticeText }}</p>
-          <button
-            type="button"
-            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            :disabled="busy"
-            data-testid="cloud-ml-ack"
-            @click="acknowledge"
+          <div
+            v-else
+            class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+            data-testid="ml-local-delete-confirm"
           >
-            {{ ACTION_READ }}
-          </button>
+            <p>
+              This deletes all agent activity Kenaz has kept on this device, and anything not yet sent to
+              Fleet. It cannot be undone.
+            </p>
+            <div class="flex gap-2">
+              <button
+                type="button"
+                class="px-3 py-1.5 rounded-sm border border-signal-danger text-signal-danger text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="localBusy"
+                data-testid="ml-local-delete-yes"
+                @click="deleteLocal"
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+                :disabled="localBusy"
+                data-testid="ml-local-delete-cancel"
+                @click="confirmingDelete = false"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </template>
-      </div>
-
-      <div
-        v-if="needsDashboard"
-        class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
-        data-testid="cloud-ml-notice-dashboard"
-      >
-        <p data-testid="cloud-ml-notice-dashboard-text">{{ DASHBOARD_NOTICE }}</p>
-        <template v-if="dashboardUrl">
-          <p class="break-all text-ink-muted" data-testid="cloud-ml-notice-dashboard-url">{{ dashboardUrl }}</p>
-          <button
-            type="button"
-            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
-            data-testid="cloud-ml-notice-dashboard-open"
-            @click="openDashboard"
-          >
-            Open Fleet dashboard
-          </button>
-        </template>
-      </div>
-
-      <!-- No notice shown: Fleet's exclusions paragraph on its own. -->
-      <p
-        v-if="loaded && !showNotice && exclusionsSummary"
-        class="text-[12px]"
-        data-testid="cloud-ml-exclusions"
-      >
-        {{ exclusionsSummary }}
-      </p>
-
-      <p class="text-[12px] text-ink-muted" data-testid="cloud-ml-harness-line">{{ HARNESS_LINE }}</p>
-    </template>
-
-    <!-- Shipping status: empty until the ML shipper reports. -->
-    <div class="text-[12px] text-ink-muted" data-testid="cloud-ml-shipping">
-      <template v-if="status.shipping">
-        <p data-testid="cloud-ml-shipping-last">
-          Last batch: {{ status.shipping.lastBatchAt ? formatTime(status.shipping.lastBatchAt) : 'none yet' }}
-        </p>
-        <p data-testid="cloud-ml-shipping-counts">
-          Accepted {{ status.shipping.accepted }}, duplicates {{ status.shipping.duplicates }},
-          rejected {{ status.shipping.rejected }}
-        </p>
-        <p v-if="status.shipping.stopReason" data-testid="cloud-ml-shipping-stop">
-          Last stop: {{ status.shipping.stopReason }}
-        </p>
       </template>
-    </div>
-
-    <p v-if="errorMsg" class="text-[12px] text-signal-danger" data-testid="cloud-ml-error">{{ errorMsg }}</p>
-  </section>
+      <p v-if="localError" class="text-[12px] text-signal-danger" data-testid="ml-local-error">{{ localError }}</p>
+    </section>
+  </div>
 </template>

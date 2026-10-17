@@ -202,6 +202,13 @@ type HarnessAPI interface {
 	// (llm-call-telemetry-01LLMTEL01 WP02).
 	ModelCallsForSession(ctx context.Context, sessionID string, limit int) ([]modelcalls.CallView, error)
 
+	// MLLocalActivity / SetMLLocalActivityRetention / DeleteMLLocalActivity
+	// are the local ML activity store's Settings surface
+	// (ml-producer-01MLPRD01 WP11, mlproducer_wiring.go).
+	MLLocalActivity(ctx context.Context) (MLLocalActivityView, error)
+	SetMLLocalActivityRetention(ctx context.Context, days int) (MLLocalActivityView, error)
+	DeleteMLLocalActivity(ctx context.Context) (MLLocalActivityView, error)
+
 	// Advice_Respond is laya-advisors-01LAYA001 WP07's chip response RPC:
 	// action is "accept" or "dismiss". Returns the newly created child
 	// session id for a branch_now accept (empty string otherwise). See
@@ -6853,7 +6860,7 @@ func newLLMStack(
 		var sidecarMgr *mlsidecar.Manager
 		var sidecarProbe advice.SidecarProbe
 		if c != nil {
-			sidecarMgr, sidecarProbe = newSidecarStack(c.DataDir(), c.BuildVersion())
+			sidecarMgr, sidecarProbe = newSidecarStack(c.DataDir(), c.BuildVersion(), settingsRetentionReader(settingsImpl))
 		}
 		var sidecarBootProbe advice.SidecarProbe
 		if sidecarMgr != nil {
