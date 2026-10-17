@@ -114,3 +114,34 @@ func TestProcessSpawner_EnvFuncReadPerSpawnReachesChild(t *testing.T) {
 		}
 	}
 }
+
+// Review nit 2 (#429): an inherited variable the harness sets is replaced
+// (never duplicated), and a ScrubEnv name is never inherited — when
+// EnvFunc omits it (its read failed) the child does not see the
+// launcher's value.
+func TestProcessSpawner_EnvScrubsAndReplacesInherited(t *testing.T) {
+	const v = "ZZ_RETENTION"
+	count := func(env []string) []string {
+		var out []string
+		for _, kv := range env {
+			if strings.HasPrefix(kv, v+"=") {
+				out = append(out, kv)
+			}
+		}
+		return out
+	}
+	inherited := []string{"PATH=/bin", v + "=7"}
+	sp := ProcessSpawner{Layout: NewLayout("/r"), ScrubEnv: []string{v},
+		EnvFunc: func() []string { return nil }}
+	if got := count(sp.Env(inherited)); len(got) != 0 {
+		t.Fatalf("read failed: child env has %v, want the inherited value stripped", got)
+	}
+	sp.EnvFunc = func() []string { return []string{v + "=3650"} }
+	if got := count(sp.Env(inherited)); len(got) != 1 || got[0] != v+"=3650" {
+		t.Fatalf("read ok: child env has %v, want exactly the harness's value", got)
+	}
+	// Without ScrubEnv, an extra still replaces an inherited entry.
+	if got := count(SpawnEnv(inherited, "/r", v+"=30")); len(got) != 1 || got[0] != v+"=30" {
+		t.Fatalf("SpawnEnv duplicate: %v", got)
+	}
+}

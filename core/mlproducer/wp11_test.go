@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -397,25 +400,28 @@ func TestWP11_IdleSweepCompletesLocalTask(t *testing.T) {
 
 // Review finding 3 (#429): a local store that failed to open at boot is
 // reopened lazily on a later record (throttled by ReopenEvery), instead of
-// the process recording nothing locally until restart.
+// the process recording nothing locally until restart. The reopen runs in
+// the background (nit 3), so the record that starts it is not written
+// locally; the next one after it succeeds is.
 func TestWP11_LocalStoreReopensLazily(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	h.rec.Close()
 	path := activity.Path(h.dir)
-	var attempts int
-	fail := true
-	var opened *activity.Store
+	var attempts atomic.Int32
+	var fail atomic.Bool
+	fail.Store(true)
+	var opened atomic.Pointer[activity.Store]
 	h.rec = NewRecorder(Config{
 		Store: h.store, Hasher: NewHasher(h.dir),
 		Gate: KindGateFunc{Record: func() bool { return false }},
 		OpenLocal: func() (*activity.Store, error) {
-			attempts++
-			if fail {
+			attempts.Add(1)
+			if fail.Load() {
 				return nil, fmt.Errorf("activity: open: database is locked")
 			}
 			s, err := activity.Open(path)
-			opened = s
+			opened.Store(s)
 			return s, err
 		},
 		ReopenEvery: time.Minute,
@@ -424,26 +430,206 @@ func TestWP11_LocalStoreReopensLazily(t *testing.T) {
 	rec := h.rec
 	t.Cleanup(func() {
 		rec.Close()
-		if opened != nil {
-			_ = opened.Close()
+		if s := opened.Load(); s != nil {
+			_ = s.Close()
 		}
 	})
 	ctx := context.Background()
 	h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
 	h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
 	h.flush()
-	if attempts != 1 || h.rec.LocalStore() != nil {
-		t.Fatalf("attempts = %d (want 1: throttled), store = %v", attempts, h.rec.LocalStore())
+	waitFor(t, func() bool { return attempts.Load() >= 1 && !rec.reopening.Load() }, "reopen")
+	if n := attempts.Load(); n != 1 || h.rec.LocalStore() != nil {
+		t.Fatalf("attempts = %d (want 1: throttled), store = %v", n, h.rec.LocalStore())
 	}
-	fail = false
+	fail.Store(false)
 	h.clock.advance(2 * time.Minute)
 	h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
 	h.flush()
-	if h.rec.LocalStore() == nil || attempts != 2 {
-		t.Fatalf("store not reopened (attempts %d)", attempts)
+	waitFor(t, func() bool { return h.rec.LocalStore() != nil }, "reopen")
+	if n := attempts.Load(); n != 2 {
+		t.Fatalf("attempts = %d, want 2", n)
 	}
+	h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+	h.flush()
 	st, err := h.rec.LocalStore().Stats(ctx)
 	if err != nil || st.Events != 2 || st.Tasks != 1 {
 		t.Fatalf("local after reopen = %+v, %v; want the post-reopen call's file + phase_change", st, err)
+	}
+}
+
+// Review nit 3 (#429): a slow, failing reopen (activity.Open retries on a
+// locked file) runs off the worker, one attempt at a time: a burst of
+// records is never held up by it, and the ship view still records.
+func TestWP11_SlowReopenNeverBlocksWorker(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.rec.Close()
+	var attempts, inFlight, maxInFlight atomic.Int32
+	h.rec = NewRecorder(Config{
+		Store: h.store, Hasher: NewHasher(h.dir),
+		Gate: KindGateFunc{Record: h.gate.Load, AIUsage: h.ai.Load},
+		OpenLocal: func() (*activity.Store, error) {
+			attempts.Add(1)
+			n := inFlight.Add(1)
+			for {
+				m := maxInFlight.Load()
+				if n <= m || maxInFlight.CompareAndSwap(m, n) {
+					break
+				}
+			}
+			time.Sleep(time.Second)
+			inFlight.Add(-1)
+			return nil, fmt.Errorf("activity: open: database is locked")
+		},
+		ReopenEvery: time.Millisecond,
+		Workspace:   func() string { return workspace }, Now: h.clock.Now, SweepInterval: -1,
+	})
+	rec := h.rec
+	t.Cleanup(rec.Close)
+	h.gate.Store(true)
+	ctx := context.Background()
+	for i := 0; i < 8; i++ {
+		h.clock.advance(time.Second) // past ReopenEvery: every record may retry
+		start := time.Now()
+		h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+		h.flush()
+		if d := time.Since(start); d > 200*time.Millisecond {
+			t.Fatalf("record %d took %v with a 1 s reopen in flight; the worker waited on OpenLocal", i, d)
+		}
+	}
+	waitFor(t, func() bool { return attempts.Load() >= 1 }, "reopen")
+	if m := maxInFlight.Load(); m != 1 {
+		t.Fatalf("max concurrent OpenLocal = %d, want 1 (single in-flight guard)", m)
+	}
+	if rec.LocalStore() != nil {
+		t.Fatal("a failing open installed a store")
+	}
+	if got := outboxEventKinds(h.outbox()); len(got) == 0 {
+		t.Fatal("ship view recorded nothing while the local store was unavailable")
+	}
+}
+
+// A background reopen that completes after Close closes its handle
+// instead of installing it (the owner closed the store it held already).
+func TestWP11_ReopenAfterClose_ClosesHandle(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.rec.Close()
+	path := activity.Path(h.dir)
+	release := make(chan struct{})
+	var opened atomic.Pointer[activity.Store]
+	rec := NewRecorder(Config{
+		Store: h.store, Hasher: NewHasher(h.dir),
+		Gate: KindGateFunc{Record: func() bool { return false }},
+		OpenLocal: func() (*activity.Store, error) {
+			<-release
+			s, err := activity.Open(path)
+			opened.Store(s)
+			return s, err
+		},
+		Workspace: func() string { return workspace }, Now: h.clock.Now, SweepInterval: -1,
+	})
+	h.rec = rec
+	ctx := context.Background()
+	h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+	h.flush()
+	waitFor(t, rec.reopening.Load, "reopen")
+	rec.Close()
+	close(release)
+	waitFor(t, func() bool { return !rec.reopening.Load() }, "reopen")
+	s := opened.Load()
+	if s == nil {
+		t.Fatal("reopen never ran")
+	}
+	if rec.LocalStore() != nil {
+		t.Fatal("a reopen finishing after Close installed its store")
+	}
+	if _, err := s.Stats(ctx); err == nil {
+		_ = s.Close()
+		t.Fatal("the late-opened handle was left open")
+	}
+}
+
+// Review nit 1 (#429): after shutdown, DeleteLocal must not open a store
+// handle (the owner closed the local store right after Close; a new one
+// would leak). Boot open failed, so the recorder has no store and only
+// OpenLocal.
+func TestWP11_DeleteLocalAfterClose_OpensNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.rec.Close()
+	path := activity.Path(h.dir)
+	var mu sync.Mutex
+	var opened []*activity.Store
+	rec := NewRecorder(Config{
+		Store: h.store, Hasher: NewHasher(h.dir),
+		Gate: KindGateFunc{Record: func() bool { return false }},
+		OpenLocal: func() (*activity.Store, error) {
+			s, err := activity.Open(path)
+			if err == nil {
+				mu.Lock()
+				opened = append(opened, s)
+				mu.Unlock()
+			}
+			return s, err
+		},
+		Workspace: func() string { return workspace }, Now: h.clock.Now, SweepInterval: -1,
+	})
+	rec.Close()
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, s := range opened {
+			_ = s.Close()
+		}
+	})
+	err := rec.DeleteLocal(context.Background())
+	if !errors.Is(err, ErrRecorderClosed) {
+		t.Fatalf("DeleteLocal after Close = %v, want ErrRecorderClosed", err)
+	}
+	mu.Lock()
+	n := len(opened)
+	mu.Unlock()
+	if n != 0 || rec.LocalStore() != nil {
+		t.Fatalf("DeleteLocal after Close opened %d store handle(s) (LocalStore %v); want none", n, rec.LocalStore())
+	}
+}
+
+// With the reopen in the background, DeleteLocal on a recorder whose boot
+// open failed opens the store itself (not the throttled retry), so the
+// file's earlier rows are really deleted, and keeps the handle for the
+// owner to close.
+func TestWP11_DeleteLocal_OpensStoreWhenNoneOpen(t *testing.T) {
+	t.Parallel()
+	lh := newLocalHarness(t)
+	ctx := context.Background()
+	lh.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+	if len(lh.localEvents(t)) == 0 {
+		t.Fatal("setup: nothing recorded locally")
+	}
+	lh.rec.Close()
+	_ = lh.local.Close()
+	rec := NewRecorder(Config{
+		Store: lh.store, Hasher: NewHasher(lh.dir),
+		Gate:      KindGateFunc{Record: func() bool { return false }},
+		OpenLocal: func() (*activity.Store, error) { return activity.Open(lh.path) },
+		Workspace: func() string { return workspace }, Now: lh.clock.Now, SweepInterval: -1,
+	})
+	t.Cleanup(func() {
+		rec.Close()
+		if s := rec.LocalStore(); s != nil {
+			_ = s.Close()
+		}
+	})
+	if err := rec.DeleteLocal(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s := rec.LocalStore()
+	if s == nil {
+		t.Fatal("DeleteLocal did not install the store it opened")
+	}
+	if st, err := s.Stats(ctx); err != nil || st.Events != 0 || st.Tasks != 0 {
+		t.Fatalf("after DeleteLocal: %+v, %v; want empty", st, err)
 	}
 }
