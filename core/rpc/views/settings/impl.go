@@ -2153,14 +2153,11 @@ func (m *memoryStore) Update(fn func(*Settings) error) error {
 	return nil
 }
 
+// validateMemorySave is validateFileSave: the in-memory store applies
+// exactly the checks the real settings.json store does, so a test built on
+// it cannot accept a save production would reject.
 func validateMemorySave(s Settings) error {
-	if err := validateCompactionFields(s); err != nil {
-		return err
-	}
-	if err := validateUpdateFields(s); err != nil {
-		return err
-	}
-	return s.toolExposureSettings().Validate()
+	return validateFileSave(s)
 }
 
 func (m *memoryStore) saveLocked(s Settings) {
