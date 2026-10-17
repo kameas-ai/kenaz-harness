@@ -19,6 +19,7 @@ const h = vi.hoisted(() => {
     release: (() => {}) as () => void,
     gate: Promise.resolve() as Promise<void>,
     childMounts: 0,
+    fail: false,
   };
   return state;
 });
@@ -26,6 +27,7 @@ const h = vi.hoisted(() => {
 function mockGatedCodeBlock() {
   vi.doMock('@/components/rendering/CodeBlock.vue', async () => {
     await h.gate;
+    if (h.fail) throw new Error('CodeBlock chunk failed to load');
     const { defineComponent, h: render, onMounted } = await import('vue');
     return {
       default: defineComponent({
@@ -92,6 +94,7 @@ describe('MarkdownBlock async upgrades vs teardown', () => {
 
   beforeEach(() => {
     h.childMounts = 0;
+    h.fail = false;
     h.gate = new Promise<void>((resolve) => {
       h.release = resolve;
     });
@@ -140,6 +143,19 @@ describe('MarkdownBlock async upgrades vs teardown', () => {
     vi.unstubAllGlobals();
     expect(h.childMounts).toBe(0);
     expect(vueErrors).toEqual([]);
+    expect(unhandled).toEqual([]);
+  });
+
+  it('a failure while still mounted reaches app.config.errorHandler (harness.log / Sentry), not an unhandled rejection', async () => {
+    const { w, vueErrors } = await mountGated();
+    wrapper = w;
+    h.fail = true;
+    h.release();
+    await settle();
+    expect(h.childMounts).toBe(0);
+    // Exactly one error reaches the app's handler (vitest wraps the failing
+    // mock factory's error in its own message, so don't match the text).
+    expect(vueErrors).toHaveLength(1);
     expect(unhandled).toEqual([]);
   });
 });

@@ -533,10 +533,11 @@ async function runUpgrades() {
 }
 
 /**
- * Fire-and-forget entry point for the lifecycle hooks. Waits for the
- * v-html commit, then upgrades. A failure after teardown is expected
- * noise (the DOM is gone) and is dropped; any other failure is logged
- * rather than escaping as an unhandled rejection.
+ * Entry point for the lifecycle hooks. Waits for the v-html commit, then
+ * upgrades. A failure after teardown is expected noise (the DOM is gone)
+ * and is dropped. Any failure while live is rethrown: the hooks return
+ * this promise, so Vue routes it to app.config.errorHandler (harness.log
+ * and Sentry, main.ts) exactly as before.
  */
 async function scheduleUpgrades(): Promise<void> {
   try {
@@ -544,19 +545,15 @@ async function scheduleUpgrades(): Promise<void> {
     await runUpgrades();
   } catch (err) {
     if (isTornDown()) return;
-    console.warn('[MarkdownBlock] post-render upgrade failed', err);
+    throw err;
   }
 }
 
 // Run upgrades whenever html changes (which fires on every text update).
 // flush: 'post' ensures the v-html DOM update has committed before we walk.
-watch(html, () => {
-  void scheduleUpgrades();
-}, { flush: 'post' });
+watch(html, () => scheduleUpgrades(), { flush: 'post' });
 
-onMounted(() => {
-  void scheduleUpgrades();
-});
+onMounted(() => scheduleUpgrades());
 
 onBeforeUnmount(() => {
   disposed = true;
