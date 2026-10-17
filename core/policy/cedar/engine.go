@@ -183,6 +183,10 @@ type PolicyFile struct {
 	Embedded bool   `json:"embedded"`
 	ParseOK  bool   `json:"parse_ok"`
 	ParseErr string `json:"parse_err,omitempty"`
+	// EvalErrors lists this file's policies that parsed but failed to
+	// evaluate on a request since the last Reload. Filled by
+	// ListPolicies; empty when none has.
+	EvalErrors []PolicyEvalError `json:"eval_errors,omitempty"`
 }
 
 // Options configures a new Engine.
@@ -255,6 +259,10 @@ type Engine struct {
 	snippets map[string][]byte
 
 	decisions DecisionStore
+
+	// evalErrors records every policy whose evaluation errored since
+	// the last Reload / SetPolicyText (PolicyEvalErrors, ListPolicies).
+	evalErrors evalErrorTracker
 }
 
 // NewEngine constructs an Engine and runs an initial Reload. When
@@ -300,6 +308,7 @@ func (e *Engine) SetPolicyText(name string, source []byte) error {
 		return fmt.Errorf("cedar: parse %s: %w", name, err)
 	}
 	e.policies.Store(ps)
+	e.evalErrors.reset()
 	e.filesMu.Lock()
 	e.files = []PolicyFile{{
 		Name:    name,
@@ -470,6 +479,7 @@ func (e *Engine) Reload(ctx context.Context) error {
 	}
 
 	e.policies.Store(ps)
+	e.evalErrors.reset()
 	e.filesMu.Lock()
 	e.files = files
 	e.filesMu.Unlock()
@@ -479,11 +489,27 @@ func (e *Engine) Reload(ctx context.Context) error {
 
 // ListPolicies returns the per-file parse status from the last Reload.
 // Empty until the first Reload completes.
+//
+// Each entry's EvalErrors lists the policies from that file that failed
+// to evaluate on at least one request since the last Reload (see
+// PolicyEvalErrors) — the status surface for "this rule parses but is
+// broken at runtime".
 func (e *Engine) ListPolicies() []PolicyFile {
 	e.filesMu.RLock()
-	defer e.filesMu.RUnlock()
 	out := make([]PolicyFile, len(e.files))
 	copy(out, e.files)
+	e.filesMu.RUnlock()
+	evalErrs := e.evalErrors.snapshot()
+	if len(evalErrs) == 0 {
+		return out
+	}
+	for i := range out {
+		for _, pe := range evalErrs {
+			if pe.File != "" && pe.File == out[i].Name {
+				out[i].EvalErrors = append(out[i].EvalErrors, pe)
+			}
+		}
+	}
 	return out
 }
 
@@ -504,9 +530,12 @@ func (e *Engine) RecentDecisions(limit int) []Decision {
 //
 // Evaluate is the hot path — it MUST NOT block on I/O. It performs
 // the cedar.Authorize call, classifies the result, and writes the
-// audit record. Errors are not returned: a Cedar-level evaluation
-// error is mapped to a Deny decision with the diagnostic message in
-// Reason so the caller can refuse the action and surface why.
+// audit record. Errors are not returned. A policy whose evaluation
+// errors (cedar-go skips it and lists it in diag.Errors) is handled by
+// fromCedar: an erroring forbid yields Deny (fail-closed), an erroring
+// permit is treated as not matching. Every such error is recorded in
+// the engine's eval-error tracker (PolicyEvalErrors / ListPolicies) so
+// the policy author can see the rule is broken.
 func (e *Engine) Evaluate(
 	ctx context.Context,
 	principal cedar.EntityUID,
@@ -533,7 +562,10 @@ func (e *Engine) Evaluate(
 		Context:   cedar.NewRecord(contextAttrs),
 	}
 	dec, diag := cedar.Authorize(ps, cedar.EntityMap{}, req)
-	out := fromCedar(action, principal, resource, dec, diag, e.opts.DefaultDeny)
+	if len(diag.Errors) > 0 {
+		e.evalErrors.record(ps, diag.Errors)
+	}
+	out := fromCedar(action, principal, resource, dec, diag, ps, e.opts.DefaultDeny)
 	e.decisions.Append(out)
 	return out
 }
@@ -702,8 +734,10 @@ func withDeviceKind(attrs map[cedar.String]cedar.Value, kind string) map[cedar.S
 //
 //  1. The bundled default policies reference these attrs in `when {
 //     ... }` clauses; a request that omits a referenced attr produces
-//     a Cedar evaluation error and lands as Deny. Filling sane
-//     zero-values keeps the request well-formed.
+//     a Cedar evaluation error. cedar-go skips the erroring policy, so
+//     an erroring permit silently does not match and an erroring
+//     forbid makes fromCedar return Deny (fail-closed). Filling sane
+//     zero-values keeps the request well-formed so neither happens.
 //  2. Derived attrs (server_name from a "<server>__<tool>" UID,
 //     pattern from a BashCommand UID, canonical_path from a
 //     FilesystemOp UID) are 1:1 with the resource id. Computing them
@@ -800,8 +834,9 @@ func populateFamilyContext(
 		// Mirror the resource id as recipe_id; callers supply the
 		// fuller recipe_command and recipe_transport via the context
 		// map. We ensure zero-values here so the policy's `when`
-		// clauses never see a missing attribute (Cedar evaluation error
-		// on a missing attr lands as Deny).
+		// clauses never see a missing attribute (a missing attr is a
+		// Cedar evaluation error: an erroring forbid denies, an erroring
+		// permit silently does not match).
 		ensure(CtxKeyRecipeID, resourceID)
 		ensure(CtxKeyRecipeCommand, "")
 		ensure(CtxKeyRecipeTransport, "stdio")

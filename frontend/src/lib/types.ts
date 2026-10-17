@@ -4441,6 +4441,21 @@ export interface PolicyFile {
   embedded?: boolean;
   parse_ok: boolean;
   parse_err?: string;
+  /** Policies in this file that parsed but failed to evaluate (cedar.PolicyEvalError). */
+  eval_errors?: PolicyEvalError[];
+}
+
+/**
+ * PolicyEvalError mirrors cedar.PolicyEvalError: a policy that failed to
+ * evaluate on at least one request since the last reload. An erroring
+ * forbid denies (fail-closed); an erroring permit is skipped.
+ */
+export interface PolicyEvalError {
+  policy_id: string;
+  file?: string;
+  effect: 'forbid' | 'permit' | string;
+  message: string;
+  count: number;
 }
 
 /**
@@ -4495,6 +4510,8 @@ export interface PolicyFileDetail {
   parse_ok: boolean;
   /** Parse error message; empty when parse_ok is true. */
   parse_err?: string;
+  /** Policies in this file that parsed but failed to evaluate. */
+  eval_errors?: PolicyEvalError[];
   /** The raw Cedar source text. */
   source: string;
   /** true for embedded defaults that cannot be edited or deleted via the UI. */
