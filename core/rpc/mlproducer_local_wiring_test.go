@@ -195,24 +195,113 @@ func TestMLProducerWiring_UnreadableRetentionSkipsPrune(t *testing.T) {
 	if err := os.WriteFile(store.Path(), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The last good read (3650, taken by SetMLLocalActivityRetention's
+	// status readout) applies: not the 90-day default.
 	ev, tk, err := w.pruner.PruneOnce(ctx)
-	if err == nil || ev != 0 || tk != 0 {
-		t.Fatalf("prune with an unreadable setting = %d/%d, %v; want the pass skipped with an error", ev, tk, err)
+	if err != nil || ev != 0 || tk != 0 {
+		t.Fatalf("prune with an unreadable setting = %d/%d, %v; want the last good 3650 days (nothing deleted)", ev, tk, err)
 	}
 	st, _ := w.rec.LocalStore().Stats(ctx)
 	if st.Events != 1 || st.Tasks != 1 {
-		t.Fatalf("rows after the skipped pass = %+v; the 200-day-old activity was purged", st)
+		t.Fatalf("rows after the pass = %+v; the 200-day-old activity was purged", st)
 	}
-	// The readout reports the failure rather than a made-up retention.
+	// Below the guard's threshold the readout reports the failure rather
+	// than a made-up retention.
 	if _, err := a.MLLocalActivity(ctx); err == nil {
 		t.Fatal("status with an unreadable setting returned no error")
+	}
+	// (d) Three consecutive failed passes: the readout flags it with the
+	// last good window the pruner is still applying.
+	for i := 0; i < 2; i++ {
+		_, _, _ = w.pruner.PruneOnce(ctx)
+	}
+	v, err := a.MLLocalActivity(ctx)
+	if err != nil {
+		t.Fatalf("status once blocked: %v; want the guard, not an error", err)
+	}
+	if !v.RetentionBlocked || v.LastGoodRetentionDays != 3650 || v.RetentionDays != 3650 || v.EffectiveRetentionDays != 3650 || !v.Available || v.Events != 1 {
+		t.Fatalf("status once blocked = %+v; want RetentionBlocked with the last good 3650", v)
+	}
+	// A good read clears it.
+	if err := os.WriteFile(store.Path(), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := a.MLLocalActivity(ctx); err != nil || v.RetentionBlocked || v.LastGoodRetentionDays != 0 {
+		t.Fatalf("status once readable = %+v, %v; want not blocked", v, err)
+	}
+}
+
+// (b) + (c) Settings unreadable from boot: no successful read in this
+// process, so the prune pass deletes nothing (not the 90-day default),
+// and the engine is spawned with exactly one
+// KENAZ_ML_ACTIVITY_RETENTION_DAYS=hold (kenaz-ml contract: do not prune
+// this run) — an inherited value is scrubbed, never passed beside it.
+func TestMLProducerWiring_UnreadableFromBootSkipsPruneAndHoldsEngine(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	c, err := core.New(core.Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	store, err := settingsview.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.Path(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := New(c, WithSettingsStore(store))
+	t.Cleanup(a.Shutdown)
+	w := a.mlProducer
+	ctx := context.Background()
+	ts := time.Now().Add(-200 * 24 * time.Hour).UnixMilli()
+	if _, err := w.rec.LocalStore().Commit(ctx, activity.Write{
+		Source: "harness.agent",
+		Events: []activity.Event{{Kind: "phase_change", TS: ts, Payload: map[string]any{"task": "agent-x", "phase": "coding"}}},
+		Task:   &activity.Task{ID: "agent-x", RepoRoot: "r", StartedAt: ts, LastActive: ts},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ev, tk, err := w.pruner.PruneOnce(ctx); err != activity.ErrRetentionUnreadable || ev != 0 || tk != 0 {
+		t.Fatalf("first prune, never readable = %d/%d, %v; want skipped", ev, tk, err)
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 1 || st.Tasks != 1 {
+		t.Fatalf("rows after the skipped pass = %+v", st)
+	}
+	// Blocked with no last good value: the readout says so (0 = nothing
+	// is being deleted) and the rows stay.
+	for i := 0; i < 2; i++ {
+		_, _, _ = w.pruner.PruneOnce(ctx)
+	}
+	if v, err := a.MLLocalActivity(ctx); err != nil || !v.RetentionBlocked || v.LastGoodRetentionDays != 0 {
+		t.Fatalf("status blocked without last good = %+v, %v", v, err)
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 1 || st.Tasks != 1 {
+		t.Fatalf("rows while blocked without last good = %+v", st)
+	}
+	sp, ok := a.sidecarMgr.Spawner.(mlsidecar.ProcessSpawner)
+	if !ok || sp.EnvFunc == nil {
+		t.Fatalf("Spawner = %T with no EnvFunc", a.sidecarMgr.Spawner)
+	}
+	var got []string
+	for _, kv := range sp.Env([]string{"PATH=/bin", activity.RetentionEnvVar + "=7"}) {
+		if strings.HasPrefix(kv, activity.RetentionEnvVar+"=") {
+			got = append(got, kv)
+		}
+	}
+	if len(got) != 1 || got[0] != activity.RetentionEnvVar+"="+activity.RetentionHold {
+		t.Fatalf("never-readable setting: child env = %v; want exactly =hold", got)
 	}
 }
 
 // kenaz-ml agreement (#429): the engine is spawned with
 // KENAZ_ML_ACTIVITY_RETENTION_DAYS = the EFFECTIVE local retention, read
-// fresh on each spawn, and with no such entry when the setting cannot be
-// read (never a fallback number that could shrink a longer setting).
+// fresh on each spawn; on a read failure the last good value, and with
+// none no such entry (never a fallback number that could shrink a longer
+// setting).
 func TestMLProducerWiring_SidecarGetsEffectiveRetention(t *testing.T) {
 	t.Parallel()
 	dataDir := t.TempDir()
@@ -261,18 +350,26 @@ func TestMLProducerWiring_SidecarGetsEffectiveRetention(t *testing.T) {
 	if err := os.WriteFile(store.Path(), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := retention(); len(got) != 0 {
-		t.Fatalf("unreadable setting → %v, want the variable omitted", got)
+	// (a)/(c) A spawn-time read failure after a good read carries the
+	// LAST GOOD value (3650), not "hold"; an inherited value never stands
+	// in for it (review nit 2, #429).
+	if got := retention(); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=3650" {
+		t.Fatalf("unreadable setting after a good read → %v, want the last good =3650", got)
 	}
-	// Review nit 2 (#429): a value inherited from the harness's own
-	// environment must not reach the child in its place.
+	var inherited []string
 	for _, kv := range sp.Env([]string{"PATH=/bin", activity.RetentionEnvVar + "=7"}) {
 		if strings.HasPrefix(kv, activity.RetentionEnvVar+"=") {
-			t.Fatalf("unreadable setting: child env carries inherited %q", kv)
+			inherited = append(inherited, kv)
 		}
 	}
-	if got := activityRetentionEnv(nil); got != nil {
-		t.Fatalf("no reader → %v", got)
+	if len(inherited) != 1 || inherited[0] != activity.RetentionEnvVar+"=3650" {
+		t.Fatalf("unreadable setting: child env = %v; want only the last good =3650", inherited)
+	}
+	if got := activityRetentionEnv(nil); len(got) != 1 || got[0] != activity.RetentionEnvVar+"="+activity.RetentionHold {
+		t.Fatalf("no reader → %v, want exactly =hold", got)
+	}
+	if got := activityRetentionEnv(func() (int, error) { return 0, errRetentionUnreadable }); len(got) != 1 || got[0] != activity.RetentionEnvVar+"="+activity.RetentionHold {
+		t.Fatalf("no value → %v, want exactly =hold", got)
 	}
 	if got := activityRetentionEnv(func() (int, error) { return 99999, nil }); got[0] != activity.RetentionEnvVar+"=3650" {
 		t.Fatalf("clamp → %v", got)

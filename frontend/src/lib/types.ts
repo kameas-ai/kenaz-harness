@@ -231,6 +231,15 @@ export interface MLLocalActivity {
   effectiveRetentionDays: number;
   /** New activity is also being copied to Fleet right now. */
   sharingWithFleet: boolean;
+  /**
+   * The retention setting has kept failing to read (3 prune passes in a
+   * row, or over 24 h since the last good read). Pruning continues to the
+   * last saved retention (lastGoodRetentionDays), or deletes nothing when
+   * there is none.
+   */
+  retentionBlocked: boolean;
+  /** With retentionBlocked: the last saved effective days still applied; 0 = none. */
+  lastGoodRetentionDays: number;
 }
 
 export interface SessionUsage {

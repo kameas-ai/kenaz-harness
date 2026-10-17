@@ -633,3 +633,179 @@ func TestWP11_DeleteLocal_OpensStoreWhenNoneOpen(t *testing.T) {
 		t.Fatalf("after DeleteLocal: %+v, %v; want empty", st, err)
 	}
 }
+
+// slowOpenRecorder is a recorder with no local store whose OpenLocal
+// signals entered, then takes `delay` (activity.Open retrying a locked
+// file) before opening path. Every handle it opens is recorded.
+type slowOpenRecorder struct {
+	rec     *Recorder
+	entered chan struct{}
+	mu      sync.Mutex
+	opened  []*activity.Store
+	calls   atomic.Int32
+}
+
+func newSlowOpenRecorder(t *testing.T, h *harness, delay func(call int32) time.Duration) *slowOpenRecorder {
+	t.Helper()
+	path := activity.Path(h.dir)
+	so := &slowOpenRecorder{entered: make(chan struct{}, 8)}
+	so.rec = NewRecorder(Config{
+		Store: h.store, Hasher: NewHasher(h.dir),
+		Gate: KindGateFunc{Record: func() bool { return false }},
+		OpenLocal: func() (*activity.Store, error) {
+			n := so.calls.Add(1)
+			so.entered <- struct{}{}
+			time.Sleep(delay(n))
+			s, err := activity.Open(path)
+			if err == nil {
+				so.mu.Lock()
+				so.opened = append(so.opened, s)
+				so.mu.Unlock()
+			}
+			return s, err
+		},
+		ReopenEvery: time.Millisecond,
+		Workspace:   func() string { return workspace }, Now: h.clock.Now, SweepInterval: -1,
+	})
+	t.Cleanup(func() {
+		so.rec.Close()
+		so.mu.Lock()
+		defer so.mu.Unlock()
+		for _, s := range so.opened {
+			_ = s.Close()
+		}
+	})
+	return so
+}
+
+func (so *slowOpenRecorder) handles() []*activity.Store {
+	so.mu.Lock()
+	defer so.mu.Unlock()
+	return append([]*activity.Store(nil), so.opened...)
+}
+
+// Review finding (DeleteLocal held closeMu.RLock across OpenLocal): a
+// slow open inside DeleteLocal must not hold up a pending Close, nor —
+// since a waiting writer blocks new readers — the record path's enqueue,
+// which is documented never to block. And when Close wins the race, the
+// handle the open produced is closed, not installed (Close-wins).
+func TestWP11_DeleteLocalSlowOpen_NeverStallsCloseOrEnqueue(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.rec.Close()
+	so := newSlowOpenRecorder(t, h, func(int32) time.Duration { return time.Second })
+	rec := so.rec
+	h.rec = rec
+	delErr := make(chan error, 1)
+	go func() { delErr <- rec.DeleteLocal(context.Background()) }()
+	<-so.entered // the 1 s open is in flight
+
+	ctx := context.Background()
+	start := time.Now()
+	h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Fatalf("record took %v while DeleteLocal's open was in flight; enqueue blocked", d)
+	}
+
+	closed := make(chan time.Duration, 1)
+	go func() {
+		s := time.Now()
+		rec.Close()
+		closed <- time.Since(s)
+	}()
+	// Let Close reach (or pass) closeMu: a record now must not block.
+	time.Sleep(50 * time.Millisecond)
+	start = time.Now()
+	h.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Fatalf("record took %v with Close pending behind DeleteLocal's open; enqueue blocked", d)
+	}
+	select {
+	case d := <-closed:
+		if d > 300*time.Millisecond {
+			t.Fatalf("Close took %v; it waited on DeleteLocal's 1 s open", d)
+		}
+	case <-time.After(700 * time.Millisecond):
+		t.Fatal("Close still blocked 750 ms in; it waits on DeleteLocal's 1 s open")
+	}
+
+	// Close won: DeleteLocal refuses and the fresh handle does not leak.
+	select {
+	case err := <-delErr:
+		if !errors.Is(err, ErrRecorderClosed) {
+			t.Fatalf("DeleteLocal after losing to Close = %v, want ErrRecorderClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DeleteLocal never returned")
+	}
+	if rec.LocalStore() != nil {
+		t.Fatal("DeleteLocal installed its handle after Close won")
+	}
+	// The records above may also have started a background reopen; it
+	// too must close its handle once it finds the recorder closed.
+	waitFor(t, func() bool { return !rec.reopening.Load() }, "background reopen")
+	hs := so.handles()
+	if len(hs) == 0 {
+		t.Fatal("DeleteLocal's open never completed")
+	}
+	for i, s := range hs {
+		if _, err := s.Stats(ctx); err == nil {
+			t.Fatalf("handle %d opened after Close won was left open", i)
+		}
+	}
+	if rec.LocalStore() != nil {
+		t.Fatal("a handle was installed after Close won")
+	}
+}
+
+// When a background reopen installs a store while DeleteLocal's own open
+// is in flight, DeleteLocal closes its handle and deletes through theirs.
+func TestWP11_DeleteLocalSlowOpen_LosesToBackgroundReopen(t *testing.T) {
+	t.Parallel()
+	lh := newLocalHarness(t)
+	ctx := context.Background()
+	lh.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+	if len(lh.localEvents(t)) == 0 {
+		t.Fatal("setup: nothing recorded locally")
+	}
+	lh.rec.Close()
+	_ = lh.local.Close()
+	release := make(chan struct{})
+	so := newSlowOpenRecorder(t, lh.harness, func(n int32) time.Duration {
+		if n == 1 {
+			<-release // DeleteLocal's open
+		}
+		return 0
+	})
+	rec := so.rec
+	lh.rec = rec
+	delErr := make(chan error, 1)
+	go func() { delErr <- rec.DeleteLocal(ctx) }()
+	<-so.entered
+	// A record starts the background reopen, which installs first.
+	lh.call(ctx, "s1", "kenaz__write_file", writeArgs, coreag.ToolOutcomeOK, `{"ok":true}`)
+	waitFor(t, func() bool { return rec.LocalStore() != nil }, "background reopen")
+	theirs := rec.LocalStore()
+	close(release)
+	if err := <-delErr; err != nil {
+		t.Fatal(err)
+	}
+	if rec.LocalStore() != theirs {
+		t.Fatal("DeleteLocal replaced the store the background reopen installed")
+	}
+	if st, err := theirs.Stats(ctx); err != nil || st.Events != 0 || st.Tasks != 0 {
+		t.Fatalf("after DeleteLocal: %+v, %v; want empty (deleted through the installed store)", st, err)
+	}
+	var mine *activity.Store
+	for _, s := range so.handles() {
+		if s != theirs {
+			mine = s
+		}
+	}
+	if mine == nil {
+		t.Fatal("DeleteLocal's own open never completed")
+	}
+	if _, err := mine.Stats(ctx); err == nil {
+		t.Fatal("DeleteLocal's losing handle was left open")
+	}
+}
