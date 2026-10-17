@@ -238,6 +238,37 @@ func (a *API) runSessionResetHooks() {
 	}
 }
 
+// OnFleetEnrolled registers fn to run after every successful enroll — the
+// sign-in enroll, the boot enroll and the session supervisor's periodic
+// re-enroll. Unlike OnFleetSessionReset it does not mean "a new session":
+// it means "the enrolled identity is now known", so a consumer gated on
+// enrolment (the ML producer's consent gate) re-reads immediately instead
+// of waiting out its own cache. fn must be quick and must not call back
+// into the settings API's fleet lock.
+func (a *API) OnFleetEnrolled(fn func()) {
+	if a == nil || fn == nil {
+		return
+	}
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	a.fleet.enrolledHooks = append(a.fleet.enrolledHooks, fn)
+	a.fleet.mu.Unlock()
+}
+
+func (a *API) runEnrolledHooks() {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	hooks := append([]func(){}, a.fleet.enrolledHooks...)
+	a.fleet.mu.RUnlock()
+	for _, fn := range hooks {
+		fn()
+	}
+}
+
 // SetFleetClientVersion records the build version enroll sends to Fleet
 // (fleet-session-truth-01DOGF0A FR-9). Called from rpc.New with the
 // ldflags-stamped version; local builds report "dev".

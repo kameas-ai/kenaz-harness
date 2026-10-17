@@ -138,6 +138,17 @@ const groups: ReadonlyArray<TabGroup> = [
       { to: '/bundles', label: 'Bundles', icon: Package },
       { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets', icon: KeyRound },
       { to: '/settings?tab=llm-routing', label: 'LLM Routing', query: 'llm-routing', icon: Route },
+      // MCP auto-restart dial (MCPHealthSettingsPanel). Kept when the Health
+      // tab was deleted (PR 405, ruling G-5); mounted here once its Go knob was
+      // verified to gate the stdio healthPinger's restart trip. Desktop-only:
+      // Settings_{Get,Set}MCPAutoRestart have no serve dispatch case.
+      {
+        to: '/settings?tab=mcp-servers',
+        label: 'MCP Servers',
+        query: 'mcp-servers',
+        icon: Server,
+        desktopOnly: true,
+      },
       // acp-orchestration-integration-01NDFSEX06 WP05 — ACP Peers tab.
       { to: '/settings?tab=peers', label: 'Peers', query: 'peers', icon: Globe },
       // fleet-share-and-sync-01NDFSEX14 WP06 — Settings sync tab.

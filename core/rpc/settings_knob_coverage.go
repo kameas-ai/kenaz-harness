@@ -37,8 +37,9 @@
 // entire mission exists to end. Direct verification against the live
 // tree (not the doc comments) before landing found all eleven were
 // false: PermissionMode, MCPAutoRestartDisabled and
-// SkippedUpdateVersions have no reader outside the settings package at
-// all; CedarStrictCredentialMode and CredentialAuditRetentionDays have
+// SkippedUpdateVersions had no reader outside the settings package at
+// all (MCPAutoRestartDisabled has since been wired — see its Register
+// entry below); CedarStrictCredentialMode and CredentialAuditRetentionDays have
 // a real reader, but it lives in core/credstore, a verified I7 orphan
 // package nothing in the running binary imports; and
 // SummarizerProfileID / NarrativePromotionWeights /
@@ -723,15 +724,15 @@ func init() {
 	// updater's release-check filters these out"; "MCPAutoRestart()
 	// ... decide whether to auto-restart"). Verified against the live
 	// tree before landing: SkippedUpdateVersions has zero references
-	// anywhere outside the settings package — no filter exists.
-	// MCPAutoRestartDisabled's only non-settings hit is the
-	// Settings_GetMCPAutoRestart binding; core/mcp/transport/stdio/
-	// supervisor.go's runSupervisor calls attemptRestart()
-	// UNCONDITIONALLY on every crash (supervisor.go:56) with no
-	// settings gate anywhere nearby — the doc's own claimed reader does
-	// not exist. Both are recorded in docs/unwired-ledger.md's
-	// 2026-08-14 "stored, bound, and inert" entry, "No implementation
-	// at all" grouping, escalated as G-4.
+	// anywhere outside the settings package — no filter exists. It is
+	// recorded in docs/unwired-ledger.md's 2026-08-14 "stored, bound,
+	// and inert" entry, "No implementation at all" grouping, escalated
+	// as G-4.
+	//
+	// MCPAutoRestartDisabled WAS in the same state at the time (the
+	// stdio supervisor restarted unconditionally), but has since been
+	// wired by connector-lifecycle-truth-01PMZ303 UNIT-9; re-verified
+	// 2026-10-15 before MCPHealthSettingsPanel was mounted.
 	knobcoverage.RegisterDeferred[settings.Settings](
 		"SkippedUpdateVersions",
 		"NOT wired: zero references anywhere outside the settings "+
@@ -740,16 +741,16 @@ func init() {
 			"(docs/escalation-register-2026-08-19.md Part 8, ruling "+
 			"F-1). docs/unwired-ledger.md 2026-08-14. Owner: alec.",
 	)
-	knobcoverage.RegisterDeferred[settings.Settings](
+	knobcoverage.Register[settings.Settings](
 		"MCPAutoRestartDisabled",
-		"NOT wired: core/mcp/transport/stdio/supervisor.go's "+
-			"runSupervisor calls attemptRestart() unconditionally on "+
-			"every crash (supervisor.go:56) with no settings gate — the "+
-			"doc's claimed 'MCP health monitor' reader does not exist. "+
-			"Only real hit is the Settings_GetMCPAutoRestart binding "+
-			"round-trip. Escalated as G-4 "+
-			"(docs/escalation-register-2026-08-19.md Part 8, ruling "+
-			"F-1). docs/unwired-ledger.md 2026-08-14. Owner: alec.",
+		"connector-lifecycle-truth-01PMZ303 UNIT-9: core/rpc/api.go "+
+			"stdio.PoolOptions.AutoRestartEnabled reads "+
+			"Store().LoadMCPAutoRestart() live on every ping-failure "+
+			"trip; core/mcp/transport/stdio/health.go healthPinger "+
+			"skips signalCrash (no restart) when it returns false. "+
+			"Pinned by TestHealth_AutoRestartDisabled_TwoConsecutive"+
+			"FailedPingsDoNotRestart. Process exits still restart "+
+			"(supervisor.go) — the dial governs the ping path only.",
 	)
 	knobcoverage.Register[settings.Settings](
 		"AutoTitleDisabled",

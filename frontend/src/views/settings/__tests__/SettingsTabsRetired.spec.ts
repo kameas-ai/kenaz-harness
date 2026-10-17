@@ -22,7 +22,7 @@ const RETIRED_IDS = ['settings-tab-flags', 'settings-tab-health', 'settings-tab-
 const RETIRED_LABELS = ['Flags', 'Health', 'Logs'];
 
 describe.each([
-  ['desktop', false, 21],
+  ['desktop', false, 22],
   ['served', true, 20],
 ] as const)('SettingsTabs — %s rail', (_name, isServed, count) => {
   beforeEach(() => {
@@ -40,9 +40,10 @@ describe.each([
     }
   });
 
-  it(`renders ${count} entries, Agent graphs only on desktop`, () => {
+  it(`renders ${count} entries, Agent graphs and MCP Servers only on desktop`, () => {
     const wrapper = mount(SettingsTabs);
     expect(wrapper.findAll('[data-testid^="settings-tab-"]')).toHaveLength(count);
     expect(wrapper.find('[data-testid="settings-tab-agent-graphs"]').exists()).toBe(!isServed);
+    expect(wrapper.find('[data-testid="settings-tab-mcp-servers"]').exists()).toBe(!isServed);
   });
 });

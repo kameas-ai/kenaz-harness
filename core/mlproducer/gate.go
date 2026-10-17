@@ -171,6 +171,11 @@ type ConsentGate struct {
 	snap       atomic.Pointer[Decision]
 	gen        atomic.Uint64
 	refreshing atomic.Bool
+	// rekick: a kick arrived while a background refresh was already in
+	// flight. That refresh may have read Fleet BEFORE the change that
+	// prompted the kick (an enroll landing mid-read), so the refresher
+	// runs once more instead of dropping the request.
+	rekick atomic.Bool
 
 	// mu serialises evaluations and the purge transition.
 	mu sync.Mutex
@@ -254,12 +259,23 @@ func (g *ConsentGate) Invalidate() {
 }
 
 func (g *ConsentGate) kick() {
+	g.rekick.Store(true)
 	if !g.refreshing.CompareAndSwap(false, true) {
+		// The in-flight refresher sees rekick and goes again.
 		return
 	}
 	go func() {
-		defer g.refreshing.Store(false)
-		g.Refresh(context.Background())
+		for {
+			for g.rekick.Swap(false) {
+				g.Refresh(context.Background())
+			}
+			g.refreshing.Store(false)
+			// A kick that landed between the last Swap and the Store above
+			// found refreshing still true and returned; pick it up here.
+			if !g.rekick.Load() || !g.refreshing.CompareAndSwap(false, true) {
+				return
+			}
+		}
 	}()
 }
 

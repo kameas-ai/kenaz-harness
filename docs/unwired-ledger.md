@@ -4278,9 +4278,16 @@ non-test callers are the two store accessors `FileStore.LoadPermissionMode`
 / `memoryStore.LoadPermissionMode`, whose only caller in turn is the
 `Settings_GetPermissionMode` binding, so the value round-trips to
 `PermissionDialsPanel.vue` and nothing ever branches on it),
-`MCPAutoRestartDisabled` (the stdio supervisor calls
+~~`MCPAutoRestartDisabled`~~ (**drained** — was: the stdio supervisor calls
 `attemptRestart()` unconditionally; nothing in `core/mcp` reads any settings
-gate), `SkippedUpdateVersions` (the doc claims the updater filters these
+gate. Wired by connector-lifecycle-truth-01PMZ303 UNIT-9:
+`core/rpc/api.go` feeds `stdio.PoolOptions.AutoRestartEnabled` from
+`Store().LoadMCPAutoRestart()` live, and `core/mcp/transport/stdio/health.go`
+skips the ping-failure restart trip when it is false, pinned by
+`TestHealth_AutoRestartDisabled_TwoConsecutiveFailedPingsDoNotRestart`.
+Re-verified 2026-10-15; `settings_knob_coverage.go` now `Register`s it.
+Process exits still restart — the dial governs the ping path only),
+`SkippedUpdateVersions` (the doc claims the updater filters these
 out; no filter exists), `LocalRuntimeRAMOverrideGB`
 (`EffectiveLocalRuntimeRAMBytes` has zero callers) —
 **`EffectiveLocalRuntimeRAMBytes` claimed and narrowed** by
@@ -4319,9 +4326,12 @@ default. Two sequencing constraints G-4 records: **`PermissionMode` must be
 ruled together with X-2 and B-4**, since its documented "every call prompts"
 semantics *is* the per-call tool authorization those two already ruled wire; and
 **`MCPAutoRestartDisabled` must get a reader before `MCPHealthSettingsPanel` is
-mounted** (see the frontend orphan backlog below). Inertness re-verified
-2026-08-19 for `EffectivePermissionMode`, `MCPAutoRestart()`,
-`EffectiveLocalRuntimeRAMBytes`.
+mounted** (see the frontend orphan backlog below) — **satisfied 2026-10-15**:
+the reader landed in 01PMZ303 UNIT-9 and the panel is now mounted at
+Settings › Integrations › MCP Servers (`?tab=mcp-servers`). Inertness
+re-verified 2026-08-19 for `EffectivePermissionMode`, `MCPAutoRestart()`,
+`EffectiveLocalRuntimeRAMBytes` (`MCPAutoRestart()` is no longer inert — see
+above).
 
 ### 2026-08-14 · knob-coverage tracks one struct out of the several that need it
 
@@ -4713,9 +4723,13 @@ surface for a real capability). Do **not** re-find these as orphans:
   `core/rpc/api.go:4304`.
 - `HookJournalView` — rows **are** being written to SQL in production;
   the read path is what is missing.
-- `MCPHealthSettingsPanel` — blocked on an inert Go knob (see "Settings
-  fields that are stored, bound, and inert" above). Wire the consumer
-  first, in the same PR.
+- ~~`MCPHealthSettingsPanel`~~ — **drained 2026-10-15.** Its Go knob is
+  no longer inert (01PMZ303 UNIT-9 wired `MCPAutoRestartDisabled` into the
+  stdio healthPinger's restart trip — see "Settings fields that are
+  stored, bound, and inert" above), and the panel is mounted at
+  Settings › Integrations › MCP Servers (`?tab=mcp-servers`, desktop-only),
+  pinned through the real parent by
+  `views/settings/__tests__/SettingsView.mcpServers.spec.ts`.
 - ~~`BranchAdvisorSettings`~~ — **drained 2026-08-18** by
   engineer-truth-pass-01PMTP01 WP02/WP03. This entry previously pointed
   at "Settings fields that are stored, bound, and inert" above, but
@@ -4783,7 +4797,8 @@ difference is the difference between "urgent" and "housekeeping".
   recommended default: mount `RecoveryCodeFlow`, `ProjectAutonomyPanel` and
   `CrashReportingOnboardingModal` now; hold `HookJournalView` until its read
   path exists; **do not mount `MCPHealthSettingsPanel` until G-4 wires
-  `MCPAutoRestartDisabled`**; hold `CedarEditor` for the `PolicyView` port.
+  `MCPAutoRestartDisabled`** (both done — wired by 01PMZ303 UNIT-9, mounted
+  2026-10-15); hold `CedarEditor` for the `PolicyView` port.
 - The **P3** item (`lib/capability-keys.ts`) is not ownerless — it carries a
   live disposition ("Being wired as a typed import").
 
