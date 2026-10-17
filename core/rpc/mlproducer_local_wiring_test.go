@@ -233,11 +233,10 @@ func TestMLProducerWiring_UnreadableRetentionSkipsPrune(t *testing.T) {
 
 // (b) + (c) Settings unreadable from boot: no successful read in this
 // process, so the prune pass deletes nothing (not the 90-day default),
-// and the engine is spawned WITHOUT KENAZ_ML_ACTIVITY_RETENTION_DAYS —
-// the engine contract (docs/telemetry/ml-activity-db.sql) defines no
-// "don't prune" sentinel, so the variable is stripped (also from the
-// inherited environment) rather than invented.
-func TestMLProducerWiring_UnreadableFromBootSkipsPruneAndStripsEnv(t *testing.T) {
+// and the engine is spawned with exactly one
+// KENAZ_ML_ACTIVITY_RETENTION_DAYS=hold (kenaz-ml contract: do not prune
+// this run) — an inherited value is scrubbed, never passed beside it.
+func TestMLProducerWiring_UnreadableFromBootSkipsPruneAndHoldsEngine(t *testing.T) {
 	t.Parallel()
 	dataDir := t.TempDir()
 	c, err := core.New(core.Options{DataDir: dataDir})
@@ -287,10 +286,14 @@ func TestMLProducerWiring_UnreadableFromBootSkipsPruneAndStripsEnv(t *testing.T)
 	if !ok || sp.EnvFunc == nil {
 		t.Fatalf("Spawner = %T with no EnvFunc", a.sidecarMgr.Spawner)
 	}
+	var got []string
 	for _, kv := range sp.Env([]string{"PATH=/bin", activity.RetentionEnvVar + "=7"}) {
 		if strings.HasPrefix(kv, activity.RetentionEnvVar+"=") {
-			t.Fatalf("never-readable setting: child env carries %q; want the variable stripped", kv)
+			got = append(got, kv)
 		}
+	}
+	if len(got) != 1 || got[0] != activity.RetentionEnvVar+"="+activity.RetentionHold {
+		t.Fatalf("never-readable setting: child env = %v; want exactly =hold", got)
 	}
 }
 
@@ -348,9 +351,8 @@ func TestMLProducerWiring_SidecarGetsEffectiveRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	// (a)/(c) A spawn-time read failure after a good read carries the
-	// LAST GOOD value (3650), so the engine is neither widened nor
-	// shortened to its own 90-day default; an inherited value never
-	// stands in for it (review nit 2, #429).
+	// LAST GOOD value (3650), not "hold"; an inherited value never stands
+	// in for it (review nit 2, #429).
 	if got := retention(); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=3650" {
 		t.Fatalf("unreadable setting after a good read → %v, want the last good =3650", got)
 	}
@@ -363,8 +365,11 @@ func TestMLProducerWiring_SidecarGetsEffectiveRetention(t *testing.T) {
 	if len(inherited) != 1 || inherited[0] != activity.RetentionEnvVar+"=3650" {
 		t.Fatalf("unreadable setting: child env = %v; want only the last good =3650", inherited)
 	}
-	if got := activityRetentionEnv(nil); got != nil {
-		t.Fatalf("no reader → %v", got)
+	if got := activityRetentionEnv(nil); len(got) != 1 || got[0] != activity.RetentionEnvVar+"="+activity.RetentionHold {
+		t.Fatalf("no reader → %v, want exactly =hold", got)
+	}
+	if got := activityRetentionEnv(func() (int, error) { return 0, errRetentionUnreadable }); len(got) != 1 || got[0] != activity.RetentionEnvVar+"="+activity.RetentionHold {
+		t.Fatalf("no value → %v, want exactly =hold", got)
 	}
 	if got := activityRetentionEnv(func() (int, error) { return 99999, nil }); got[0] != activity.RetentionEnvVar+"=3650" {
 		t.Fatalf("clamp → %v", got)

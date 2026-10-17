@@ -75,18 +75,19 @@ func activityDBPath(dataDir string) string {
 // the harness prunes events/tasks to. read is the shared fail-safe
 // Retention (sidecarRetentionReader), so a read error after a good read
 // still yields the last good value. With no value at all (or no reader)
-// it returns nothing and logs a WARN: the engine then uses its own
-// default. The engine contract defines no "don't prune" sentinel, so
-// none is invented here; the spawner's ScrubEnv keeps an inherited value
-// from standing in for the setting.
+// it is activity.RetentionHold and logs a WARN: the engine prunes nothing
+// this run (kenaz-ml contract; see activity.RetentionEnvVar). The
+// spawner's ScrubEnv drops any inherited value, so this entry is the only
+// one the engine sees.
 func activityRetentionEnv(read func() (int, error)) []string {
+	hold := []string{activity.RetentionEnvVar + "=" + activity.RetentionHold}
 	if read == nil {
-		return nil
+		return hold
 	}
 	days, err := read()
 	if err != nil {
 		slog.Warn("mlsidecar.spawn.activity_retention_unreadable")
-		return nil
+		return hold
 	}
 	return []string{activity.RetentionEnvVar + "=" + strconv.Itoa(activity.EffectiveRetentionDays(days))}
 }
@@ -95,10 +96,9 @@ func activityRetentionEnv(read func() (int, error)) []string {
 // ML producer's shared fail-safe Retention when there is one (a failed
 // read then carries the last good value, so the engine's own pruning is
 // never widened or shortened by it), else the settings API directly.
-// With neither a fresh nor a last-good value the read fails and the env
-// var is omitted: the engine contract defines no "don't prune" sentinel
-// (docs/telemetry/ml-activity-db.sql), so the harness cannot tell it to
-// hold off — see activityRetentionEnv.
+// With neither a fresh nor a last-good value the read fails and the
+// engine is told to hold (activity.RetentionHold) — see
+// activityRetentionEnv.
 func sidecarRetentionReader(w *mlProducerWiring, s *settings.API) func() (int, error) {
 	if r := w.retentionReader(); r != nil {
 		return r
@@ -107,7 +107,7 @@ func sidecarRetentionReader(w *mlProducerWiring, s *settings.API) func() (int, e
 }
 
 // settingsRetentionReader adapts the settings API (nil-safe: nil = no
-// reader, so the env var is omitted).
+// reader, so the engine is told to hold).
 func settingsRetentionReader(s *settings.API) func() (int, error) {
 	if s == nil {
 		return nil
@@ -133,8 +133,8 @@ func settingsRetentionReader(s *settings.API) func() (int, error) {
 // engine exist — they are only read by the explicit install path.
 //
 // retentionDays reads the local activity retention setting
-// (settings.API.MLLocalActivityRetentionDays; nil = unknown, the env var
-// is omitted). It is read on every spawn.
+// (settings.API.MLLocalActivityRetentionDays; nil = unknown, the engine is
+// told to hold). It is read on every spawn.
 func newSidecarStack(dataDir, buildVersion string, retentionDays func() (int, error)) (*mlsidecar.Manager, advice.SidecarProbe) {
 	if dataDir == "" {
 		return nil, nil
@@ -167,9 +167,9 @@ func newSidecarStack(dataDir, buildVersion string, retentionDays func() (int, er
 			Layout:   layout,
 			ExtraEnv: []string{activity.EnvVar + "=" + activityDBPath(dataDir)},
 			EnvFunc:  func() []string { return activityRetentionEnv(retentionDays) },
-			// An unreadable setting omits the retention; the engine must
-			// then use its own default, never a value the harness merely
-			// inherited from its launcher's environment.
+			// The harness's own entry (days or "hold") is the only one the
+			// engine sees: never a value the harness merely inherited from
+			// its launcher's environment.
 			ScrubEnv: []string{activity.RetentionEnvVar},
 		},
 		"harness", buildVersion)

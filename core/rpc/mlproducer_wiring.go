@@ -400,7 +400,7 @@ var errRetentionUnreadable = errors.New("local activity retention setting could 
 
 // retentionReader is the engine's spawn-time retention read, through the
 // shared fail-safe Retention: the fresh value, else the last good one,
-// else an error (the spawn env then omits the variable). nil without a
+// else an error (the spawn env then sends activity.RetentionHold). nil without a
 // producer.
 func (w *mlProducerWiring) retentionReader() func() (int, error) {
 	if w == nil || w.retention == nil {
