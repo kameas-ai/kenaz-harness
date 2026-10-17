@@ -2540,6 +2540,7 @@ export interface SettingsClient {
    * when the file reads fine. Desktop-only (no served dispatch).
    */
   resetUnreadable(): Promise<SettingsResetUnreadableResult>;
+  /**
    * The local ML activity store (ml-producer-01MLPRD01 WP11): row counts,
    * size, retention, and whether new activity is also shared with Fleet.
    */
