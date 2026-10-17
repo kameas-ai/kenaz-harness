@@ -3647,6 +3647,8 @@ export namespace llm {
 	export class CredentialReference {
 	    kind: string;
 	    locator: string;
+	    source?: string;
+	    credentialId?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CredentialReference(source);
@@ -3656,6 +3658,8 @@ export namespace llm {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.locator = source["locator"];
+	        this.source = source["source"];
+	        this.credentialId = source["credentialId"];
 	    }
 	}
 	export class AddProviderInput {
@@ -3859,6 +3863,34 @@ export namespace llm {
 		    }
 		    return a;
 		}
+	}
+	export class CredentialKey {
+	    id: string;
+	    provider: string;
+	    source: string;
+	    scopeName?: string;
+	    profileIds: string[];
+	    orgDefault?: boolean;
+	    teamDefault?: boolean;
+	    preselected?: boolean;
+	    userSelectable: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CredentialKey(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.provider = source["provider"];
+	        this.source = source["source"];
+	        this.scopeName = source["scopeName"];
+	        this.profileIds = source["profileIds"];
+	        this.orgDefault = source["orgDefault"];
+	        this.teamDefault = source["teamDefault"];
+	        this.preselected = source["preselected"];
+	        this.userSelectable = source["userSelectable"];
+	    }
 	}
 	
 	export class CustomCapabilityMatrix {
@@ -8050,6 +8082,7 @@ export namespace settings {
 	    emailSource?: string;
 	    nameSource?: string;
 	    tokensUsable: boolean;
+	    accountKey?: string;
 	    claims: FleetSessionClaims;
 	    capabilities: CapabilitiesView;
 	    profile?: FleetProfileInfo;
@@ -8076,6 +8109,7 @@ export namespace settings {
 	        this.emailSource = source["emailSource"];
 	        this.nameSource = source["nameSource"];
 	        this.tokensUsable = source["tokensUsable"];
+	        this.accountKey = source["accountKey"];
 	        this.claims = this.convertValues(source["claims"], FleetSessionClaims);
 	        this.capabilities = this.convertValues(source["capabilities"], CapabilitiesView);
 	        this.profile = this.convertValues(source["profile"], FleetProfileInfo);

@@ -1262,6 +1262,9 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 	default:
 		return fmt.Errorf("llm: AddProvider requires an indirect credential kind (keychain|aws_profile|env|file), got %q", in.Cred.Kind)
 	}
+	if err := refuseClientFleetBinding(in.Cred); err != nil {
+		return err
+	}
 	// Only keychain creds need a plaintext write — aws_profile points at
 	// ~/.aws/credentials which the AWS SDK reads directly, env / file
 	// resolve via their respective backends with no upfront staging.
@@ -1286,10 +1289,7 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 		Model:  in.Model,
 		Models: in.Models,
 		Region: in.Region,
-		Cred: corellm.CredentialReference{
-			Kind:    in.Cred.Kind,
-			Locator: in.Cred.Locator,
-		},
+		Cred:   toCoreCred(in.Cred),
 	}
 	if err := a.store.Add(profile); err != nil {
 		log.Error("llm.add_provider.failed", "id", in.ID, "stage", "store.Add", "err", err.Error())
@@ -1325,6 +1325,9 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 	default:
 		return fmt.Errorf("llm: UpdateProvider requires an indirect credential kind (keychain|aws_profile|env|file), got %q", in.Cred.Kind)
 	}
+	if err := refuseClientFleetBinding(in.Cred); err != nil {
+		return err
+	}
 	if a.bundles != nil {
 		for _, p := range a.bundles.BundleProfiles() {
 			if p.ID == in.ID {
@@ -1353,10 +1356,7 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 		Model:  in.Model,
 		Models: in.Models,
 		Region: in.Region,
-		Cred: corellm.CredentialReference{
-			Kind:    in.Cred.Kind,
-			Locator: in.Cred.Locator,
-		},
+		Cred:   toCoreCred(in.Cred),
 	}
 	if err := a.store.Update(profile); err != nil {
 		return err
@@ -1506,6 +1506,11 @@ func (a *API) UpdateProviderCredential(ctx context.Context, profileID, plaintext
 	if profile.Cred.Kind != "keychain" {
 		return fmt.Errorf("llm: UpdateProviderCredential: profile %q uses kind=%q; only keychain credentials are writable via this RPC", profileID, profile.Cred.Kind)
 	}
+	if profile.Cred.Source.IsFleet() || profile.Cred.CredentialID != "" {
+		// A Fleet-delivered key lives in its own keychain namespace and
+		// is never overwritten from this device (ErrFleetKeyReadOnly).
+		return ErrFleetKeyReadOnly
+	}
 	if a.keychain == nil {
 		return errors.New("llm: UpdateProviderCredential: no keychain writer configured")
 	}
@@ -1653,10 +1658,7 @@ func profileToProvider(p corellm.ProviderProfile, source string, validated bool)
 		Model:  p.Model,
 		Models: p.AvailableModels(),
 		Region: p.Region,
-		Cred: CredentialReference{
-			Kind:    p.Cred.Kind,
-			Locator: p.Cred.Locator,
-		},
+		Cred:      fromCoreCred(p.Cred),
 		Source:    source,
 		Validated: validated,
 	}
@@ -1745,6 +1747,9 @@ func (a *API) TestAndRotateKey(ctx context.Context, profileID, plaintextApiKey, 
 	profile, err := a.lookupProfile(profileID)
 	if err != nil {
 		return RotationResult{}, err
+	}
+	if profile.Cred.Source.IsFleet() || profile.Cred.CredentialID != "" {
+		return RotationResult{}, ErrFleetKeyReadOnly
 	}
 	if profile.Cred.Kind != "keychain" {
 		if profile.Kind == "bedrock" {
@@ -2200,4 +2205,73 @@ func viewToChain(v FallbackChainView) *fallback.Chain {
 		Description: v.Description,
 		Entries:     entries,
 	}
+}
+
+// ErrFleetKeyReadOnly rejects any client-supplied Fleet binding on
+// AddProvider / UpdateProvider: a Source other than local, or any
+// CredentialID. Only the Fleet delivery paths (WP05 org/team keys, WP06
+// synced user keys) bind a profile to a Fleet key, after the key is
+// actually in this user's keychain namespace. Accepting the binding from
+// the form would let any caller point a profile at an arbitrary
+// credential id — the binding would fail open to whatever that id
+// resolves to.
+var ErrFleetKeyReadOnly = errors.New("llm: keys delivered by Fleet are bound by Fleet, not from the provider form")
+
+// refuseClientFleetBinding enforces ErrFleetKeyReadOnly.
+func refuseClientFleetBinding(c CredentialReference) error {
+	src := corellm.CredentialSource(c.Source)
+	if (src != "" && src != corellm.CredSourceLocal) || c.CredentialID != "" {
+		return ErrFleetKeyReadOnly
+	}
+	return nil
+}
+
+// toCoreCred converts the RPC credential reference to the connector shape,
+// carrying Source and CredentialID so an edit of a Fleet-bound profile keeps
+// its binding.
+func toCoreCred(c CredentialReference) corellm.CredentialReference {
+	return corellm.CredentialReference{
+		Kind:         c.Kind,
+		Locator:      c.Locator,
+		Source:       corellm.CredentialSource(c.Source),
+		CredentialID: c.CredentialID,
+	}
+}
+
+// fromCoreCred is the inverse of toCoreCred.
+func fromCoreCred(c corellm.CredentialReference) CredentialReference {
+	return CredentialReference{
+		Kind:         c.Kind,
+		Locator:      c.Locator,
+		Source:       string(c.Source),
+		CredentialID: c.CredentialID,
+	}
+}
+
+// CredentialKeys projects the listed providers onto the keys they use, one
+// row per distinct key (corellm.BuildKeyList). The org credential policy
+// (defaults, allow_user_selection) and org/team display names come from
+// Fleet, which WP05 delivers; until then the policy is nil, so no default
+// is claimed and no key is user-selectable (fail closed).
+func CredentialKeys(provs []Provider) []CredentialKey {
+	profs := make([]corellm.ProviderProfile, 0, len(provs))
+	for _, p := range provs {
+		profs = append(profs, corellm.ProviderProfile{ID: p.ID, Kind: p.Kind, Cred: toCoreCred(p.Cred)})
+	}
+	keys := corellm.BuildKeyList(profs, nil, nil)
+	out := make([]CredentialKey, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, CredentialKey{
+			ID:             k.ID,
+			Provider:       k.Provider,
+			Source:         string(k.Source),
+			ScopeName:      k.ScopeName,
+			ProfileIDs:     k.ProfileIDs,
+			OrgDefault:     k.OrgDefault,
+			TeamDefault:    k.TeamDefault,
+			Preselected:    k.Preselected,
+			UserSelectable: k.UserSelectable,
+		})
+	}
+	return out
 }

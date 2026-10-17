@@ -750,6 +750,10 @@ export function LLM_GetAttachmentLimits(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LLM_GetAttachmentLimits'](arg1, arg2);
 }
 
+export function LLM_ListCredentialKeys() {
+  return window['go']['rpc']['Bindings']['LLM_ListCredentialKeys']();
+}
+
 export function LLM_ListCustomTemplates() {
   return window['go']['rpc']['Bindings']['LLM_ListCustomTemplates']();
 }

@@ -343,6 +343,42 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-10-16 (provider-credentials-client-01PCCLI01 WP04) · Fleet credential groundwork with no producer yet — dated
+
+WP04 lands the local model for Fleet-delivered keys with no Fleet calls, so
+these pieces have no production writer yet. None of them claims to do
+something it does not: no profile can carry a Fleet source until a writer
+binds one, and every reader below reports exactly what exists.
+
+- `secrets.FleetCredentialStore` (`Put`, `Delete`, `Purge`, `IDs`) and
+  `NewFleetCredentialStore` — the only writer of
+  `kenaz-harness/fleet/<env>/<realm>/<sub>/{org,user}/<credential_id>`;
+  `Put` is called only by tests. Live today: resolution
+  (`credref.Resolver.WithFleetPrincipal(fleet.CredentialPrincipal)` on
+  every model call), the sign-out and `node_removed` purge
+  (`secrets.PurgeFleetCredentialsForSignOut` from `FleetSignOut` /
+  `handleNodeRemoved`) and the account/org-change purge
+  (`settings.ReconcileFleetCredentialsOnSessionReset` on
+  `OnFleetSessionReset`). **Owner:** WP05 (org/team fetch + unwrap →
+  `Put(FleetNamespaceOrg, …)`; tombstone and lockdown purges) and WP06
+  (synced user keys → `Put`/`Purge(FleetNamespaceUser)`).
+- `llm.BuildKeyList`'s `policy` (`*llm.CredentialPolicy`) and `scopeNames`
+  arguments — the one production caller (`views/llm.CredentialKeys`, behind
+  `LLM_ListCredentialKeys`) passes nil for both, so `CredentialKey.OrgDefault`
+  is never true, `ScopeName` is always empty (the Providers view falls back
+  to "Provided by your organization") and — failing closed, since the
+  contract's `allow_user_selection` defaults to false — no key is
+  `UserSelectable`. **Owner:** WP05, which fetches the policy
+  (`GET /me/credentials/policy`) and org/team names; WP12 then narrows
+  `llm.userKeySelectionAllowed` further with the Cedar Credential family.
+- `readSessionCredential` / `writeSessionCredential`
+  (`frontend/src/lib/sessionModelStash.ts`) — the per-chat key selection,
+  stored per Fleet account (`FleetSessionView.accountKey`) and bound to the
+  provider it was made for; `clearSessionCredentials` is live (sign-out and
+  account change, from `lib/fleetSession.ts`), but only the spec reaches the
+  reader and writer. **Owner:** WP07 (the per-chat key picker, and the send
+  path that re-checks the selection against policy on every use).
+
 ### 2026-10-09 (ml-producer-01MLPRD01 WP03) · Fleet's OTLP-JSON decode — the ML shipper sends protobuf
 
 (WP03's dev-org-only guard entry that stood here was closed by WP05, which

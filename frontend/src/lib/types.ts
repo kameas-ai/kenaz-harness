@@ -364,6 +364,37 @@ export type ProviderSource = 'bundle' | 'host' | 'personal';
 export interface CredentialReference {
   kind: 'keychain' | 'env' | 'file' | 'aws_profile' | 'kms';
   locator: string;
+  /**
+   * Who owns the key (provider-credentials-client-01PCCLI01 B1). Absent
+   * means 'local' — a key entered on this device.
+   */
+  source?: CredentialSource;
+  /** Fleet credential id for a Fleet source. An identifier, not key material. */
+  credentialId?: string;
+}
+
+/** Ownership of a provider key. Mirrors Go llm.CredentialSource. */
+export type CredentialSource = 'local' | 'user_sync' | 'org' | 'team';
+
+/**
+ * One key a provider profile can use, as LLM_ListCredentialKeys lists it
+ * (§7a H2: several per provider, labelled by scope). Display metadata only:
+ * no key material and no keychain locator. Mirrors Go
+ * core/rpc/views/llm.CredentialKey.
+ */
+export interface CredentialKey {
+  /** Fleet credential id, or "local:<profileId>" for a key entered here. */
+  id: string;
+  provider: string;
+  source: CredentialSource;
+  /** Org or team display name for an org/team key, when known. */
+  scopeName?: string;
+  profileIds: string[];
+  orgDefault?: boolean;
+  teamDefault?: boolean;
+  /** The provider's default key, in contract order (team → org → own key). */
+  preselected?: boolean;
+  userSelectable: boolean;
 }
 
 export type ProviderKind =
@@ -5059,6 +5090,12 @@ export interface FleetSessionView {
   nameSource?: string;
   /** Stored tokens still authenticate (signing_in + true = a re-auth). */
   tokensUsable: boolean;
+  /**
+   * Opaque, non-PII key for the signed-in Fleet account (hashed realm +
+   * subject); absent when signed out. Per-account local state is scoped by
+   * it and dropped when it changes.
+   */
+  accountKey?: string;
   claims: { hasSubject: boolean; hasOrgClaim: boolean };
   capabilities: CapabilitiesView;
   profile?: FleetProfileInfo;

@@ -94,3 +94,46 @@ describe('ProviderRow', () => {
     expect(buttons).not.toContain('Remove');
   });
 });
+
+describe('ProviderRow key source badge (WP04)', () => {
+  it('labels a key entered on this device "Your key" with a Personal scope', () => {
+    const wrapper = mount(ProviderRow, {
+      props: { provider: makeProvider({ cred: { kind: 'keychain', locator: 'kenaz-harness/anth-personal' } }) },
+    });
+    expect(wrapper.get('[data-testid="provider-key-badge-anth-personal"]').text()).toBe('Your key');
+    expect(wrapper.get('[data-testid="provider-key-scope-anth-personal"]').text()).toBe('Scope: Personal');
+    expect(wrapper.find('[data-testid="edit-provider-anth-personal"]').exists()).toBe(true);
+  });
+
+  it('names the org for an org key and hides Edit', () => {
+    const wrapper = mount(ProviderRow, {
+      props: {
+        provider: makeProvider({ cred: { kind: 'keychain', locator: '', source: 'org', credentialId: 'c-org' } }),
+        credentialKey: { id: 'c-org', provider: 'anthropic', source: 'org', scopeName: 'Acme', profileIds: ['anth-personal'], userSelectable: true },
+      },
+    });
+    expect(wrapper.get('[data-testid="provider-key-badge-anth-personal"]').text()).toBe('Provided by Acme');
+    expect(wrapper.get('[data-testid="provider-key-scope-anth-personal"]').text()).toBe('Scope: Organization');
+    expect(wrapper.find('[data-testid="edit-provider-anth-personal"]').exists()).toBe(false);
+  });
+
+  it('falls back to "your organization" when the org name is unknown', () => {
+    const wrapper = mount(ProviderRow, {
+      props: { provider: makeProvider({ cred: { kind: 'keychain', locator: '', source: 'org', credentialId: 'c-org' } }) },
+    });
+    expect(wrapper.get('[data-testid="provider-key-badge-anth-personal"]').text()).toBe('Provided by your organization');
+  });
+
+  it('labels a team key "Team"', () => {
+    const wrapper = mount(ProviderRow, {
+      props: { provider: makeProvider({ cred: { kind: 'keychain', locator: '', source: 'team', credentialId: 'c-t' } }) },
+    });
+    expect(wrapper.get('[data-testid="provider-key-badge-anth-personal"]').text()).toBe('Team');
+    expect(wrapper.get('[data-testid="provider-key-scope-anth-personal"]').text()).toBe('Scope: Team');
+  });
+
+  it('shows no badge for a profile with no credential', () => {
+    const wrapper = mount(ProviderRow, { props: { provider: makeProvider() } });
+    expect(wrapper.find('[data-testid="provider-key-badge-anth-personal"]').exists()).toBe(false);
+  });
+});

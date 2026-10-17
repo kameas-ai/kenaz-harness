@@ -60,6 +60,7 @@ var (
 		"Fleet_GetTelemetryConsent",
 		"Fleet_SetTelemetryConsent",
 		"Fleet_TelemetryStatus",
+		"LLM_ListCredentialKeys",
 		"LLM_ListProviders",
 		"LLM_StartStream",
 		"LLM_StopStream",

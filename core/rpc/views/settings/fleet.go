@@ -1224,6 +1224,9 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 	// in-flight requests have a chance to complete.
 	a.StopFleetBackground()
 	a.clearToolExposurePins("sign_out")
+	// Fleet-delivered provider keys go while the token still says whose
+	// they are (provider-credentials-client-01PCCLI01 WP04).
+	purgeFleetCredentialsForSignOut("sign_out")
 
 	// Aggregate keyring errors: a missing token is not an error on sign-out.
 	var signOutErr error
@@ -1297,6 +1300,7 @@ func (a *API) handleNodeRemoved() {
 	}
 	a.StopFleetBackground()
 	a.clearToolExposurePins("node_removed")
+	purgeFleetCredentialsForSignOut("node_removed")
 	if err := fleet.ClearTokens(); err != nil {
 		logging.L().Warn("fleet.node_removed.clear_tokens_partial", "err", err.Error())
 	}

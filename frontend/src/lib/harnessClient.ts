@@ -33,6 +33,7 @@ import type {
   DocumentPreview,
   KnowledgeSiteBuild,
   Provider,
+  CredentialKey,
   AddProviderInput,
   TestResult,
   ModelInfo,
@@ -408,6 +409,7 @@ interface WailsBindingsLike {
   ): Promise<LoadToolsResult>;
 
   LLM_ListProviders(): Promise<Provider[]>;
+  LLM_ListCredentialKeys(): Promise<CredentialKey[]>;
   LLM_StartStream(
     profileID: string,
     sessionID: string,
@@ -1872,6 +1874,11 @@ export interface ProjectsClient {
 
 export interface LLMConnectorClient {
   listProviders(): Promise<Provider[]>;
+  /**
+   * Every key the configured profiles use, one row per key, labelled by
+   * scope (local / user_sync / org / team). Read-only; never key bytes.
+   */
+  listCredentialKeys(): Promise<CredentialKey[]>;
   /**
    * startStream begins an assistant completion against `profileID` for
    * `sessionID`. modelOverride (optional) selects a non-default model
@@ -4300,7 +4307,7 @@ export interface HarnessClient {
  * hand-editing it.
  */
 const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
-  'Sessions_List', 'Sessions_ListMessages', 'LLM_ListProviders', 'LLM_ListModels',
+  'Sessions_List', 'Sessions_ListMessages', 'LLM_ListProviders', 'LLM_ListCredentialKeys', 'LLM_ListModels',
   'LLM_ListCustomTemplates', 'LLM_ListFallbackChains', 'MCP_ListServers', 'MCP_ListToolPolicies', 'A2A_ListCards',
   'Workflow_ListJobs', 'Trust_ListSecretReferences', 'Context_List', 'Contexts_RecentlyApplied',
   'Contexts_ContextSearch', 'Bundle_List', 'Trust_ListAnchors', 'CedarPolicy_ListPolicies',
@@ -4547,6 +4554,7 @@ export function createHarnessClient(): HarnessClient {
     },
     llm: {
       listProviders: () => b().LLM_ListProviders(),
+      listCredentialKeys: () => b().LLM_ListCredentialKeys(),
       startStream: (profileID, sessionID, modelOverride) =>
         b().LLM_StartStream(profileID, sessionID, modelOverride ?? ''),
       stopStream: (id) => b().LLM_StopStream(id),
@@ -5616,6 +5624,9 @@ export function createServedHarnessClient(opts?: {
        */
       listProviders: () => transport.call<Provider[]>('LLM_ListProviders'),
 
+      /** listCredentialKeys — READ-ONLY, the same projection as desktop. */
+      listCredentialKeys: () => transport.call<CredentialKey[]>('LLM_ListCredentialKeys'),
+
       /**
        * startStream / stopStream — the chat turn itself.
        *
@@ -5974,6 +5985,7 @@ export function createFakeHarnessClient(
     },
     llm: {
       listProviders: async () => [],
+      listCredentialKeys: async () => [],
       startStream: async () => 'fake-sub',
       stopStream: noop,
       addProvider: noop,
