@@ -850,6 +850,8 @@ export function Settings_GetWebFetchEnabled():Promise<boolean>;
 
 export function Settings_GetWebSearch():Promise<boolean>;
 
+export function Settings_ResetUnreadable():Promise<settings.ResetUnreadableResult>;
+
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
 
 export function Settings_SetAuditSettings(arg1:settings.AuditSettings):Promise<void>;
@@ -985,6 +987,8 @@ export function Subagent_Pause(arg1:string):Promise<void>;
 export function Subagent_Resume(arg1:string):Promise<void>;
 
 export function Subagent_Steer(arg1:string,arg2:string):Promise<void>;
+
+export function Sync_ConfirmUploads():Promise<void>;
 
 export function Sync_ForcePull(arg1:string):Promise<void>;
 

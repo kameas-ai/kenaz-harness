@@ -159,6 +159,7 @@ import type {
   SessionUsage,
   ModelCall,
   ModelCallTelemetrySettings,
+  SettingsResetUnreadableResult,
   TurnRun,
   DriftReport,
   PolicyFileDetail,
@@ -310,6 +311,8 @@ interface WailsBindingsLike {
   Sessions_ModelCalls(id: string, limit: number): Promise<ModelCall[] | null>;
   Settings_GetModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   Settings_SetModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /** "Reset settings" recovery for an unreadable settings.json. Desktop-only. */
+  Settings_ResetUnreadable(): Promise<SettingsResetUnreadableResult>;
   /** Turn -> run links (agentgraph-settings-linkage-01DOGF0D WP03). Desktop-only. */
   Sessions_TurnRuns(sessionID: string): Promise<TurnRun[]>;
   Sessions_SaveAsArtifact(
@@ -1085,6 +1088,12 @@ interface WailsBindingsLike {
   Sync_ForcePull(category: string): Promise<void>;
   /** MCPs that arrived via sync but need credentials before they can start. */
   Sync_PendingMCPSecrets(): Promise<PendingMCPSecret[]>;
+  /**
+   * Record the one-time confirmation that enabled settings categories may
+   * upload to Fleet, then upload the held ones (provider-credentials-client-
+   * 01PCCLI01 A2, owner ruling H1).
+   */
+  Sync_ConfirmUploads(): Promise<void>;
 
   // ── Cedar team publish (fleet-share-and-sync-01NDFSEX14 WP07) ────────────
   /** Publish a Cedar rule to the team via fleet. Requires policy_admin role. */
@@ -2519,6 +2528,13 @@ export interface SettingsClient {
   getModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   /** Persist them; turning sharing on exports only calls that start afterwards. */
   setModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /**
+   * Recovery for a settings file that cannot be read: moves it aside to
+   * settings.json.corrupt-<UTC timestamp> (returned as backupPath), writes
+   * the defaults, and turns settings sync off. Rejects, changing nothing,
+   * when the file reads fine. Desktop-only (no served dispatch).
+   */
+  resetUnreadable(): Promise<SettingsResetUnreadableResult>;
   /** Persist the MCP auto-restart dial. */
   setMCPAutoRestart(enabled: boolean): Promise<void>;
 
@@ -4076,6 +4092,8 @@ export interface SyncClient {
   forcePull(category: string): Promise<void>;
   /** MCPs that arrived via sync but need credentials. */
   pendingMCPSecrets(): Promise<PendingMCPSecret[]>;
+  /** Confirm once that enabled categories may upload, then upload them. */
+  confirmUploads(): Promise<void>;
 }
 
 // ── CedarPublish client (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
@@ -4753,6 +4771,7 @@ export function createHarnessClient(): HarnessClient {
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
       getModelCallTelemetry: () => b().Settings_GetModelCallTelemetry(),
       setModelCallTelemetry: (mc) => b().Settings_SetModelCallTelemetry(mc),
+      resetUnreadable: () => b().Settings_ResetUnreadable(),
       setMCPAutoRestart: (enabled) => b().Settings_SetMCPAutoRestart(enabled),
       getToolExposure: () => b().Settings_GetToolExposure(),
       setToolExposure: (settings) => b().Settings_SetToolExposure(settings),
@@ -5144,6 +5163,7 @@ export function createHarnessClient(): HarnessClient {
       forcePush: (category) => b().Sync_ForcePush(category),
       forcePull: (category) => b().Sync_ForcePull(category),
       pendingMCPSecrets: () => b().Sync_PendingMCPSecrets(),
+      confirmUploads: () => b().Sync_ConfirmUploads(),
     },
     // ── CedarPublish (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
     cedarPublish: {
@@ -6296,6 +6316,7 @@ export function createFakeHarnessClient(
         shareWithFleet: false,
       }),
       setModelCallTelemetry: noop,
+      resetUnreadable: async () => ({ backupPath: '' }),
       setMCPAutoRestart: noop,
       getToolExposure: async () => ({
         exposure: {},
@@ -7140,6 +7161,7 @@ export function createFakeHarnessClient(
       forcePush: noop,
       forcePull: noop,
       pendingMCPSecrets: async () => [],
+      confirmUploads: noop,
     },
     cedarPublish: {
       publishToTeam: noop,

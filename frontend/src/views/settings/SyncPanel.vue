@@ -75,7 +75,7 @@ interface CategoryLabel {
 const CATEGORY_LABELS: Record<string, CategoryLabel> = {
   provider_profiles: {
     label: 'Provider profiles',
-    description: 'Not yet syncing provider profile metadata (no credentials either way — API keys always stay on-device).',
+    description: 'Not syncing yet: provider profiles stay on this device. API keys always stay on-device.',
   },
     // core/rpc/sync_categories.go's modelPrefsPayload carries exactly
     // CompactionAggressiveness, CompactionArchiveDays,
@@ -92,7 +92,7 @@ const CATEGORY_LABELS: Record<string, CategoryLabel> = {
     // provisioned-recipe entries. WP12/AC-024.
   mcp_recipes: {
     label: 'MCP recipes',
-    description: 'Personal recipe sync is not yet syncing (org-provisioned recipes still apply from your fleet admin).',
+    description: 'Not syncing yet: your personal recipes stay on this device. Recipes your fleet admin provisions still apply.',
   },
   // Canonical wire value: corefleet.SyncCategoryInstalledMCP
   // (core/fleet/sync.go:34), registered under this exact string at
@@ -114,6 +114,10 @@ const CATEGORY_LABELS: Record<string, CategoryLabel> = {
     label: 'UI theme',
     description: 'Color theme only.',
   },
+  // Fleet's settings-sync schema (kenaz-fleet service/sync_schema.go) does
+  // not accept slash_commands yet, so the backend never sends it
+  // (fleet.FleetAcceptsSyncCategory; the row reports local_only).
+  // provider-credentials-client-01PCCLI01 A2.
   slash_commands: {
     label: 'Slash commands',
     description: 'Your custom /slash commands (global scope only).',
@@ -143,6 +147,15 @@ function descriptionFor(id: string): string {
   return CATEGORY_LABELS[id]?.description ?? '';
 }
 
+/**
+ * localOnly — Fleet does not accept this category, so the backend never
+ * uploads or downloads it (SyncStatusView.local_only). The row says so
+ * instead of offering a toggle that would claim to sync.
+ */
+function localOnly(id: string): boolean {
+  return statusFor(id)?.local_only ?? false;
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 function statusFor(id: string): SyncStatusView | undefined {
   return statusList.value.find((s) => s.category === id);
@@ -162,6 +175,16 @@ function isEnabled(id: string): boolean {
  * forward-compat case, `provider_setups` (fleet-org-config-inheritance-
  * 01NORGX01 WP04, still gated on the fleet-side blocker).
  */
+/**
+ * notSyncingYet — personal sync for this kind is not built
+ * (fleet.SyncKind.UserSyncNotBuilt; provider_profiles, mcp_recipes): the
+ * backend sends and applies nothing, so the row offers no toggle and no
+ * Push/Pull rather than a switch that would do nothing.
+ */
+function notSyncingYet(id: string): boolean {
+  return statusFor(id)?.not_syncing_yet ?? false;
+}
+
 function isOrgOnly(id: string): boolean {
   const scopes = statusFor(id)?.scopes;
   if (!scopes || scopes.length === 0) return false;
@@ -195,11 +218,47 @@ function lastSyncLabel(id: string): string {
   }
 }
 
+function inConflict(id: string): boolean {
+  return statusFor(id)?.conflict ?? false;
+}
+
 function lastError(id: string): string {
+  // A conflict has its own notice with the way out; don't repeat it as an
+  // error.
+  if (inConflict(id)) return '';
   return statusFor(id)?.last_error ?? '';
 }
 
 const pendingCount = computed(() => pendingSecrets.value.length);
+
+/**
+ * Categories turned on whose first upload waits for the one-time
+ * confirmation (owner ruling H1, provider-credentials-client-01PCCLI01 A2).
+ * The Settings banner asks too; this notice covers a toggle made on this
+ * page, which the banner (loaded on mount) has not seen yet.
+ */
+const awaitingConfirmation = computed(() =>
+  statusList.value
+    .filter((s) => s.awaiting_confirmation && !s.not_syncing_yet)
+    .map((s) => labelFor(s.category)),
+);
+const uploadsBlockedReason = computed(
+  () => statusList.value.find((s) => s.uploads_blocked_reason)?.uploads_blocked_reason ?? '',
+);
+const confirming = ref(false);
+
+async function confirmUploads() {
+  confirming.value = true;
+  errorMsg.value = '';
+  try {
+    await client.sync.confirmUploads();
+    await loadStatus();
+  } catch (err) {
+    errorMsg.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    confirming.value = false;
+  }
+}
 
 // ── load ───────────────────────────────────────────────────────────────────
 async function loadStatus() {
@@ -285,11 +344,52 @@ function goToMCPTools() {
       <!-- Header -->
       <div>
         <h2 class="text-sm font-semibold text-ink mb-1">Cross-device sync</h2>
-        <p class="text-xs text-ink-muted">
-          Toggle categories to sync between your devices. Credentials and API keys
-          are <strong>never</strong> synced — only configuration metadata.
-          Changes push within 5s; fleet polls every 60s.
+        <p class="text-xs text-ink-muted" data-testid="sync-panel-intro">
+          Toggle categories to sync between your devices. Your choices stay
+          set when you restart the app. API keys and other
+          credentials are not part of settings sync; only settings are.
+          Nothing is uploaded until you confirm once with “Start syncing”.
+          Theme changes upload within a few seconds; other categories upload
+          when you turn them on or press Push. Changes from your other devices
+          are checked every 60 seconds.
         </p>
+      </div>
+
+      <!-- Uploads held because the settings file cannot be read: confirming
+           cannot help, so say what is wrong (backend: Sync_Status
+           uploads_blocked_reason). -->
+      <div
+        v-if="uploadsBlockedReason"
+        class="rounded-md border border-signal-danger px-4 py-3"
+        data-testid="sync-uploads-blocked"
+      >
+        <p class="text-sm font-medium text-signal-danger">Settings sync is paused</p>
+        <p class="text-xs text-signal-danger">{{ uploadsBlockedReason }}</p>
+      </div>
+
+      <!-- One-time upload confirmation (owner ruling H1). -->
+      <div
+        v-if="awaitingConfirmation.length > 0"
+        class="flex items-start gap-3 rounded-md border border-signal-warn bg-signal-warn-soft px-4 py-3"
+        data-testid="sync-confirm-uploads-notice"
+      >
+        <div class="flex-1">
+          <p class="text-sm font-medium text-signal-warn">Start syncing your settings?</p>
+          <p class="text-xs text-signal-warn">
+            Turned on: {{ awaitingConfirmation.join(', ') }}. None of these settings
+            has left this device yet. Start syncing uploads them so your other
+            signed-in devices can use them.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="shrink-0 rounded-sm bg-signal-warn px-3 py-1 text-xs font-medium text-white hover:brightness-90 disabled:opacity-50"
+          :disabled="confirming"
+          data-testid="sync-confirm-uploads-btn"
+          @click="confirmUploads"
+        >
+          {{ confirming ? '…' : 'Start syncing' }}
+        </button>
       </div>
 
       <!-- Pending MCP secrets banner -->
@@ -348,8 +448,15 @@ function goToMCPTools() {
                  show 'managed'"); every live kind today also declares
                  ScopeUser, so this branch is forward-compat rather than
                  currently load-bearing. -->
+            <span
+              v-if="notSyncingYet(s.category)"
+              class="mt-0.5 shrink-0 rounded-sm bg-surface-2 px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim"
+              :data-testid="`sync-not-yet-${s.category}`"
+            >
+              Not syncing yet
+            </span>
             <label
-              v-if="!isOrgOnly(s.category)"
+              v-else-if="!isOrgOnly(s.category)"
               class="mt-0.5 flex shrink-0 cursor-pointer items-center"
             >
               <input
@@ -375,7 +482,7 @@ function goToMCPTools() {
               <div class="flex items-center justify-between gap-2">
                 <span class="text-sm font-medium text-ink">{{ labelFor(s.category) }}</span>
                 <!-- Force push/pull — only when enabled -->
-                <div v-if="isEnabled(s.category)" class="flex items-center gap-1.5 shrink-0">
+                <div v-if="isEnabled(s.category) && !localOnly(s.category) && !notSyncingYet(s.category)" class="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
                     class="h-6 rounded-sm border border-border-muted px-2 font-ui text-[10px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
@@ -399,6 +506,22 @@ function goToMCPTools() {
 
               <p v-if="descriptionFor(s.category)" class="mt-0.5 text-xs text-ink-muted">
                 {{ descriptionFor(s.category) }}
+              </p>
+              <p
+                v-if="localOnly(s.category)"
+                class="mt-0.5 text-xs text-ink-muted"
+                :data-testid="`sync-local-only-${s.category}`"
+              >
+                Not syncing yet: this stays on this device until Kenaz's sync service supports it.
+              </p>
+              <p
+                v-if="inConflict(s.category)"
+                class="mt-0.5 text-xs text-signal-warn"
+                :data-testid="`sync-conflict-${s.category}`"
+              >
+                Another device changed this after this device last synced, so this device's
+                change was not uploaded. ↑ Push keeps this device's settings; ↓ Pull takes the
+                other device's. Sync pauses for this category until you choose.
               </p>
 
               <!-- Last synced + error + org provenance -->

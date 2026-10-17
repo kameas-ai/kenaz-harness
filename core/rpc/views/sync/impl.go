@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -16,6 +17,96 @@ type API struct {
 
 	mu       sync.RWMutex
 	registry *corefleet.KindRegistry
+	consent  UploadConsent
+	optIns   OptInStore
+}
+
+// SetOptInStore wires persistence for the per-category opt-ins
+// (Settings.SettingsSyncEnabledCategories). Called once from rpc.New(),
+// followed by RestoreOptIns.
+func (a *API) SetOptInStore(o OptInStore) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.optIns = o
+}
+
+func (a *API) optInStore() OptInStore {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.optIns
+}
+
+// RestoreOptIns re-applies the persisted opt-ins to the syncer. rpc.New
+// calls it at boot, after every category is registered and the upload gate
+// is installed, and before the first poll (StartPolling's first tick is
+// syncBaseInterval away). It never uploads (fleet.Syncer.RestoreEnabled):
+// a restored opt-in is not upload consent, so held categories keep waiting
+// for Sync_ConfirmUploads. A persisted category this build does not
+// register (e.g. slash_commands with its feature gate off) is skipped and
+// kept on disk, so it comes back when the category does.
+func (a *API) RestoreOptIns() (restored []string, err error) {
+	o := a.optInStore()
+	if o == nil || a.syncer == nil {
+		return nil, nil
+	}
+	cats, err := o.EnabledCategories()
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range cats {
+		cat := corefleet.SyncCategory(c)
+		if !a.syncer.HasCategory(cat) {
+			continue
+		}
+		if err := a.syncer.RestoreEnabled(cat, true); err != nil {
+			return restored, err
+		}
+		restored = append(restored, c)
+	}
+	return restored, nil
+}
+
+// SetUploadConsent wires the persisted upload confirmation
+// (Settings.SettingsSyncUploadsConfirmed) and installs it as the syncer's
+// upload gate, so Push holds every category until the user confirms.
+// Called once from rpc.New(). A nil consent keeps uploads closed (the Syncer default).
+func (a *API) SetUploadConsent(c UploadConsent) {
+	a.mu.Lock()
+	a.consent = c
+	a.mu.Unlock()
+	if a.syncer == nil {
+		return
+	}
+	if c == nil {
+		a.syncer.SetUploadGate(nil)
+		return
+	}
+	a.syncer.SetUploadGate(c.UploadsConfirmed)
+}
+
+func (a *API) uploadConsent() UploadConsent {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.consent
+}
+
+// Sync_ConfirmUploads implements SyncAPI.
+func (a *API) Sync_ConfirmUploads(ctx context.Context) error {
+	c := a.uploadConsent()
+	if c == nil {
+		return ErrUploadConsentUnavailable
+	}
+	if err := c.ConfirmUploads(); err != nil {
+		return err
+	}
+	if a.syncer == nil {
+		return nil
+	}
+	// Best effort: the confirmation is saved; an upload that fails now
+	// (offline, signed out) shows in that category's Sync_Status error and
+	// retries on the next change or Push.
+	_ = a.syncer.PushHeld(ctx)
+	return nil
 }
 
 var _ SyncAPI = (*API)(nil)
@@ -53,7 +144,20 @@ func (a *API) Sync_Toggle(ctx context.Context, category string, enabled bool) er
 	if a.syncer == nil {
 		return corefleet.ErrFleetDisabled
 	}
-	return a.syncer.SetEnabled(ctx, corefleet.SyncCategory(category), enabled)
+	cat := corefleet.SyncCategory(category)
+	if !a.syncer.HasCategory(cat) {
+		return fmt.Errorf("fleet/sync: unknown category %q", category)
+	}
+	// Persist first: the choice must survive a restart even when the
+	// immediate push below fails (offline, signed out, uploads held), and a
+	// choice that could not be saved must not take effect, or the panel
+	// would show a state the next launch silently drops.
+	if o := a.optInStore(); o != nil {
+		if err := o.SetCategoryEnabled(category, enabled); err != nil {
+			return fmt.Errorf("sync: save %s choice: %w", category, err)
+		}
+	}
+	return a.syncer.SetEnabled(ctx, cat, enabled)
 }
 
 // Sync_Status implements SyncAPI.
@@ -87,16 +191,47 @@ func (a *API) Sync_Status(_ context.Context) ([]SyncStatusView, error) {
 		}
 		out := make([]SyncStatusView, len(cats))
 		for i, cat := range cats {
-			out[i] = enrichWithRegistry(SyncStatusView{Category: cat}, registry, cat)
+			out[i] = enrichWithRegistry(SyncStatusView{
+				Category:  cat,
+				LocalOnly: !corefleet.FleetAcceptsSyncCategory(corefleet.SyncCategory(cat)),
+			}, registry, cat)
 		}
 		return out, nil
 	}
 	raw := a.syncer.Status()
 	out := make([]SyncStatusView, len(raw))
+	blocked, unreadable := a.uploadsBlockedReason()
 	for i, s := range raw {
-		out[i] = enrichWithRegistry(syncStatusToView(s), registry, string(s.Category))
+		v := enrichWithRegistry(syncStatusToView(s), registry, string(s.Category))
+		if blocked != "" && v.Enabled && !v.LocalOnly && !v.NotSyncingYet {
+			v.UploadsBlockedReason = blocked
+			v.SettingsUnreadable = unreadable
+			v.AwaitingConfirmation = false
+		}
+		out[i] = v
 	}
 	return out, nil
+}
+
+// uploadsBlockedReason is non-empty when the upload confirmation cannot be
+// read, so uploads are held for a reason the user cannot fix by
+// confirming. Without this the gate failed closed silently: the panel
+// asked the user to "Start syncing", and confirming could not take effect.
+// unreadable is true when the reason is the settings file itself, which
+// "Reset settings" can recover from.
+func (a *API) uploadsBlockedReason() (reason string, unreadable bool) {
+	c := a.uploadConsent()
+	if c == nil {
+		return "Settings sync cannot upload: this build has no settings store to record your confirmation.", false
+	}
+	if _, err := c.UploadState(); err != nil {
+		if errors.Is(err, ErrUploadConsentUnavailable) {
+			return "Settings sync cannot upload: this build has no settings store to record your confirmation.", false
+		}
+		return "Settings sync is paused: Kenaz could not read your settings file, so it cannot tell whether you confirmed uploads (" +
+			err.Error() + "). Uploads resume as soon as the file can be read again.", true
+	}
+	return "", false
 }
 
 // enrichWithRegistry adds Scopes + OrgAppliedAt to v from registry, when a
@@ -113,6 +248,9 @@ func enrichWithRegistry(v SyncStatusView, registry *corefleet.KindRegistry, cate
 			scopes = append(scopes, string(s))
 		}
 		v.Scopes = scopes
+		if kind.UserSyncNotBuilt {
+			v.NotSyncingYet = true
+		}
 	}
 	if at, ok := registry.OrgAppliedAt(category); ok {
 		v.OrgAppliedAt = at.UTC().Format(time.RFC3339)
@@ -125,7 +263,9 @@ func (a *API) Sync_ForcePush(ctx context.Context, category string) error {
 	if a.syncer == nil {
 		return corefleet.ErrFleetDisabled
 	}
-	return a.syncer.Push(ctx, corefleet.SyncCategory(category))
+	// The user's explicit Push: also resolves a conflict in favour of
+	// this device (fleet.Syncer.ForcePush).
+	return a.syncer.ForcePush(ctx, corefleet.SyncCategory(category))
 }
 
 // Sync_ForcePull implements SyncAPI.
@@ -133,7 +273,9 @@ func (a *API) Sync_ForcePull(ctx context.Context, category string) error {
 	if a.syncer == nil {
 		return corefleet.ErrFleetDisabled
 	}
-	return a.syncer.Pull(ctx, corefleet.SyncCategory(category))
+	// The user's explicit Pull: also resolves a conflict in favour of
+	// the other device (fleet.Syncer.ForcePull).
+	return a.syncer.ForcePull(ctx, corefleet.SyncCategory(category))
 }
 
 // Sync_PendingMCPSecrets implements SyncAPI.
@@ -157,9 +299,13 @@ func (a *API) Sync_PendingMCPSecrets(_ context.Context) ([]PendingMCPSecret, err
 
 func syncStatusToView(s corefleet.SyncStatus) SyncStatusView {
 	v := SyncStatusView{
-		Category:  string(s.Category),
-		Enabled:   s.Enabled,
-		LastError: s.LastError,
+		Category:             string(s.Category),
+		Enabled:              s.Enabled,
+		LastError:            s.LastError,
+		AwaitingConfirmation: s.AwaitingConfirmation,
+		LocalOnly:            s.LocalOnly,
+		Conflict:             s.Conflict,
+		NotSyncingYet:        s.NotSyncingYet,
 	}
 	if !s.LastPushAt.IsZero() {
 		v.LastPushAt = s.LastPushAt.UTC().Format(time.RFC3339)

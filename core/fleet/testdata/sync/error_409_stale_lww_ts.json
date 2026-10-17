@@ -1,0 +1,1 @@
+{"code":"stale_lww_ts","message":"supplied lww_ts is not newer than the stored timestamp; pull first and retry","details":{"lww_ts":"2026-10-15T12:00:00.123456Z"}}

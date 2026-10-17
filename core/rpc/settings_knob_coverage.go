@@ -815,6 +815,22 @@ func init() {
 			"via resolveBinding/matchesEvent so a rebind changes the "+
 			"actual handler, not just the cheat sheet.",
 	)
+	knobcoverage.Register[settings.Settings](
+		"SettingsSyncUploadsConfirmed",
+		"provider-credentials-client-01PCCLI01 A2 / owner ruling H1: "+
+			"settingsUploadConsent.UploadsConfirmed (sync_upload_consent.go) "+
+			"is fleet.Syncer's upload gate; Syncer.Push returns "+
+			"ErrSyncUploadNotConfirmed and sends nothing while it is false "+
+			"(sync_upload_consent_test.go drives it through a real FileStore).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"SettingsSyncEnabledCategories",
+		"persisted per-category sync opt-ins: written by Sync_Toggle via "+
+			"settingsSyncOptIns (sync_optins.go); rpc.New re-applies them "+
+			"through syncview.API.RestoreOptIns -> fleet.Syncer.RestoreEnabled, "+
+			"whose enabled flag gates Push and Pull (sync_optins_test.go "+
+			"restarts over a real FileStore).",
+	)
 	knobcoverage.RegisterDeferred[settings.Settings](
 		"KeyboardShortcutsPreset",
 		"documented reserved field (api.go doc comment): 'reserved for a "+

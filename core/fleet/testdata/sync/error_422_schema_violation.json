@@ -1,0 +1,1 @@
+{"code":"schema_violation","message":"payload does not match the allowlist schema for this category","details":{"category":"ui_theme","path":"$[key#0]","reason":"unknown field (not in the category allowlist)"}}

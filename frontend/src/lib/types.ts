@@ -5308,6 +5308,48 @@ export interface SyncStatusView {
    * device. The WP03 generic org-provenance signal.
    */
   org_applied_at?: string;
+  /**
+   * True when the category is enabled but its upload waits for the user's
+   * one-time confirmation (Sync_ConfirmUploads). Pulls still run.
+   */
+  awaiting_confirmation?: boolean;
+  /** True when Fleet does not accept this category; it stays on this device. */
+  local_only?: boolean;
+  /**
+   * True when another device changed this category after this one last
+   * synced, so this device's change was not uploaded. Push
+   * (Sync_ForcePush) keeps this device's settings; Pull (Sync_ForcePull)
+   * takes the other device's. Automatic sync leaves it alone until then.
+   */
+  conflict?: boolean;
+  /**
+   * True when personal sync for this category is not built yet
+   * (fleet.SyncKind.UserSyncNotBuilt — provider_profiles, mcp_recipes):
+   * nothing is uploaded or applied, so the panel offers no toggle and the
+   * upload confirmation never lists it.
+   */
+  not_syncing_yet?: boolean;
+  /**
+   * Non-empty when this category's uploads are held because the settings
+   * that record the upload confirmation could not be read. Confirming
+   * cannot fix it, so awaiting_confirmation is false on such a row.
+   */
+  uploads_blocked_reason?: string;
+  /**
+   * True when uploads_blocked_reason is set because the settings file itself
+   * cannot be read. The UI then offers "Reset settings"
+   * (Settings_ResetUnreadable).
+   */
+  settings_unreadable?: boolean;
+}
+
+/**
+ * SettingsResetUnreadableResult — Settings_ResetUnreadable's answer
+ * (Go: settings.ResetUnreadableResult). backupPath is where the unreadable
+ * settings.json was kept (settings.json.corrupt-<UTC timestamp>).
+ */
+export interface SettingsResetUnreadableResult {
+  backupPath: string;
 }
 
 /**

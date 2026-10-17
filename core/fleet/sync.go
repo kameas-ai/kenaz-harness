@@ -1,18 +1,35 @@
 // Package fleet — sync.go
 //
 // Per-category settings sync (push-up / pull-down) between harness devices.
-// Wire contract: §2b of kenaz-fleet/docs/contract-harness-sync.md.
+// Wire contract: §2b of kenaz-fleet/docs/contract-harness-sync.md, served by
+// kenaz-fleet service/handlers_sync.go (wire types PutSyncRequest and
+// SyncStateResponse) over table user_sync_state (migration 0062):
 //
-// Categories: provider_profiles, model_prefs, mcp_recipes, installed_mcp,
-// ui_theme.
+//	PUT /api/v1/sync/{category}                 body {"lww_ts": RFC3339, "payload": {...}}
+//	GET /api/v1/sync/{category}?since=<RFC3339> 200 SyncStateResponse | 304
+//
+// Until provider-credentials-client-01PCCLI01 A2 this file sent POST with an
+// int64 lww_ts and pulled with ?since=<int>. Fleet answers the first with 405
+// and the others with 400, so settings sync never round-tripped
+// (sync_wire_test.go pins the fix).
+//
+// Categories Fleet accepts: provider_profiles, model_prefs, mcp_recipes,
+// installed_mcp, ui_theme (fleetAcceptedSyncCategories). Anything else
+// registered here (slash_commands) stays on this device.
+//
+// Uploads are gated (SetUploadGate): until the user has confirmed once that
+// their settings may leave the machine, Push holds every category. Pulls are
+// not gated; see Pull.
 //
 // Fork-removal recipe: delete this file + sync_mcp.go + core/rpc/views/sync/ +
 // frontend/src/views/settings/SyncPanel.vue + the "Sync" tab in settings.
 package fleet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,23 +63,178 @@ func AllSyncCategories() []SyncCategory {
 	}
 }
 
-// SyncPayload is the wire type for PUT/GET /api/v1/sync/{category}.
-// Payload is the category-specific JSON blob; LWWTimestamp is the
-// last-write-wins epoch (nanoseconds).
-type SyncPayload struct {
-	Category     SyncCategory    `json:"category"`
-	LWWTimestamp int64           `json:"lww_ts"`
-	Payload      json.RawMessage `json:"payload"`
+// fleetAcceptedSyncCategories is the set of categories Fleet's settings-sync
+// endpoint accepts. It mirrors kenaz-fleet service/sync_schema.go's
+// syncSchemas map (ParseSyncCategory rejects anything else: 422
+// unknown_category on PUT, 400 on GET) and the CHECK constraint in migration
+// 0062_user_sync_state. A category registered with the Syncer but absent from
+// this list (slash_commands today) is never pushed or pulled; it stays on
+// this device. The contract says Fleet ships a category's schema before the
+// harness sends it (§2b), so add an entry here only once sync_schema.go has
+// it.
+var fleetAcceptedSyncCategories = map[SyncCategory]bool{
+	SyncCategoryProviderProfiles: true,
+	SyncCategoryModelPrefs:       true,
+	SyncCategoryMCPRecipes:       true,
+	SyncCategoryInstalledMCP:     true,
+	SyncCategoryUITheme:          true,
+}
+
+// FleetAcceptsSyncCategory reports whether Fleet's settings-sync endpoint
+// accepts cat (see fleetAcceptedSyncCategories).
+func FleetAcceptsSyncCategory(cat SyncCategory) bool {
+	return fleetAcceptedSyncCategories[cat]
+}
+
+// ErrSyncUploadNotConfirmed is returned by Push while the upload gate is
+// closed, because the user has not yet confirmed that settings may leave
+// this device. Nothing was sent.
+var ErrSyncUploadNotConfirmed = errors.New("fleet/sync: uploads are paused until you confirm settings sync")
+
+// ErrSyncCategoryLocalOnly is returned by Push and Pull for a category Fleet
+// does not accept. Nothing was sent.
+var ErrSyncCategoryLocalOnly = errors.New("fleet/sync: this category stays on this device; Fleet does not sync it yet")
+
+// ErrSyncCategoryNotSyncingYet is returned by Push and Pull for a category
+// whose personal sync is not built yet (CategoryConfig.NotSyncingYet).
+// Nothing was sent.
+var ErrSyncCategoryNotSyncingYet = errors.New("fleet/sync: this category does not sync yet")
+
+// ErrSyncClockSkew is returned by Push when Fleet rejects the write with 422
+// lww_ts_in_future: this device's clock is more than 5 minutes ahead.
+var ErrSyncClockSkew = errors.New("fleet/sync: this device's clock is more than 5 minutes ahead of Fleet; correct the clock and sync will resume")
+
+// syncPutRequest is exactly kenaz-fleet's PutSyncRequest
+// (service/handlers_sync.go): lww_ts is an RFC 3339 string and payload is the
+// category blob. The body has no category field; the category is the path.
+type syncPutRequest struct {
+	LWWTs   string          `json:"lww_ts"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// syncStateResponse is kenaz-fleet's SyncStateResponse, returned by a
+// successful PUT and by GET.
+type syncStateResponse struct {
+	Category  string          `json:"category"`
+	LWWTs     lwwStamp        `json:"lww_ts"`
+	Payload   json.RawMessage `json:"payload"`
+	UpdatedAt string          `json:"updated_at"`
+}
+
+// fleetErrorBody is kenaz-fleet's httpcore.ErrorResponse envelope. Fleet
+// never echoes a payload value in it (contract §2b, "422 error shape").
+type fleetErrorBody struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
+// lwwStamp is an LWW timestamp in Unix nanoseconds, the harness's internal
+// form. It is monotonic and directly comparable, and 0 means "nothing seen".
+//
+// On the wire it is RFC 3339 only, because Fleet's user_sync_state.lww_ts
+// column is TIMESTAMPTZ. Fleet main routes only PUT and parses lww_ts as
+// RFC 3339 only: it has no POST route and no int64 form, in this or any
+// release, so a pre-A2 harness build cannot upload at all (which is what
+// lets the H1 confirmation be the only way settings first leave a device).
+// A bare JSON integer on the wire is rejected. Fleet's "nothing stored yet" answer
+// carries the zero time ("0001-01-01T00:00:00Z"), which decodes to 0.
+//
+// No int64 form survives anywhere locally: CategoryState.lwwTS is
+// persisted (sync_state.go) as RFC 3339 too, and nothing before that
+// persisted it, so there is no cached int64 to migrate and no legacy
+// decoder is needed.
+type lwwStamp int64
+
+// UnmarshalJSON accepts an RFC 3339 string only.
+func (l *lwwStamp) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		*l = 0
+		return nil
+	}
+	if b[0] != '"' {
+		return fmt.Errorf("fleet/sync: lww_ts must be an RFC 3339 string, got %.32s", b)
+	}
+	var str string
+	if err := json.Unmarshal(b, &str); err != nil {
+		return err
+	}
+	ns, err := parseLWW(str)
+	if err != nil {
+		return err
+	}
+	*l = lwwStamp(ns)
+	return nil
+}
+
+// parseLWW parses an RFC 3339 timestamp, with or without a fractional
+// second (Fleet accepts both), into Unix nanos. The zero time maps to 0.
+func parseLWW(s string) (int64, error) {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return 0, fmt.Errorf("fleet/sync: lww_ts %q is not RFC 3339: %w", s, err)
+	}
+	if t.Unix() <= 0 {
+		return 0, nil
+	}
+	return t.UnixNano(), nil
+}
+
+// formatLWW renders Unix nanos as the RFC 3339 UTC string Fleet expects.
+func formatLWW(ns int64) string {
+	return time.Unix(0, ns).UTC().Format(time.RFC3339Nano)
+}
+
+// nextLWW returns the timestamp for a new push. It is now truncated to the
+// microsecond (Postgres TIMESTAMPTZ resolution, so the value Fleet stores and
+// echoes equals the one kept here), and strictly greater than prev, so a
+// fast second push never earns a self-inflicted 409 stale_lww_ts.
+func nextLWW(prev int64) int64 {
+	now := time.Now().UTC().Truncate(time.Microsecond).UnixNano()
+	if now <= prev {
+		now = prev + int64(time.Microsecond)
+	}
+	return now
 }
 
 // CategoryState holds the per-category runtime state.
 type CategoryState struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// enabled is the user's opt-in. It is persisted by the rpc layer
+	// (Settings.SettingsSyncEnabledCategories, written by Sync_Toggle) and
+	// re-applied at boot through RestoreEnabled; this field is the live copy.
 	enabled  bool
 	lastPush time.Time
 	lastPull time.Time
 	lastErr  string
-	lwwTS    int64 // nanoseconds
+	// lwwTS is the stamp of the last state this device and Fleet agreed
+	// on, in Unix nanoseconds. Persisted through SyncStateStore
+	// (sync_state.go), so it survives a restart.
+	lwwTS int64
+	// fleetRejected is set when Fleet answers 422 unknown_category although
+	// fleetAcceptedSyncCategories lists the category (an older Fleet). It is
+	// remembered for the life of the process, so no further request is sent.
+	fleetRejected bool
+	// conflict is an unresolved 409 stale_lww_ts (sync_conflict.go):
+	// automatic pushes and polls skip the category until ForcePush or
+	// ForcePull. Persisted with lwwTS.
+	conflict bool
+	// dirty marks a local change Fleet does not have yet (sync_dirty.go):
+	// set by NotifyMutation and by a PUT that failed in transit, cleared
+	// only by a successful PUT (or ForcePull). Persisted, so an edit made
+	// offline survives a restart. While dirty, the poll retries the upload,
+	// and a pull that finds a newer remote marks a conflict instead of
+	// applying it over the unsent edit.
+	dirty bool
+	// dirtyGen counts markDirty calls, so a PUT of an older collect does not
+	// clear the mark of an edit made while it was in flight.
+	dirtyGen uint64
+	// retryHeld stops the poll retrying a PUT Fleet refused for its content
+	// (422 schema/secret, 413, 403): sending it again would only repeat the
+	// refusal. The next local change clears it. Not persisted: one retry per
+	// launch is bounded.
+	retryHeld bool
 }
 
 // SyncStatus is the read-only view of a category's sync state,
@@ -74,6 +246,21 @@ type SyncStatus struct {
 	LastPullAt time.Time    `json:"last_pull_at,omitempty"`
 	LastError  string       `json:"last_error,omitempty"`
 	LWWTS      int64        `json:"lww_ts"`
+	// AwaitingConfirmation is true when the category is enabled, Fleet
+	// accepts it, and the upload gate is closed: its first upload waits for
+	// the user to confirm.
+	AwaitingConfirmation bool `json:"awaiting_confirmation,omitempty"`
+	// LocalOnly is true when Fleet does not accept this category, so it never
+	// leaves the device.
+	LocalOnly bool `json:"local_only,omitempty"`
+	// Conflict is true when another device changed the category after this
+	// one last synced and this device's change was not uploaded. The user
+	// resolves it with ForcePush (keep this device's) or ForcePull (take
+	// the other device's); see sync_conflict.go.
+	Conflict bool `json:"conflict,omitempty"`
+	// NotSyncingYet is true when personal sync for this category is not
+	// built (CategoryConfig.NotSyncingYet): nothing is sent or applied.
+	NotSyncingYet bool `json:"not_syncing_yet,omitempty"`
 }
 
 // CategoryCollector is called by the Syncer to gather the current local state
@@ -89,6 +276,10 @@ type CategoryApplier func(ctx context.Context, payload json.RawMessage) error
 type CategoryConfig struct {
 	Collector CategoryCollector
 	Applier   CategoryApplier
+	// NotSyncingYet: personal sync for this category is not built (see
+	// SyncKind.UserSyncNotBuilt). Push and Pull send nothing and return
+	// ErrSyncCategoryNotSyncingYet.
+	NotSyncingYet bool
 }
 
 // Syncer manages per-category sync (push-up / pull-down) against
@@ -103,6 +294,32 @@ type Syncer struct {
 	debounce   map[SyncCategory]chan struct{}
 	stopCh     chan struct{}
 	once       sync.Once
+	// uploadGate, when set, must return true before Push sends anything.
+	// Owner ruling H1 (provider-credentials-client-01PCCLI01 §7a) asks for a
+	// one-time confirmation before any category first uploads. Production
+	// wires it to Settings.SettingsSyncUploadsConfirmed
+	// (core/rpc/sync_upload_consent.go). nil means CLOSED: a Syncer with no
+	// gate never uploads, so no path (boot order, the first poll cycle, a
+	// debounced push fired before wiring finishes) can upload before the
+	// acknowledgement. Fleet has no other consent path: Fleet main has no
+	// POST or int64 route a pre-A2 build could upload through.
+	gateMu     sync.RWMutex
+	uploadGate func() bool
+	// stateStore persists lwwTS per category (sync_state.go). nil keeps
+	// it in memory only. persistedLate holds loaded entries for categories
+	// not registered yet; persistMu serialises saves.
+	stateStore    SyncStateStore
+	persistedLate map[SyncCategory]PersistedSyncState
+	persistMu     sync.Mutex
+	// clockOffset is local-minus-Fleet from the last response's Date
+	// header (sync_conflict.go); Push refuses while it exceeds
+	// syncMaxClockSkew.
+	clockMu     sync.Mutex
+	clockOffset time.Duration
+	clockKnown  bool
+	// skewRefusals counts consecutive checkClock refusals; at
+	// syncSkewReprobeAfter the next check re-reads Fleet's clock first.
+	skewRefusals int
 	// stopOnce guards close(stopCh). Stop is reachable from more than one
 	// teardown path (rpc.API.Shutdown, and any caller that stops the syncer
 	// directly), and a bare close() panics on the second call with
@@ -126,6 +343,23 @@ func NewSyncer(c *Client) *Syncer {
 	return s
 }
 
+// SetUploadGate installs the upload gate. Push sends nothing while gate
+// returns false. nil closes uploads again (the default).
+func (s *Syncer) SetUploadGate(gate func() bool) {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	s.uploadGate = gate
+}
+
+// uploadsAllowed reports whether the upload gate is installed and open.
+// Fail closed: no gate, no upload.
+func (s *Syncer) uploadsAllowed() bool {
+	s.gateMu.RLock()
+	gate := s.uploadGate
+	s.gateMu.RUnlock()
+	return gate != nil && gate()
+}
+
 // RegisterCategory wires a collector + applier for a sync category.
 // Must be called before Start.
 //
@@ -142,13 +376,25 @@ func (s *Syncer) RegisterCategory(cat SyncCategory, cfg CategoryConfig) {
 	defer s.mu.Unlock()
 	s.configs[cat] = cfg
 	if _, ok := s.categories[cat]; !ok {
-		s.categories[cat] = &CategoryState{}
+		st := &CategoryState{}
+		s.adoptPersistedLocked(cat, st)
+		s.categories[cat] = st
 	}
 }
 
-// SetEnabled toggles sync on/off for a category. When toggled on, an
-// immediate push is triggered. When toggled off, no further pushes or
-// polls occur for that category (local state is preserved).
+// SetEnabled toggles sync on/off for a category. When toggled off, no
+// further pushes or polls occur for that category (local state is
+// preserved).
+//
+// When toggled on it PULLS FIRST, then pushes only if the pull applied
+// nothing (pullThenPush). Pushing first stamped this device's current state
+// with a fresh LWW timestamp, so turning a category on on a new device (or
+// after a restart, before lwwTS was persisted) overwrote the newer
+// model_prefs / ui_theme every other device had already agreed on.
+//
+// A push held by the upload gate or skipped because the category is
+// local-only is not an error here: the category is enabled and uploads once
+// the user confirms (or never, for a local-only category).
 func (s *Syncer) SetEnabled(ctx context.Context, cat SyncCategory, enabled bool) error {
 	s.mu.Lock()
 	st, ok := s.categories[cat]
@@ -159,12 +405,78 @@ func (s *Syncer) SetEnabled(ctx context.Context, cat SyncCategory, enabled bool)
 	st.mu.Lock()
 	wasEnabled := st.enabled
 	st.enabled = enabled
+	clearedDirty := !enabled && st.dirty
+	if !enabled {
+		// Turning a category off ends its pending upload. Turning it back on
+		// pulls first (pullThenPush), so a stale mark must not turn that pull
+		// into a conflict.
+		st.dirty = false
+		st.retryHeld = false
+	}
 	st.mu.Unlock()
+	if clearedDirty {
+		s.persist()
+	}
 
 	if enabled && !wasEnabled {
-		// Immediate push of current local state (FR-102).
-		return s.Push(ctx, cat)
+		// FR-102 (push current local state on enable), after taking any
+		// newer state from Fleet.
+		err := s.pullThenPush(ctx, cat)
+		if errors.Is(err, ErrSyncUploadNotConfirmed) || errors.Is(err, ErrSyncCategoryLocalOnly) ||
+			errors.Is(err, ErrSyncCategoryNotSyncingYet) {
+			return nil
+		}
+		return err
 	}
+	return nil
+}
+
+// pullThenPush brings a category up to date before uploading it: it pulls,
+// and pushes only when the pull applied nothing (Fleet has nothing newer
+// than what this device last agreed on). When the pull applied Fleet's
+// state, local now equals it, so there is nothing to upload. A failed pull
+// skips the push: uploading without knowing what Fleet holds is exactly
+// what overwrote other devices' settings.
+func (s *Syncer) pullThenPush(ctx context.Context, cat SyncCategory) error {
+	applied, err := s.pull(ctx, cat)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+	return s.Push(ctx, cat)
+}
+
+// HasCategory reports whether cat has runtime state on this Syncer (a
+// built-in category, or one registered through RegisterCategory), i.e.
+// whether SetEnabled / RestoreEnabled would accept it.
+func (s *Syncer) HasCategory(cat SyncCategory) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.categories[cat]
+	return ok
+}
+
+// RestoreEnabled re-applies a persisted opt-in at boot (the user's choice
+// from a previous launch, Settings.SettingsSyncEnabledCategories). Unlike
+// SetEnabled it never pushes: restoring a choice is not a new action by the
+// user, and in particular is not upload consent. Uploads for a restored
+// category still go through Push, so they stay held by the upload gate
+// until Settings.SettingsSyncUploadsConfirmed is true, and otherwise wait
+// for the next local change (NotifyMutation) — a boot-time push would stamp
+// possibly stale local state with a fresh LWW timestamp and overwrite a
+// newer write made from another device. Pulls resume on the next poll.
+func (s *Syncer) RestoreEnabled(cat SyncCategory, enabled bool) error {
+	s.mu.RLock()
+	st, ok := s.categories[cat]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("fleet/sync: unknown category %q", cat)
+	}
+	st.mu.Lock()
+	st.enabled = enabled
+	st.mu.Unlock()
 	return nil
 }
 
@@ -183,28 +495,59 @@ func (s *Syncer) IsEnabled(cat SyncCategory) bool {
 
 // Status returns the sync status for all categories.
 func (s *Syncer) Status() []SyncStatus {
+	allowed := s.uploadsAllowed()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]SyncStatus, 0, len(s.categories))
 	for cat, st := range s.categories {
+		notYet := s.configs[cat].NotSyncingYet
 		st.mu.Lock()
+		localOnly := !FleetAcceptsSyncCategory(cat) || st.fleetRejected
 		out = append(out, SyncStatus{
-			Category:   cat,
-			Enabled:    st.enabled,
-			LastPushAt: st.lastPush,
-			LastPullAt: st.lastPull,
-			LastError:  st.lastErr,
-			LWWTS:      st.lwwTS,
+			Category:             cat,
+			Enabled:              st.enabled,
+			LastPushAt:           st.lastPush,
+			LastPullAt:           st.lastPull,
+			LastError:            st.lastErr,
+			LWWTS:                st.lwwTS,
+			AwaitingConfirmation: st.enabled && !localOnly && !notYet && !allowed,
+			LocalOnly:            localOnly,
+			Conflict:             st.conflict,
+			NotSyncingYet:        notYet,
 		})
 		st.mu.Unlock()
 	}
 	return out
 }
 
+// PushHeld uploads every enabled, Fleet-accepted category. The rpc layer
+// calls it right after the user confirms uploads, so categories enabled
+// before the confirmation upload at once instead of waiting for the next
+// local change. Each one pulls first (pullThenPush): a held category may
+// have been enabled long ago, and stamping its local state "now" would
+// overwrite anything another device uploaded since.
+// Per-category failures are recorded in Status and joined into the result.
+func (s *Syncer) PushHeld(ctx context.Context) error {
+	var errs []error
+	for _, cat := range s.RegisteredCategories() {
+		if !s.IsEnabled(cat) || !FleetAcceptsSyncCategory(cat) {
+			continue
+		}
+		if err := s.pullThenPush(ctx, cat); err != nil && !errors.Is(err, ErrSyncCategoryLocalOnly) &&
+			!errors.Is(err, ErrSyncCategoryNotSyncingYet) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // NotifyMutation should be called by any subsystem that mutates a synced
 // category's local state. It triggers a debounced push after 5s (FR-104,
 // NFR-002).
 func (s *Syncer) NotifyMutation(cat SyncCategory) {
+	// Record the unsent change before debouncing, so it survives a crash or
+	// a quit inside the debounce window as well as a failed PUT.
+	s.markDirty(cat)
 	s.debounceMu.Lock()
 	defer s.debounceMu.Unlock()
 	if _, ok := s.debounce[cat]; ok {
@@ -238,7 +581,18 @@ func (s *Syncer) NotifyMutation(cat SyncCategory) {
 		s.debounceMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := s.Push(ctx, cat); err != nil {
+		err := s.Push(ctx, cat)
+		switch {
+		case err == nil, errors.Is(err, ErrFleetDisabled):
+		case errors.Is(err, ErrSyncUploadNotConfirmed), errors.Is(err, ErrSyncCategoryLocalOnly),
+			errors.Is(err, ErrSyncCategoryNotSyncingYet),
+			errors.Is(err, ErrSyncConflict): // markConflict already logged it once
+
+			logging.L().Debug("fleet.sync.debounced_push.held",
+				"category", string(cat),
+				"reason", err.Error(),
+			)
+		default:
 			logging.L().Warn("fleet.sync.debounced_push.failed",
 				"category", string(cat),
 				"err", err.Error(),
@@ -247,9 +601,79 @@ func (s *Syncer) NotifyMutation(cat SyncCategory) {
 	}()
 }
 
+// categoryLocalOnly reports whether cat must not be sent to Fleet.
+func categoryLocalOnly(cat SyncCategory, st *CategoryState) bool {
+	if !FleetAcceptsSyncCategory(cat) {
+		return true
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.fleetRejected
+}
+
+// readFleetError decodes a Fleet error envelope. A body that is not one
+// yields a code-less value carrying the raw text, truncated.
+func readFleetError(resp *http.Response) fleetErrorBody {
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	var e fleetErrorBody
+	if err := json.Unmarshal(raw, &e); err != nil || e.Code == "" {
+		msg := string(raw)
+		if len(msg) > 256 {
+			msg = msg[:256]
+		}
+		return fleetErrorBody{Message: msg}
+	}
+	return e
+}
+
+// describe renders a Fleet error for Status.LastError. It names the code and
+// the JSON path Fleet reports; Fleet never echoes a payload value, so nothing
+// from the payload reaches the string.
+func (e fleetErrorBody) describe(status int) string {
+	msg := fmt.Sprintf("status %d", status)
+	if e.Code != "" {
+		msg += " " + e.Code
+	}
+	if path, ok := e.Details["path"].(string); ok && path != "" {
+		msg += " at " + path
+	}
+	if reason, ok := e.Details["reason"].(string); ok && reason != "" {
+		msg += ": " + reason
+	} else if e.Message != "" {
+		msg += ": " + e.Message
+	}
+	return msg
+}
+
 // Push immediately pushes the current local state for a category to fleet.
-// Skips if the category is not enabled or has no collector.
+// Skips if the category is not enabled or has no collector. Returns
+// ErrSyncUploadNotConfirmed, sending nothing, while the upload gate is
+// closed, and ErrSyncCategoryLocalOnly for a category Fleet does not accept.
+//
+// Before sending it checks this device's clock against Fleet's
+// (checkClock): more than syncMaxClockSkew apart and nothing is sent
+// (ErrSyncClockMismatch). A category in conflict is not pushed
+// (ErrSyncConflict) until the user resolves it; ForcePush does.
+//
+// Fleet's documented errors (handlers_sync.go) are handled without retrying
+// the PUT, so a bad state can never turn into a request loop:
+//   - 409 stale_lww_ts: Fleet holds a newer write from another device. The
+//     category is marked in conflict (Status.Conflict, LastError, a log
+//     line) and ErrSyncConflict returned. Nothing is pulled: the old silent
+//     pull reverted this device's change without telling anyone.
+//   - 422 lww_ts_in_future: this clock is ahead. ErrSyncClockSkew.
+//   - 422 unknown_category: remembered; the category goes local-only.
+//   - 422 schema_violation / secret_field_detected / secret_value_detected,
+//     413 payload_too_large: recorded in LastError (code + JSON path, never
+//     a value); the next local change tries again.
+//   - 403: ErrCapabilityNotInTier.
 func (s *Syncer) Push(ctx context.Context, cat SyncCategory) error {
+	return s.push(ctx, cat, false)
+}
+
+// push is Push; force is the user's explicit Push (ForcePush), which may
+// resolve a conflict by keeping this device's settings.
+func (s *Syncer) push(ctx context.Context, cat SyncCategory, force bool) error {
 	if s.client == nil || s.client.isNop {
 		return ErrFleetDisabled
 	}
@@ -269,73 +693,205 @@ func (s *Syncer) Push(ctx context.Context, cat SyncCategory) error {
 	if !cfgOk || cfg.Collector == nil {
 		return nil
 	}
+	if cfg.NotSyncingYet {
+		return ErrSyncCategoryNotSyncingYet
+	}
+	if categoryLocalOnly(cat, st) {
+		return ErrSyncCategoryLocalOnly
+	}
+	// Consumer of Settings.SettingsSyncUploadsConfirmed (via uploadGate):
+	// nothing is collected or sent until the user has confirmed once.
+	if !s.uploadsAllowed() {
+		return ErrSyncUploadNotConfirmed
+	}
+	conflict := inConflict(st)
+	if conflict && !force {
+		return ErrSyncConflict
+	}
+	if err := s.checkClock(ctx, cat, st); err != nil {
+		return err
+	}
+	st.mu.Lock()
+	floor := st.lwwTS
+	st.mu.Unlock()
+	if conflict {
+		// Keep this device's settings: stamp above Fleet's current row.
+		remoteTS, err := s.remoteStamp(ctx, cat)
+		if err != nil {
+			return err
+		}
+		if remoteTS > floor {
+			floor = remoteTS
+		}
+	}
 
+	st.mu.Lock()
+	gen := st.dirtyGen
+	st.mu.Unlock()
 	raw, err := cfg.Collector(ctx)
 	if err != nil {
 		return fmt.Errorf("fleet/sync: collect %s: %w", cat, err)
 	}
-	now := time.Now().UnixNano()
-	sp := SyncPayload{
-		Category:     cat,
-		LWWTimestamp: now,
-		Payload:      raw,
+	if len(bytes.TrimSpace(raw)) == 0 {
+		raw = json.RawMessage(`{}`)
 	}
-	resp, err := s.client.PostJSON(ctx, "/api/v1/sync/"+url.PathEscape(string(cat)), sp)
+	ts := nextLWW(floor)
+	body, err := json.Marshal(syncPutRequest{LWWTs: formatLWW(ts), Payload: raw})
 	if err != nil {
+		return fmt.Errorf("fleet/sync: push %s: encode: %w", cat, err)
+	}
+	resp, err := s.client.doWithContentType(ctx, http.MethodPut,
+		"/api/v1/sync/"+url.PathEscape(string(cat)), "application/json", bytes.NewReader(body))
+	if err != nil {
+		// Offline or a transport failure: Fleet does not have this change.
+		// Keep it marked so the poll retries it and a pull cannot overwrite
+		// it (sync_dirty.go).
 		st.mu.Lock()
 		st.lastErr = err.Error()
 		st.mu.Unlock()
+		s.markUnsent(st)
 		return fmt.Errorf("fleet/sync: push %s: %w", cat, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusForbidden {
-		st.mu.Lock()
-		st.lastErr = ErrCapabilityNotInTier.Error()
-		st.mu.Unlock()
-		return ErrCapabilityNotInTier
-	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		body, _ := io.ReadAll(resp.Body)
-		msg := fmt.Sprintf("status %d: %s", resp.StatusCode, body)
+	s.observeClock(resp)
+
+	setErr := func(msg string) {
 		st.mu.Lock()
 		st.lastErr = msg
 		st.mu.Unlock()
+	}
+	// holdRetry: Fleet refused this content; retrying unchanged would only
+	// be refused again. The change stays unsent (dirty) until the next local
+	// edit.
+	holdRetry := func() {
+		st.mu.Lock()
+		st.retryHeld = true
+		st.mu.Unlock()
+	}
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent:
+		// Fleet echoes the stored lww_ts; prefer it when present so the
+		// local mark equals what ?since= will compare against.
+		var echoed syncStateResponse
+		if resp.StatusCode == http.StatusOK {
+			if derr := json.NewDecoder(resp.Body).Decode(&echoed); derr == nil && echoed.LWWTs > 0 {
+				ts = int64(echoed.LWWTs)
+			}
+		}
+		st.mu.Lock()
+		st.lastPush = time.Now()
+		st.lastErr = ""
+		st.conflict = false
+		if ts > st.lwwTS {
+			st.lwwTS = ts
+		}
+		// Clear the unsent mark only when no edit landed after this collect.
+		if st.dirtyGen == gen {
+			st.dirty = false
+		}
+		st.retryHeld = false
+		st.mu.Unlock()
+		s.persist()
+		logging.L().Info("fleet.sync.push.ok", "category", string(cat))
+		return nil
+	case http.StatusForbidden:
+		setErr(ErrCapabilityNotInTier.Error())
+		holdRetry()
+		return ErrCapabilityNotInTier
+	case http.StatusConflict:
+		// stale_lww_ts. Not retried, and not silently pulled either: the
+		// user chooses which device's settings win.
+		_ = readFleetError(resp)
+		s.markConflict(cat, st)
+		return ErrSyncConflict
+	case http.StatusUnprocessableEntity:
+		e := readFleetError(resp)
+		switch e.Code {
+		case "lww_ts_in_future":
+			setErr(ErrSyncClockSkew.Error())
+			return ErrSyncClockSkew
+		case "unknown_category":
+			st.mu.Lock()
+			st.fleetRejected = true
+			st.lastErr = ""
+			st.mu.Unlock()
+			logging.L().Warn("fleet.sync.push.unknown_category", "category", string(cat))
+			return ErrSyncCategoryLocalOnly
+		}
+		msg := e.describe(resp.StatusCode)
+		setErr(msg)
+		holdRetry()
+		return fmt.Errorf("fleet/sync: push %s: %s", cat, msg)
+	case http.StatusRequestEntityTooLarge:
+		msg := readFleetError(resp).describe(resp.StatusCode)
+		setErr(msg)
+		holdRetry()
+		return fmt.Errorf("fleet/sync: push %s: %s", cat, msg)
+	default:
+		// 5xx and anything unexpected: Fleet did not store the change.
+		msg := readFleetError(resp).describe(resp.StatusCode)
+		setErr(msg)
+		s.markUnsent(st)
 		return fmt.Errorf("fleet/sync: push %s: %s", cat, msg)
 	}
-	st.mu.Lock()
-	st.lastPush = time.Now()
-	st.lastErr = ""
-	st.lwwTS = now
-	st.mu.Unlock()
-	logging.L().Info("fleet.sync.push.ok", "category", string(cat))
-	return nil
 }
 
 // Pull fetches the remote state for a category and applies it when
 // remote-newer (LWW). Skips if the category is not enabled.
+//
+// Pulls are deliberately NOT behind the upload gate (owner ruling H1): a
+// pull only brings the user's own data down from Fleet to this device;
+// nothing local leaves the machine. The confirmation guards uploads only.
+//
+// A category in conflict is skipped (nil, nothing applied): applying Fleet's
+// state would silently discard the change this device could not upload.
+// ForcePull applies it on the user's say-so. A category holding an unsent
+// local change (dirty, sync_dirty.go) whose remote is newer is marked in
+// conflict instead of applied, for the same reason.
 func (s *Syncer) Pull(ctx context.Context, cat SyncCategory) error {
+	_, err := s.pull(ctx, cat)
+	return err
+}
+
+// pull is Pull, also reporting whether Fleet's state was applied.
+func (s *Syncer) pull(ctx context.Context, cat SyncCategory) (applied bool, err error) {
+	return s.pullMode(ctx, cat, false)
+}
+
+// pullMode is pull; force (ForcePull) resolves a conflict by taking Fleet's
+// state.
+func (s *Syncer) pullMode(ctx context.Context, cat SyncCategory, force bool) (applied bool, err error) {
 	if s.client == nil || s.client.isNop {
-		return ErrFleetDisabled
+		return false, ErrFleetDisabled
 	}
 	s.mu.RLock()
 	st, catOk := s.categories[cat]
 	cfg, cfgOk := s.configs[cat]
 	s.mu.RUnlock()
 	if !catOk {
-		return fmt.Errorf("fleet/sync: unknown category %q", cat)
+		return false, fmt.Errorf("fleet/sync: unknown category %q", cat)
 	}
 	st.mu.Lock()
 	enabled := st.enabled
 	lwwTS := st.lwwTS
 	st.mu.Unlock()
 	if !enabled {
-		return nil
+		return false, nil
+	}
+	if cfgOk && cfg.NotSyncingYet {
+		return false, ErrSyncCategoryNotSyncingYet
+	}
+	if categoryLocalOnly(cat, st) {
+		return false, ErrSyncCategoryLocalOnly
+	}
+	if inConflict(st) && !force {
+		return false, nil
 	}
 
-	// GET /api/v1/sync/<category>?since=<lww_ts>
+	// GET /api/v1/sync/<category>?since=<RFC 3339>
 	q := url.Values{}
 	if lwwTS > 0 {
-		q.Set("since", fmt.Sprintf("%d", lwwTS))
+		q.Set("since", formatLWW(lwwTS))
 	}
 	path := "/api/v1/sync/" + url.PathEscape(string(cat))
 	if len(q) > 0 {
@@ -346,32 +902,55 @@ func (s *Syncer) Pull(ctx context.Context, cat SyncCategory) error {
 		st.mu.Lock()
 		st.lastErr = err.Error()
 		st.mu.Unlock()
-		return fmt.Errorf("fleet/sync: pull %s: %w", cat, err)
+		return false, fmt.Errorf("fleet/sync: pull %s: %w", cat, err)
 	}
 	defer resp.Body.Close()
+	s.observeClock(resp)
 	if resp.StatusCode == http.StatusNotModified {
-		// Remote is not newer — nothing to do.
-		return nil
+		// Remote is not newer — nothing to do. On a ForcePull that ends a
+		// conflict: there is nothing newer to take.
+		if force {
+			s.clearConflict(st)
+		}
+		return false, nil
 	}
 	if resp.StatusCode == http.StatusForbidden {
-		return ErrCapabilityNotInTier
+		return false, ErrCapabilityNotInTier
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("fleet/sync: pull %s: status %d: %s", cat, resp.StatusCode, body)
+		e := readFleetError(resp)
+		if resp.StatusCode == http.StatusBadRequest && e.Code == "unknown_category" {
+			st.mu.Lock()
+			st.fleetRejected = true
+			st.mu.Unlock()
+			return false, ErrSyncCategoryLocalOnly
+		}
+		return false, fmt.Errorf("fleet/sync: pull %s: %s", cat, e.describe(resp.StatusCode))
 	}
 
-	var remote SyncPayload
+	var remote syncStateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&remote); err != nil {
-		return fmt.Errorf("fleet/sync: pull %s: decode: %w", cat, err)
+		return false, fmt.Errorf("fleet/sync: pull %s: decode: %w", cat, err)
 	}
+	remoteTS := int64(remote.LWWTs)
 
-	// LWW: apply only when remote is strictly newer.
+	// LWW: apply only when remote is strictly newer. Fleet's "nothing
+	// stored yet" answer has the zero lww_ts, so it never applies.
 	st.mu.Lock()
 	localLWW := st.lwwTS
 	st.mu.Unlock()
-	if remote.LWWTimestamp <= localLWW {
-		return nil
+	if remoteTS <= localLWW {
+		if force {
+			s.clearConflict(st)
+		}
+		return false, nil
+	}
+	// Another device wrote while this one holds an unsent change: applying
+	// Fleet's state would silently discard it. Surface a conflict instead;
+	// the user resolves it with ForcePush or ForcePull.
+	if !force && isDirty(st) {
+		s.markConflict(cat, st)
+		return false, nil
 	}
 
 	// Apply.
@@ -380,24 +959,31 @@ func (s *Syncer) Pull(ctx context.Context, cat SyncCategory) error {
 			st.mu.Lock()
 			st.lastErr = err.Error()
 			st.mu.Unlock()
-			return fmt.Errorf("fleet/sync: apply %s: %w", cat, err)
+			return false, fmt.Errorf("fleet/sync: apply %s: %w", cat, err)
 		}
 	}
 
 	st.mu.Lock()
 	st.lastPull = time.Now()
-	st.lwwTS = remote.LWWTimestamp
+	st.lwwTS = remoteTS
 	st.lastErr = ""
+	st.conflict = false
+	// Local now equals Fleet's state (a ForcePull discards the unsent edit
+	// on the user's say-so), so nothing is left to upload.
+	st.dirty = false
+	st.retryHeld = false
 	st.mu.Unlock()
+	s.persist()
 	logging.L().Info("fleet.sync.pull.applied",
 		"category", string(cat),
-		"remote_ts", remote.LWWTimestamp,
+		"remote_ts", remoteTS,
 	)
-	return nil
+	return true, nil
 }
 
 // StartPolling begins a background 60s poll loop for all enabled categories.
 // Implements FR-103 (60s) and NFR-003 (backoff on failures: 60s → 300s → 1800s).
+// The same backoff bounds the retry of an unsent local change (syncOnce).
 // Context cancellation stops the loop.
 func (s *Syncer) StartPolling(ctx context.Context) {
 	s.once.Do(func() {
@@ -486,7 +1072,12 @@ func (s *Syncer) pollLoop(ctx context.Context) {
 				if !s.IsEnabled(cat) {
 					continue
 				}
-				if err := s.Pull(ctx, cat); err != nil {
+				// A local-only category (Fleet does not accept it) is
+				// skipped, not failed: counting it would drive every
+				// category's poll into backoff.
+				// syncOnce pulls and then retries an unsent local change
+				// (sync_dirty.go); a failure of either backs the loop off.
+				if err := s.syncOnce(ctx, cat); err != nil {
 					consecutiveErrors[cat]++
 					logging.L().Warn("fleet.sync.poll.pull_failed",
 						"category", string(cat),

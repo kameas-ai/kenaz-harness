@@ -112,6 +112,36 @@ func (s *FileStore) loadLocked() (Settings, error) {
 
 // SaveAll persists every field atomically via a temp-file rename.
 func (s *FileStore) SaveAll(in Settings) error {
+	if err := validateFileSave(in); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveLocked(in)
+}
+
+// Update reads, modifies and writes the settings under the store's lock, so
+// no other write (another Update, SaveAll, or a Save* helper) can land
+// between the read and the write and be lost. fn edits the loaded value in
+// place; an error from fn, or a read error, aborts without writing.
+func (s *FileStore) Update(fn func(*Settings) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	if err := fn(&cur); err != nil {
+		return err
+	}
+	if err := validateFileSave(cur); err != nil {
+		return err
+	}
+	return s.saveLocked(cur)
+}
+
+// validateFileSave is every check FileStore applies before writing.
+func validateFileSave(in Settings) error {
 	if err := validateCompactionFields(in); err != nil {
 		return err
 	}
@@ -130,9 +160,7 @@ func (s *FileStore) SaveAll(in Settings) error {
 	if err := validateModelCallFields(in); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.saveLocked(in)
+	return nil
 }
 
 // ErrInvalidModelCallRetentionDays is returned when the model-call
@@ -1563,6 +1591,38 @@ func (a *API) notifySync(category string) {
 	}
 }
 
+// Updater is a SettingsStore that can read-modify-write atomically.
+// FileStore and the in-memory store implement it.
+type Updater interface {
+	Update(fn func(*Settings) error) error
+}
+
+// fallbackUpdateMu serialises Update for stores that are not Updaters.
+var fallbackUpdateMu sync.Mutex
+
+// Update is the one way to change some settings fields and keep the rest:
+// it reads, lets fn edit, and writes, with no other write able to land in
+// between. Every read-modify-write of the settings record goes through it
+// (settings.API.Set, Sync_ConfirmUploads, Sync_Toggle, the sync appliers,
+// the Settings_Set* bindings). A bare LoadAll then SaveAll can lose a
+// concurrent write, e.g. a whole-settings save reverting the upload
+// confirmation made between its read and its write.
+func Update(store SettingsStore, fn func(*Settings) error) error {
+	if u, ok := store.(Updater); ok {
+		return u.Update(fn)
+	}
+	fallbackUpdateMu.Lock()
+	defer fallbackUpdateMu.Unlock()
+	cur, err := store.LoadAll()
+	if err != nil {
+		return err
+	}
+	if err := fn(&cur); err != nil {
+		return err
+	}
+	return store.SaveAll(cur)
+}
+
 // NewAPI constructs a SettingsAPI backed by the given store. nil
 // store falls back to an in-memory implementation so tests can run
 // without touching the filesystem.
@@ -1597,20 +1657,34 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 			}
 		}
 	}
-	// "Share model-call telemetry with Fleet" is consent, and a
-	// whole-settings save is not a consent action. Callers send the whole
-	// object they loaded earlier, so a stale copy would turn sharing back
-	// on without the user seeing the opt-in text. The stored values always
-	// win here; only SetModelCallTelemetry (the panel action) changes them.
-	// If the stored values can't be read, sharing is forced off.
-	if cur, err := a.store.LoadAll(); err == nil {
+	// Fields that are not Set's to write; it always keeps the stored value:
+	//   - SettingsSyncUploadsConfirmed is the H1 upload consent. Only
+	//     Sync_ConfirmUploads, which the user reaches through the "Start
+	//     syncing" notice, may write it. Keeping it in BOTH directions means
+	//     a whole-settings save can neither clear it (a stale copy) nor set
+	//     it (a payload with settingsSyncUploadsConfirmed:true would
+	//     otherwise grant consent without the notice ever being shown).
+	//   - SettingsSyncEnabledCategories is owned by Sync_Toggle, so a copy
+	//     loaded before a toggle cannot silently revert it.
+	//   - "Share model-call telemetry with Fleet" and its consent evidence
+	//     (text revision, accepted-at) are written only by
+	//     SetModelCallTelemetry (the panel action). A stale copy must not
+	//     turn sharing back on without the user seeing the opt-in text
+	//     (legal D82).
+	// The keep happens inside Update, under the store lock, so a
+	// confirmation or toggle landing between the read and the write cannot
+	// be reverted. If the stored settings cannot be read the save is
+	// refused (nothing is written), so consent is never taken from the
+	// caller's copy.
+	if err := Update(a.store, func(cur *Settings) error {
+		s.SettingsSyncUploadsConfirmed = cur.SettingsSyncUploadsConfirmed
+		s.SettingsSyncEnabledCategories = cur.SettingsSyncEnabledCategories
 		s.ShareModelCallTelemetryWithFleet = cur.ShareModelCallTelemetryWithFleet
 		s.ShareModelCallTelemetryTextRevision = cur.ShareModelCallTelemetryTextRevision
 		s.ShareModelCallTelemetryAcceptedAt = cur.ShareModelCallTelemetryAcceptedAt
-	} else {
-		s.ShareModelCallTelemetryWithFleet = false
-	}
-	if err := a.store.SaveAll(s); err != nil {
+		*cur = s
+		return nil
+	}); err != nil {
 		return err
 	}
 	a.applyModelCallSharing(s.modelCallSharingEffective())
@@ -1637,25 +1711,25 @@ func (a *API) GetModelCallTelemetry(_ context.Context) (ModelCallTelemetrySettin
 // telemetry settings (EffectiveRetentionDays is ignored) and applies the
 // Fleet-sharing opt-in to the live pipeline at once.
 func (a *API) SetModelCallTelemetry(_ context.Context, mc ModelCallTelemetrySettings) error {
-	s, err := a.store.LoadAll()
-	if err != nil {
+	var effective bool
+	if err := Update(a.store, func(s *Settings) error {
+		s.ModelCallStatsPullDisabled = !mc.StatsPullEnabled
+		s.ModelCallRetentionDays = mc.RetentionDays
+		// Consent evidence: which wording was agreed to, and when. Stamped
+		// only on a real opt-in, i.e. off (or an outdated revision) → on. A
+		// later panel save while sharing stays on (e.g. a retention change)
+		// keeps the original agreement time.
+		if mc.ShareWithFleet && !s.modelCallSharingEffective() {
+			s.ShareModelCallTelemetryTextRevision = ModelCallOptInTextRevision
+			s.ShareModelCallTelemetryAcceptedAt = time.Now().UTC().Format(time.RFC3339)
+		}
+		s.ShareModelCallTelemetryWithFleet = mc.ShareWithFleet
+		effective = s.modelCallSharingEffective()
+		return nil
+	}); err != nil {
 		return err
 	}
-	s.ModelCallStatsPullDisabled = !mc.StatsPullEnabled
-	s.ModelCallRetentionDays = mc.RetentionDays
-	// Consent evidence: which wording was agreed to, and when. Stamped only
-	// on a real opt-in, i.e. off (or an outdated revision) → on. A later
-	// panel save while sharing stays on (e.g. a retention change) keeps the
-	// original agreement time.
-	if mc.ShareWithFleet && !s.modelCallSharingEffective() {
-		s.ShareModelCallTelemetryTextRevision = ModelCallOptInTextRevision
-		s.ShareModelCallTelemetryAcceptedAt = time.Now().UTC().Format(time.RFC3339)
-	}
-	s.ShareModelCallTelemetryWithFleet = mc.ShareWithFleet
-	if err := a.store.SaveAll(s); err != nil {
-		return err
-	}
-	a.applyModelCallSharing(s.modelCallSharingEffective())
+	a.applyModelCallSharing(effective)
 	return nil
 }
 
@@ -2010,22 +2084,45 @@ func (m *memoryStore) LoadAll() (Settings, error) {
 }
 
 func (m *memoryStore) SaveAll(s Settings) error {
+	if err := validateMemorySave(s); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.saveLocked(s)
+	return nil
+}
+
+// Update is FileStore.Update for the in-memory store.
+func (m *memoryStore) Update(fn func(*Settings) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur := m.data
+	if err := fn(&cur); err != nil {
+		return err
+	}
+	if err := validateMemorySave(cur); err != nil {
+		return err
+	}
+	m.saveLocked(cur)
+	return nil
+}
+
+func validateMemorySave(s Settings) error {
 	if err := validateCompactionFields(s); err != nil {
 		return err
 	}
 	if err := validateUpdateFields(s); err != nil {
 		return err
 	}
-	if err := s.toolExposureSettings().Validate(); err != nil {
-		return err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	return s.toolExposureSettings().Validate()
+}
+
+func (m *memoryStore) saveLocked(s Settings) {
 	if s.SchemaVersion == 0 {
 		s.SchemaVersion = 1
 	}
 	m.data = s
-	return nil
 }
 
 func (m *memoryStore) LoadRoute() (string, error) {

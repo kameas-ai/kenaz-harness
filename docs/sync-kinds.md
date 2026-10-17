@@ -100,18 +100,24 @@ launch" table).
    needs to reach a store `core/fleet` can't import — see the OSS-first
    boundary note at the top of `sync_categories.go`.
 
-5. **No `core/fleet/sync.go` changes needed.** `RegisterCategory` lazily
-   creates the category's runtime state and the background poll loop
-   iterates whatever is currently registered — this is the WP01 genericity
-   fix. A kind registered after `StartPolling()` has already run still
-   gets picked up on the next tick.
+5. **One `core/fleet/sync.go` change: the Fleet-accepted list.**
+   `RegisterCategory` lazily creates the category's runtime state and the
+   background poll loop iterates whatever is currently registered (the
+   WP01 genericity fix), but the Syncer only sends categories in
+   `fleetAcceptedSyncCategories`. Anything else stays on the device:
+   Push/Pull return `ErrSyncCategoryLocalOnly` and `Sync_Status` reports
+   `local_only`. Add the new id there only after step 6 has shipped.
 
-6. **No fleet-server changes needed** for a plain user-scoped LWW kind —
-   `/api/v1/sync/{category}` accepts arbitrary category strings already.
-   *(If fleet enforces a category allowlist that this codebase doesn't see
-   — e.g. a DB enum or admin-configured list — add the new category string
-   there. See "Fleet-side ask" below for the exact, unverified, one-line
-   ask this mission is flagging for `slash_commands`.)*
+6. **A Fleet-server change is required first.** This file used to say
+   none was needed. That was wrong. Fleet's
+   `PUT/GET /api/v1/sync/{category}` accepts only the categories with a
+   strict allowlist schema in kenaz-fleet `service/sync_schema.go`
+   (`ParseSyncCategory`: PUT answers 422 `unknown_category`, GET 400), and
+   migration `0062_user_sync_state` has a matching CHECK constraint. Every
+   payload field must also be in that category's schema, or the PUT
+   answers 422 `schema_violation`. Contract §2b says it plainly: ship the
+   Fleet schema change before the harness change. Today the five built-in
+   categories are accepted and `slash_commands` is not.
 
 7. **Test the round trip**, mirroring
    `core/rpc/sync_categories_slashcmd_test.go`:
@@ -211,19 +217,47 @@ in WP03/WP06 forecloses it, and nothing here requires it.
   your org") cannot be built until that lands — there is no data source
   for it yet.
 
-## Fleet-side ask (if any)
+## Fleet-side ask
 
-None verified as required. `/api/v1/sync/{category}` is documented in this
-repo (`core/fleet/sync.go` header, `DESIGN.md` §5.6) as already generic
-server-side — no per-category schema or allowlist is referenced anywhere
-in the harness codebase. `slash_commands` was registered and exercised
-end-to-end at the harness layer (collector → applier, and the Syncer's
-push/pull/poll plumbing) without touching any fleet contract.
+**Required, open.** Verified on 2026-10-15 against kenaz-fleet `main`
+`a528ff4b` (provider-credentials-client-01PCCLI01 A2): Fleet enforces a
+category allowlist. The five built-ins each have a strict schema in
+`service/sync_schema.go`, and `slash_commands` has none, so Fleet rejects
+it (PUT 422 `unknown_category`). The earlier text here guessed that the
+endpoint was category-agnostic. It is not.
 
-The one thing this mission could not verify from the harness repo alone:
-whether `kenaz-fleet`'s `/api/v1/sync/{category}` handler enforces a
-category allowlist (e.g. a DB enum, or an admin-configured list of known
-categories) that isn't visible here. **If it does, the one-line ask is:
-add `"slash_commands"` to that allowlist alongside the five existing
-category strings.** If the endpoint is truly category-agnostic as
-documented, no fleet-side change is needed at all.
+The harness therefore keeps `slash_commands` on the device
+(`fleetAcceptedSyncCategories` in `core/fleet/sync.go`; the Sync panel row
+says "Not syncing yet"). To ship it, Fleet first needs:
+
+1. a `slash_commands` schema in `sync_schema.go` that matches
+   `slashCommandSyncPayload` (`{items: [UserCommand…]}`, global scope only,
+   `PayloadPath` already cleared on the wire), and
+2. `slash_commands` added to the `user_sync_state.category` CHECK
+   constraint.
+
+Then add the id to `fleetAcceptedSyncCategories`. Fleet config-coverage §2
+tracks this as P1.
+
+## Wire and first upload (A2)
+
+The wire is kenaz-fleet contract §2b: `PUT` with body
+`{"lww_ts": "<RFC 3339>", "payload": {…}}`, and
+`GET ?since=<RFC 3339>`, which answers 200 or 304. Before A2 the harness
+sent `POST` with an int64 `lww_ts`, so settings sync had never
+round-tripped. Fleet main has no `POST` route and no int64 `lww_ts` form
+(no compatibility path, in any release), so only an A2 or later harness
+can upload. The contract test is `core/fleet/sync_wire_test.go`, run
+against fixtures in `core/fleet/testdata/sync/` (see `PROVENANCE.md`).
+
+`provider_profiles` and `mcp_recipes` have no personal sync yet: their
+user collector would send `{}` and their user applier does nothing. They
+are registered with `UserSyncNotBuilt: true`, so the Syncer sends and pulls
+nothing for them, `Sync_Status` reports `not_syncing_yet`, and the panel
+and the upload confirmation never present them as syncing. (The
+`mcp_recipes` org arm, applied through `org_config`, is unaffected.)
+
+Because nothing had ever been uploaded, the first upload waits for a
+one-time confirmation (owner ruling H1). The answer is stored in
+`Settings.SettingsSyncUploadsConfirmed`, and the Syncer's upload gate
+reads it. Downloads are not gated.

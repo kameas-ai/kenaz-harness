@@ -89,8 +89,10 @@ function buildClient(overrides: {
   statuses?: SyncStatusView[];
   pending?: PendingMCPSecret[];
   toggleFn?: ReturnType<typeof vi.fn>;
+  confirmFn?: ReturnType<typeof vi.fn>;
 } = {}) {
   const toggleFn = overrides.toggleFn ?? vi.fn(async () => {});
+  const confirmFn = overrides.confirmFn ?? vi.fn(async () => {});
   return {
     client: createFakeHarnessClient({
       sync: {
@@ -99,9 +101,11 @@ function buildClient(overrides: {
         forcePush: async () => {},
         forcePull: async () => {},
         pendingMCPSecrets: async () => overrides.pending ?? [],
+        confirmUploads: confirmFn,
       },
     }),
     toggleFn,
+    confirmFn,
   };
 }
 
@@ -162,6 +166,11 @@ describe('SyncPanel', () => {
     expect(wrapper.find('[data-testid="sync-pro-gate"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="sync-category-list"]').exists()).toBe(true);
     expect(vi.mocked(capability)).toHaveBeenCalledWith(SYNC_CAPABILITY);
+    // Opt-ins persist (Settings.SettingsSyncEnabledCategories); the intro
+    // says so, and still says nothing uploads before the confirmation.
+    const intro = wrapper.find('[data-testid="sync-panel-intro"]').text();
+    expect(intro).toContain('Your choices stay set when you restart the app.');
+    expect(intro).toContain('Nothing is uploaded until you confirm once');
   });
 
   it('3. shows pro-gate when the sync entitlement is absent', async () => {
@@ -234,8 +243,31 @@ describe('SyncPanel', () => {
 
     const providerText = wrapper.find('[data-testid="sync-category-provider_profiles"]').text().toLowerCase();
     const recipesText = wrapper.find('[data-testid="sync-category-mcp_recipes"]').text().toLowerCase();
-    expect(providerText).toContain('not yet syncing');
-    expect(recipesText).toContain('not yet syncing');
+    expect(providerText).toContain('not syncing yet');
+    expect(recipesText).toContain('not syncing yet');
+  });
+
+  // provider_profiles / mcp_recipes collect {} and apply nothing
+  // (core/rpc/sync_categories.go emptyPayloadKind / mcpRecipesKind), so the
+  // backend marks them not_syncing_yet. The panel must not offer a switch
+  // that does nothing, nor name them in "Start syncing" as uploading.
+  it('offers no toggle or push/pull for a not-syncing-yet kind and leaves it out of the upload notice', async () => {
+    const statuses: SyncStatusView[] = [
+      { category: 'provider_profiles', enabled: true, not_syncing_yet: true, awaiting_confirmation: true },
+      { category: 'mcp_recipes', enabled: true, not_syncing_yet: true },
+      { category: 'ui_theme', enabled: true, awaiting_confirmation: true },
+    ];
+    const { client } = buildClient({ statuses });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+    for (const id of ['provider_profiles', 'mcp_recipes']) {
+      expect(wrapper.find(`[data-testid="sync-not-yet-${id}"]`).exists()).toBe(true);
+      expect(wrapper.find(`[data-testid="sync-toggle-${id}"]`).exists()).toBe(false);
+      expect(wrapper.find(`[data-testid="sync-force-push-${id}"]`).exists()).toBe(false);
+    }
+    const notice = wrapper.find('[data-testid="sync-confirm-uploads-notice"]').text();
+    expect(notice).toContain('UI theme');
+    expect(notice).not.toContain('Provider profiles');
   });
 
   it('7. installed-MCP toggle sends the canonical backend category id, not the historic installed_mcp_servers id', async () => {
@@ -338,5 +370,78 @@ describe('SyncPanel', () => {
 
     expect(wrapper.find('[data-testid="sync-managed-mcp_recipes"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="sync-toggle-mcp_recipes"]').exists()).toBe(true);
+  });
+
+  // provider-credentials-client-01PCCLI01 A2 / owner ruling H1.
+  it('shows the one-time Start syncing notice for held categories and confirms', async () => {
+    const statuses: SyncStatusView[] = [
+      { category: 'ui_theme', enabled: true, awaiting_confirmation: true },
+      { category: 'model_prefs', enabled: false },
+    ];
+    const { client, confirmFn } = buildClient({ statuses });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+    const notice = wrapper.find('[data-testid="sync-confirm-uploads-notice"]');
+    expect(notice.exists()).toBe(true);
+    expect(notice.text()).toContain('UI theme');
+    expect(notice.text()).not.toContain('Model preferences');
+    await wrapper.find('[data-testid="sync-confirm-uploads-btn"]').trigger('click');
+    await flushPromises();
+    expect(confirmFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('says why uploads are paused when the settings file cannot be read', async () => {
+    const reason = 'Settings sync is paused: Kenaz could not read your settings file.';
+    const statuses: SyncStatusView[] = [
+      { category: 'ui_theme', enabled: true, uploads_blocked_reason: reason },
+    ];
+    const { client } = buildClient({ statuses });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="sync-uploads-blocked"]').text()).toContain(reason);
+    expect(wrapper.find('[data-testid="sync-confirm-uploads-notice"]').exists()).toBe(false);
+  });
+
+  // A 409 from Fleet is a conflict the user resolves, not a silent revert
+  // (fleet.Syncer, sync_conflict.go): the row says so and names the way out,
+  // instead of repeating the message as an "Error:".
+  it('shows a conflicted category with how Push and Pull resolve it', async () => {
+    const statuses: SyncStatusView[] = [
+      {
+        category: 'model_prefs',
+        enabled: true,
+        conflict: true,
+        last_error: 'Another device changed these settings after this device last synced.',
+      },
+    ];
+    const { client } = buildClient({ statuses });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+    const row = wrapper.find('[data-testid="sync-conflict-model_prefs"]');
+    expect(row.exists()).toBe(true);
+    expect(row.text()).toContain('Push keeps this device');
+    expect(row.text()).toContain('Pull takes the other device');
+    expect(wrapper.find('[data-testid="sync-last-error-model_prefs"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="sync-force-push-model_prefs"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="sync-force-pull-model_prefs"]').exists()).toBe(true);
+  });
+
+  it('marks a local-only category as not syncing and offers no push/pull', async () => {
+    const statuses: SyncStatusView[] = [
+      { category: 'slash_commands', enabled: true, local_only: true },
+    ];
+    const { client } = buildClient({ statuses });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="sync-local-only-slash_commands"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="sync-force-push-slash_commands"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="sync-confirm-uploads-notice"]').exists()).toBe(false);
+  });
+
+  it('header copy no longer claims every change pushes within 5s', async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('Changes push within 5s');
+    expect(wrapper.text()).toContain('Nothing is uploaded until you confirm once');
   });
 });

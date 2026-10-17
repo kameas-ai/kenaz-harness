@@ -4271,6 +4271,14 @@ func New(c *core.Core, opts ...Option) *API {
 		// The Syncer is a lightweight object; we create it unconditionally but
 		// its Push/Pull methods short-circuit via ErrFleetDisabled when flCl is nil.
 		syncer := corefleet.NewSyncer(flCl)
+		// Persist each category's LWW stamp in the Fleet data dir, loaded
+		// before anything pulls or pushes, so a restart remembers what this
+		// device last agreed with Fleet on. No data dir: in memory only.
+		if flDataDir != "" {
+			if err := syncer.SetStateStore(corefleet.NewFileSyncStateStore(flDataDir)); err != nil {
+				logging.L().Warn("rpc.settings_sync.state_load_failed", "err", err.Error())
+			}
+		}
 		syncPending := &corefleet.SecretPromptQueue{}
 		a.syncAPI = syncview.NewAPI(syncer, syncPending)
 
@@ -4328,6 +4336,17 @@ func New(c *core.Core, opts ...Option) *API {
 		// the concrete setter.
 		if syncAPI, ok := a.syncAPI.(*syncview.API); ok {
 			syncAPI.SetSyncKindRegistry(a.syncKindRegistry)
+			// provider-credentials-client-01PCCLI01 A2 / owner ruling H1:
+			// uploads wait for the one-time confirmation persisted in
+			// Settings.SettingsSyncUploadsConfirmed. Fails closed when
+			// syncStore is nil (no store, no upload).
+			syncAPI.SetUploadConsent(settingsUploadConsent{store: syncStore})
+			// Persist per-category opt-ins and re-apply last launch's
+			// choices now: every category (incl. slash_commands) is
+			// registered and the upload gate is installed, and the first
+			// poll is syncBaseInterval away. RestoreOptIns never uploads,
+			// so the gate above still holds for restored categories.
+			wireSyncOptIns(syncAPI, syncStore)
 		}
 
 		// Connect settings mutations to the Syncer's debounced push so a theme
