@@ -53,6 +53,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -82,12 +83,16 @@ type mlProducerWiring struct {
 	dataDir  string
 	settings *settings.API
 
-	store   *mlstore.Store
-	pruner  *activity.Pruner
-	rec     *mlproducer.Recorder
-	gate    *mlproducer.ConsentGate
-	shipper *mlproducer.Shipper
-	source  *fleetMLConsentSource
+	store  *mlstore.Store
+	pruner *activity.Pruner
+	// retention is the one fail-safe reader of the local retention
+	// setting: the pruner, the status readout and the engine's spawn env
+	// share its last good value and failure state.
+	retention *activity.Retention
+	rec       *mlproducer.Recorder
+	gate      *mlproducer.ConsentGate
+	shipper   *mlproducer.Shipper
+	source    *fleetMLConsentSource
 
 	// enrollGen moves whenever enrolment may have changed (a session
 	// reset, a successful re-enroll after ml_node_not_enrolled).
@@ -159,7 +164,8 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 		EnrollGen: w.enrollGen.Load,
 	})
 
-	w.pruner = activity.NewLazyPruner(w.rec.LocalStore, settingsImpl.MLLocalActivityRetentionDays, nil, logging.L())
+	w.retention = activity.NewRetention(settingsImpl.MLLocalActivityRetentionDays, nil)
+	w.pruner = activity.NewRetentionPruner(w.rec.LocalStore, w.retention, nil, logging.L())
 
 	settingsImpl.OnFleetSessionReset(w.onSessionReset)
 	// Every successful enroll (boot, periodic, sign-in) re-reads the gate
@@ -375,6 +381,36 @@ type MLLocalActivityView struct {
 	// SharingWithFleet: the ship gate is open right now, so new activity
 	// is also copied to the Fleet outbox.
 	SharingWithFleet bool `json:"sharingWithFleet"`
+	// RetentionBlocked: the retention setting has kept failing to read
+	// (activity.BlockedPasses consecutive prune passes, or more than
+	// activity.BlockedAfter since the last good read), so the pruner is
+	// deleting nothing until it can. RetentionDays /
+	// EffectiveRetentionDays are then the last good values (0 / 90 when
+	// there has been none).
+	RetentionBlocked bool `json:"retentionBlocked"`
+}
+
+// errRetentionUnreadable is the status readout's answer when the
+// retention setting cannot be read (and the failures have not yet
+// reached the visible guard). Generic on purpose: a settings read error
+// can quote the file.
+var errRetentionUnreadable = errors.New("local activity retention setting could not be read")
+
+// retentionReader is the engine's spawn-time retention read, through the
+// shared fail-safe Retention: the fresh value, else the last good one,
+// else an error (the spawn env then omits the variable). nil without a
+// producer.
+func (w *mlProducerWiring) retentionReader() func() (int, error) {
+	if w == nil || w.retention == nil {
+		return nil
+	}
+	return func() (int, error) {
+		days, _, ok := w.retention.Read()
+		if !ok {
+			return 0, errRetentionUnreadable
+		}
+		return days, nil
+	}
 }
 
 func (w *mlProducerWiring) localActivity(ctx context.Context) (MLLocalActivityView, error) {
@@ -382,11 +418,16 @@ func (w *mlProducerWiring) localActivity(ctx context.Context) (MLLocalActivityVi
 	if w == nil {
 		return v, nil
 	}
-	days, err := w.settings.MLLocalActivityRetentionDays()
-	if err != nil {
-		return v, err
+	days, fresh, ok := w.retention.Read()
+	if !fresh {
+		if !w.retention.Health().Blocked {
+			return v, errRetentionUnreadable
+		}
+		v.RetentionBlocked = true
 	}
-	v.RetentionDays = days
+	if ok {
+		v.RetentionDays = days
+	}
 	v.EffectiveRetentionDays = activity.EffectiveRetentionDays(v.RetentionDays)
 	v.SharingWithFleet = w.gate.Last().Open
 	local := w.rec.LocalStore()

@@ -72,10 +72,13 @@ func activityDBPath(dataDir string) string {
 
 // activityRetentionEnv is the engine's KENAZ_ML_ACTIVITY_RETENTION_DAYS
 // entry: the EFFECTIVE days (0 → 90, clamped to 1..3650), the same window
-// the harness prunes events/tasks to. On a read error (or no reader) it
-// returns nothing and logs a WARN: the engine then uses its own default,
-// and no fallback number ever shrinks a user's longer setting (the
-// spawner's ScrubEnv keeps an inherited value from standing in for it).
+// the harness prunes events/tasks to. read is the shared fail-safe
+// Retention (sidecarRetentionReader), so a read error after a good read
+// still yields the last good value. With no value at all (or no reader)
+// it returns nothing and logs a WARN: the engine then uses its own
+// default. The engine contract defines no "don't prune" sentinel, so
+// none is invented here; the spawner's ScrubEnv keeps an inherited value
+// from standing in for the setting.
 func activityRetentionEnv(read func() (int, error)) []string {
 	if read == nil {
 		return nil
@@ -86,6 +89,21 @@ func activityRetentionEnv(read func() (int, error)) []string {
 		return nil
 	}
 	return []string{activity.RetentionEnvVar + "=" + strconv.Itoa(activity.EffectiveRetentionDays(days))}
+}
+
+// sidecarRetentionReader is the engine's spawn-time retention read: the
+// ML producer's shared fail-safe Retention when there is one (a failed
+// read then carries the last good value, so the engine's own pruning is
+// never widened or shortened by it), else the settings API directly.
+// With neither a fresh nor a last-good value the read fails and the env
+// var is omitted: the engine contract defines no "don't prune" sentinel
+// (docs/telemetry/ml-activity-db.sql), so the harness cannot tell it to
+// hold off — see activityRetentionEnv.
+func sidecarRetentionReader(w *mlProducerWiring, s *settings.API) func() (int, error) {
+	if r := w.retentionReader(); r != nil {
+		return r
+	}
+	return settingsRetentionReader(s)
 }
 
 // settingsRetentionReader adapts the settings API (nil-safe: nil = no

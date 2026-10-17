@@ -63,8 +63,10 @@ const EnvVar = "KENAZ_ML_ACTIVITY_DB"
 // RetentionEnvVar carries the effective local retention in days (0 → 90,
 // clamped to 1..3650) to the engine, which prunes ml_predictions and
 // ml_events to the same window at startup and daily (agreed with
-// kenaz-ml). Omitted when the harness cannot read the setting: the engine
-// then uses its own 90-day default rather than a guessed number.
+// kenaz-ml). On a failed read it carries the last value read successfully
+// in this process (Retention); with none it is omitted and the engine uses
+// its own 90-day default — the contract defines no "don't prune" value,
+// so the harness cannot ask the engine to hold off.
 const RetentionEnvVar = "KENAZ_ML_ACTIVITY_RETENTION_DAYS"
 
 // Producer is every harness row's producer value.

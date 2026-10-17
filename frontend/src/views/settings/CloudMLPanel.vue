@@ -76,6 +76,10 @@ onMounted(refresh);
 const LOCAL_LINE =
   'Kenaz records agent activity on this device to power local suggestions. Nothing is sent to ' +
   'Fleet unless you opt in.';
+/** Shown while retention can't be read (rpc.MLLocalActivityView.RetentionBlocked). */
+const RETENTION_BLOCKED_LINE =
+  "Local activity retention can't be applied right now because settings can't be read. Nothing is being " +
+  'deleted until they can.';
 const local = ref<MLLocalActivity | null>(null);
 const localBusy = ref(false);
 const localError = ref('');
@@ -457,6 +461,9 @@ function onOptInChange(ev: Event) {
       <p class="text-[12px]" data-testid="ml-local-line">{{ LOCAL_LINE }}</p>
       <p v-if="local?.sharingWithFleet" class="text-[12px] text-ink-muted" data-testid="ml-local-sharing">
         Fleet sharing is on, so new activity is also sent to your organization's Cloud ML.
+      </p>
+      <p v-if="local?.retentionBlocked" class="text-[12px] text-signal-warn" data-testid="ml-local-retention-blocked">
+        {{ RETENTION_BLOCKED_LINE }}
       </p>
       <template v-if="local">
         <p v-if="!local.available" class="text-[12px] text-ink-muted" data-testid="ml-local-unavailable">

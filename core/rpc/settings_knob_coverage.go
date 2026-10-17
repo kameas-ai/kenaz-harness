@@ -340,7 +340,9 @@ func init() {
 	knobcoverage.Register[settings.Settings](
 		"MLLocalActivityRetentionDays",
 		"core/rpc/mlproducer_wiring.go passes settings.API."+
-			"MLLocalActivityRetentionDays to activity.NewPruner, read on every "+
+			"MLLocalActivityRetentionDays to activity.NewRetention (fail-safe: "+
+			"last good value on a read failure, no prune with none) and "+
+			"activity.NewRetentionPruner, read on every "+
 			"pass through EffectiveRetentionDays (0 = 90 days) — decides which "+
 			"events / tasks rows of <dataDir>/ml/activity.db PruneBefore deletes "+
 			"(TestMLProducerWiring_LocalActivityRetentionReachesPruner); "+

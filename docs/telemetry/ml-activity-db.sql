@@ -11,9 +11,10 @@
 -- Connections: journal_mode=WAL, busy_timeout=5000. The engine is always handed the
 -- absolute path in KENAZ_ML_ACTIVITY_DB (a non-standard data dir uses
 -- <dataDir>/ml-activity/activity.db); it never derives one. KENAZ_ML_ACTIVITY_RETENTION_DAYS
--- carries the effective local retention (1..3650, default 90), read at each spawn and
--- omitted when the harness cannot read the setting; a change applies at the engine's
--- next start. The engine prunes ml_predictions / ml_events to it.
+-- carries the effective local retention (1..3650, default 90), read at each spawn; on a
+-- failed read it carries the last value the harness read successfully, and is omitted
+-- when there is none (this contract defines no "don't prune" value). A change applies
+-- at the engine's next start. The engine prunes ml_predictions / ml_events to it.
 
 CREATE TABLE IF NOT EXISTS harness_activity_schema (
   version    INTEGER PRIMARY KEY,
