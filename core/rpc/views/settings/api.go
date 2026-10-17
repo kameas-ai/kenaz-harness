@@ -1839,9 +1839,11 @@ type SettingsAPI interface {
 	// GET /me/ml read (ml-producer-01MLPRD01 WP01, spec §5), the rendered
 	// notice, and the producer's shipping status.
 	FleetMLStatus(ctx context.Context) (MLStatusView, error)
-	// FleetMLAckNotice acknowledges the notice version the panel showed. A
+	// FleetMLAckNotice acknowledges the notice version the panel showed,
+	// through the notice button clicked (MLNoticeActionTurnOn or
+	// MLNoticeActionRead), which picks the ack action. A
 	// 409 policy_changed re-reads and returns the state with NoticeChanged.
-	FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatusView, error)
+	FleetMLAckNotice(ctx context.Context, noticeVersion int, button string) (MLStatusView, error)
 	// FleetSetWorkflowEventsOptIn writes the member's workflow_events
 	// opt-in (PUT /me/telemetry-opt-ins) and re-reads /me/ml.
 	FleetSetWorkflowEventsOptIn(ctx context.Context, optedIn bool) (MLStatusView, error)

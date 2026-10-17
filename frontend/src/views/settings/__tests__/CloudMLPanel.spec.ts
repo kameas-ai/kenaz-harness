@@ -77,37 +77,99 @@ function mountWith(
 const q = (w: any, id: string) => w.find(`[data-testid="${id}"]`);
 
 describe('CloudMLPanel', () => {
-  it('lists the org exclusions read-only (WP05)', async () => {
-    const { wrapper } = mountWith(
-      status({
-        effective: true,
-        exclusionPaths: ['hr/**', '**/secrets/*'],
-        exclusionCommands: ['ssh', 'git push'],
-        excludeBrowser: true,
-        legacyExclusionNotes: ['Nothing from the HR share'],
-      }),
-    );
+  // Fleet's exclusions paragraph (the backend's port of exclusionsSummary,
+  // pinned byte-for-byte against Fleet's fixture in ml_fixture_test.go).
+  const SUMMARY =
+    'Excluded from upload: file paths matching: legal/**. Your organization also listed these exclusions in ' +
+    "its own words. Fleet can't apply them automatically, so matching activity may still be uploaded: " +
+    'no HR team; no legal.';
+  const EXCL = {
+    exclusionPaths: ['legal/**'],
+    exclusionCommands: ['ssh'],
+    legacyExclusionNotes: ['no HR team', 'no legal'],
+    exclusionsSummary: SUMMARY,
+  };
+  const OLD_HEADING = /Earlier notes from your organization|Your organization excludes:/;
+
+  it("no notice shown: Fleet's exclusions paragraph, read-only, verbatim (WP05)", async () => {
+    const { wrapper } = mountWith(status({ ...EXCL, effective: true }));
     await flushPromises();
     const block = q(wrapper, 'cloud-ml-exclusions');
     expect(block.exists()).toBe(true);
-    expect(block.text()).toContain('Your organization excludes:');
-    const paths = wrapper.findAll('[data-testid="cloud-ml-exclusion-path"]').map((w) => w.text());
-    expect(paths).toEqual(['files matching hr/**', 'files matching **/secrets/*']);
-    const cmds = wrapper.findAll('[data-testid="cloud-ml-exclusion-command"]').map((w) => w.text());
-    expect(cmds).toEqual(['commands starting with ssh', 'commands starting with git push']);
-    // Read-only: no inputs inside the exclusions block.
+    expect(block.text()).toBe(SUMMARY);
     expect(block.findAll('input').length).toBe(0);
     expect(block.findAll('button').length).toBe(0);
-    const notes = q(wrapper, 'cloud-ml-legacy-notes');
-    expect(notes.exists()).toBe(true);
-    expect(notes.text()).toContain('not applied as patterns');
-    expect(wrapper.findAll('[data-testid="cloud-ml-legacy-note"]').map((w) => w.text())).toEqual([
-      'Nothing from the HR share',
-    ]);
+    // No markup of our own: no typed list, no legacy-notes heading or list.
+    expect(q(wrapper, 'cloud-ml-legacy-notes').exists()).toBe(false);
+    expect(q(wrapper, 'cloud-ml-exclusion-path').exists()).toBe(false);
+    expect(wrapper.text()).not.toMatch(OLD_HEADING);
+  });
+
+  describe('exclusions in the notice (legal, kameas-ai-11, 2026-10-16)', () => {
+    const before = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    it("fallback notice: Fleet's exact exclusions text after the notice text, before the first button", async () => {
+      const { wrapper } = mountWith(
+        status({
+          ...EXCL,
+          orgOffloadEnabled: true,
+          orgPolicy: 'member_choice',
+          noticeVersion: 3,
+          noticeText: 'plain',
+          notice: {
+            heading: 'Your organization has enabled workflow data offload',
+            intro: 'intro',
+            sections: [],
+            policyText: 'You decide.',
+            policy: 'member_choice',
+            exclusionsText: SUMMARY,
+            actions: ['Turn on Offload', 'Not now'],
+          },
+        }),
+      );
+      await flushPromises();
+      const card = q(wrapper, 'cloud-ml-notice');
+      const excl = card.find('[data-testid="cloud-ml-exclusions"]');
+      expect(excl.exists()).toBe(true);
+      expect(excl.text()).toBe(SUMMARY);
+      const firstButton = card.find('[data-testid="cloud-ml-notice-action"]');
+      expect(before(q(wrapper, 'cloud-ml-notice-policy').element, excl.element)).toBe(true);
+      expect(before(excl.element, firstButton.element)).toBe(true);
+      // Rendered once, and nothing of the old markup anywhere.
+      expect(wrapper.findAll('[data-testid="cloud-ml-exclusions"]').length).toBe(1);
+      expect(q(wrapper, 'cloud-ml-legacy-notes').exists()).toBe(false);
+      expect(wrapper.text()).not.toMatch(OLD_HEADING);
+    });
+
+    it('hub notice: no exclusions of our own; body_text whole, before the button', async () => {
+      const BODY = 'What changed\n\nNotice text.\n\n' + SUMMARY;
+      const { wrapper } = mountWith(
+        status({
+          ...EXCL,
+          orgOffloadEnabled: true,
+          orgPolicy: 'on',
+          noticeAckRequired: true,
+          noticeVersion: 3,
+          noticeText: BODY,
+          noticeFromHub: true,
+          noticeItemId: 'ml_notice:o1:3',
+        }),
+      );
+      await flushPromises();
+      expect(q(wrapper, 'cloud-ml-exclusions').exists()).toBe(false);
+      expect(q(wrapper, 'cloud-ml-legacy-notes').exists()).toBe(false);
+      const text = q(wrapper, 'cloud-ml-notice-text');
+      expect(text.element.textContent).toBe(BODY);
+      expect(before(text.element, q(wrapper, 'cloud-ml-ack').element)).toBe(true);
+      // No "excludes" wording outside the served body_text.
+      const outside = wrapper.text().replace(text.text(), '');
+      expect(outside).not.toMatch(/exclud/i);
+      expect(wrapper.text()).not.toMatch(OLD_HEADING);
+    });
   });
 
   it('shows no exclusions block when the org excludes nothing', async () => {
-    const { wrapper } = mountWith(status({ effective: true, excludeBrowser: true }));
+    const { wrapper } = mountWith(status({ effective: true, exclusionsSummary: '' }));
     await flushPromises();
     expect(q(wrapper, 'cloud-ml-exclusions').exists()).toBe(false);
     expect(q(wrapper, 'cloud-ml-legacy-notes').exists()).toBe(false);
@@ -115,7 +177,7 @@ describe('CloudMLPanel', () => {
 
   it('shows no exclusions while /me/ml is not loaded', async () => {
     const { wrapper } = mountWith(
-      status({ loaded: false, fleetError: 'boom', exclusionPaths: ['hr/**'], legacyExclusionNotes: ['x'] }),
+      status({ loaded: false, fleetError: 'boom', exclusionPaths: ['hr/**'], legacyExclusionNotes: ['x'], exclusionsSummary: 'x' }),
     );
     await flushPromises();
     expect(q(wrapper, 'cloud-ml-exclusions').exists()).toBe(false);
@@ -177,7 +239,7 @@ describe('CloudMLPanel', () => {
     expect(q(wrapper, 'cloud-ml-policy').text()).toContain('On for every member');
   });
 
-  it('notice required: shows the notice verbatim + harness line; Acknowledge posts the shown version', async () => {
+  it('notice required: shows the notice verbatim + harness line; "I have read this" posts the shown version', async () => {
     const effective = status({
       orgOffloadEnabled: true,
       orgPolicy: 'on',
@@ -195,7 +257,7 @@ describe('CloudMLPanel', () => {
     expect(q(wrapper, 'cloud-ml-harness-line').text()).toBe(HARNESS_LINE);
     await q(wrapper, 'cloud-ml-ack').trigger('click');
     await flushPromises();
-    expect(mlAckNotice).toHaveBeenCalledWith(3);
+    expect(mlAckNotice).toHaveBeenCalledWith(3, 'I have read this');
     expect(q(wrapper, 'cloud-ml-notice').exists()).toBe(false);
     expect(q(wrapper, 'cloud-ml-effective').text()).toContain('agent activity is sent');
   });
@@ -233,7 +295,7 @@ describe('CloudMLPanel', () => {
     await flushPromises();
     await q(wrapper, 'cloud-ml-ack').trigger('click');
     await flushPromises();
-    expect(mlAckNotice).toHaveBeenCalledWith(3);
+    expect(mlAckNotice).toHaveBeenCalledWith(3, 'I have read this');
     expect(q(wrapper, 'cloud-ml-notice-changed').exists()).toBe(true);
     expect(q(wrapper, 'cloud-ml-notice-text').text()).toBe(NOTICE_V4);
     expect(q(wrapper, 'cloud-ml-notice-status').text()).toContain('version 4');
@@ -393,7 +455,7 @@ describe('CloudMLPanel', () => {
       await flushPromises();
       await q(wrapper, 'cloud-ml-ack').trigger('click');
       await flushPromises();
-      expect(mlAckNotice).toHaveBeenCalledWith(3);
+      expect(mlAckNotice).toHaveBeenCalledWith(3, 'I have read this');
       expect(approveItem).not.toHaveBeenCalled();
     });
 
@@ -480,7 +542,7 @@ describe('CloudMLPanel', () => {
       await actions(wrapper)[0].trigger('click');
       await flushPromises();
       expect(setWorkflowEventsOptIn).toHaveBeenCalledWith(true);
-      expect(mlAckNotice).toHaveBeenCalledWith(3);
+      expect(mlAckNotice).toHaveBeenCalledWith(3, 'Turn on Offload');
       expect(setWorkflowEventsOptIn.mock.invocationCallOrder[0]).toBeLessThan(mlAckNotice.mock.invocationCallOrder[0]);
       expect(approveItem).not.toHaveBeenCalled();
       expect(q(wrapper, 'cloud-ml-effective').text()).toContain('On');
@@ -505,8 +567,62 @@ describe('CloudMLPanel', () => {
       expect(actions(wrapper).map((b: any) => b.text())).toEqual(['I have read this']);
       await actions(wrapper)[0].trigger('click');
       await flushPromises();
-      expect(mlAckNotice).toHaveBeenCalledWith(3);
+      expect(mlAckNotice).toHaveBeenCalledWith(3, 'I have read this');
       expect(setWorkflowEventsOptIn).not.toHaveBeenCalled();
+    });
+
+    it('re-acknowledging (member_choice, Offload already on): "I have read this" acks, no opt-in write', async () => {
+      const { wrapper, mlAckNotice, setWorkflowEventsOptIn } = mountWith(
+        memberChoice({
+          userWorkflowEventsOptedIn: true,
+          noticeAckRequired: true,
+          notice: notice('member_choice', MEMBER, ['I have read this']),
+        }),
+      );
+      await flushPromises();
+      expect(actions(wrapper).map((b: any) => b.text())).toEqual(['I have read this']);
+      await actions(wrapper)[0].trigger('click');
+      await flushPromises();
+      expect(mlAckNotice).toHaveBeenCalledWith(3, 'I have read this');
+      expect(setWorkflowEventsOptIn).not.toHaveBeenCalled();
+    });
+
+    it('the ML notice card never says agree / accept / consent (legal, 2026-10-16)', async () => {
+      for (const s of [
+        memberChoice(),
+        required(),
+        status({
+          orgOffloadEnabled: true,
+          orgPolicy: 'on',
+          noticeAckRequired: true,
+          noticeVersion: 3,
+          noticeText: 'Hub body',
+          noticeFromHub: true,
+          noticeItemId: 'ml_notice:o1:3',
+        }),
+      ]) {
+        const { wrapper } = mountWith(s);
+        await flushPromises();
+        const card = q(wrapper, 'cloud-ml-notice');
+        expect(card.exists()).toBe(true);
+        expect(card.text()).not.toMatch(/agree|accept|consent/i);
+      }
+    });
+
+    it('hub branch: the acknowledge button reads "I have read this"', async () => {
+      const { wrapper } = mountWith(
+        status({
+          orgOffloadEnabled: true,
+          orgPolicy: 'on',
+          noticeAckRequired: true,
+          noticeVersion: 3,
+          noticeText: 'Hub body',
+          noticeFromHub: true,
+          noticeItemId: 'ml_notice:o1:3',
+        }),
+      );
+      await flushPromises();
+      expect(q(wrapper, 'cloud-ml-ack').text()).toBe('I have read this');
     });
 
     it('a 409 on the ack re-shows the notice with the "changed" line', async () => {

@@ -506,8 +506,38 @@ func (c *Client) GetMeML(ctx context.Context) (MeML, error) {
 	return readMLResponse(resp)
 }
 
+// Notice-ack actions (legal, kameas-ai-11, 2026-10-16): the explicit
+// "action" every POST /api/v1/me/ml/notice-ack carries. Fleet stores
+// exactly what is sent and never defaults it, so the harness always names
+// one, and only these three.
+const (
+	// MLNoticeAckActionTurnOn: the member_choice "Turn on Offload" button.
+	MLNoticeAckActionTurnOn = "turn_on"
+	// MLNoticeAckActionRead: "I have read this" (a required policy, or a
+	// re-acknowledgement).
+	MLNoticeAckActionRead = "read"
+	// MLNoticeAckActionIncludeAIUsage: the AI-usage add-on control
+	// ("Include AI usage"). Sent INSTEAD of turn_on/read, and only with
+	// the served ai_usage_epoch (Fleet answers 422 without it).
+	MLNoticeAckActionIncludeAIUsage = "include_ai_usage"
+)
+
+// MLNoticeAckSurfaceDesktop is the "surface" every notice ack from this
+// app carries (legal, kameas-ai-11, 2026-10-16).
+const MLNoticeAckSurfaceDesktop = "desktop"
+
+// validMLNoticeAckAction reports whether a is one of the three legal
+// notice-ack actions.
+func validMLNoticeAckAction(a string) bool {
+	switch a {
+	case MLNoticeAckActionTurnOn, MLNoticeAckActionRead, MLNoticeAckActionIncludeAIUsage:
+		return true
+	}
+	return false
+}
+
 // AckMLNotice posts POST /api/v1/me/ml/notice-ack {notice_version,
-// text_revision} — the version of the notice that was actually shown and
+// text_revision, surface, action} — the version of the notice that was actually shown and
 // the revision of the notice TEXT that was shown. text_revision is sent
 // only when textRevision > 0, so an older Fleet that does not know it sees
 // the original body; a Fleet that requires it (PR #225, dev rev 2) answers
@@ -520,10 +550,27 @@ func (c *Client) GetMeML(ctx context.Context) (MeML, error) {
 // true the ack must echo its ai_usage_epoch exactly, or Fleet answers 409
 // policy_changed (re-read and re-show). Pass MeML.AckAIUsageEpoch() of the
 // read the notice was shown from: nil (include_ai_usage false) sends no
-// epoch.
-func (c *Client) AckMLNotice(ctx context.Context, noticeVersion, textRevision int, aiUsageEpoch *int) (MeML, error) {
+// epoch. The epoch alone never implies include_ai_usage.
+//
+// surface is always "desktop"; action is one of MLNoticeAckAction* and is
+// refused client-side (nothing sent) otherwise. include_ai_usage also
+// requires a non-nil aiUsageEpoch, or Fleet would answer 422.
+//
+// exclusionsTemplate (kenaz-fleet #289): the version of Fleet's exclusions
+// paragraph template the caller rendered the exclusions text from, sent as
+// "exclusions_template" only when > 0. Fleet logs it beside its own; a
+// mismatch is logged, never refused, and a missing value means 1. Only the
+// fallback ack (the harness's own copy of the text) passes one; hub acks
+// post Fleet's served body.
+func (c *Client) AckMLNotice(ctx context.Context, action string, noticeVersion, textRevision int, aiUsageEpoch *int, exclusionsTemplate int) (MeML, error) {
 	if c == nil || c.isNop {
 		return MeML{}, ErrFleetDisabled
+	}
+	if !validMLNoticeAckAction(action) {
+		return MeML{}, fmt.Errorf("fleet: ack ml notice: action %q is not one of turn_on, read, include_ai_usage", action)
+	}
+	if action == MLNoticeAckActionIncludeAIUsage && aiUsageEpoch == nil {
+		return MeML{}, fmt.Errorf("fleet: ack ml notice: include_ai_usage requires the served ai_usage_epoch")
 	}
 	if noticeVersion < 1 {
 		return MeML{}, fmt.Errorf("fleet: ack ml notice: notice_version %d < 1", noticeVersion)
@@ -534,12 +581,22 @@ func (c *Client) AckMLNotice(ctx context.Context, noticeVersion, textRevision in
 	if aiUsageEpoch != nil && *aiUsageEpoch < 0 {
 		return MeML{}, fmt.Errorf("fleet: ack ml notice: ai_usage_epoch %d < 0", *aiUsageEpoch)
 	}
-	body := map[string]int{"notice_version": noticeVersion}
+	if exclusionsTemplate < 0 {
+		return MeML{}, fmt.Errorf("fleet: ack ml notice: exclusions_template %d < 0", exclusionsTemplate)
+	}
+	body := map[string]any{
+		"notice_version": noticeVersion,
+		"surface":        MLNoticeAckSurfaceDesktop,
+		"action":         action,
+	}
 	if textRevision > 0 {
 		body["text_revision"] = textRevision
 	}
 	if aiUsageEpoch != nil {
 		body["ai_usage_epoch"] = *aiUsageEpoch
+	}
+	if exclusionsTemplate > 0 {
+		body["exclusions_template"] = exclusionsTemplate
 	}
 	resp, err := c.PostJSON(ctx, "/api/v1/me/ml/notice-ack", body)
 	if err != nil {

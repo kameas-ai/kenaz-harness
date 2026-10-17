@@ -391,7 +391,11 @@ func (c *Client) GetPendingApprovals(ctx context.Context) (PendingApprovals, err
 }
 
 // ApprovePendingItem sends item.Approve verbatim — THE allowlist enforcement
-// point. A method + path outside approveAllowlist is refused with
+// point. The one exception (legal, kameas-ai-11, 2026-10-16): a POST to
+// ApprovePathMLNoticeAck whose served body has no "surface" key gets
+// "surface":"desktop" merged in (withMLNoticeAckSurface); every other key
+// and value — Fleet's served "action" included — is sent as served, and
+// every other approve path is sent byte for byte. A method + path outside approveAllowlist is refused with
 // ErrApproveActionNotAllowed before any request is built, and logged with
 // the kind, method and path only (never the body). A stale item answers an
 // *ApprovalError matching ErrApprovalStale.
@@ -404,12 +408,44 @@ func (c *Client) ApprovePendingItem(ctx context.Context, item PendingApproval) e
 			"kind", item.Kind, "method", item.Approve.Method, "path", item.Approve.Path)
 		return ErrApproveActionNotAllowed
 	}
-	resp, err := c.Post(ctx, item.Approve.Path, "application/json", bytes.NewReader(item.Approve.Body))
+	body := item.Approve.Body
+	if item.Approve.Method == http.MethodPost && item.Approve.Path == ApprovePathMLNoticeAck {
+		body = withMLNoticeAckSurface(body)
+	}
+	resp, err := c.Post(ctx, item.Approve.Path, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("fleet: approve %s: %w", item.Kind, err)
 	}
 	_, err = readApprovalResponse(resp)
 	return err
+}
+
+// withMLNoticeAckSurface adds "surface":"desktop" to a served notice-ack
+// body that lacks a "surface" key, by inserting it before the closing
+// brace, so every served byte (key order, spacing, values) is kept. A body
+// that already has "surface", or that does not decode as a JSON object, is
+// returned unchanged.
+func withMLNoticeAckSurface(body json.RawMessage) json.RawMessage {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(body, &keys); err != nil {
+		return body
+	}
+	if _, ok := keys["surface"]; ok {
+		return body
+	}
+	t := bytes.TrimRight(body, " \t\r\n")
+	if len(t) == 0 || t[len(t)-1] != '}' {
+		return body
+	}
+	field := `"surface":"` + MLNoticeAckSurfaceDesktop + `"`
+	if len(keys) > 0 {
+		field = "," + field
+	}
+	out := make([]byte, 0, len(t)+len(field))
+	out = append(out, t[:len(t)-1]...)
+	out = append(out, field...)
+	out = append(out, '}')
+	return out
 }
 
 // readApprovalResponse drains and closes resp; a non-2xx is *ApprovalError.

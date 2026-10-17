@@ -3759,11 +3759,13 @@ func (b *Bindings) Fleet_MLStatus() (settings.MLStatusView, error) {
 }
 
 // Fleet_MLAckNotice acknowledges the hosted-inference notice version the
-// panel displayed. On 409 policy_changed the fresh state comes back with
-// noticeChanged set so the panel shows the new notice again.
-func (b *Bindings) Fleet_MLAckNotice(noticeVersion int) (settings.MLStatusView, error) {
+// panel displayed, through the notice button clicked ("Turn on Offload" or
+// "I have read this"; it picks the ack action Fleet records). On 409
+// policy_changed the fresh state comes back with noticeChanged set so the
+// panel shows the new notice again.
+func (b *Bindings) Fleet_MLAckNotice(noticeVersion int, button string) (settings.MLStatusView, error) {
 	defer sentry.WrapBinding("Fleet_MLAckNotice")()
-	return b.api.Settings().FleetMLAckNotice(b.ctx(), noticeVersion)
+	return b.api.Settings().FleetMLAckNotice(b.ctx(), noticeVersion, button)
 }
 
 // Fleet_SetWorkflowEventsOptIn writes the member's own workflow_events

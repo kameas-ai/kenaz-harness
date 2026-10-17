@@ -114,6 +114,7 @@ func (c *Client) doWithContentType(ctx context.Context, method, path, contentTyp
 				return nil, fmt.Errorf("fleet: build request: %w", err)
 			}
 			req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
+			setUserAgent(req)
 			if contentType != "" {
 				req.Header.Set("Content-Type", contentType)
 			}

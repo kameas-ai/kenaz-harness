@@ -4887,6 +4887,12 @@ export interface MLNotice {
   policyText: string;
   /** The org_policy it was rendered for. */
   policy: string;
+  /**
+   * The org's exclusions paragraph, Fleet's own words (a port of Fleet's
+   * exclusionsSummary, template 2); "" when nothing is excluded. Shown inside
+   * the notice, before the buttons.
+   */
+  exclusionsText?: string;
   /** Button labels: ["Turn on Offload", "Not now"] | ["I have read this"] | []. */
   actions: string[];
 }
@@ -4961,6 +4967,12 @@ export interface MLStatus {
   exclusionsVersion: number;
   /** The org's old free-text exclusions: display only, never matched. */
   legacyExclusionNotes: string[];
+  /**
+   * The exclusions paragraph Fleet's notice carries (same text as
+   * notice.exclusionsText); "" when nothing is excluded. Shown outside a
+   * notice; never on the hub path (body_text carries it).
+   */
+  exclusionsSummary?: string;
   fleetError?: string;
   /** Absent until the ML shipper is wired. */
   shipping?: MLShippingStatus;

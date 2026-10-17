@@ -278,7 +278,7 @@ func TestGetMeML_OK(t *testing.T) {
 func TestAckMLNotice_PostsVersionAndReturnsFreshState(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 	c := newMLTestClient(t, f)
-	m, err := c.AckMLNotice(t.Context(), 3, 0, nil)
+	m, err := c.AckMLNotice(t.Context(), MLNoticeAckActionRead, 3, 0, nil, 0)
 	if err != nil {
 		t.Fatalf("AckMLNotice: %v", err)
 	}
@@ -292,15 +292,103 @@ func TestAckMLNotice_PostsVersionAndReturnsFreshState(t *testing.T) {
 	if err := json.Unmarshal([]byte(f.acks[0]), &body); err != nil {
 		t.Fatalf("ack body %q: %v", f.acks[0], err)
 	}
-	if v, ok := body["notice_version"].(float64); !ok || v != 3 || len(body) != 1 {
-		t.Errorf("ack body = %v, want exactly {notice_version: 3}", body)
+	if v, ok := body["notice_version"].(float64); !ok || v != 3 || body["action"] != "read" ||
+		body["surface"] != "desktop" || len(body) != 3 {
+		t.Errorf("ack body = %v, want exactly {notice_version: 3, action: read, surface: desktop}", body)
+	}
+}
+
+// Legal (kameas-ai-11, 2026-10-16): the ack body carries surface
+// "desktop" and the explicit action; the served ai_usage_epoch is echoed
+// whenever passed; include_ai_usage is sendable (with its epoch).
+func TestAckMLNotice_BodyCarriesSurfaceActionAndEpoch(t *testing.T) {
+	seven := 7
+	cases := []struct {
+		name   string
+		action string
+		epoch  *int
+		want   string
+	}{
+		{"turn_on", MLNoticeAckActionTurnOn, nil, `{"action":"turn_on","notice_version":3,"surface":"desktop","text_revision":1}`},
+		{"read", MLNoticeAckActionRead, nil, `{"action":"read","notice_version":3,"surface":"desktop","text_revision":1}`},
+		{"read with epoch", MLNoticeAckActionRead, &seven, `{"action":"read","ai_usage_epoch":7,"notice_version":3,"surface":"desktop","text_revision":1}`},
+		{"include_ai_usage", MLNoticeAckActionIncludeAIUsage, &seven, `{"action":"include_ai_usage","ai_usage_epoch":7,"notice_version":3,"surface":"desktop","text_revision":1}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
+			c := newMLTestClient(t, f)
+			if _, err := c.AckMLNotice(t.Context(), tc.action, 3, 1, tc.epoch, 0); err != nil {
+				t.Fatalf("AckMLNotice: %v", err)
+			}
+			f.mu.Lock()
+			acks := append([]string(nil), f.acks...)
+			f.mu.Unlock()
+			if len(acks) != 1 || acks[0] != tc.want {
+				t.Errorf("ack bodies = %q, want [%s]", acks, tc.want)
+			}
+		})
+	}
+}
+
+// kenaz-fleet #289: exclusions_template is sent only when > 0 (missing
+// means 1 to Fleet); a negative one is refused unsent.
+func TestAckMLNotice_ExclusionsTemplate(t *testing.T) {
+	for _, tc := range []struct {
+		tmpl int
+		want string
+	}{
+		{0, `{"action":"read","notice_version":3,"surface":"desktop"}`},
+		{2, `{"action":"read","exclusions_template":2,"notice_version":3,"surface":"desktop"}`},
+	} {
+		f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
+		c := newMLTestClient(t, f)
+		if _, err := c.AckMLNotice(t.Context(), MLNoticeAckActionRead, 3, 0, nil, tc.tmpl); err != nil {
+			t.Fatalf("template %d: %v", tc.tmpl, err)
+		}
+		f.mu.Lock()
+		acks := append([]string(nil), f.acks...)
+		f.mu.Unlock()
+		if len(acks) != 1 || acks[0] != tc.want {
+			t.Errorf("template %d: ack bodies = %q, want %s", tc.tmpl, acks, tc.want)
+		}
+	}
+	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
+	c := newMLTestClient(t, f)
+	if _, err := c.AckMLNotice(t.Context(), MLNoticeAckActionRead, 3, 0, nil, -1); err == nil {
+		t.Error("exclusions_template -1 accepted")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.acks) != 0 {
+		t.Errorf("refused ack reached Fleet: %q", f.acks)
+	}
+}
+
+// An action outside the three legal values, or include_ai_usage without
+// the served epoch (Fleet's 422), is refused before anything is sent.
+func TestAckMLNotice_RefusesInvalidActionWithoutRequest(t *testing.T) {
+	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
+	c := newMLTestClient(t, f)
+	for _, a := range []string{"", "agree", "accept", "consent", "READ", "not_now"} {
+		if _, err := c.AckMLNotice(t.Context(), a, 3, 1, nil, 0); err == nil {
+			t.Errorf("action %q accepted", a)
+		}
+	}
+	if _, err := c.AckMLNotice(t.Context(), MLNoticeAckActionIncludeAIUsage, 3, 1, nil, 0); err == nil {
+		t.Error("include_ai_usage without ai_usage_epoch accepted")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.acks) != 0 {
+		t.Errorf("refused acks reached Fleet: %q", f.acks)
 	}
 }
 
 func TestAckMLNotice_409PolicyChangedIsTyped(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 409, ackBody: `{"code":"policy_changed","message":"the org notice changed since it was fetched; re-read /api/v1/me/ml"}`}
 	c := newMLTestClient(t, f)
-	m, err := c.AckMLNotice(t.Context(), 1, 0, nil)
+	m, err := c.AckMLNotice(t.Context(), MLNoticeAckActionRead, 1, 0, nil, 0)
 	if !errors.Is(err, ErrMLPolicyChanged) {
 		t.Fatalf("err = %v, want ErrMLPolicyChanged", err)
 	}
@@ -313,7 +401,7 @@ func TestAckMLNotice_409PolicyChangedIsTyped(t *testing.T) {
 	}
 	// A 409 with some other code is NOT policy_changed.
 	f.ackBody = `{"code":"something_else"}`
-	if _, err := c.AckMLNotice(t.Context(), 1, 0, nil); err == nil || errors.Is(err, ErrMLPolicyChanged) {
+	if _, err := c.AckMLNotice(t.Context(), MLNoticeAckActionRead, 1, 0, nil, 0); err == nil || errors.Is(err, ErrMLPolicyChanged) {
 		t.Errorf("409 something_else: err = %v", err)
 	}
 }
@@ -321,7 +409,7 @@ func TestAckMLNotice_409PolicyChangedIsTyped(t *testing.T) {
 func TestAckMLNotice_RefusesVersionZeroWithoutRequest(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 	c := newMLTestClient(t, f)
-	if _, err := c.AckMLNotice(t.Context(), 0, 0, nil); err == nil {
+	if _, err := c.AckMLNotice(t.Context(), MLNoticeAckActionRead, 0, 0, nil, 0); err == nil {
 		t.Fatal("version 0 accepted")
 	}
 	if len(f.acks) != 0 {
@@ -334,7 +422,7 @@ func TestML_NopClient(t *testing.T) {
 	if _, err := nop.GetMeML(t.Context()); !errors.Is(err, ErrFleetDisabled) {
 		t.Errorf("GetMeML: %v", err)
 	}
-	if _, err := nop.AckMLNotice(t.Context(), 1, 0, nil); !errors.Is(err, ErrFleetDisabled) {
+	if _, err := nop.AckMLNotice(t.Context(), MLNoticeAckActionRead, 1, 0, nil, 0); !errors.Is(err, ErrFleetDisabled) {
 		t.Errorf("AckMLNotice: %v", err)
 	}
 	if err := nop.SetWorkflowEventsOptIn(t.Context(), true); !errors.Is(err, ErrFleetDisabled) {
@@ -426,15 +514,15 @@ func TestDecodeMeML_TextRevisions(t *testing.T) {
 func TestAckMLNotice_TextRevisionInBodyOnlyWhenPositive(t *testing.T) {
 	cases := []struct {
 		rev  int
-		want map[string]float64
+		want map[string]any
 	}{
-		{0, map[string]float64{"notice_version": 3}},
-		{1, map[string]float64{"notice_version": 3, "text_revision": 1}},
+		{0, map[string]any{"notice_version": 3.0, "action": "read", "surface": "desktop"}},
+		{1, map[string]any{"notice_version": 3.0, "text_revision": 1.0, "action": "read", "surface": "desktop"}},
 	}
 	for _, tc := range cases {
 		f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 		c := newMLTestClient(t, f)
-		if _, err := c.AckMLNotice(t.Context(), 3, tc.rev, nil); err != nil {
+		if _, err := c.AckMLNotice(t.Context(), MLNoticeAckActionRead, 3, tc.rev, nil, 0); err != nil {
 			t.Fatalf("rev %d: AckMLNotice: %v", tc.rev, err)
 		}
 		f.mu.Lock()
@@ -443,7 +531,7 @@ func TestAckMLNotice_TextRevisionInBodyOnlyWhenPositive(t *testing.T) {
 		if len(acks) != 1 {
 			t.Fatalf("rev %d: acks = %d, want 1", tc.rev, len(acks))
 		}
-		var body map[string]float64
+		var body map[string]any
 		if err := json.Unmarshal([]byte(acks[0]), &body); err != nil {
 			t.Fatalf("ack body %q: %v", acks[0], err)
 		}
@@ -468,14 +556,14 @@ func TestAckMLNotice_AIUsageEpochOnlyWhenGiven(t *testing.T) {
 		epoch *int
 		want  string
 	}{
-		{"nil: no epoch", nil, `{"notice_version":3}`},
-		{"7 echoed", &seven, `{"ai_usage_epoch":7,"notice_version":3}`},
-		{"0 echoed", &zero, `{"ai_usage_epoch":0,"notice_version":3}`},
+		{"nil: no epoch", nil, `{"action":"read","notice_version":3,"surface":"desktop"}`},
+		{"7 echoed", &seven, `{"action":"read","ai_usage_epoch":7,"notice_version":3,"surface":"desktop"}`},
+		{"0 echoed", &zero, `{"action":"read","ai_usage_epoch":0,"notice_version":3,"surface":"desktop"}`},
 	}
 	for _, tc := range cases {
 		f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 		c := newMLTestClient(t, f)
-		if _, err := c.AckMLNotice(t.Context(), 3, 0, tc.epoch); err != nil {
+		if _, err := c.AckMLNotice(t.Context(), MLNoticeAckActionRead, 3, 0, tc.epoch, 0); err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
 		f.mu.Lock()
@@ -487,7 +575,7 @@ func TestAckMLNotice_AIUsageEpochOnlyWhenGiven(t *testing.T) {
 	}
 	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 	c := newMLTestClient(t, f)
-	if _, err := c.AckMLNotice(t.Context(), 3, 0, &neg); err == nil {
+	if _, err := c.AckMLNotice(t.Context(), MLNoticeAckActionRead, 3, 0, &neg, 0); err == nil {
 		t.Error("ai_usage_epoch -1 accepted")
 	}
 	if len(f.acks) != 0 {
@@ -498,7 +586,7 @@ func TestAckMLNotice_AIUsageEpochOnlyWhenGiven(t *testing.T) {
 func TestAckMLNotice_RefusesNegativeTextRevisionWithoutRequest(t *testing.T) {
 	f := &fakeMLFleet{ackStatus: 200, ackBody: effectiveBody}
 	c := newMLTestClient(t, f)
-	if _, err := c.AckMLNotice(t.Context(), 1, -1, nil); err == nil {
+	if _, err := c.AckMLNotice(t.Context(), MLNoticeAckActionRead, 1, -1, nil, 0); err == nil {
 		t.Fatal("text_revision -1 accepted")
 	}
 	if len(f.acks) != 0 {

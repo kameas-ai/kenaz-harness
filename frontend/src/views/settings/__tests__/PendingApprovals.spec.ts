@@ -303,17 +303,26 @@ describe('PendingApprovalsModal', () => {
     expect(q(w, 'pending-approval-blocking').text()).toBe('Paused until you approve.');
   });
 
-  it('ml_notice: body_text rendered verbatim as text; I agree approves by id', async () => {
+  it('ml_notice: body_text rendered verbatim as text; "I have read this" approves by id', async () => {
     const { client, approveItem } = makeClient([view([NOTICE])]);
     const w = await mountModal(client);
     const body = q(w, 'pending-approval-body');
     expect(body.element.textContent).toBe(NOTICE_TEXT);
     expect(body.classes()).toContain('whitespace-pre-wrap');
     expect(q(w, 'pending-approval-accept').exists()).toBe(false);
-    expect(q(w, 'pending-approval-approve').text()).toBe('I agree');
+    expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
     await q(w, 'pending-approval-approve').trigger('click');
     await flushPromises();
     expect(approveItem).toHaveBeenCalledWith('ml_notice:o1:4');
+  });
+
+  it('ml_notice: the button never reads agree / accept / consent (legal, 2026-10-16)', async () => {
+    for (const over of [{}, { required: false }, { documentUrl: 'https://example.test/notice' }]) {
+      const { client } = makeClient([view([{ ...NOTICE, ...over }])]);
+      const w = await mountModal(client);
+      expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
+      expect(q(w, 'pending-approval-approve').text()).not.toMatch(/agree|accept|consent/i);
+    }
   });
 
   // Legal (kameas-ai-11, 2026-10-16): only "I have read this" records the
@@ -367,6 +376,15 @@ describe('PendingApprovalsModal', () => {
     expect(q(w, 'pending-approval-accept').exists()).toBe(false);
     expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
     expect(w.text()).not.toMatch(/\b(agree|consent|accept|approval|approve|OK, continue)\b/i);
+  });
+
+  it('ml_notice with a documentUrl: never the read-and-accept checkbox', async () => {
+    const withDoc = { ...NOTICE, documentUrl: 'https://kenaz.kameas.ai/notice.html', documentSha256: 'c'.repeat(64) };
+    const { client } = makeClient([view([withDoc])]);
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approval-accept').exists()).toBe(false);
+    expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
+    expect(q(w, 'pending-approval-approve').attributes('disabled')).toBeUndefined();
   });
 
   it('dialog title says "approval" only when every item is required', async () => {

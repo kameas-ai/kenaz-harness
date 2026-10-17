@@ -1031,7 +1031,7 @@ interface WailsBindingsLike {
   Fleet_MemorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
   // ── Fleet Cloud ML consent (ml-producer-01MLPRD01 WP01) ───────────────
   Fleet_MLStatus(): Promise<MLStatus>;
-  Fleet_MLAckNotice(noticeVersion: number): Promise<MLStatus>;
+  Fleet_MLAckNotice(noticeVersion: number, button: string): Promise<MLStatus>;
   Fleet_SetWorkflowEventsOptIn(optedIn: boolean): Promise<MLStatus>;
   // ── Fleet pending-approvals hub (ml-producer-01MLPRD01 WP06) ──────────
   Fleet_PendingApprovals(): Promise<PendingApprovals>;
@@ -3981,10 +3981,12 @@ export interface FleetClient {
   /** Cloud ML consent panel state: a fresh GET /me/ml read (ml-producer-01MLPRD01 WP01). */
   mlStatus(): Promise<MLStatus>;
   /**
-   * Acknowledge the notice version that was shown. On 409 policy_changed the
-   * re-read state comes back with noticeChanged set (show the notice again).
+   * Acknowledge the notice version that was shown, through the notice button
+   * clicked ("Turn on Offload" or "I have read this"; it picks the ack action
+   * Fleet records). On 409 policy_changed the re-read state comes back with
+   * noticeChanged set (show the notice again).
    */
-  mlAckNotice(noticeVersion: number): Promise<MLStatus>;
+  mlAckNotice(noticeVersion: number, button: string): Promise<MLStatus>;
   /** The member's own workflow_events opt-in (policy member_choice). */
   setWorkflowEventsOptIn(optedIn: boolean): Promise<MLStatus>;
   /** Fleet's pending-approvals hub: everything the member must agree to (WP06). */
@@ -5101,7 +5103,7 @@ export function createHarnessClient(): HarnessClient {
       memorySyncEnable: (scopes, consentVersion) => b().Fleet_MemorySyncEnable(scopes, consentVersion),
       memorySyncDisable: (deleteFromFleet, confirm) => b().Fleet_MemorySyncDisable(deleteFromFleet, confirm),
       mlStatus: () => b().Fleet_MLStatus(),
-      mlAckNotice: (noticeVersion) => b().Fleet_MLAckNotice(noticeVersion),
+      mlAckNotice: (noticeVersion, button) => b().Fleet_MLAckNotice(noticeVersion, button),
       setWorkflowEventsOptIn: (optedIn) => b().Fleet_SetWorkflowEventsOptIn(optedIn),
       pendingApprovals: () => b().Fleet_PendingApprovals(),
       approveItem: (id) => b().Fleet_ApproveItem(id),

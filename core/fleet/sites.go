@@ -191,6 +191,7 @@ func (c *Client) SiteDeploy(
 	req.Header.Set("Content-Type", "application/gzip")
 	req.Header.Set("X-Kameas-Bundle-Sha256", sha256Hex)
 	req.Header.Set("X-Kameas-Manifest", base64.StdEncoding.EncodeToString(manifestJSON))
+	setUserAgent(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

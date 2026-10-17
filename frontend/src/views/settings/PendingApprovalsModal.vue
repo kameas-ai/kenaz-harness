@@ -13,7 +13,8 @@
  *     per-document box "I have read and accept <title> (<version>)" is
  *     ticked. The document opens in the system browser; it is not fetched.
  *   - ml_notice: the server-rendered notice, including any "Changed since
- *     you last approved" section; "I agree" sends the hub's approve action.
+ *     you last approved" section; "I have read this" sends the hub's approve
+ *     action (legal's fixed label, 2026-10-16: never agree/accept/consent).
  *   - ml_exclusions_change: informational ("I have read this", the only
  *     recorded action; closing records nothing); the backend lists it
  *     only while nothing required is pending.
@@ -81,7 +82,9 @@ onMounted(load);
  * this", so it gets no checkbox or accept wording (legal, 2026-10-16).
  */
 function needsCheckbox(it: PendingApprovalItem): boolean {
-  if (it.kind === 'ml_exclusions_change') return false;
+  // ML notices and exclusions changes record "I have read this" only, never
+  // an acceptance (legal, 2026-10-16), even if Fleet ever attaches a document.
+  if (it.kind === 'ml_exclusions_change' || it.kind === 'ml_notice' || it.kind === 'ml_opt_in_available') return false;
   return it.kind === 'legal_acceptance' || !!it.documentUrl;
 }
 
@@ -126,6 +129,9 @@ function approveLabel(it: PendingApprovalItem): string {
   // path: the backend binds kind and path both ways
   // (fleet.ApproveActionAllowedFor). Otherwise there is no approve button.
   if (it.kind === 'ml_opt_in_available' && it.approveAllowed) return 'Not now';
+  // Legal (kameas-ai-11, 2026-10-16): the ML notice reads "I have read
+  // this" — never "I agree", "Accept" or "Consent".
+  if (it.kind === 'ml_notice') return 'I have read this';
   // Legal (kameas-ai-11, 2026-10-16): the exclusions-change card records
   // only "I have read this" (exclusions-seen). No consent wording; close,
   // Esc and outside-click record nothing and the item stays pending.

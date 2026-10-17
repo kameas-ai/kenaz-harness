@@ -8187,6 +8187,7 @@ export namespace settings {
 	    sections: MLNoticeSection[];
 	    policyText: string;
 	    policy: string;
+	    exclusionsText: string;
 	    actions: string[];
 	
 	    static createFrom(source: any = {}) {
@@ -8200,6 +8201,7 @@ export namespace settings {
 	        this.sections = this.convertValues(source["sections"], MLNoticeSection);
 	        this.policyText = source["policyText"];
 	        this.policy = source["policy"];
+	        this.exclusionsText = source["exclusionsText"];
 	        this.actions = source["actions"];
 	    }
 	
@@ -8272,6 +8274,7 @@ export namespace settings {
 	    excludeBrowser: boolean;
 	    exclusionsVersion: number;
 	    legacyExclusionNotes: string[];
+	    exclusionsSummary: string;
 	    fleetError?: string;
 	    shipping?: MLShippingStatusView;
 	
@@ -8311,6 +8314,7 @@ export namespace settings {
 	        this.excludeBrowser = source["excludeBrowser"];
 	        this.exclusionsVersion = source["exclusionsVersion"];
 	        this.legacyExclusionNotes = source["legacyExclusionNotes"];
+	        this.exclusionsSummary = source["exclusionsSummary"];
 	        this.fleetError = source["fleetError"];
 	        this.shipping = this.convertValues(source["shipping"], MLShippingStatusView);
 	    }

@@ -358,7 +358,7 @@ export function Fleet_DismissItemLocally(arg1:string):Promise<settings.PendingAp
 
 export function Fleet_GetTelemetryConsent():Promise<string>;
 
-export function Fleet_MLAckNotice(arg1:number):Promise<settings.MLStatusView>;
+export function Fleet_MLAckNotice(arg1:number,arg2:string):Promise<settings.MLStatusView>;
 
 export function Fleet_MLStatus():Promise<settings.MLStatusView>;
 

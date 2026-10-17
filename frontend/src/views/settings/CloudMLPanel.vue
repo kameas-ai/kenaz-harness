@@ -9,16 +9,16 @@
  * toggle appears only when offload is on and the policy is member_choice.
  * When a notice acknowledgement is required, the contract's notice text
  * (rendered by the backend: org, retention, retain_on_withdrawal variant)
- * is shown with an Acknowledge button that posts the version shown; a 409
+ * is shown with an "I have read this" button that posts the version shown; a 409
  * policy_changed comes back as noticeChanged and the new notice is shown
  * again. When Fleet requires a newer notice TEXT revision than the one the
- * backend renders (noticeNeedsDashboard), no notice and no Acknowledge are
+ * backend renders (noticeNeedsDashboard), no notice and no acknowledge button are
  * shown; the panel points the user to the Fleet dashboard's consent card.
  *
  * WP06: when Fleet's pending-approvals hub lists an ml_notice
  * (noticeFromHub), noticeText is the hub's server-rendered body_text, shown
  * verbatim (line breaks kept, including any "Changed since you last
- * approved" section), and Acknowledge approves that hub item by id — the
+ * approved" section), and "I have read this" approves that hub item by id — the
  * harness acknowledges exactly the text it showed. The local template and
  * the dashboard routing above are only the fallback for a Fleet without the
  * hub.
@@ -28,7 +28,10 @@
  * intro, bold-labelled paragraphs and the policy paragraph, laid out here
  * with the policy's buttons — member_choice: "Turn on Offload" (set the
  * workflow_events opt-in, then acknowledge the version shown) and "Not now"
- * (close, no request); required (policy on): "I have read this" (ack).
+ * (close, no request); required (policy on), or re-acknowledging with
+ * Offload already on: "I have read this" (ack). The hub branch's button reads
+ * "I have read this" too — legal's fixed labels (kameas-ai-11, 2026-10-16);
+ * never "I agree", "Accept" or "Consent" on the ML notice.
  * With the hub, the item's title (`noticeTitle`) is the heading above its
  * verbatim body_text (Fleet's rev-2 notice keeps the heading out of it).
  *
@@ -69,7 +72,7 @@ const showOptIn = computed(
 /**
  * kenaz-fleet PR 225: an ack is owed for a notice text NEWER than the one this
  * harness renders. The user never saw that text here, so it must not be
- * acknowledged from this panel: no notice text, no Acknowledge button —
+ * acknowledged from this panel: no notice text, no acknowledge button —
  * route them to the Fleet dashboard's consent card instead.
  */
 const DASHBOARD_NOTICE =
@@ -109,17 +112,15 @@ function openDashboard() {
 }
 
 /**
- * WP05: the org's exclusions, read-only. Paths and command prefixes are
- * enforced on this device; legacy notes are the org's old free text and are
- * shown only (never matched). exclude_browser changes nothing here (the
- * harness sends no browser data), so it is not listed.
+ * WP05: the org's exclusions, read-only, as Fleet words them (legal,
+ * kameas-ai-11, 2026-10-16): the backend's port of Fleet's
+ * exclusionsSummary ("Excluded from upload: …" plus the legacy free-text
+ * sentence), never markup of our own. Inside the fallback notice it is
+ * notice.exclusionsText, before any action button; with no notice shown it
+ * is exclusionsSummary on its own. On the hub path nothing is added: the
+ * served body_text is the only exclusions source.
  */
-const exclusionPaths = computed(() => status.value?.exclusionPaths ?? []);
-const exclusionCommands = computed(() => status.value?.exclusionCommands ?? []);
-const legacyNotes = computed(() => status.value?.legacyExclusionNotes ?? []);
-const showExclusions = computed(
-  () => loaded.value && (exclusionPaths.value.length > 0 || exclusionCommands.value.length > 0),
-);
+const exclusionsSummary = computed(() => status.value?.exclusionsSummary ?? '');
 
 function policyLabel(p: string): string {
   switch (p) {
@@ -167,7 +168,7 @@ async function acknowledge() {
       await refresh();
       return;
     }
-    const next = await client.fleet.mlAckNotice(s.noticeVersion);
+    const next = await client.fleet.mlAckNotice(s.noticeVersion, ACTION_READ);
     status.value = next;
     noticeChanged.value = !!next.noticeChanged;
   } catch (err) {
@@ -199,7 +200,7 @@ async function turnOnOffload() {
     const next = await client.fleet.setWorkflowEventsOptIn(true);
     status.value = next;
     if (next.noticeFromHub || next.noticeNeedsDashboard || !next.noticeAckRequired) return;
-    const acked = await client.fleet.mlAckNotice(shownVersion);
+    const acked = await client.fleet.mlAckNotice(shownVersion, ACTION_TURN_ON);
     status.value = acked;
     noticeChanged.value = !!acked.noticeChanged;
   } catch (err) {
@@ -294,6 +295,8 @@ function onOptInChange(ev: Event) {
             <strong>{{ s.label }}</strong> {{ s.text }}
           </p>
           <p v-if="localNotice.policyText" data-testid="cloud-ml-notice-policy">{{ localNotice.policyText }}</p>
+          <!-- Exclusions are part of the notice (Fleet's words): before any action button. -->
+          <p v-if="localNotice.exclusionsText" data-testid="cloud-ml-exclusions">{{ localNotice.exclusionsText }}</p>
           <div class="flex gap-2">
             <button
               v-for="a in localNotice.actions"
@@ -313,6 +316,7 @@ function onOptInChange(ev: Event) {
           <h3 v-if="status.noticeTitle" class="text-[13px] font-semibold" data-testid="cloud-ml-notice-heading">
             {{ status.noticeTitle }}
           </h3>
+          <!-- The served body_text is the only exclusions source here: nothing of our own. -->
           <p class="whitespace-pre-wrap" data-testid="cloud-ml-notice-text">{{ status.noticeText }}</p>
           <button
             type="button"
@@ -321,7 +325,7 @@ function onOptInChange(ev: Event) {
             data-testid="cloud-ml-ack"
             @click="acknowledge"
           >
-            Acknowledge
+            {{ ACTION_READ }}
           </button>
         </template>
       </div>
@@ -345,27 +349,14 @@ function onOptInChange(ev: Event) {
         </template>
       </div>
 
-      <div v-if="showExclusions"class="space-y-1 text-[12px]" data-testid="cloud-ml-exclusions">
-        <p>Your organization excludes:</p>
-        <ul class="list-disc pl-5">
-          <li v-for="p in exclusionPaths" :key="'p:' + p" data-testid="cloud-ml-exclusion-path">
-            files matching <code>{{ p }}</code>
-          </li>
-          <li v-for="c in exclusionCommands" :key="'c:' + c" data-testid="cloud-ml-exclusion-command">
-            commands starting with <code>{{ c }}</code>
-          </li>
-        </ul>
-        <p class="text-ink-muted">
-          These are checked on this device. Matching files and commands are never sent; only that a
-          tool ran, its outcome and timing.
-        </p>
-      </div>
-      <div v-if="loaded && legacyNotes.length" class="space-y-1 text-[12px] text-ink-muted" data-testid="cloud-ml-legacy-notes">
-        <p>Earlier notes from your organization (for information; not applied as patterns):</p>
-        <ul class="list-disc pl-5">
-          <li v-for="(n, i) in legacyNotes" :key="i" data-testid="cloud-ml-legacy-note">{{ n }}</li>
-        </ul>
-      </div>
+      <!-- No notice shown: Fleet's exclusions paragraph on its own. -->
+      <p
+        v-if="loaded && !showNotice && exclusionsSummary"
+        class="text-[12px]"
+        data-testid="cloud-ml-exclusions"
+      >
+        {{ exclusionsSummary }}
+      </p>
 
       <p class="text-[12px] text-ink-muted" data-testid="cloud-ml-harness-line">{{ HARNESS_LINE }}</p>
     </template>

@@ -78,5 +78,7 @@ func (t *tokenRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	// Clone the request so we don't mutate the caller's headers.
 	r2 := req.Clone(req.Context())
 	r2.Header.Set("Authorization", "Bearer "+tok)
+	// Overrides the OTel exporter's own UA: Fleet reads kenaz-harness/<v>.
+	setUserAgent(r2)
 	return t.transport.RoundTrip(r2)
 }

@@ -586,8 +586,8 @@ export function Fleet_GetTelemetryConsent() {
   return window['go']['rpc']['Bindings']['Fleet_GetTelemetryConsent']();
 }
 
-export function Fleet_MLAckNotice(arg1) {
-  return window['go']['rpc']['Bindings']['Fleet_MLAckNotice'](arg1);
+export function Fleet_MLAckNotice(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Fleet_MLAckNotice'](arg1, arg2);
 }
 
 export function Fleet_MLStatus() {

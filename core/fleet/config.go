@@ -95,6 +95,7 @@ func FetchFleetConfig(ctx context.Context, spaBaseURL string) (FleetConfig, erro
 		return FleetConfig{}, fmt.Errorf("fleet: config request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	setUserAgent(req)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
