@@ -104,6 +104,8 @@ const hasParseErrors = computed(() => parseErrors.value.length > 0);
 const failedUserPolicies = computed(() =>
   policyFiles.value.filter((f) => !f.embedded && !f.parse_ok),
 );
+/** Policies that parsed but failed to evaluate on a request — mirrors cedar.Engine.PolicyEvalErrors. */
+const evalErrors = computed(() => policyFiles.value.flatMap((f) => f.eval_errors ?? []));
 const isDirty = computed(
   () => selectedFile.value !== null && editorSource.value !== selectedFile.value.source,
 );
@@ -465,6 +467,28 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
         <ul>
           <li v-for="f in failedUserPolicies" :key="f.name">
             <strong>{{ f.name }}</strong>: {{ f.parse_err }}
+          </li>
+        </ul>
+      </div>
+
+      <!-- A policy that parses but errors at evaluation time (e.g. reads a
+           context attribute the request lacks). An erroring forbid denies
+           the request (fail-closed); an erroring permit never matches. -->
+      <div
+        v-if="evalErrors.length > 0"
+        class="policy-view__banner policy-view__banner--error"
+        role="alert"
+        data-testid="policy-eval-failed"
+      >
+        <p>
+          A policy could not be evaluated. A broken forbid rule blocks the actions it
+          covers; a broken permit rule never applies. Guard attribute reads with
+          <code>context has &lt;attr&gt; &amp;&amp;</code>.
+        </p>
+        <ul>
+          <li v-for="pe in evalErrors" :key="pe.policy_id">
+            <strong>{{ pe.file || pe.policy_id }}</strong> ({{ pe.effect }}): {{ pe.message }}
+            — {{ pe.count }}×
           </li>
         </ul>
       </div>

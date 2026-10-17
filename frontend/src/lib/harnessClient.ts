@@ -33,6 +33,7 @@ import type {
   DocumentPreview,
   KnowledgeSiteBuild,
   Provider,
+  CredentialKey,
   AddProviderInput,
   TestResult,
   ModelInfo,
@@ -158,6 +159,8 @@ import type {
   SessionUsage,
   ModelCall,
   ModelCallTelemetrySettings,
+  SettingsResetUnreadableResult,
+  MLLocalActivity,
   TurnRun,
   DriftReport,
   PolicyFileDetail,
@@ -309,6 +312,12 @@ interface WailsBindingsLike {
   Sessions_ModelCalls(id: string, limit: number): Promise<ModelCall[] | null>;
   Settings_GetModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   Settings_SetModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /** "Reset settings" recovery for an unreadable settings.json. Desktop-only. */
+  Settings_ResetUnreadable(): Promise<SettingsResetUnreadableResult>;
+  // ── ml-producer-01MLPRD01 WP11 ──────────────────────────────────────
+  Settings_GetMLLocalActivity(): Promise<MLLocalActivity>;
+  Settings_SetMLLocalActivityRetention(days: number): Promise<MLLocalActivity>;
+  Settings_DeleteMLLocalActivity(): Promise<MLLocalActivity>;
   /** Turn -> run links (agentgraph-settings-linkage-01DOGF0D WP03). Desktop-only. */
   Sessions_TurnRuns(sessionID: string): Promise<TurnRun[]>;
   Sessions_SaveAsArtifact(
@@ -408,6 +417,7 @@ interface WailsBindingsLike {
   ): Promise<LoadToolsResult>;
 
   LLM_ListProviders(): Promise<Provider[]>;
+  LLM_ListCredentialKeys(): Promise<CredentialKey[]>;
   LLM_StartStream(
     profileID: string,
     sessionID: string,
@@ -1031,7 +1041,7 @@ interface WailsBindingsLike {
   Fleet_MemorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
   // ── Fleet Cloud ML consent (ml-producer-01MLPRD01 WP01) ───────────────
   Fleet_MLStatus(): Promise<MLStatus>;
-  Fleet_MLAckNotice(noticeVersion: number): Promise<MLStatus>;
+  Fleet_MLAckNotice(noticeVersion: number, button: string): Promise<MLStatus>;
   Fleet_SetWorkflowEventsOptIn(optedIn: boolean): Promise<MLStatus>;
   // ── Fleet pending-approvals hub (ml-producer-01MLPRD01 WP06) ──────────
   Fleet_PendingApprovals(): Promise<PendingApprovals>;
@@ -1083,6 +1093,12 @@ interface WailsBindingsLike {
   Sync_ForcePull(category: string): Promise<void>;
   /** MCPs that arrived via sync but need credentials before they can start. */
   Sync_PendingMCPSecrets(): Promise<PendingMCPSecret[]>;
+  /**
+   * Record the one-time confirmation that enabled settings categories may
+   * upload to Fleet, then upload the held ones (provider-credentials-client-
+   * 01PCCLI01 A2, owner ruling H1).
+   */
+  Sync_ConfirmUploads(): Promise<void>;
 
   // ── Cedar team publish (fleet-share-and-sync-01NDFSEX14 WP07) ────────────
   /** Publish a Cedar rule to the team via fleet. Requires policy_admin role. */
@@ -1873,6 +1889,11 @@ export interface ProjectsClient {
 export interface LLMConnectorClient {
   listProviders(): Promise<Provider[]>;
   /**
+   * Every key the configured profiles use, one row per key, labelled by
+   * scope (local / user_sync / org / team). Read-only; never key bytes.
+   */
+  listCredentialKeys(): Promise<CredentialKey[]>;
+  /**
    * startStream begins an assistant completion against `profileID` for
    * `sessionID`. modelOverride (optional) selects a non-default model
    * from the profile's authorised set — the backend validates and
@@ -2512,6 +2533,22 @@ export interface SettingsClient {
   getModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   /** Persist them; turning sharing on exports only calls that start afterwards. */
   setModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /**
+   * Recovery for a settings file that cannot be read: moves it aside to
+   * settings.json.corrupt-<UTC timestamp> (returned as backupPath), writes
+   * the defaults, and turns settings sync off. Rejects, changing nothing,
+   * when the file reads fine. Desktop-only (no served dispatch).
+   */
+  resetUnreadable(): Promise<SettingsResetUnreadableResult>;
+  /**
+   * The local ML activity store (ml-producer-01MLPRD01 WP11): row counts,
+   * size, retention, and whether new activity is also shared with Fleet.
+   */
+  getMLLocalActivity(): Promise<MLLocalActivity>;
+  /** Days to keep local activity (0 = the 90-day default; 1..3650). */
+  setMLLocalActivityRetention(days: number): Promise<MLLocalActivity>;
+  /** "Delete local activity data": wipes the store, the unsent outbox and task state. */
+  deleteMLLocalActivity(): Promise<MLLocalActivity>;
   /** Persist the MCP auto-restart dial. */
   setMCPAutoRestart(enabled: boolean): Promise<void>;
 
@@ -3981,10 +4018,12 @@ export interface FleetClient {
   /** Cloud ML consent panel state: a fresh GET /me/ml read (ml-producer-01MLPRD01 WP01). */
   mlStatus(): Promise<MLStatus>;
   /**
-   * Acknowledge the notice version that was shown. On 409 policy_changed the
-   * re-read state comes back with noticeChanged set (show the notice again).
+   * Acknowledge the notice version that was shown, through the notice button
+   * clicked ("Turn on Offload" or "I have read this"; it picks the ack action
+   * Fleet records). On 409 policy_changed the re-read state comes back with
+   * noticeChanged set (show the notice again).
    */
-  mlAckNotice(noticeVersion: number): Promise<MLStatus>;
+  mlAckNotice(noticeVersion: number, button: string): Promise<MLStatus>;
   /** The member's own workflow_events opt-in (policy member_choice). */
   setWorkflowEventsOptIn(optedIn: boolean): Promise<MLStatus>;
   /** Fleet's pending-approvals hub: everything the member must agree to (WP06). */
@@ -4067,6 +4106,8 @@ export interface SyncClient {
   forcePull(category: string): Promise<void>;
   /** MCPs that arrived via sync but need credentials. */
   pendingMCPSecrets(): Promise<PendingMCPSecret[]>;
+  /** Confirm once that enabled categories may upload, then upload them. */
+  confirmUploads(): Promise<void>;
 }
 
 // ── CedarPublish client (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
@@ -4298,7 +4339,7 @@ export interface HarnessClient {
  * hand-editing it.
  */
 const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
-  'Sessions_List', 'Sessions_ListMessages', 'LLM_ListProviders', 'LLM_ListModels',
+  'Sessions_List', 'Sessions_ListMessages', 'LLM_ListProviders', 'LLM_ListCredentialKeys', 'LLM_ListModels',
   'LLM_ListCustomTemplates', 'LLM_ListFallbackChains', 'MCP_ListServers', 'MCP_ListToolPolicies', 'A2A_ListCards',
   'Workflow_ListJobs', 'Trust_ListSecretReferences', 'Context_List', 'Contexts_RecentlyApplied',
   'Contexts_ContextSearch', 'Bundle_List', 'Trust_ListAnchors', 'CedarPolicy_ListPolicies',
@@ -4545,6 +4586,7 @@ export function createHarnessClient(): HarnessClient {
     },
     llm: {
       listProviders: () => b().LLM_ListProviders(),
+      listCredentialKeys: () => b().LLM_ListCredentialKeys(),
       startStream: (profileID, sessionID, modelOverride) =>
         b().LLM_StartStream(profileID, sessionID, modelOverride ?? ''),
       stopStream: (id) => b().LLM_StopStream(id),
@@ -4743,6 +4785,10 @@ export function createHarnessClient(): HarnessClient {
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
       getModelCallTelemetry: () => b().Settings_GetModelCallTelemetry(),
       setModelCallTelemetry: (mc) => b().Settings_SetModelCallTelemetry(mc),
+      resetUnreadable: () => b().Settings_ResetUnreadable(),
+      getMLLocalActivity: () => b().Settings_GetMLLocalActivity(),
+      setMLLocalActivityRetention: (days) => b().Settings_SetMLLocalActivityRetention(days),
+      deleteMLLocalActivity: () => b().Settings_DeleteMLLocalActivity(),
       setMCPAutoRestart: (enabled) => b().Settings_SetMCPAutoRestart(enabled),
       getToolExposure: () => b().Settings_GetToolExposure(),
       setToolExposure: (settings) => b().Settings_SetToolExposure(settings),
@@ -5101,7 +5147,7 @@ export function createHarnessClient(): HarnessClient {
       memorySyncEnable: (scopes, consentVersion) => b().Fleet_MemorySyncEnable(scopes, consentVersion),
       memorySyncDisable: (deleteFromFleet, confirm) => b().Fleet_MemorySyncDisable(deleteFromFleet, confirm),
       mlStatus: () => b().Fleet_MLStatus(),
-      mlAckNotice: (noticeVersion) => b().Fleet_MLAckNotice(noticeVersion),
+      mlAckNotice: (noticeVersion, button) => b().Fleet_MLAckNotice(noticeVersion, button),
       setWorkflowEventsOptIn: (optedIn) => b().Fleet_SetWorkflowEventsOptIn(optedIn),
       pendingApprovals: () => b().Fleet_PendingApprovals(),
       approveItem: (id) => b().Fleet_ApproveItem(id),
@@ -5134,6 +5180,7 @@ export function createHarnessClient(): HarnessClient {
       forcePush: (category) => b().Sync_ForcePush(category),
       forcePull: (category) => b().Sync_ForcePull(category),
       pendingMCPSecrets: () => b().Sync_PendingMCPSecrets(),
+      confirmUploads: () => b().Sync_ConfirmUploads(),
     },
     // ── CedarPublish (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
     cedarPublish: {
@@ -5614,6 +5661,9 @@ export function createServedHarnessClient(opts?: {
        */
       listProviders: () => transport.call<Provider[]>('LLM_ListProviders'),
 
+      /** listCredentialKeys — READ-ONLY, the same projection as desktop. */
+      listCredentialKeys: () => transport.call<CredentialKey[]>('LLM_ListCredentialKeys'),
+
       /**
        * startStream / stopStream — the chat turn itself.
        *
@@ -5972,6 +6022,7 @@ export function createFakeHarnessClient(
     },
     llm: {
       listProviders: async () => [],
+      listCredentialKeys: async () => [],
       startStream: async () => 'fake-sub',
       stopStream: noop,
       addProvider: noop,
@@ -6282,6 +6333,10 @@ export function createFakeHarnessClient(
         shareWithFleet: false,
       }),
       setModelCallTelemetry: noop,
+      resetUnreadable: async () => ({ backupPath: '' }),
+      getMLLocalActivity: async () => fakeMLLocalActivity(),
+      setMLLocalActivityRetention: async (days: number) => fakeMLLocalActivity(days),
+      deleteMLLocalActivity: async () => fakeMLLocalActivity(),
       setMCPAutoRestart: noop,
       getToolExposure: async () => ({
         exposure: {},
@@ -7126,6 +7181,7 @@ export function createFakeHarnessClient(
       forcePush: noop,
       forcePull: noop,
       pendingMCPSecrets: async () => [],
+      confirmUploads: noop,
     },
     cedarPublish: {
       publishToTeam: noop,
@@ -7244,6 +7300,19 @@ export function createFakeHarnessClient(
 }
 
 /** Fake-client Cloud ML state: signed out (no Fleet in the fake). */
+/** Fake client: an empty local activity store (ml-producer-01MLPRD01 WP11). */
+function fakeMLLocalActivity(retentionDays = 0): MLLocalActivity {
+  return {
+    available: true,
+    events: 0,
+    tasks: 0,
+    sizeBytes: 0,
+    retentionDays,
+    effectiveRetentionDays: retentionDays > 0 ? retentionDays : 90,
+    sharingWithFleet: false,
+  };
+}
+
 function fakeMLStatus(): MLStatus {
   return {
     signedIn: false,

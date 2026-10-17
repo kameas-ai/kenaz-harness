@@ -189,17 +189,20 @@ func TestFleetApproveItem_MLNoticeSendsVerbatimBody(t *testing.T) {
 	if _, err := r.api.FleetApproveItem(context.Background(), "ml_notice:o1:4"); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	if _, _, acks := r.fleet.hubSnapshot(); len(acks) != 1 || acks[0] != `{"notice_version":4,"text_revision":2}` {
+	// Served body + "surface":"desktop" (it had none); nothing else changes.
+	if _, _, acks := r.fleet.hubSnapshot(); len(acks) != 1 || acks[0] != `{"notice_version":4,"text_revision":2,"surface":"desktop"}` {
 		t.Errorf("notice-ack bodies = %q", acks)
 	}
 }
 
 // kenaz-fleet #235: the rev-2 ml_notice approve body carries
 // ai_usage_epoch. The hub path forwards Fleet's body byte for byte (key
-// order and all) — the harness never rebuilds it, so the epoch it echoes
-// is exactly the one Fleet put there.
+// order and all) — the harness never rebuilds it, so the epoch and the
+// action it echoes are exactly the ones Fleet put there. The one addition
+// (legal, kameas-ai-11, 2026-10-16) is "surface":"desktop" when the served
+// body has no surface; a served surface is left alone (byte-identical).
 func TestFleetApproveItem_MLNoticeForwardsHubBodyByteForByte(t *testing.T) {
-	const approveBody = `{"notice_version":4,"text_revision":2,"ai_usage_epoch":9}`
+	const approveBody = `{"notice_version":4,"text_revision":2,"ai_usage_epoch":9,"action":"read","surface":"desktop"}`
 	item, _ := json.Marshal(map[string]any{
 		"id": "ml_notice:o1:4", "kind": "ml_notice", "title": "Your organization has enabled workflow data offload",
 		"summary": "Read how your activity is uploaded.", "body_text": "What's new\n\nAI usage is now included.",
@@ -216,6 +219,24 @@ func TestFleetApproveItem_MLNoticeForwardsHubBodyByteForByte(t *testing.T) {
 	}
 	if _, _, acks := r.fleet.hubSnapshot(); len(acks) != 1 || acks[0] != approveBody {
 		t.Errorf("notice-ack bodies = %q, want exactly %q", acks, approveBody)
+	}
+}
+
+// kenaz-fleet #289: exclusions_template is the fallback ack's alone. A hub
+// ml_notice ack posts Fleet's served body (+ surface only) and never gains
+// it.
+func TestFleetApproveItem_MLNoticeHubAckHasNoExclusionsTemplate(t *testing.T) {
+	r := newMLRig(t, true)
+	r.fleet.set(func(f *mlFakeFleet) {
+		f.hubStatus, f.hubBody = 200, hubBody(hubNotice())
+		f.ackBody = mlBody(true, "on", false, false, true, 4, "2026-10-09T13:00:00Z", 90, false)
+	})
+	if _, err := r.api.FleetApproveItem(context.Background(), "ml_notice:o1:4"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	_, _, acks := r.fleet.hubSnapshot()
+	if len(acks) != 1 || strings.Contains(acks[0], "exclusions_template") {
+		t.Errorf("hub notice-ack bodies = %q, want one without exclusions_template", acks)
 	}
 }
 
@@ -289,7 +310,7 @@ func TestFleetMLStatus_FallbackWhenHubUnavailable(t *testing.T) {
 			f.state = withTextRevisions(mlBody(true, "on", false, true, false, 4, "", 90, false), 1, 0)
 		})
 		v, _ := r.api.FleetMLStatus(context.Background())
-		if v.NoticeFromHub || v.NoticeItemID != "" || v.NoticeText != RenderMLNotice("Acme Corp", 90, "on").PlainText() {
+		if v.NoticeFromHub || v.NoticeItemID != "" || v.NoticeText != RenderMLNotice("Acme Corp", 90, "on", false).PlainText() {
 			t.Errorf("view = %+v", v)
 		}
 	})
@@ -310,7 +331,7 @@ func TestFleetMLStatus_FallbackWhenHubUnavailable(t *testing.T) {
 			f.hubStatus, f.hubBody = 200, hubBody(hubLegal())
 		})
 		v, _ := r.api.FleetMLStatus(context.Background())
-		if v.NoticeFromHub || v.NoticeText != RenderMLNotice("Acme Corp", 90, "on").PlainText() {
+		if v.NoticeFromHub || v.NoticeText != RenderMLNotice("Acme Corp", 90, "on", false).PlainText() {
 			t.Errorf("view = %+v", v)
 		}
 	})

@@ -1382,6 +1382,26 @@ export namespace cedar {
 	        this.dangerous = source["dangerous"];
 	    }
 	}
+	export class PolicyEvalError {
+	    policy_id: string;
+	    file?: string;
+	    effect: string;
+	    message: string;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PolicyEvalError(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.policy_id = source["policy_id"];
+	        this.file = source["file"];
+	        this.effect = source["effect"];
+	        this.message = source["message"];
+	        this.count = source["count"];
+	    }
+	}
 	export class PolicyFile {
 	    name: string;
 	    path: string;
@@ -1389,6 +1409,7 @@ export namespace cedar {
 	    embedded: boolean;
 	    parse_ok: boolean;
 	    parse_err?: string;
+	    eval_errors?: PolicyEvalError[];
 	
 	    static createFrom(source: any = {}) {
 	        return new PolicyFile(source);
@@ -1402,7 +1423,26 @@ export namespace cedar {
 	        this.embedded = source["embedded"];
 	        this.parse_ok = source["parse_ok"];
 	        this.parse_err = source["parse_err"];
+	        this.eval_errors = this.convertValues(source["eval_errors"], PolicyEvalError);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ToolPromptSurface {
 	    tool_name: string;
@@ -1520,6 +1560,7 @@ export namespace cedarpolicy {
 	    embedded: boolean;
 	    parse_ok: boolean;
 	    parse_err?: string;
+	    eval_errors?: cedar.PolicyEvalError[];
 	    source: string;
 	    read_only: boolean;
 	
@@ -1535,9 +1576,28 @@ export namespace cedarpolicy {
 	        this.embedded = source["embedded"];
 	        this.parse_ok = source["parse_ok"];
 	        this.parse_err = source["parse_err"];
+	        this.eval_errors = this.convertValues(source["eval_errors"], cedar.PolicyEvalError);
 	        this.source = source["source"];
 	        this.read_only = source["read_only"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -3587,6 +3647,8 @@ export namespace llm {
 	export class CredentialReference {
 	    kind: string;
 	    locator: string;
+	    source?: string;
+	    credentialId?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CredentialReference(source);
@@ -3596,6 +3658,8 @@ export namespace llm {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.locator = source["locator"];
+	        this.source = source["source"];
+	        this.credentialId = source["credentialId"];
 	    }
 	}
 	export class AddProviderInput {
@@ -3799,6 +3863,34 @@ export namespace llm {
 		    }
 		    return a;
 		}
+	}
+	export class CredentialKey {
+	    id: string;
+	    provider: string;
+	    source: string;
+	    scopeName?: string;
+	    profileIds: string[];
+	    orgDefault?: boolean;
+	    teamDefault?: boolean;
+	    preselected?: boolean;
+	    userSelectable: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CredentialKey(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.provider = source["provider"];
+	        this.source = source["source"];
+	        this.scopeName = source["scopeName"];
+	        this.profileIds = source["profileIds"];
+	        this.orgDefault = source["orgDefault"];
+	        this.teamDefault = source["teamDefault"];
+	        this.preselected = source["preselected"];
+	        this.userSelectable = source["userSelectable"];
+	    }
 	}
 	
 	export class CustomCapabilityMatrix {
@@ -6749,6 +6841,30 @@ export namespace rpc {
 		    return a;
 		}
 	}
+	export class MLLocalActivityView {
+	    available: boolean;
+	    events: number;
+	    tasks: number;
+	    sizeBytes: number;
+	    retentionDays: number;
+	    effectiveRetentionDays: number;
+	    sharingWithFleet: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MLLocalActivityView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.events = source["events"];
+	        this.tasks = source["tasks"];
+	        this.sizeBytes = source["sizeBytes"];
+	        this.retentionDays = source["retentionDays"];
+	        this.effectiveRetentionDays = source["effectiveRetentionDays"];
+	        this.sharingWithFleet = source["sharingWithFleet"];
+	    }
+	}
 	export class ShellReadFileResult {
 	    dataBase64: string;
 	    mediaType: string;
@@ -7990,6 +8106,7 @@ export namespace settings {
 	    emailSource?: string;
 	    nameSource?: string;
 	    tokensUsable: boolean;
+	    accountKey?: string;
 	    claims: FleetSessionClaims;
 	    capabilities: CapabilitiesView;
 	    profile?: FleetProfileInfo;
@@ -8016,6 +8133,7 @@ export namespace settings {
 	        this.emailSource = source["emailSource"];
 	        this.nameSource = source["nameSource"];
 	        this.tokensUsable = source["tokensUsable"];
+	        this.accountKey = source["accountKey"];
 	        this.claims = this.convertValues(source["claims"], FleetSessionClaims);
 	        this.capabilities = this.convertValues(source["capabilities"], CapabilitiesView);
 	        this.profile = this.convertValues(source["profile"], FleetProfileInfo);
@@ -8127,6 +8245,7 @@ export namespace settings {
 	    sections: MLNoticeSection[];
 	    policyText: string;
 	    policy: string;
+	    exclusionsText: string;
 	    actions: string[];
 	
 	    static createFrom(source: any = {}) {
@@ -8140,6 +8259,7 @@ export namespace settings {
 	        this.sections = this.convertValues(source["sections"], MLNoticeSection);
 	        this.policyText = source["policyText"];
 	        this.policy = source["policy"];
+	        this.exclusionsText = source["exclusionsText"];
 	        this.actions = source["actions"];
 	    }
 	
@@ -8212,6 +8332,7 @@ export namespace settings {
 	    excludeBrowser: boolean;
 	    exclusionsVersion: number;
 	    legacyExclusionNotes: string[];
+	    exclusionsSummary: string;
 	    fleetError?: string;
 	    shipping?: MLShippingStatusView;
 	
@@ -8251,6 +8372,7 @@ export namespace settings {
 	        this.excludeBrowser = source["excludeBrowser"];
 	        this.exclusionsVersion = source["exclusionsVersion"];
 	        this.legacyExclusionNotes = source["legacyExclusionNotes"];
+	        this.exclusionsSummary = source["exclusionsSummary"];
 	        this.fleetError = source["fleetError"];
 	        this.shipping = this.convertValues(source["shipping"], MLShippingStatusView);
 	    }
@@ -8443,6 +8565,18 @@ export namespace settings {
 	        this.modelId = source["modelId"];
 	    }
 	}
+	export class ResetUnreadableResult {
+	    backupPath: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ResetUnreadableResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.backupPath = source["backupPath"];
+	    }
+	}
 	export class WindowSize {
 	    width: number;
 	    height: number;
@@ -8554,6 +8688,9 @@ export namespace settings {
 	    shareModelCallTelemetryWithFleet?: boolean;
 	    shareModelCallTelemetryTextRevision?: number;
 	    shareModelCallTelemetryAcceptedAt?: string;
+	    settingsSyncUploadsConfirmed?: boolean;
+	    settingsSyncEnabledCategories?: string[];
+	    mlLocalActivityRetentionDays?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8657,6 +8794,9 @@ export namespace settings {
 	        this.shareModelCallTelemetryWithFleet = source["shareModelCallTelemetryWithFleet"];
 	        this.shareModelCallTelemetryTextRevision = source["shareModelCallTelemetryTextRevision"];
 	        this.shareModelCallTelemetryAcceptedAt = source["shareModelCallTelemetryAcceptedAt"];
+	        this.settingsSyncUploadsConfirmed = source["settingsSyncUploadsConfirmed"];
+	        this.settingsSyncEnabledCategories = source["settingsSyncEnabledCategories"];
+	        this.mlLocalActivityRetentionDays = source["mlLocalActivityRetentionDays"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -9162,6 +9302,12 @@ export namespace sync {
 	    last_error?: string;
 	    scopes?: string[];
 	    org_applied_at?: string;
+	    awaiting_confirmation?: boolean;
+	    local_only?: boolean;
+	    conflict?: boolean;
+	    not_syncing_yet?: boolean;
+	    uploads_blocked_reason?: string;
+	    settings_unreadable?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SyncStatusView(source);
@@ -9176,6 +9322,12 @@ export namespace sync {
 	        this.last_error = source["last_error"];
 	        this.scopes = source["scopes"];
 	        this.org_applied_at = source["org_applied_at"];
+	        this.awaiting_confirmation = source["awaiting_confirmation"];
+	        this.local_only = source["local_only"];
+	        this.conflict = source["conflict"];
+	        this.not_syncing_yet = source["not_syncing_yet"];
+	        this.uploads_blocked_reason = source["uploads_blocked_reason"];
+	        this.settings_unreadable = source["settings_unreadable"];
 	    }
 	}
 

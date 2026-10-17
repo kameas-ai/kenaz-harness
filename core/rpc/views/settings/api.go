@@ -944,6 +944,47 @@ type Settings struct {
 	ShareModelCallTelemetryTextRevision int    `json:"shareModelCallTelemetryTextRevision,omitempty"`
 	ShareModelCallTelemetryAcceptedAt   string `json:"shareModelCallTelemetryAcceptedAt,omitempty"`
 
+	// SettingsSyncUploadsConfirmed records the user's one-time confirmation
+	// that the settings categories they enable under Settings › Sync may be
+	// uploaded to Fleet (owner ruling H1, provider-credentials-client-
+	// 01PCCLI01 §7a). Settings sync never reached Fleet before that
+	// mission's wire fix, so categories a user had opted into had never
+	// left the machine; the first upload waits for this. Default false.
+	// Consumer: fleet.Syncer.Push via the upload gate wired in
+	// core/rpc/sync_upload_consent.go. Written true only by
+	// Sync_ConfirmUploads; Set always keeps the stored value, in both
+	// directions: a stale whole-settings save cannot re-arm the prompt, and
+	// a save carrying true cannot grant consent without the notice.
+	//
+	// H1 scope (owner ruling): the confirmation is global and one-time. A
+	// category the user turns on AFTER confirming is itself consent for
+	// that category (no second prompt). "Not now" means not confirming: the
+	// notice stays until the user chooses Start syncing.
+	SettingsSyncUploadsConfirmed bool `json:"settingsSyncUploadsConfirmed,omitempty"`
+
+	// SettingsSyncEnabledCategories is the persisted set of settings-sync
+	// categories the user has turned on under Settings › Sync (sorted,
+	// unique). Before this field the opt-in lived only in fleet.Syncer's
+	// memory, so every launch silently turned every category off again.
+	// Written only by Sync_Toggle (core/rpc/sync_optins.go); Set always
+	// keeps the stored value, so a whole-settings save from an older copy
+	// cannot undo a toggle. Consumer: syncview.API.RestoreOptIns at boot
+	// (rpc.New) re-applies each entry through fleet.Syncer.RestoreEnabled,
+	// which gates Push and Pull. Restoring is NOT upload consent: uploads
+	// still wait for SettingsSyncUploadsConfirmed.
+	SettingsSyncEnabledCategories []string `json:"settingsSyncEnabledCategories,omitempty"`
+
+	// ── Local ML activity (ml-producer-01MLPRD01 WP11, spec §12 A-16) ──
+
+	// MLLocalActivityRetentionDays is how long the local activity store
+	// (<dataDir>/ml/activity.db) keeps agent activity. 0 = the 90-day
+	// default; valid range 1..3650 (activity.EffectiveRetentionDays).
+	// Read on every pass of core/mlproducer/activity.Pruner
+	// (core/rpc/mlproducer_wiring.go). UI: Settings › Sync › Cloud ML ›
+	// "Local activity", written through
+	// Settings_SetMLLocalActivityRetention or a whole-settings Set.
+	MLLocalActivityRetentionDays int `json:"mlLocalActivityRetentionDays,omitempty"`
+
 	// gates:settings-struct-end — keep this marker the LAST line of the
 	// struct and add new fields ABOVE it. scripts/ci/gates_can_fail_test.go
 	// plants a probe field here, so it no longer re-anchors on whichever
@@ -1839,9 +1880,11 @@ type SettingsAPI interface {
 	// GET /me/ml read (ml-producer-01MLPRD01 WP01, spec §5), the rendered
 	// notice, and the producer's shipping status.
 	FleetMLStatus(ctx context.Context) (MLStatusView, error)
-	// FleetMLAckNotice acknowledges the notice version the panel showed. A
+	// FleetMLAckNotice acknowledges the notice version the panel showed,
+	// through the notice button clicked (MLNoticeActionTurnOn or
+	// MLNoticeActionRead), which picks the ack action. A
 	// 409 policy_changed re-reads and returns the state with NoticeChanged.
-	FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatusView, error)
+	FleetMLAckNotice(ctx context.Context, noticeVersion int, button string) (MLStatusView, error)
 	// FleetSetWorkflowEventsOptIn writes the member's workflow_events
 	// opt-in (PUT /me/telemetry-opt-ins) and re-reads /me/ml.
 	FleetSetWorkflowEventsOptIn(ctx context.Context, optedIn bool) (MLStatusView, error)

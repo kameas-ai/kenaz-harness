@@ -3,7 +3,6 @@ package fleet
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -11,66 +10,10 @@ import (
 	"time"
 )
 
-// ── fake sync server ──────────────────────────────────────────────────────────
-
-// fakeSyncServerSimple is a simple in-memory per-category state store that mirrors
-// the fleet /api/v1/sync/{category} shape.
-type fakeSyncServerSimple struct {
-	mu    sync.Mutex
-	state map[SyncCategory]SyncPayload
-}
-
-func newFakeSyncServerSimple() *fakeSyncServerSimple {
-	return &fakeSyncServerSimple{state: make(map[SyncCategory]SyncPayload)}
-}
-
-func (f *fakeSyncServerSimple) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	const prefix = "/api/v1/sync/"
-	if len(r.URL.Path) <= len(prefix) {
-		http.NotFound(w, r)
-		return
-	}
-	cat := SyncCategory(r.URL.Path[len(prefix):])
-
-	switch r.Method {
-	case http.MethodPut, http.MethodPost:
-		var p SyncPayload
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		f.mu.Lock()
-		f.state[cat] = p
-		f.mu.Unlock()
-		w.WriteHeader(http.StatusNoContent)
-
-	case http.MethodGet:
-		f.mu.Lock()
-		stored, ok := f.state[cat]
-		f.mu.Unlock()
-		if !ok {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(stored)
-
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (f *fakeSyncServerSimple) get(cat SyncCategory) (SyncPayload, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	p, ok := f.state[cat]
-	return p, ok
-}
-
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 func TestSync_PushAndPull(t *testing.T) {
-	fake := newFakeSyncServerSimple()
+	fake := newFakeFleetSync(t)
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
@@ -81,6 +24,7 @@ func TestSync_PushAndPull(t *testing.T) {
 	})
 	c := makeTestClient(t, srv.URL)
 	syncer := NewSyncer(c)
+	syncer.SetUploadGate(func() bool { return true }) // confirmed user
 
 	// Register a simple theme category collector.
 	themePayload := json.RawMessage(`{"theme":"dark"}`)
@@ -136,7 +80,7 @@ func TestSync_PushAndPull(t *testing.T) {
 }
 
 func TestSync_LWW_RemoteOlderSkipped(t *testing.T) {
-	fake := newFakeSyncServerSimple()
+	fake := newFakeFleetSync(t)
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
@@ -147,6 +91,7 @@ func TestSync_LWW_RemoteOlderSkipped(t *testing.T) {
 	})
 	c := makeTestClient(t, srv.URL)
 	syncer := NewSyncer(c)
+	syncer.SetUploadGate(func() bool { return true }) // confirmed user
 
 	applyCalled := 0
 	syncer.RegisterCategory(SyncCategoryModelPrefs, CategoryConfig{
@@ -179,7 +124,7 @@ func TestSync_LWW_RemoteOlderSkipped(t *testing.T) {
 }
 
 func TestSync_DisabledCategorySkipped(t *testing.T) {
-	fake := newFakeSyncServerSimple()
+	fake := newFakeFleetSync(t)
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
@@ -190,6 +135,7 @@ func TestSync_DisabledCategorySkipped(t *testing.T) {
 	})
 	c := makeTestClient(t, srv.URL)
 	syncer := NewSyncer(c)
+	syncer.SetUploadGate(func() bool { return true }) // confirmed user
 
 	collected := 0
 	syncer.RegisterCategory(SyncCategoryProviderProfiles, CategoryConfig{

@@ -12,8 +12,18 @@ package rpc
 // session manager (delete observer), the subagent spawner (MLParent) and
 // the bash tool (EnvProvider: the KENAZ_ACTOR / KENAZ_SESSION markers).
 //
+// Local-first (WP11, spec §12 A-16): the recorder also writes the local
+// activity store <dataDir>/ml/activity.db (core/mlproducer/activity;
+// activityDBPath for the non-standard-profile exception)
+// whatever the Fleet state; the gate decides only what is copied to the
+// ship outbox, at record time. The store's retention pruner reads
+// Settings.MLLocalActivityRetentionDays on every pass. The local ML
+// engine is handed the store's path (KENAZ_ML_ACTIVITY_DB, see
+// sidecar_wiring.go). "Delete local activity data" is
+// API.DeleteMLLocalActivity.
+//
 // Lifecycle:
-//   - New:        construct; register observers + invalidation hooks; write
+//   - New:        construct (opening activity.db); register observers + invalidation hooks; write
 //                 <dataDir>/fleet/agent_pids.
 //   - SetContext: start the gate's refresher; the shipper runs whenever the
 //                 gate is open (gate OnChange → reconcile).
@@ -22,6 +32,7 @@ package rpc
 //                 contract "do not cache across sessions"; a new session may
 //                 be another account), bump the enrolment generation,
 //                 re-read the gate. A closed gate pauses the shipper.
+//   - any successful enroll (settings OnFleetEnrolled): re-read the gate.
 //   - org pause change / unpause / capability change: re-read the gate.
 //   - Shutdown:   flush the recorder, stop the shipper, one final ship
 //                 attempt bounded to 5 s, close the recorder, remove
@@ -54,6 +65,7 @@ import (
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer/activity"
 	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
@@ -71,6 +83,7 @@ type mlProducerWiring struct {
 	settings *settings.API
 
 	store   *mlstore.Store
+	pruner  *activity.Pruner
 	rec     *mlproducer.Recorder
 	gate    *mlproducer.ConsentGate
 	shipper *mlproducer.Shipper
@@ -103,6 +116,16 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 	}
 	w := &mlProducerWiring{dataDir: c.DataDir(), settings: settingsImpl}
 	w.store = mlstore.New(h.SQL())
+	// The local store: opened now when possible; a failed first open (a
+	// busy file, a full disk) is retried lazily by the recorder on later
+	// records (OpenLocal) instead of leaving the process without local
+	// recording.
+	localPath := activityDBPath(c.DataDir())
+	local, err := activity.Open(localPath)
+	if err != nil {
+		logging.L().Warn("mlproducer.activity.open_failed", "err", err.Error())
+		local = nil
+	}
 	w.source = &fleetMLConsentSource{settings: settingsImpl}
 	w.gate = mlproducer.NewConsentGate(mlproducer.GateConfig{
 		Source: w.source,
@@ -120,6 +143,8 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 	w.source.invalidate = w.gate.Invalidate
 	w.rec = mlproducer.NewRecorder(mlproducer.Config{
 		Store:     w.store,
+		Local:     local,
+		OpenLocal: func() (*activity.Store, error) { return activity.Open(localPath) },
 		Hasher:    mlproducer.NewHasher(c.DataDir()),
 		Gate:      w.gate,
 		Workspace: c.WorkspaceDir,
@@ -134,7 +159,15 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 		EnrollGen: w.enrollGen.Load,
 	})
 
+	w.pruner = activity.NewLazyPruner(w.rec.LocalStore, settingsImpl.MLLocalActivityRetentionDays, nil, logging.L())
+
 	settingsImpl.OnFleetSessionReset(w.onSessionReset)
+	// Every successful enroll (boot, periodic, sign-in) re-reads the gate
+	// now. Without this the boot enroll — which runs no session-reset hook
+	// — left the gate on its pre-enroll not_enrolled decision until the
+	// refresher's next tick (TTL·5/6 = 50 s): the dev log's ~40 s gap
+	// between fleet.rpc.enroll.success and mlproducer.gate.changed open.
+	settingsImpl.OnFleetEnrolled(w.gate.Invalidate)
 	settingsImpl.OnOrgUnpaused(w.gate.Invalidate)
 	if cl := settingsImpl.FleetClientForBootstrap(); cl != nil {
 		cl.OnOrgPauseChange(func(corefleet.OrgPauseStatus) { w.gate.Invalidate() })
@@ -213,6 +246,7 @@ func (w *mlProducerWiring) start(ctx context.Context) {
 	}
 	w.appCtx = ctx
 	w.lifeMu.Unlock()
+	w.pruner.Start()
 	w.gate.Start(ctx)
 	logging.L().Info("mlproducer.started")
 }
@@ -293,6 +327,12 @@ func (w *mlProducerWiring) shutdown() {
 		scancel()
 	}
 	w.rec.Close()
+	w.pruner.Stop()
+	if local := w.rec.LocalStore(); local != nil {
+		if err := local.Close(); err != nil {
+			logging.L().Warn("mlproducer.activity.close_failed", "err", err.Error())
+		}
+	}
 	if err := mlproducer.RemoveAgentPIDs(w.dataDir); err != nil {
 		logging.L().Warn("mlproducer.agent_pids.remove_failed", "err", err.Error())
 	}
@@ -316,6 +356,83 @@ func (w *mlProducerWiring) shippingStatus() settings.MLShippingStatusView {
 		}
 	}
 	return v
+}
+
+// ---- local activity (WP11) ----
+
+// MLLocalActivityView is Settings › Sync › Cloud ML › "Local activity".
+type MLLocalActivityView struct {
+	// Available is false when the local store could not be opened (or in
+	// a chassis with no data dir); the other fields are then zero.
+	Available bool  `json:"available"`
+	Events    int64 `json:"events"`
+	Tasks     int64 `json:"tasks"`
+	SizeBytes int64 `json:"sizeBytes"`
+	// RetentionDays is the stored setting (0 = default);
+	// EffectiveRetentionDays what the pruner applies.
+	RetentionDays          int `json:"retentionDays"`
+	EffectiveRetentionDays int `json:"effectiveRetentionDays"`
+	// SharingWithFleet: the ship gate is open right now, so new activity
+	// is also copied to the Fleet outbox.
+	SharingWithFleet bool `json:"sharingWithFleet"`
+}
+
+func (w *mlProducerWiring) localActivity(ctx context.Context) (MLLocalActivityView, error) {
+	v := MLLocalActivityView{EffectiveRetentionDays: activity.EffectiveRetentionDays(0)}
+	if w == nil {
+		return v, nil
+	}
+	days, err := w.settings.MLLocalActivityRetentionDays()
+	if err != nil {
+		return v, err
+	}
+	v.RetentionDays = days
+	v.EffectiveRetentionDays = activity.EffectiveRetentionDays(v.RetentionDays)
+	v.SharingWithFleet = w.gate.Last().Open
+	local := w.rec.LocalStore()
+	if local == nil {
+		return v, nil
+	}
+	st, err := local.Stats(ctx)
+	if err != nil {
+		return v, err
+	}
+	v.Available, v.Events, v.Tasks, v.SizeBytes = true, st.Events, st.Tasks, st.SizeBytes
+	return v, nil
+}
+
+// MLLocalActivity returns the local activity store's status.
+func (a *API) MLLocalActivity(ctx context.Context) (MLLocalActivityView, error) {
+	if a == nil {
+		return MLLocalActivityView{}, nil
+	}
+	return a.mlProducer.localActivity(ctx)
+}
+
+// DeleteMLLocalActivity is "Delete local activity data": it wipes the
+// local activity store, the unsent Fleet outbox and the task state
+// (Recorder.DeleteLocal), then returns the fresh status.
+func (a *API) DeleteMLLocalActivity(ctx context.Context) (MLLocalActivityView, error) {
+	if a == nil || a.mlProducer == nil {
+		return MLLocalActivityView{}, nil
+	}
+	if err := a.mlProducer.rec.DeleteLocal(ctx); err != nil {
+		return MLLocalActivityView{}, err
+	}
+	return a.mlProducer.localActivity(ctx)
+}
+
+// SetMLLocalActivityRetention persists the local retention (0 = 90-day
+// default; 1..3650) and returns the fresh status. The pruner applies it on
+// its next pass.
+func (a *API) SetMLLocalActivityRetention(ctx context.Context, days int) (MLLocalActivityView, error) {
+	if a == nil || a.mlProducer == nil {
+		return MLLocalActivityView{}, nil
+	}
+	if err := a.mlProducer.settings.SetMLLocalActivityRetentionDays(ctx, days); err != nil {
+		return MLLocalActivityView{}, err
+	}
+	return a.mlProducer.localActivity(ctx)
 }
 
 // ---- ConsentSource over core/fleet ----

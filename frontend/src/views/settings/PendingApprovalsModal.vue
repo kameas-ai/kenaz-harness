@@ -13,8 +13,10 @@
  *     per-document box "I have read and accept <title> (<version>)" is
  *     ticked. The document opens in the system browser; it is not fetched.
  *   - ml_notice: the server-rendered notice, including any "Changed since
- *     you last approved" section; "I agree" sends the hub's approve action.
- *   - ml_exclusions_change: informational ("Dismiss"); the backend lists it
+ *     you last approved" section; "I have read this" sends the hub's approve
+ *     action (legal's fixed label, 2026-10-16: never agree/accept/consent).
+ *   - ml_exclusions_change: informational ("I have read this", the only
+ *     recorded action; closing records nothing); the backend lists it
  *     only while nothing required is pending.
  *   - unknown kinds: rendered generically ("I agree" / "Got it").
  *
@@ -74,10 +76,28 @@ async function load() {
 
 onMounted(load);
 
-/** Legal acceptance, or any item that points at an external document. */
+/**
+ * Legal acceptance, or any item that points at an external document. Never
+ * an exclusions change: it is informational and records only "I have read
+ * this", so it gets no checkbox or accept wording (legal, 2026-10-16).
+ */
 function needsCheckbox(it: PendingApprovalItem): boolean {
+  // ML notices and exclusions changes record "I have read this" only, never
+  // an acceptance (legal, 2026-10-16), even if Fleet ever attaches a document.
+  if (it.kind === 'ml_exclusions_change' || it.kind === 'ml_notice' || it.kind === 'ml_opt_in_available') return false;
   return it.kind === 'legal_acceptance' || !!it.documentUrl;
 }
+
+/**
+ * Dialog title. "Approval" only when every item shown is required. With any
+ * informational item (e.g. an exclusions change) the title is neutral, so
+ * an informational card never carries consent-adjacent wording.
+ */
+const dialogTitle = computed(() =>
+  items.value.length > 0 && items.value.every((it) => it.required)
+    ? 'Items that need your approval'
+    : 'Items that need your attention',
+);
 
 function checkboxLabel(it: PendingApprovalItem): string {
   return `I have read and accept ${it.title} (${it.version})`;
@@ -109,7 +129,13 @@ function approveLabel(it: PendingApprovalItem): string {
   // path: the backend binds kind and path both ways
   // (fleet.ApproveActionAllowedFor). Otherwise there is no approve button.
   if (it.kind === 'ml_opt_in_available' && it.approveAllowed) return 'Not now';
-  if (it.kind === 'ml_exclusions_change') return 'Dismiss';
+  // Legal (kameas-ai-11, 2026-10-16): the ML notice reads "I have read
+  // this" — never "I agree", "Accept" or "Consent".
+  if (it.kind === 'ml_notice') return 'I have read this';
+  // Legal (kameas-ai-11, 2026-10-16): the exclusions-change card records
+  // only "I have read this" (exclusions-seen). No consent wording; close,
+  // Esc and outside-click record nothing and the item stays pending.
+  if (it.kind === 'ml_exclusions_change' && it.approveAllowed) return 'I have read this';
   if (needsCheckbox(it)) return 'Accept';
   return it.required ? 'I agree' : 'Got it';
 }
@@ -184,14 +210,14 @@ function next() {
 <template>
   <BaseDialog
     :open="true"
-    title="Items that need your approval"
+    :title="dialogTitle"
     panel-class="w-[560px] max-w-[92vw] max-h-[85vh] overflow-y-auto rounded-sm border border-border-muted bg-surface-1 p-5 text-ink"
     :close-on-overlay-click="false"
     @close="emit('close')"
   >
     <div class="space-y-3" data-testid="pending-approvals-modal">
       <div class="flex items-baseline justify-between gap-3">
-        <h2 class="font-ui text-[13px] font-medium">Items that need your approval</h2>
+        <h2 class="font-ui text-[13px] font-medium" data-testid="pending-approvals-title">{{ dialogTitle }}</h2>
         <span v-if="items.length > 1" class="text-[11px] text-ink-muted" data-testid="pending-approvals-step">
           {{ index + 1 }} of {{ items.length }}
         </span>

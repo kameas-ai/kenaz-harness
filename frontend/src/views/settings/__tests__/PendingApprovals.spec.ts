@@ -303,27 +303,94 @@ describe('PendingApprovalsModal', () => {
     expect(q(w, 'pending-approval-blocking').text()).toBe('Paused until you approve.');
   });
 
-  it('ml_notice: body_text rendered verbatim as text; I agree approves by id', async () => {
+  it('ml_notice: body_text rendered verbatim as text; "I have read this" approves by id', async () => {
     const { client, approveItem } = makeClient([view([NOTICE])]);
     const w = await mountModal(client);
     const body = q(w, 'pending-approval-body');
     expect(body.element.textContent).toBe(NOTICE_TEXT);
     expect(body.classes()).toContain('whitespace-pre-wrap');
     expect(q(w, 'pending-approval-accept').exists()).toBe(false);
-    expect(q(w, 'pending-approval-approve').text()).toBe('I agree');
+    expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
     await q(w, 'pending-approval-approve').trigger('click');
     await flushPromises();
     expect(approveItem).toHaveBeenCalledWith('ml_notice:o1:4');
   });
 
-  it('ml_exclusions_change: informational, Dismiss approves it', async () => {
-    const { client, approveItem } = makeClient([view([EXCL])]);
+  it('ml_notice: the button never reads agree / accept / consent (legal, 2026-10-16)', async () => {
+    for (const over of [{}, { required: false }, { documentUrl: 'https://example.test/notice' }]) {
+      const { client } = makeClient([view([{ ...NOTICE, ...over }])]);
+      const w = await mountModal(client);
+      expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
+      expect(q(w, 'pending-approval-approve').text()).not.toMatch(/agree|accept|consent/i);
+    }
+  });
+
+  // Legal (kameas-ai-11, 2026-10-16): only "I have read this" records the
+  // exclusions change (exclusions-seen); the full body shows untruncated.
+  it('ml_exclusions_change: "I have read this" is the only action that records it', async () => {
+    const longBody = 'Excluded now:\n' + Array.from({ length: 80 }, (_, i) => `- path/${i}/**`).join('\n') + '\n\nChanged: added path/79/**';
+    const { client, approveItem } = makeClient([view([{ ...EXCL, bodyText: longBody }])]);
     const w = await mountModal(client);
     expect(q(w, 'pending-approval-blocking').exists()).toBe(false);
-    expect(q(w, 'pending-approval-approve').text()).toBe('Dismiss');
+    expect(q(w, 'pending-approval-body').text()).toBe(longBody);
+    expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
+    expect(w.text()).not.toMatch(/\b(agree|consent|accept|approval|approve|OK, continue)\b/i);
     await q(w, 'pending-approval-approve').trigger('click');
     await flushPromises();
+    expect(approveItem).toHaveBeenCalledTimes(1);
     expect(approveItem).toHaveBeenCalledWith('ml_exclusions_change:o1:5');
+  });
+
+  it('ml_exclusions_change: Close records nothing', async () => {
+    const { client, approveItem } = makeClient([view([EXCL])]);
+    const w = await mountModal(client);
+    await q(w, 'pending-approvals-close').trigger('click');
+    await flushPromises();
+    expect(approveItem).not.toHaveBeenCalled();
+    expect(w.emitted('close')).toHaveLength(1);
+  });
+
+  it('ml_exclusions_change: Esc records nothing', async () => {
+    const { client, approveItem } = makeClient([view([EXCL])]);
+    const w = await mountModal(client);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+    expect(w.emitted('close')).toHaveLength(1); // Esc reached the dialog…
+    expect(approveItem).not.toHaveBeenCalled(); // …and posted nothing
+  });
+
+  it('ml_exclusions_change: an outside click records nothing and does not close', async () => {
+    const { client, approveItem } = makeClient([view([EXCL])]);
+    const w = await mountModal(client);
+    await w.find('.bg-modal-overlay').trigger('click');
+    await flushPromises();
+    expect(approveItem).not.toHaveBeenCalled();
+    expect(w.emitted('close')).toBeUndefined();
+  });
+
+  it('ml_exclusions_change: neutral dialog title and never a read-and-accept checkbox', async () => {
+    const withDoc = { ...EXCL, documentUrl: 'https://kenaz.kameas.ai/x.html', documentSha256: 'b'.repeat(64) };
+    const { client } = makeClient([view([withDoc])]);
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approvals-title').text()).toBe('Items that need your attention');
+    expect(q(w, 'pending-approval-accept').exists()).toBe(false);
+    expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
+    expect(w.text()).not.toMatch(/\b(agree|consent|accept|approval|approve|OK, continue)\b/i);
+  });
+
+  it('ml_notice with a documentUrl: never the read-and-accept checkbox', async () => {
+    const withDoc = { ...NOTICE, documentUrl: 'https://kenaz.kameas.ai/notice.html', documentSha256: 'c'.repeat(64) };
+    const { client } = makeClient([view([withDoc])]);
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approval-accept').exists()).toBe(false);
+    expect(q(w, 'pending-approval-approve').text()).toBe('I have read this');
+    expect(q(w, 'pending-approval-approve').attributes('disabled')).toBeUndefined();
+  });
+
+  it('dialog title says "approval" only when every item is required', async () => {
+    const { client } = makeClient([view([LEGAL, NOTICE])]);
+    const w = await mountModal(client);
+    expect(q(w, 'pending-approvals-title').text()).toBe('Items that need your approval');
   });
 
   it('"Offload available" offer: Not now sends the hub\'s own (member-private) dismissal', async () => {

@@ -5,8 +5,13 @@
 // costs one SyncKind (registry entry) + one collector/applier here — no
 // changes to core/fleet/sync.go's Syncer, no new endpoint. It rides the
 // exact same PUT/GET /api/v1/sync/{category} transport the five WP01
-// categories use (DESIGN.md §5.6: the endpoint is already generic
-// server-side; no per-category schema on the harness side).
+// categories use.
+//
+// NOT SENT TODAY (provider-credentials-client-01PCCLI01 A2): Fleet's
+// endpoint is not category-agnostic. kenaz-fleet service/sync_schema.go has
+// no slash_commands schema, so Fleet rejects it, and core/fleet/sync.go's
+// fleetAcceptedSyncCategories keeps it on the device until Fleet ships one
+// (see docs/sync-kinds.md, "Fleet-side ask").
 //
 // Scope: only *global*-scope user commands sync (coreslashcmd.ScopeGlobal).
 // Project-scoped commands are tied to a specific project checkout that may

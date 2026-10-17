@@ -481,7 +481,17 @@ func (s *Shipper) ship(ctx context.Context, d Decision, recs []mlstore.Record) c
 				return cycleResult{backoff: true}
 			}
 			s.countLocal(oversize, withheld)
-			s.countAccepted(res.Body, len(send))
+			acc, dup, rej := s.countAccepted(res.Body, len(send))
+			// One summary line per shipped batch: counts and sizes only —
+			// never record content, ids or paths.
+			logging.L().Info("mlproducer.ship.batch",
+				"sent", len(send),
+				"accepted", acc,
+				"duplicates", dup,
+				"rejected", rej,
+				"dropped_local", oversize+withheld,
+				"bytes", len(body),
+			)
 			s.setStop("")
 			return cycleResult{progressed: true}
 
@@ -573,7 +583,9 @@ type ingestResponse struct {
 	} `json:"ml"`
 }
 
-func (s *Shipper) countAccepted(body []byte, sent int) {
+// countAccepted folds a 2xx body into the status counters and returns this
+// batch's accepted / duplicate / rejected counts (for the batch log line).
+func (s *Shipper) countAccepted(body []byte, sent int) (accepted, duplicates, rejected int) {
 	var r ingestResponse
 	_ = json.Unmarshal(body, &r)
 	s.stMu.Lock()
@@ -585,7 +597,7 @@ func (s *Shipper) countAccepted(body []byte, sent int) {
 		// Count it so the panel does not report success it did not see.
 		s.st.Rejected += int64(sent)
 		s.st.Rejections["no_ml_result"] += int64(sent)
-		return
+		return 0, 0, sent
 	}
 	s.st.Accepted += int64(r.ML.Accepted)
 	s.st.Duplicates += int64(r.ML.Duplicates)
@@ -593,6 +605,7 @@ func (s *Shipper) countAccepted(body []byte, sent int) {
 	for reason, n := range r.ML.Rejections {
 		s.st.Rejections[reason] += int64(n)
 	}
+	return r.ML.Accepted, r.ML.Duplicates, r.ML.Rejected
 }
 
 func (s *Shipper) countRejected(reason string, n int) {

@@ -87,12 +87,10 @@ func uiThemeKind(store settings.SettingsStore) corefleet.SyncKind {
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return err
 			}
-			s, err := store.LoadAll()
-			if err != nil {
-				return err
-			}
-			s.Theme = p.Theme
-			return store.SaveAll(s)
+			return settings.Update(store, func(s *settings.Settings) error {
+				s.Theme = p.Theme
+				return nil
+			})
 		},
 		SecretPolicy:   corefleet.SecretPolicyMustNotContainSecrets,
 		ConflictPolicy: corefleet.ConflictPolicyLWW,
@@ -126,23 +124,21 @@ func modelPrefsKind(store settings.SettingsStore) corefleet.SyncKind {
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return err
 			}
-			s, err := store.LoadAll()
-			if err != nil {
-				return err
-			}
-			if p.CompactionAggressiveness != "" {
-				s.CompactionAggressiveness = p.CompactionAggressiveness
-			}
-			if p.CompactionArchiveDays > 0 {
-				s.CompactionArchiveDays = p.CompactionArchiveDays
-			}
-			if p.CompactionRecentWindow > 0 {
-				s.CompactionRecentWindow = p.CompactionRecentWindow
-			}
-			if p.MaxAgentTurns > 0 {
-				s.MaxAgentTurns = p.MaxAgentTurns
-			}
-			return store.SaveAll(s)
+			return settings.Update(store, func(s *settings.Settings) error {
+				if p.CompactionAggressiveness != "" {
+					s.CompactionAggressiveness = p.CompactionAggressiveness
+				}
+				if p.CompactionArchiveDays > 0 {
+					s.CompactionArchiveDays = p.CompactionArchiveDays
+				}
+				if p.CompactionRecentWindow > 0 {
+					s.CompactionRecentWindow = p.CompactionRecentWindow
+				}
+				if p.MaxAgentTurns > 0 {
+					s.MaxAgentTurns = p.MaxAgentTurns
+				}
+				return nil
+			})
 		},
 		SecretPolicy:   corefleet.SecretPolicyMustNotContainSecrets,
 		ConflictPolicy: corefleet.ConflictPolicyLWW,
@@ -191,6 +187,9 @@ func emptyPayloadKind(id corefleet.SyncCategory, scopes []corefleet.Scope) coref
 		},
 		SecretPolicy:   corefleet.SecretPolicyMustNotContainSecrets,
 		ConflictPolicy: corefleet.ConflictPolicyLWW,
+		// Nothing real to send or apply: the Syncer leaves it alone and the
+		// UI says it does not sync yet, instead of offering to upload {}.
+		UserSyncNotBuilt: true,
 	}
 }
 
@@ -256,6 +255,10 @@ func mcpRecipesKind(cat *recipes.MergedCatalog) corefleet.SyncKind {
 		// Recipe.Source (finer-grained: WHICH recipes, not just whether the
 		// kind as a whole has an active org layer).
 		ConflictPolicy: corefleet.ConflictPolicyOrgWinsReadonly,
+		// Personal (user-scope) sync is the documented no-op above: the
+		// Syncer sends and pulls nothing for it and the UI says so. The org
+		// arm (org_config, not the Syncer) is unaffected.
+		UserSyncNotBuilt: true,
 	}
 }
 

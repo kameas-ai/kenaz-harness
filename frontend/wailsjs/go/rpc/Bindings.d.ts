@@ -358,7 +358,7 @@ export function Fleet_DismissItemLocally(arg1:string):Promise<settings.PendingAp
 
 export function Fleet_GetTelemetryConsent():Promise<string>;
 
-export function Fleet_MLAckNotice(arg1:number):Promise<settings.MLStatusView>;
+export function Fleet_MLAckNotice(arg1:number,arg2:string):Promise<settings.MLStatusView>;
 
 export function Fleet_MLStatus():Promise<settings.MLStatusView>;
 
@@ -439,6 +439,8 @@ export function LLM_AutoConfigureLocalRuntime(arg1:string):Promise<llm.LocalRunt
 export function LLM_DeleteChain(arg1:string):Promise<void>;
 
 export function LLM_GetAttachmentLimits(arg1:string,arg2:string):Promise<llm.AttachmentLimitsView>;
+
+export function LLM_ListCredentialKeys():Promise<Array<llm.CredentialKey>>;
 
 export function LLM_ListCustomTemplates():Promise<Array<llm.CustomTemplateSummary>>;
 
@@ -754,6 +756,8 @@ export function SetContext(arg1:context.Context):Promise<void>;
 
 export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
 
+export function Settings_DeleteMLLocalActivity():Promise<rpc.MLLocalActivityView>;
+
 export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
 export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
@@ -814,6 +818,8 @@ export function Settings_GetLocalRuntimeRAMOverrideGB():Promise<number>;
 
 export function Settings_GetMCPAutoRestart():Promise<boolean>;
 
+export function Settings_GetMLLocalActivity():Promise<rpc.MLLocalActivityView>;
+
 export function Settings_GetMaxAgentTurns():Promise<number>;
 
 export function Settings_GetMaxGeneratedImageBytes():Promise<number>;
@@ -848,6 +854,8 @@ export function Settings_GetWebFetchEnabled():Promise<boolean>;
 
 export function Settings_GetWebSearch():Promise<boolean>;
 
+export function Settings_ResetUnreadable():Promise<settings.ResetUnreadableResult>;
+
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
 
 export function Settings_SetAuditSettings(arg1:settings.AuditSettings):Promise<void>;
@@ -879,6 +887,8 @@ export function Settings_SetFSWriteEnabled(arg1:boolean):Promise<void>;
 export function Settings_SetLocalRuntimeRAMOverrideGB(arg1:number):Promise<void>;
 
 export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
+
+export function Settings_SetMLLocalActivityRetention(arg1:number):Promise<rpc.MLLocalActivityView>;
 
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
@@ -983,6 +993,8 @@ export function Subagent_Pause(arg1:string):Promise<void>;
 export function Subagent_Resume(arg1:string):Promise<void>;
 
 export function Subagent_Steer(arg1:string,arg2:string):Promise<void>;
+
+export function Sync_ConfirmUploads():Promise<void>;
 
 export function Sync_ForcePull(arg1:string):Promise<void>;
 

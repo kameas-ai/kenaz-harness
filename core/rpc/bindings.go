@@ -421,6 +421,19 @@ func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {
 	defer sentry.WrapBinding("LLM_ListProviders")()
 	return b.api.LLMConnector().ListProviders(b.ctx())
 }
+
+// LLM_ListCredentialKeys lists every key the configured provider profiles
+// use, one row per distinct key, labelled by scope (local | user_sync | org
+// | team) — provider-credentials-client-01PCCLI01 WP04, §7a H2. Read-only
+// display metadata: never key bytes, never a keychain locator.
+func (b *Bindings) LLM_ListCredentialKeys() ([]llm.CredentialKey, error) {
+	defer sentry.WrapBinding("LLM_ListCredentialKeys")()
+	provs, err := b.api.LLMConnector().ListProviders(b.ctx())
+	if err != nil {
+		return nil, err
+	}
+	return llm.CredentialKeys(provs), nil
+}
 func (b *Bindings) LLM_StartStream(profileID, sessionID, modelOverride string) (string, error) {
 	defer sentry.WrapBinding("LLM_StartStream")()
 	// Gating (fleet emergency lockdown) lives in API.StartLLMStream so the
@@ -1438,15 +1451,13 @@ func (b *Bindings) Settings_SetShortcut(id, binding string) error {
 		return ss.SaveShortcuts(m)
 	}
 	// Fallback: full round-trip.
-	s, err := store.LoadAll()
-	if err != nil {
-		return err
-	}
-	if s.KeyboardShortcuts == nil {
-		s.KeyboardShortcuts = make(map[string]string)
-	}
-	s.KeyboardShortcuts[id] = binding
-	return store.SaveAll(s)
+	return settings.Update(store, func(s *settings.Settings) error {
+		if s.KeyboardShortcuts == nil {
+			s.KeyboardShortcuts = make(map[string]string)
+		}
+		s.KeyboardShortcuts[id] = binding
+		return nil
+	})
 }
 
 // Settings_SetShortcuts atomically replaces the full keyboard shortcut
@@ -1468,12 +1479,10 @@ func (b *Bindings) Settings_SetShortcuts(m map[string]string) error {
 		return ss.SaveShortcuts(m)
 	}
 	// Fallback: full round-trip.
-	s, err := store.LoadAll()
-	if err != nil {
-		return err
-	}
-	s.KeyboardShortcuts = m
-	return store.SaveAll(s)
+	return settings.Update(store, func(s *settings.Settings) error {
+		s.KeyboardShortcuts = m
+		return nil
+	})
 }
 
 // Settings_GetMCPAutoRestart returns whether MCP servers should auto-restart
@@ -1499,6 +1508,29 @@ func (b *Bindings) Settings_GetModelCallTelemetry() (settings.ModelCallTelemetry
 func (b *Bindings) Settings_SetModelCallTelemetry(mc settings.ModelCallTelemetrySettings) error {
 	defer sentry.WrapBinding("Settings_SetModelCallTelemetry")()
 	return b.api.Settings().SetModelCallTelemetry(b.ctx(), mc)
+}
+
+// Settings_GetMLLocalActivity returns the local ML activity store's
+// status (ml-producer-01MLPRD01 WP11): row counts, size on disk,
+// retention, and whether new activity is also being shared with Fleet.
+func (b *Bindings) Settings_GetMLLocalActivity() (MLLocalActivityView, error) {
+	defer sentry.WrapBinding("Settings_GetMLLocalActivity")()
+	return b.api.MLLocalActivity(b.ctx())
+}
+
+// Settings_SetMLLocalActivityRetention sets how many days local agent
+// activity is kept (0 = the 90-day default; 1..3650).
+func (b *Bindings) Settings_SetMLLocalActivityRetention(days int) (MLLocalActivityView, error) {
+	defer sentry.WrapBinding("Settings_SetMLLocalActivityRetention")()
+	return b.api.SetMLLocalActivityRetention(b.ctx(), days)
+}
+
+// Settings_DeleteMLLocalActivity is "Delete local activity data": it
+// wipes the local activity store, the unsent Fleet outbox and the task
+// state on this device.
+func (b *Bindings) Settings_DeleteMLLocalActivity() (MLLocalActivityView, error) {
+	defer sentry.WrapBinding("Settings_DeleteMLLocalActivity")()
+	return b.api.DeleteMLLocalActivity(b.ctx())
 }
 
 // Settings_SetMCPAutoRestart persists the MCP auto-restart dial.
@@ -1626,12 +1658,10 @@ func (b *Bindings) Settings_SetShowPerMessageTokenMeter(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	s.ShowPerMessageTokenMeter = enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		s.ShowPerMessageTokenMeter = enabled
+		return nil
+	})
 }
 
 // ── WP08 — multimodal input feature flag ──────────────────────────────
@@ -1662,13 +1692,11 @@ func (b *Bindings) Settings_SetMultimodalInput(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	// Inverted storage: Disabled = !enabled.
-	s.MultimodalInputDisabled = !enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		// Inverted storage: Disabled = !enabled.
+		s.MultimodalInputDisabled = !enabled
+		return nil
+	})
 }
 
 // ── Multimodal output capture dials (multimodal-io-extended-01KQ8TD2 WP06) ──
@@ -1698,13 +1726,11 @@ func (b *Bindings) Settings_SetAutoCaptureGeneratedImages(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	// Inverted storage: Disabled = !enabled.
-	s.AutoCaptureGeneratedImagesDisabled = !enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		// Inverted storage: Disabled = !enabled.
+		s.AutoCaptureGeneratedImagesDisabled = !enabled
+		return nil
+	})
 }
 
 // Settings_GetMaxGeneratedImageBytes returns the per-image byte cap for the
@@ -1732,15 +1758,13 @@ func (b *Bindings) Settings_SetMaxGeneratedImageBytes(bytes int64) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	if bytes < 0 {
-		bytes = 0
-	}
-	s.MaxGeneratedImageBytes = bytes
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		if bytes < 0 {
+			bytes = 0
+		}
+		s.MaxGeneratedImageBytes = bytes
+		return nil
+	})
 }
 
 // ── key-rotation settings (provider-keychain-rotation-01KQ8TD9 WP07) ──
@@ -1771,12 +1795,10 @@ func (b *Bindings) Settings_SetAutoResumeOnKeyRotation(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	s.AutoResumeOnKeyRotationDisabled = !enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		s.AutoResumeOnKeyRotationDisabled = !enabled
+		return nil
+	})
 }
 
 // ── audit settings (audit-log-enhancement-01KX5R8F WP07) ────────────────────
@@ -3543,15 +3565,13 @@ func (b *Bindings) Settings_SetLocalRuntimeRAMOverrideGB(gb float64) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	if gb < 0 {
-		gb = 0
-	}
-	s.LocalRuntimeRAMOverrideGB = gb
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		if gb < 0 {
+			gb = 0
+		}
+		s.LocalRuntimeRAMOverrideGB = gb
+		return nil
+	})
 }
 
 // LLM_ListDetectedLocalRuntimes returns the current local runtime detection
@@ -3759,11 +3779,13 @@ func (b *Bindings) Fleet_MLStatus() (settings.MLStatusView, error) {
 }
 
 // Fleet_MLAckNotice acknowledges the hosted-inference notice version the
-// panel displayed. On 409 policy_changed the fresh state comes back with
-// noticeChanged set so the panel shows the new notice again.
-func (b *Bindings) Fleet_MLAckNotice(noticeVersion int) (settings.MLStatusView, error) {
+// panel displayed, through the notice button clicked ("Turn on Offload" or
+// "I have read this"; it picks the ack action Fleet records). On 409
+// policy_changed the fresh state comes back with noticeChanged set so the
+// panel shows the new notice again.
+func (b *Bindings) Fleet_MLAckNotice(noticeVersion int, button string) (settings.MLStatusView, error) {
 	defer sentry.WrapBinding("Fleet_MLAckNotice")()
-	return b.api.Settings().FleetMLAckNotice(b.ctx(), noticeVersion)
+	return b.api.Settings().FleetMLAckNotice(b.ctx(), noticeVersion, button)
 }
 
 // Fleet_SetWorkflowEventsOptIn writes the member's own workflow_events
@@ -3925,6 +3947,29 @@ func (b *Bindings) Sync_ForcePush(category string) error {
 func (b *Bindings) Sync_ForcePull(category string) error {
 	defer sentry.WrapBinding("Sync_ForcePull")()
 	return b.api.Sync().Sync_ForcePull(b.ctx(), category)
+}
+
+// Sync_ConfirmUploads records the user's one-time confirmation that enabled
+// settings categories may upload to Fleet, then uploads the held ones
+// (provider-credentials-client-01PCCLI01 A2, owner ruling H1).
+func (b *Bindings) Sync_ConfirmUploads() error {
+	defer sentry.WrapBinding("Sync_ConfirmUploads")()
+	return b.api.Sync().Sync_ConfirmUploads(b.ctx())
+}
+
+// Settings_ResetUnreadable is the "Reset settings" recovery for a
+// settings.json that cannot be read: it moves the file aside to
+// settings.json.corrupt-<UTC timestamp>, writes the defaults and turns the
+// live settings-sync opt-ins off to match (settings_reset.go). It refuses,
+// changing nothing, when the file reads fine. Desktop-only: the settings
+// file is the host's own.
+func (b *Bindings) Settings_ResetUnreadable() (settings.ResetUnreadableResult, error) {
+	defer sentry.WrapBinding("Settings_ResetUnreadable")()
+	r, ok := b.api.(unreadableSettingsResetter)
+	if !ok {
+		return settings.ResetUnreadableResult{}, settings.ErrResetUnsupported
+	}
+	return r.ResetUnreadableSettings(b.ctx())
 }
 
 // Sync_PendingMCPSecrets returns MCPs that arrived via sync but need credentials

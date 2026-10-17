@@ -356,6 +356,7 @@ func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, re
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
+	setUserAgent(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -431,6 +432,7 @@ func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, re
 		req2, _ := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 		req2.Header.Set("Content-Type", "application/json")
 		req2.Header.Set("Authorization", "Bearer "+newTS.AccessToken)
+		setUserAgent(req2)
 		resp2, err2 := c.httpClient.Do(req2)
 		if err2 != nil {
 			return 0, nil, fmt.Errorf("fleet: enroll retry: %w", err2)

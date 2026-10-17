@@ -277,9 +277,57 @@ func TestApprovePendingItem_SendsBodyVerbatimToAllowlistedPath(t *testing.T) {
 		t.Fatalf("approve: %v", err)
 	}
 	reqs := f.snapshot()
-	want := `POST /api/v1/me/ml/notice-ack {"notice_version": 2, "text_revision": 2}`
+	// The served body has no "surface", so "surface":"desktop" is appended
+	// (legal, kameas-ai-11, 2026-10-16); every served byte is kept.
+	want := `POST /api/v1/me/ml/notice-ack {"notice_version": 2, "text_revision": 2,"surface":"desktop"}`
 	if len(reqs) != 2 || reqs[1] != want {
 		t.Errorf("requests = %q, want the GET then %q", reqs, want)
+	}
+}
+
+// Legal (kameas-ai-11, 2026-10-16): a hub ml_notice ack gains
+// "surface":"desktop" only when the served body has no "surface" key, and
+// only on POST /api/v1/me/ml/notice-ack. Fleet's served "action" is never
+// overridden; a body that already has surface, and every other approve
+// path, is sent byte-identical.
+func TestApprovePendingItem_MLNoticeAckSurfaceMerge(t *testing.T) {
+	cases := []struct {
+		name string
+		kind string
+		act  ApproveAction
+		want string
+	}{
+		{"no surface: added, other keys kept", ApprovalKindMLNotice,
+			ApproveAction{Method: "POST", Path: ApprovePathMLNoticeAck,
+				Body: []byte(`{"notice_version":4, "text_revision":2,"ai_usage_epoch":9,"action":"read"}`)},
+			`POST /api/v1/me/ml/notice-ack {"notice_version":4, "text_revision":2,"ai_usage_epoch":9,"action":"read","surface":"desktop"}`},
+		{"empty object: surface only", ApprovalKindMLNotice,
+			ApproveAction{Method: "POST", Path: ApprovePathMLNoticeAck, Body: []byte(`{}`)},
+			`POST /api/v1/me/ml/notice-ack {"surface":"desktop"}`},
+		{"surface served: byte-identical", ApprovalKindMLNotice,
+			ApproveAction{Method: "POST", Path: ApprovePathMLNoticeAck,
+				Body: []byte(`{"surface": "web", "action":"read","notice_version":4}`)},
+			`POST /api/v1/me/ml/notice-ack {"surface": "web", "action":"read","notice_version":4}`},
+		{"legal path: byte-identical", ApprovalKindLegalAcceptance,
+			ApproveAction{Method: "POST", Path: ApprovePathLegalAcceptances,
+				Body: []byte(`{"acceptances": [{"kind":"terms","version":"v1.1"}]}`)},
+			`POST /api/v1/me/legal-acceptances {"acceptances": [{"kind":"terms","version":"v1.1"}]}`},
+		{"exclusions-seen path: byte-identical", ApprovalKindMLExclusionsChange,
+			ApproveAction{Method: "POST", Path: ApprovePathMLExclusionsSeen,
+				Body: []byte(`{"exclusions_version": 3}`)},
+			`POST /api/v1/me/ml/exclusions-seen {"exclusions_version": 3}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeHubFleet{postStatus: 200, postBody: `{}`}
+			c := newHubTestClient(t, f)
+			if err := c.ApprovePendingItem(t.Context(), PendingApproval{ID: "x", Kind: tc.kind, Approve: tc.act}); err != nil {
+				t.Fatalf("approve: %v", err)
+			}
+			if reqs := f.snapshot(); len(reqs) != 1 || reqs[0] != tc.want {
+				t.Errorf("requests = %q, want [%s]", reqs, tc.want)
+			}
+		})
 	}
 }
 
@@ -357,6 +405,26 @@ func TestApproveActionAllowedFor_OptInDismissalBoundToItsKind(t *testing.T) {
 	for _, path := range []string{ApprovePathMLNoticeAck, ApprovePathLegalAcceptances, ApprovePathMLExclusionsSeen} {
 		if ApproveActionAllowedFor(ApprovalKindMLOptInAvailable, "POST", path) {
 			t.Errorf("ml_opt_in_available may call %s", path)
+		}
+	}
+}
+
+// Legal (kameas-ai-11, 2026-10-16): an exclusions change records only
+// "I have read this" via exclusions-seen, bound both ways, so a malformed
+// item can't turn that button into a notice ack or a legal acceptance, and
+// exclusions-seen can't be sent for another kind.
+func TestApproveActionAllowedFor_ExclusionsSeenBoundBothWays(t *testing.T) {
+	if !ApproveActionAllowedFor(ApprovalKindMLExclusionsChange, "POST", ApprovePathMLExclusionsSeen) {
+		t.Fatal("the exclusions change must be able to post exclusions-seen")
+	}
+	for _, path := range []string{ApprovePathMLNoticeAck, ApprovePathLegalAcceptances, ApprovePathMLOptInPromptDismissed} {
+		if ApproveActionAllowedFor(ApprovalKindMLExclusionsChange, "POST", path) {
+			t.Errorf("ml_exclusions_change may call %s", path)
+		}
+	}
+	for _, kind := range []string{ApprovalKindMLNotice, ApprovalKindLegalAcceptance, ApprovalKindMLOptInAvailable, "future_kind"} {
+		if ApproveActionAllowedFor(kind, "POST", ApprovePathMLExclusionsSeen) {
+			t.Errorf("kind %q may call exclusions-seen", kind)
 		}
 	}
 }

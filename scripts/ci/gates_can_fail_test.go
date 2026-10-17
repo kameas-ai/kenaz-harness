@@ -116,6 +116,7 @@ var cwdSensitiveGates = []string{
 	"check-test-only-symbols.sh",
 	"check-no-credential-in-ui.sh",
 	"check-no-user-content-in-slog.sh",
+	"check-no-credential-in-fleet-logs.sh",
 	"check-serve-dispatch-drift.sh",
 	"check-builtin-tool-registration.sh",
 	"check-single-move-writer.sh",
@@ -386,6 +387,219 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// `logger.` not `slog.` — the receiver spelling the gate was blind
 			// to, and the one 86% of this codebase's log calls actually use.
 			content: "package rpc\n\nfunc zzGateProbe(p string) { logger.Info(\"saved\", \"Path\", p) }\n",
+		},
+		{
+			// provider-credentials-client-01PCCLI01 WP04. The probe file
+			// name puts it in the namespace store's own scope
+			// (core/secrets/fleet_credentials*.go).
+			name:       "fleet-cred-logs/one-line-value",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(plaintext []byte) { logger.Info(\"stored\", \"value\", string(plaintext)) }\n",
+			wantOutput: "forbidden attribute key",
+		},
+		{
+			// A multi-line call — the shape the line-oriented slog-privacy
+			// gate cannot see — logging a locator variable.
+			name:       "fleet-cred-logs/multi-line-locator",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(loc string) {\n\tslog.Warn(\n\t\t\"fleet key write failed\",\n\t\t\"where\", loc,\n\t)\n}\n",
+			wantOutput: "raw-secret identifier loc",
+		},
+		{
+			// Spec §10.4: uck_auth is never logged, including as a typed
+			// attribute built out of line.
+			name:       "fleet-cred-logs/typed-attr-uck-auth",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nvar zzGateProbe = slog.String(\"uck_auth\", \"x\")\n",
+			wantOutput: "forbidden attribute key \"uck_auth\"",
+		},
+		{
+			// A new file anywhere under core/ joins the scope the moment it
+			// names the namespace store — no script edit needed.
+			name:       "fleet-cred-logs/new-caller-joins-scope",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/rpc/zz_gate_probe.go",
+			content:    "package rpc\n\nfunc zzGateProbe(_ *secrets.FleetCredentialStore, secret string) { log.Printf(\"got %s\", secret) }\n",
+			wantOutput: "raw-secret identifier secret",
+		},
+		{
+			// Review shape 1: logging.L().Info — the repo's dominant spelling, a call (not an identifier) before the dot.
+			name:       "fleet-cred-logs/review-1-logging-chain",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(v []byte) { logging.L().Info(\"stored\", \"value\", string(v)) }\n",
+			wantOutput: "forbidden attribute key \"value\"",
+		},
+		{
+			// Review shape 2: an apiKey identifier.
+			name:       "fleet-cred-logs/review-2-apikey-ident",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(apiKey string) { slog.Info(\"x\", \"k\", apiKey) }\n",
+			wantOutput: "raw-secret identifier apiKey",
+		},
+		{
+			// Review shape 3: a bare key identifier.
+			name:       "fleet-cred-logs/review-3-key-ident",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(key string) { slog.Info(\"x\", \"k\", key) }\n",
+			wantOutput: "raw-secret identifier key",
+		},
+		{
+			// Review shape 4: pt (plaintext) identifier.
+			name:       "fleet-cred-logs/review-4-pt-ident",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(pt string) { logger.Warn(\"x\", \"k\", pt) }\n",
+			wantOutput: "raw-secret identifier pt",
+		},
+		{
+			// Review shape 5: a token identifier.
+			name:       "fleet-cred-logs/review-5-token-ident",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(token string) { logging.L().Debug(\"x\", \"t\", token) }\n",
+			wantOutput: "raw-secret identifier token",
+		},
+		{
+			// Review shape 6: a key-shaped literal in the message (assembled at runtime; matched by core/fleet/secretshape.go's patterns).
+			name:       "fleet-cred-logs/review-6-key-shaped-message",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe() { logging.L().Info(\"loaded " + zzFakeAnthropicKey() + "\") }\n",
+			wantOutput: "key-shaped literal",
+		},
+		{
+			// Review shape 7: fmt.Sprintf building the message inline.
+			name:       "fleet-cred-logs/review-7-inline-sprintf",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(secret string) { logging.L().Info(fmt.Sprintf(\"got %s\", secret)) }\n",
+			wantOutput: "raw-secret identifier secret",
+		},
+		{
+			// Review shape 8: a Sprintf result bound to a variable, then logged.
+			name:       "fleet-cred-logs/review-8-sprintf-variable",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(plaintext string) {\n\tmsg := fmt.Sprintf(\"%s\", plaintext)\n\tlogger.Info(msg)\n}\n",
+			wantOutput: "\"msg\" assigned from fmt.Sprintf",
+		},
+		{
+			// Review shape 9: logger.With(...) attrs.
+			name:       "fleet-cred-logs/review-9-logger-with",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(x string) { logger.With(\"value\", x).Info(\"y\") }\n",
+			wantOutput: "forbidden attribute key \"value\"",
+		},
+		{
+			// Review shape 10: log.Printf / fmt.Fprintf(os.Stderr) feeding a stream.
+			name:       "fleet-cred-logs/review-10-printf",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nfunc zzGateProbe(locator string) { log.Printf(\"%s\", locator); fmt.Fprintf(os.Stderr, \"%s\", locator) }\n",
+			wantOutput: "raw-secret identifier locator",
+		},
+		{
+			// Round-2 review 1: a struct with a secret field rendered whole by %+v.
+			name:       "fleet-cred-logs/round2-1a-struct-sprintf-v",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\ntype zzProbeCfg struct {\n\tName   string\n\tAPIKey string\n}\n\nfunc zzGateProbe(c zzProbeCfg) { slog.Info(fmt.Sprintf(\"cfg %+v\", c)) }\n",
+			wantOutput: "secret field APIKey",
+		},
+		{
+			// Round-2 review 1: the same struct as a slog value, secret only by its json tag.
+			name:       "fleet-cred-logs/round2-1b-struct-slog-value-json-tag",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\ntype zzProbeCfg struct {\n\tName string\n\tCred string `json:\"access_token\"`\n}\n\nfunc zzGateProbe(c *zzProbeCfg) { slog.Info(\"cfg\", \"c\", c) }\n",
+			wantOutput: "secret field Cred",
+		},
+		{
+			// Round-2 review 2: an error built from a key, logged later.
+			name:       "fleet-cred-logs/round2-2a-errors-new",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nfunc zzGateProbe(apiKey string) {\n\terr := errors.New(apiKey)\n\tslog.Warn(\"failed\", \"err\", err)\n}\n",
+			wantOutput: "\"err\" assigned from errors.New(...) of raw-secret identifier apiKey",
+		},
+		{
+			// Round-2 review 2: fmt.Errorf wrapping a key, logged via .Error().
+			name:       "fleet-cred-logs/round2-2b-errorf-error-string",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nfunc zzGateProbe(plaintext string) {\n\terr := fmt.Errorf(\"bad key %s\", plaintext)\n\tslog.Warn(\"failed\", \"e\", err.Error())\n}\n",
+			wantOutput: "Error() of \"err\" assigned from fmt.Errorf",
+		},
+		{
+			// Round-2 review 3: s := string(buf); log(s).
+			name:       "fleet-cred-logs/round2-3a-string-conversion-assigned",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nfunc zzGateProbe(buf []byte) {\n\ts := string(buf)\n\tslog.Info(\"read\", \"s\", s)\n}\n",
+			wantOutput: "\"s\" assigned from bytes-to-text conversion",
+		},
+		{
+			// Round-2 review 3: taint through :=, var and = in one function.
+			name:       "fleet-cred-logs/round2-3b-alias-chain",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nfunc zzGateProbe(key string) {\n\tx := key\n\tvar y = x\n\tvar z string\n\tz = y\n\tslog.Info(\"x\", \"v\", z)\n}\n",
+			wantOutput: "\"z\" assigned from \"y\" assigned from \"x\" assigned from raw-secret identifier key",
+		},
+		{
+			// Round-2 review 4: a key literal split with + (folded by the type checker before shape-matching).
+			name:       "fleet-cred-logs/round2-4-split-literal",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nconst zzPrefix = \"sk-\" + \"ant-\"\n\nfunc zzGateProbe() { slog.Info(\"loaded \" + zzPrefix + \"" + zzFakeAnthropicKeyTail() + "\") }\n",
+			wantOutput: "key-shaped literal",
+		},
+		{
+			// Round-2 review 5: a method value, f := l.Info; f(..., key).
+			name:       "fleet-cred-logs/round2-5-method-value",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/secrets/fleet_credentials_zz_gate_probe.go",
+			content:    "package secrets\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\nvar _ = errors.New\nvar _ = fmt.Sprint\n\nfunc zzGateProbe(apiKey string) {\n\tf := slog.Default().Info\n\tf(\"k\", \"v\", apiKey)\n}\n",
+			wantOutput: "raw-secret identifier apiKey",
+		},
+		{
+			// A *credref.Cred passed straight to slog, under a name (h) no identifier rule knows. Cred redacts itself, but logging a credential handle at all is the violation.
+			name:       "fleet-cred-logs/round3-cred-slog-pointer",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/llm/credref/zz_gate_probe.go",
+			content:    "package credref\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"log/slog\"\n)\n\nvar _ = fmt.Sprint\nvar _ = log.Print\nvar _ = slog.Info\n\nfunc zzGateProbe(h *Cred) { slog.Info(\"resolved\", \"h\", h) }\n",
+			wantOutput: "credential handle credref.Cred rendered (pointer)",
+		},
+		{
+			// A Cred value formatted by %v into a message that is logged later.
+			name:       "fleet-cred-logs/round3-cred-sprintf-value",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/llm/credref/zz_gate_probe.go",
+			content:    "package credref\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"log/slog\"\n)\n\nvar _ = fmt.Sprint\nvar _ = log.Print\nvar _ = slog.Info\n\nfunc zzGateProbe(h Cred) {\n\tmsg := fmt.Sprintf(\"got %v\", h)\n\tslog.Info(msg)\n}\n",
+			wantOutput: "credential handle credref.Cred rendered (value)",
+		},
+		{
+			// The handle's own String() in a log attribute.
+			name:       "fleet-cred-logs/round3-cred-string-method",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/llm/credref/zz_gate_probe.go",
+			content:    "package credref\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"log/slog\"\n)\n\nvar _ = fmt.Sprint\nvar _ = log.Print\nvar _ = slog.Info\n\nfunc zzGateProbe(h *Cred) { slog.Warn(\"x\", \"h\", h.String()) }\n",
+			wantOutput: "String() of credential handle credref.Cred",
+		},
+		{
+			// A struct holding a *Cred, rendered whole by %+v into log.Printf.
+			name:       "fleet-cred-logs/round3-cred-in-struct",
+			gate:       "check-no-credential-in-fleet-logs.sh",
+			file:       "core/llm/credref/zz_gate_probe.go",
+			content:    "package credref\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"log/slog\"\n)\n\nvar _ = fmt.Sprint\nvar _ = log.Print\nvar _ = slog.Info\n\ntype zzHolder struct {\n\tID string\n\tC  *Cred\n}\n\nfunc zzGateProbe(z zzHolder) { log.Printf(\"%+v\", z) }\n",
+			wantOutput: "field C pointer",
 		},
 		{
 			name: "agentgraph-convergence/I5-second-ask-store",
@@ -5520,6 +5734,34 @@ func TestMLMinimisationGate_PlantedFullBackgroundCmdFires(t *testing.T) {
 		`terminal.cmd`, `has 4 tokens`, `canary`)
 }
 
+// WP11 (spec §12 A-16): the local activity store gets the same rules as
+// the wire. A kind outside the A-10 table written only to the local store
+// is caught on the local row.
+func TestMLMinimisationGate_PlantedLocalStoreKindFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"activity.Event{Kind: e.kind, TS: e.at, Payload: e.payload}",
+		"activity.Event{Kind: e.kind + \"zz\", TS: e.at, Payload: e.payload}",
+		`local events id`, `is outside the A-10 table`)
+}
+
+// WP11: the real branch name in the LOCAL tasks row (the wire stays
+// clean). The ^x*$ rule fires on the local row.
+func TestMLMinimisationGate_PlantedLocalBranchNameFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"Branch: branch, // already the",
+		"Branch: branch + \"zzbranch\", // already the",
+		`local tasks agent-`, `does not match ^x*$`)
+}
+
+// WP11: local recording switched off. The local floor fires (a store that
+// is never written would make every local check vacuous).
+func TestMLMinimisationGate_PlantedLocalStoreSkippedFires(t *testing.T) {
+	mlMinimisationPlant(t, "recorder.go",
+		"if r.localOn() && r.ensureLocal() != nil {\n\t\tout = append(out, r.local)",
+		"if false && r.localOn() && r.ensureLocal() != nil {\n\t\tout = append(out, r.local)",
+		`the local activity store holds no`)
+}
+
 // Negative control: the unmutated tree is clean, and says what it looked at.
 func TestMLMinimisationGate_CleanOnUnmutatedTree(t *testing.T) {
 	root := repoRoot(t)
@@ -5527,7 +5769,7 @@ func TestMLMinimisationGate_CleanOnUnmutatedTree(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("check-ml-producer-minimisation.sh exited %d on the unmutated tree:\n%s", code, out)
 	}
-	if !strings.Contains(out, "clean") || !strings.Contains(out, "through the real recorder") {
+	if !strings.Contains(out, "clean") || !strings.Contains(out, "through the real recorder") || !strings.Contains(out, "local event(s)") {
 		t.Fatalf("gate exited 0 without its clean summary:\n%s", out)
 	}
 }
@@ -5747,5 +5989,82 @@ func TestGenAISpanGate_StructuralVerdictIsCWDIndependent(t *testing.T) {
 			!strings.Contains(out, "local store model_calls: 42 columns") {
 			t.Fatalf("check-genai-span-no-content.sh from %s passed without reporting its scan:\n%s", dir, out)
 		}
+	}
+}
+
+// zzFakeAnthropicKey assembles an Anthropic-shaped key at runtime so this
+// file never carries one (#413 pattern).
+func zzFakeAnthropicKey() string {
+	return "sk" + "-" + "ant" + "-" + "api03" + "-" + strings.Repeat("Q", 32)
+}
+
+// zzFakeAnthropicKeyTail is the part of a fake Anthropic key after the
+// "sk-ant-" prefix, assembled at runtime.
+func zzFakeAnthropicKeyTail() string { return "api03" + "-" + strings.Repeat("Q", 32) }
+
+// TestFleetCredLogsGate_TypedBenignPass is the round-2 negative control,
+// in a file that type-checks: a struct with no secret fields rendered by
+// %+v and as a slog value, an error built from a constant, a constant
+// assigned and logged, and a comparison on a key all pass.
+func TestFleetCredLogsGate_TypedBenignPass(t *testing.T) {
+	root := repoRoot(t)
+	full := filepath.Join(root, "core/secrets/fleet_credentials_zz_gate_probe.go")
+	defer plant(t, full, "package secrets\n\n"+
+		"import (\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n)\n\n"+
+		"type zzProbePlain struct {\n\tName  string\n\tCount int\n\tKeyID string\n}\n\n"+
+		"func zzGateProbe(p zzProbePlain, key string) {\n"+
+		"\tslog.Info(fmt.Sprintf(\"cfg %+v\", p))\n"+
+		"\tslog.Info(\"cfg\", \"p\", p)\n"+
+		"\terr := errors.New(\"credential store unavailable\")\n"+
+		"\tslog.Warn(\"failed\", \"err\", err)\n"+
+		"\tslog.Warn(\"failed\", \"err\", fmt.Errorf(\"purge %d keys: %w\", p.Count, err).Error())\n"+
+		"\tx := \"static\"\n"+
+		"\tslog.Info(\"x\", \"v\", x)\n"+
+		"\tslog.Info(\"has a key\", \"present\", key != \"\", \"len\", len(key))\n"+
+		"}\n", "")()
+	if code, out := runGate(t, "check-no-credential-in-fleet-logs.sh", root); code != 0 {
+		t.Fatalf("typed benign namespace logging tripped the gate (exit %d):\n%s", code, out)
+	}
+}
+
+// TestFleetCredLogsGate_CredMetadataPasses is the negative control for the
+// round3-cred-* cases: logging a credref.Cred's metadata — its
+// ReferenceID(), whether it is present, the length of its view — is not
+// logging the credential and must pass.
+func TestFleetCredLogsGate_CredMetadataPasses(t *testing.T) {
+	root := repoRoot(t)
+	full := filepath.Join(root, "core/llm/credref/zz_gate_probe.go")
+	defer plant(t, full, "package credref\n\n"+
+		"import (\n\t\"fmt\"\n\t\"log/slog\"\n)\n\n"+
+		"func zzGateProbe(h *Cred, profileID string) {\n"+
+		"\tslog.Info(\"credential resolved\", \"profile\", profileID, \"ref\", h.ReferenceID())\n"+
+		"\tslog.Debug(\"credential state\", \"present\", h != nil, \"len\", len(h.Bytes()))\n"+
+		"\tslog.Info(fmt.Sprintf(\"resolved %s for %s\", h.ReferenceID(), profileID))\n"+
+		"}\n", "")()
+	if code, out := runGate(t, "check-no-credential-in-fleet-logs.sh", root); code != 0 {
+		t.Fatalf("credref.Cred metadata logging tripped the gate (exit %d):\n%s", code, out)
+	}
+}
+
+// TestFleetCredLogsGate_BenignLogsPass is the negative control for the
+// fleet-cred-logs cases: ordinary logging in the namespace — an id, a
+// count, an enum conversion, an error string, a length, formatting into a
+// builder, prose that mentions "value" and "key" — must not trip the gate.
+func TestFleetCredLogsGate_BenignLogsPass(t *testing.T) {
+	root := repoRoot(t)
+	full := filepath.Join(root, "core/secrets/fleet_credentials_zz_gate_probe.go")
+	defer plant(t, full, "package secrets\n\n"+
+		"func zzGateProbe(id string, n int, kind Kind, err error, pt []byte, secret string) {\n"+
+		"\tlogging.L().Info(\"fleet.credential.stored\", \"credential_id\", id)\n"+
+		"\tlogger.Debug(\"purge done\", \"count\", n, \"kind\", string(kind))\n"+
+		"\tslog.Warn(\"purge failed\", \"credential_id\", id, \"err\", err.Error(), \"len\", len(pt))\n"+
+		"\tlogging.L().Info(\"the value for this key was stored\", \"credential_id\", id)\n"+
+		"\t_ = err.Error()\n"+
+		"\t_ = fmt.Sprintf(\"%d keys\", n)\n"+
+		"\tvar b strings.Builder\n"+
+		"\tfmt.Fprintf(&b, \"%s\", secret)\n"+
+		"}\n", "")()
+	if code, out := runGate(t, "check-no-credential-in-fleet-logs.sh", root); code != 0 {
+		t.Fatalf("benign namespace logging tripped the gate (exit %d):\n%s", code, out)
 	}
 }

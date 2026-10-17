@@ -83,6 +83,24 @@ func validateCredRef(profileID string, ref CredentialReference) error {
 	if _, ok := validCredKinds[kind]; !ok {
 		return fmt.Errorf("llm: profile %q: unknown credential reference kind %q (must be env|keychain|file|aws_profile|kms)", profileID, ref.Kind)
 	}
+	if !ref.Source.Valid() {
+		return fmt.Errorf("llm: profile %q: unknown credential source %q (must be local|user_sync|org|team)", profileID, ref.Source)
+	}
+	if ref.Source.IsFleet() {
+		// A Fleet-sourced key always lives in the OS keychain under a
+		// namespace derived from Source + CredentialID; the locator is
+		// not consulted.
+		if kind != "keychain" {
+			return fmt.Errorf("llm: profile %q: a %s credential must be kind keychain, not %q", profileID, ref.Source, ref.Kind)
+		}
+		if !ValidCredentialID(ref.CredentialID) {
+			return fmt.Errorf("llm: profile %q: a %s credential needs a valid credential_id", profileID, ref.Source)
+		}
+		return nil
+	}
+	if ref.CredentialID != "" {
+		return fmt.Errorf("llm: profile %q: credential_id is only valid for a Fleet source (user_sync|org|team)", profileID)
+	}
 	if strings.TrimSpace(ref.Locator) == "" {
 		return fmt.Errorf("llm: profile %q: credential reference locator is required", profileID)
 	}
@@ -122,4 +140,27 @@ func PlaintextCredentialPrefixes() []string {
 	out := make([]string, len(plaintextCredentialPrefixes))
 	copy(out, plaintextCredentialPrefixes)
 	return out
+}
+
+// ValidCredentialID reports whether id is a well-formed Fleet credential
+// id: 1-128 characters of [A-Za-z0-9._-], starting with an alphanumeric.
+// Fleet issues lowercase hyphenated UUIDs (spec §10); the wider charset
+// keeps the check from rejecting a future id format while still keeping
+// path separators and keychain-index names (leading "_") out of the
+// derived keychain locator.
+func ValidCredentialID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		alnum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if i == 0 && !alnum {
+			return false
+		}
+		if !alnum && c != '.' && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
 }

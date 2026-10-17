@@ -317,3 +317,49 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
+
+// blockingConsent holds its first Identity read until release is closed,
+// so a test can land a change (an enroll) while a refresh is mid-read.
+type blockingConsent struct {
+	*fakeConsent
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingConsent) Identity(ctx context.Context) (Identity, error) {
+	id, err := b.fakeConsent.Identity(ctx) // read BEFORE blocking: the stale view
+	first := false
+	b.once.Do(func() { first = true })
+	if first {
+		close(b.entered)
+		<-b.release
+	}
+	return id, err
+}
+
+// An Invalidate that arrives while a background re-read is already in
+// flight must not be dropped. Boot shape from the 2026-10 dev log: the
+// gate's first read sees not_enrolled; the boot enroll lands mid-read and
+// invalidates. The old kick() was a no-op while a refresh ran, so the
+// stale not_enrolled decision stood until the refresher's next tick
+// (TTL·5/6 = 50 s) — the ~40 s gap after fleet.rpc.enroll.success.
+// No Start here: there is no ticker to rescue a dropped kick.
+func TestConsentGate_InvalidateDuringInFlightReadReEvaluates(t *testing.T) {
+	t.Parallel()
+	fc := devConsent()
+	fc.set(func(f *fakeConsent) { f.id.Enrolled = false })
+	src := &blockingConsent{fakeConsent: fc, entered: make(chan struct{}), release: make(chan struct{})}
+	g := NewConsentGate(GateConfig{Source: src})
+
+	g.Invalidate() // boot: first background read starts and blocks
+	<-src.entered
+	fc.set(func(f *fakeConsent) { f.id.Enrolled = true }) // enroll succeeds
+	g.Invalidate()                                        // OnFleetEnrolled
+	close(src.release)
+
+	waitFor(t, func() bool { return g.Last().Open }, "gate opens right after the enroll invalidation")
+	if !g.Recording() {
+		t.Fatal("Recording() false after the post-enroll re-read")
+	}
+}

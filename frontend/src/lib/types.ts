@@ -214,6 +214,25 @@ export interface ModelCallTelemetrySettings {
   shareWithFleet: boolean;
 }
 
+/**
+ * The local ML activity store (ml-producer-01MLPRD01 WP11): what Kenaz keeps
+ * on this device to power local suggestions (rpc.MLLocalActivityView).
+ */
+export interface MLLocalActivity {
+  /** False when the store could not be opened; the counts are then 0. */
+  available: boolean;
+  events: number;
+  tasks: number;
+  /** The database file plus its write-ahead log. */
+  sizeBytes: number;
+  /** Retention as stored; 0 = the 90-day default. */
+  retentionDays: number;
+  /** Read-only: the window the pruner applies. */
+  effectiveRetentionDays: number;
+  /** New activity is also being copied to Fleet right now. */
+  sharingWithFleet: boolean;
+}
+
 export interface SessionUsage {
   /** Sum of all input tokens for the session. */
   promptTokens: number;
@@ -364,6 +383,37 @@ export type ProviderSource = 'bundle' | 'host' | 'personal';
 export interface CredentialReference {
   kind: 'keychain' | 'env' | 'file' | 'aws_profile' | 'kms';
   locator: string;
+  /**
+   * Who owns the key (provider-credentials-client-01PCCLI01 B1). Absent
+   * means 'local' — a key entered on this device.
+   */
+  source?: CredentialSource;
+  /** Fleet credential id for a Fleet source. An identifier, not key material. */
+  credentialId?: string;
+}
+
+/** Ownership of a provider key. Mirrors Go llm.CredentialSource. */
+export type CredentialSource = 'local' | 'user_sync' | 'org' | 'team';
+
+/**
+ * One key a provider profile can use, as LLM_ListCredentialKeys lists it
+ * (§7a H2: several per provider, labelled by scope). Display metadata only:
+ * no key material and no keychain locator. Mirrors Go
+ * core/rpc/views/llm.CredentialKey.
+ */
+export interface CredentialKey {
+  /** Fleet credential id, or "local:<profileId>" for a key entered here. */
+  id: string;
+  provider: string;
+  source: CredentialSource;
+  /** Org or team display name for an org/team key, when known. */
+  scopeName?: string;
+  profileIds: string[];
+  orgDefault?: boolean;
+  teamDefault?: boolean;
+  /** The provider's default key, in contract order (team → org → own key). */
+  preselected?: boolean;
+  userSelectable: boolean;
 }
 
 export type ProviderKind =
@@ -4441,6 +4491,21 @@ export interface PolicyFile {
   embedded?: boolean;
   parse_ok: boolean;
   parse_err?: string;
+  /** Policies in this file that parsed but failed to evaluate (cedar.PolicyEvalError). */
+  eval_errors?: PolicyEvalError[];
+}
+
+/**
+ * PolicyEvalError mirrors cedar.PolicyEvalError: a policy that failed to
+ * evaluate on at least one request since the last reload. An erroring
+ * forbid denies (fail-closed); an erroring permit is skipped.
+ */
+export interface PolicyEvalError {
+  policy_id: string;
+  file?: string;
+  effect: 'forbid' | 'permit' | string;
+  message: string;
+  count: number;
 }
 
 /**
@@ -4495,6 +4560,8 @@ export interface PolicyFileDetail {
   parse_ok: boolean;
   /** Parse error message; empty when parse_ok is true. */
   parse_err?: string;
+  /** Policies in this file that parsed but failed to evaluate. */
+  eval_errors?: PolicyEvalError[];
   /** The raw Cedar source text. */
   source: string;
   /** true for embedded defaults that cannot be edited or deleted via the UI. */
@@ -4870,6 +4937,12 @@ export interface MLNotice {
   policyText: string;
   /** The org_policy it was rendered for. */
   policy: string;
+  /**
+   * The org's exclusions paragraph, Fleet's own words (a port of Fleet's
+   * exclusionsSummary, template 2); "" when nothing is excluded. Shown inside
+   * the notice, before the buttons.
+   */
+  exclusionsText?: string;
   /** Button labels: ["Turn on Offload", "Not now"] | ["I have read this"] | []. */
   actions: string[];
 }
@@ -4944,6 +5017,12 @@ export interface MLStatus {
   exclusionsVersion: number;
   /** The org's old free-text exclusions: display only, never matched. */
   legacyExclusionNotes: string[];
+  /**
+   * The exclusions paragraph Fleet's notice carries (same text as
+   * notice.exclusionsText); "" when nothing is excluded. Shown outside a
+   * notice; never on the hub path (body_text carries it).
+   */
+  exclusionsSummary?: string;
   fleetError?: string;
   /** Absent until the ML shipper is wired. */
   shipping?: MLShippingStatus;
@@ -5030,6 +5109,12 @@ export interface FleetSessionView {
   nameSource?: string;
   /** Stored tokens still authenticate (signing_in + true = a re-auth). */
   tokensUsable: boolean;
+  /**
+   * Opaque, non-PII key for the signed-in Fleet account (hashed realm +
+   * subject); absent when signed out. Per-account local state is scoped by
+   * it and dropped when it changes.
+   */
+  accountKey?: string;
   claims: { hasSubject: boolean; hasOrgClaim: boolean };
   capabilities: CapabilitiesView;
   profile?: FleetProfileInfo;
@@ -5242,6 +5327,48 @@ export interface SyncStatusView {
    * device. The WP03 generic org-provenance signal.
    */
   org_applied_at?: string;
+  /**
+   * True when the category is enabled but its upload waits for the user's
+   * one-time confirmation (Sync_ConfirmUploads). Pulls still run.
+   */
+  awaiting_confirmation?: boolean;
+  /** True when Fleet does not accept this category; it stays on this device. */
+  local_only?: boolean;
+  /**
+   * True when another device changed this category after this one last
+   * synced, so this device's change was not uploaded. Push
+   * (Sync_ForcePush) keeps this device's settings; Pull (Sync_ForcePull)
+   * takes the other device's. Automatic sync leaves it alone until then.
+   */
+  conflict?: boolean;
+  /**
+   * True when personal sync for this category is not built yet
+   * (fleet.SyncKind.UserSyncNotBuilt — provider_profiles, mcp_recipes):
+   * nothing is uploaded or applied, so the panel offers no toggle and the
+   * upload confirmation never lists it.
+   */
+  not_syncing_yet?: boolean;
+  /**
+   * Non-empty when this category's uploads are held because the settings
+   * that record the upload confirmation could not be read. Confirming
+   * cannot fix it, so awaiting_confirmation is false on such a row.
+   */
+  uploads_blocked_reason?: string;
+  /**
+   * True when uploads_blocked_reason is set because the settings file itself
+   * cannot be read. The UI then offers "Reset settings"
+   * (Settings_ResetUnreadable).
+   */
+  settings_unreadable?: boolean;
+}
+
+/**
+ * SettingsResetUnreadableResult — Settings_ResetUnreadable's answer
+ * (Go: settings.ResetUnreadableResult). backupPath is where the unreadable
+ * settings.json was kept (settings.json.corrupt-<UTC timestamp>).
+ */
+export interface SettingsResetUnreadableResult {
+  backupPath: string;
 }
 
 /**

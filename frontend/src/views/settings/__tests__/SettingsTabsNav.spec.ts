@@ -46,9 +46,11 @@ describe('SettingsTabs — vertical nav rail', () => {
     // Authoring (moved from the top-level rail; desktop-only).
     // settings-cleanup-01SETUX01 WP01: -3 — Flags and Health (App) and Logs
     // (Security) deleted by owner ruling.
+    // fix/known-issues-oct15: +1 — MCP Servers (Integrations; desktop-only)
+    // mounts MCPHealthSettingsPanel.
     // This is the desktop rail; both rails are pinned in
     // SettingsTabsRetired.spec.ts.
-    expect(items).toHaveLength(21);
+    expect(items).toHaveLength(22);
     for (const item of items) {
       // lucide-vue-next renders an <svg>; every row should carry one.
       expect(item.find('svg').exists()).toBe(true);

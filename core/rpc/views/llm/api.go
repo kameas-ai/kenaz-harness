@@ -68,6 +68,27 @@ type Provider struct {
 type CredentialReference struct {
 	Kind    string `json:"kind"`
 	Locator string `json:"locator"`
+	// Source is local | user_sync | org | team; empty means local
+	// (provider-credentials-client-01PCCLI01 B1).
+	Source string `json:"source,omitempty"`
+	// CredentialID is the Fleet credential id for a Fleet source. An
+	// identifier, never key material.
+	CredentialID string `json:"credentialId,omitempty"`
+}
+
+// CredentialKey is one key a provider profile can use, as the Providers
+// view lists it (§7a H2: many keys per provider, each labelled by scope).
+// Display metadata only: no key material and no keychain locator.
+type CredentialKey struct {
+	ID             string   `json:"id"`
+	Provider       string   `json:"provider"`
+	Source         string   `json:"source"`
+	ScopeName      string   `json:"scopeName,omitempty"`
+	ProfileIDs     []string `json:"profileIds"`
+	OrgDefault     bool     `json:"orgDefault,omitempty"`
+	TeamDefault    bool     `json:"teamDefault,omitempty"`
+	Preselected    bool     `json:"preselected,omitempty"`
+	UserSelectable bool     `json:"userSelectable"`
 }
 
 // AddProviderInput is the payload accepted by AddProvider. Mirrors the

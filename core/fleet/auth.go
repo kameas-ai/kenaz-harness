@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/oautherr"
 )
 
 // shortID returns the first 8 chars of s for log-safe identifiers.
@@ -253,6 +254,7 @@ func exchangeCode(ctx context.Context, profile EnvProfile, code, redirectURI, ve
 		return TokenSet{}, fmt.Errorf("fleet: token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setUserAgent(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -262,19 +264,20 @@ func exchangeCode(ctx context.Context, profile EnvProfile, code, redirectURI, ve
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		// Truncate body so log doesn't explode on a giant HTML error page.
-		bodyPreview := string(body)
-		if len(bodyPreview) > 800 {
-			bodyPreview = bodyPreview[:800] + "…(truncated)"
-		}
+		// Only the OAuth error fields, never the raw body. A token
+		// endpoint's response is credential-bearing by nature, and a
+		// misbehaving IdP or proxy could put anything in a non-200 body.
+		code, desc := oautherr.Fields(body)
 		logging.L().Error("fleet.auth.token_exchange.failed",
 			"status", resp.StatusCode,
 			"url", tokenURL,
 			"redirect_uri", redirectURI,
 			"client_id", shortID(profile.NativeClientID),
-			"body", bodyPreview,
+			"oauth_error", code,
+			"oauth_error_description", desc,
+			"body_bytes", len(body),
 		)
-		return TokenSet{}, fmt.Errorf("%w: status %d: %s", ErrAuthFailed, resp.StatusCode, body)
+		return TokenSet{}, fmt.Errorf("%w: %s", ErrAuthFailed, oautherr.Summary(resp.StatusCode, body))
 	}
 	ts, err := parseTokenResponse(body)
 	if err != nil {
@@ -304,6 +307,7 @@ func RefreshTokenSet(ctx context.Context, profile EnvProfile, refreshToken strin
 		return TokenSet{}, fmt.Errorf("fleet: refresh request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setUserAgent(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -314,14 +318,16 @@ func RefreshTokenSet(ctx context.Context, profile EnvProfile, refreshToken strin
 	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized {
 		// OAuth2 rejects a dead refresh token with 400 invalid_grant (or
 		// 401 invalid_client): a DEFINITE rejection — the session is over.
-		return TokenSet{}, fmt.Errorf("%w: status %d during refresh: %s", ErrTokenExpired, resp.StatusCode, body)
+		// Never the raw body: this error reaches the session-expired event's
+		// Reason and the logs (oautherr).
+		return TokenSet{}, fmt.Errorf("%w: during refresh: %s", ErrTokenExpired, oautherr.Summary(resp.StatusCode, body))
 	}
 	if resp.StatusCode != http.StatusOK {
 		// IdP 5xx / 429 / anything else says nothing about the refresh
 		// token's validity: transient, NOT ErrTokenExpired, so the session
 		// is not shown as expired over an IdP hiccup
 		// (fleet-session-truth-01DOGF0A delta review #4).
-		return TokenSet{}, fmt.Errorf("fleet: token endpoint status %d during refresh: %s", resp.StatusCode, body)
+		return TokenSet{}, fmt.Errorf("fleet: token endpoint during refresh: %s", oautherr.Summary(resp.StatusCode, body))
 	}
 	return parseTokenResponse(body)
 }

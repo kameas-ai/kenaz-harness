@@ -125,6 +125,15 @@ type SyncKind struct {
 	// ConflictPolicy declares how same-ID collisions across layers
 	// resolve. Required.
 	ConflictPolicy ConflictPolicy
+	// UserSyncNotBuilt marks a kind whose personal (user-scope) sync is not
+	// built yet: its user collector has no credential-free snapshot to
+	// send (it would upload {}) and its user applier does nothing. The
+	// Syncer then sends and pulls nothing for it and Status reports it as
+	// NotSyncingYet, so no UI offers to "sync" it and the upload
+	// confirmation never names it. Org-scope applies (org_config) are not
+	// affected. Today: provider_profiles and mcp_recipes
+	// (core/rpc/sync_categories.go).
+	UserSyncNotBuilt bool
 }
 
 // HasScope reports whether the kind is declared for the given scope.
@@ -177,7 +186,7 @@ func (k SyncKind) validate() error {
 // user-scope kind uniformly, since every kind's CategoryConfig() is built
 // through this one function.
 func (k SyncKind) CategoryConfig() CategoryConfig {
-	cfg := CategoryConfig{}
+	cfg := CategoryConfig{NotSyncingYet: k.UserSyncNotBuilt}
 	enforceSecretShape := k.SecretPolicy == SecretPolicyMustNotContainSecrets
 	if k.Collect != nil {
 		collect := k.Collect

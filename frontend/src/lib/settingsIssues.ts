@@ -10,7 +10,9 @@
  * The model is generic on purpose. An issue comes from a provider; the
  * banner asks every provider for its current issues and renders whatever
  * comes back. Migration drift was the first provider; Fleet's pending
- * approvals (ml-producer-01MLPRD01 WP06) the second. A later issue (an MCP
+ * approvals (ml-producer-01MLPRD01 WP06) the second; settings sync waiting
+ * for its one-time confirmation (provider-credentials-client-01PCCLI01 A2)
+ * the third. A later issue (an MCP
  * server stuck in an error state, say) plugs in by adding a provider to
  * SETTINGS_ISSUE_PROVIDERS — the banner does not change.
  *
@@ -30,9 +32,16 @@ export interface SettingsIssueFix {
   /**
    * Applies the fix. Resolves when the fix landed; the banner then re-runs
    * every provider, so a fixed issue disappears on its own. Rejects with a
-   * user-presentable Error when it did not.
+   * user-presentable Error when it did not. A string result is a note the
+   * banner keeps showing after the issue is gone (e.g. where a backup was
+   * saved).
    */
-  run: () => Promise<void>;
+  run: () => Promise<void | string>;
+  /**
+   * When set, the fix is destructive: the banner first shows `body` with a
+   * `label` button and Cancel, and runs the fix only on that second click.
+   */
+  confirm?: { body: string; label: string };
 }
 
 export interface SettingsIssue {
@@ -51,6 +60,12 @@ export interface SettingsIssue {
   instructions?: string[];
   /** Builds the text the "Copy diagnostics" button puts on the clipboard. */
   diagnostics?: () => Promise<string>;
+  /**
+   * A secondary path, shown beside the fix: an in-app route (hash-router
+   * path, e.g. "/settings?tab=sync") where the user can make a different
+   * choice than the fix makes for them.
+   */
+  link?: { label: string; to: string };
 }
 
 export interface SettingsIssueProvider {
@@ -276,8 +291,109 @@ const pendingApprovalsIssues: SettingsIssueProvider = {
   },
 };
 
+// ── provider: settings sync waiting for confirmation (01PCCLI01 A2, H1) ──
+
+/** Plain-language names for the sync categories, as the Sync panel shows them. */
+const SYNC_CATEGORY_NAMES: Record<string, string> = {
+  provider_profiles: 'provider profiles',
+  model_prefs: 'model preferences',
+  mcp_recipes: 'MCP recipes',
+  installed_mcp: 'installed MCP servers',
+  ui_theme: 'UI theme',
+  slash_commands: 'slash commands',
+};
+
+function syncCategoryName(id: string): string {
+  return SYNC_CATEGORY_NAMES[id] ?? id.split('_').filter(Boolean).join(' ');
+}
+
+/**
+ * "Reset settings": the way out of an unreadable settings.json, which Kenaz
+ * otherwise refuses to save over (Settings_ResetUnreadable). Destructive, so
+ * it asks first, and says plainly what is lost and where the old file goes.
+ */
+function resetUnreadableFix(client: HarnessClient): SettingsIssueFix {
+  return {
+    label: 'Reset settings',
+    confirm: {
+      label: 'Reset to defaults',
+      body:
+        'All of your Kenaz settings will return to their defaults: theme, model preferences, ' +
+        'tool settings, and which settings sync. Settings sync turns off until you turn it back on. ' +
+        'Your current settings file can’t be read, so it isn’t deleted: Kenaz keeps it, unchanged, ' +
+        'in the same folder, renamed settings.json.corrupt- followed by today’s date and time (UTC). ' +
+        'Your sessions and API keys are not affected.',
+    },
+    run: async () => {
+      const { backupPath } = await client.settings.resetUnreadable();
+      return backupPath
+        ? `Your settings were reset to their defaults. Your old settings file is kept at ${backupPath}.`
+        : 'Your settings were reset to their defaults.';
+    },
+  };
+}
+
+/**
+ * Owner ruling H1 (provider-credentials-client-01PCCLI01 §7a): settings sync
+ * never reached Fleet before the A2 wire fix, so a category the user turned
+ * on had never left the machine. Before the first upload, ask once. The
+ * backend holds every upload until Sync_ConfirmUploads saves the answer
+ * (Settings.SettingsSyncUploadsConfirmed); Sync_Status marks the held rows
+ * `awaiting_confirmation`. Downloads from Fleet are not held.
+ * Sync_* has no served dispatch, hence desktopOnly.
+ */
+const settingsSyncConfirmIssues: SettingsIssueProvider = {
+  id: 'settings-sync-confirm',
+  desktopOnly: true,
+  async collect(client) {
+    const rows = await client.sync.status();
+    // Uploads held because the settings file cannot be read: "Start
+    // syncing" cannot help, so say what is wrong instead of asking.
+    const blocked = rows.find((r) => r.uploads_blocked_reason);
+    if (blocked) {
+      return [
+        {
+          id: 'settings-sync-blocked',
+          severity: 'error',
+          title: 'Settings sync is paused',
+          body: blocked.uploads_blocked_reason!,
+          // The file itself cannot be read: offer the recovery. (A build with
+          // no settings store has nothing to reset.)
+          fix: blocked.settings_unreadable ? resetUnreadableFix(client) : undefined,
+          link: { label: 'Open Sync settings', to: '/settings?tab=sync' },
+        },
+      ];
+    }
+    // Name only categories that really upload something: a not-built kind
+    // (provider_profiles, mcp_recipes) sends nothing, so "uploads them so
+    // your other devices can use them" would be false for it.
+    const held = rows
+      .filter((r) => r.awaiting_confirmation && !r.not_syncing_yet)
+      .map((r) => syncCategoryName(r.category));
+    if (held.length === 0) return [];
+    return [
+      {
+        id: 'settings-sync-confirm',
+        severity: 'warning',
+        title: 'Start syncing your settings?',
+        body:
+          `You turned on sync for: ${held.join(', ')}. ` +
+          'Until now, none of these settings has left this device. ' +
+          'When you choose Start syncing, Kenaz uploads them so your other signed-in devices can use them. ' +
+          'API keys and other credentials are not included.',
+        fix: { label: 'Start syncing', run: () => client.sync.confirmUploads() },
+        link: { label: 'Change what syncs', to: '/settings?tab=sync' },
+      },
+    ];
+  },
+};
+
 /** Every issue provider the banner consults, in display order. */
-const SETTINGS_ISSUE_PROVIDERS: readonly SettingsIssueProvider[] = [pendingApprovalsIssues, databaseIssues];
+const SETTINGS_ISSUE_PROVIDERS: readonly SettingsIssueProvider[] = [
+  pendingApprovalsIssues,
+  settingsSyncConfirmIssues,
+  databaseIssues,
+];
 
 /**
  * Runs every provider that can run in this build and concatenates their

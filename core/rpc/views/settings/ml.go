@@ -25,6 +25,7 @@ package settings
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -110,8 +111,13 @@ type MLNoticeView struct {
 	PolicyText string `json:"policyText"`
 	// Policy is the org_policy the notice was rendered for.
 	Policy string `json:"policy"`
+	// ExclusionsText is the org's exclusions paragraph (MLExclusionsSummary),
+	// "" when nothing is excluded. PlainText ends with it, as Fleet's notice
+	// text does; the panel shows it inside the notice, before the buttons.
+	ExclusionsText string `json:"exclusionsText"`
 	// Actions are the button labels for that policy, in order:
-	// member_choice → [Turn on Offload, Not now]; on → [I have read this];
+	// member_choice → [Turn on Offload, Not now], or [I have read this]
+	// when re-acknowledging (Offload already on); on → [I have read this];
 	// none otherwise.
 	Actions []string `json:"actions"`
 }
@@ -125,6 +131,52 @@ type MLNoticeView struct {
 // PR #225), the user has not seen that text here, so the panel routes them
 // to the Fleet dashboard instead of acknowledging it.
 const localNoticeTextRevision = 1
+
+// localExclusionsTemplate is the version of Fleet's exclusions paragraph
+// template this harness mirrors (MLExclusionsSummary): template 2,
+// kenaz-fleet PR #289 (c9b08ca2, legal kameas-ai-11, 2026-10-16). The fallback ack sends it as
+// "exclusions_template"; Fleet logs a mismatch, never refuses. Bump it
+// whenever the mirrored exclusions text changes — NOT
+// localNoticeTextRevision, which the exclusions paragraph never moves.
+const localExclusionsTemplate = 2
+
+// mlExclusionsLegacyLead is the legacy-notes sentence lead of Fleet's
+// exclusions template 2 (kenaz-fleet c9b08ca2 service/ml_notice_text.go
+// mlExclusionsLegacyLeadV2), verbatim.
+const mlExclusionsLegacyLead = "Your organization also listed these exclusions in its own words. Fleet can't " +
+	"apply them automatically, so matching activity may still be uploaded: "
+
+// MLExclusionsSummary renders the org's exclusions as the plain-text
+// paragraph Fleet appends to the ML notice — a faithful port of kenaz-fleet
+// exclusionsSummary (c9b08ca2 service/ml_exclusions.go, template
+// localExclusionsTemplate): "Excluded from upload: …" when anything typed is
+// excluded, then the legacy free-text sentence only when legacy notes exist.
+// "" when nothing is excluded. Pinned byte-for-byte against every case of
+// Fleet's shared fixture (testdata/ml_notice_text.json). Never hand-edit the
+// words here without the fixture.
+func MLExclusionsSummary(paths, commands []string, excludeBrowser bool, legacyNotes []string) string {
+	var parts []string
+	if len(paths) > 0 {
+		parts = append(parts, "file paths matching: "+strings.Join(paths, ", "))
+	}
+	if len(commands) > 0 {
+		parts = append(parts, "terminal commands starting with: "+strings.Join(commands, ", "))
+	}
+	if excludeBrowser {
+		parts = append(parts, "browser pages (all)")
+	}
+	out := ""
+	if len(parts) > 0 {
+		out = "Excluded from upload: " + strings.Join(parts, "; ") + "."
+	}
+	if len(legacyNotes) > 0 {
+		if out != "" {
+			out += " "
+		}
+		out += mlExclusionsLegacyLead + strings.Join(legacyNotes, "; ") + "."
+	}
+	return out
+}
 
 // mlDashboardConsentPath is the Fleet dashboard's hosted-inference consent
 // card, relative to the active profile's FleetBaseURL (stable per Fleet).
@@ -146,7 +198,13 @@ const mlOrgFallback = "Your organization"
 
 // RenderMLNotice fills the fallback notice for display: the org name, the
 // retention period and the policy block (member_choice or on).
-func RenderMLNotice(orgName string, retentionDays int, policy string) MLNoticeView {
+//
+// Buttons are legal's fixed labels (kameas-ai-11, 2026-10-16): a required
+// policy (on), or re-acknowledging an earlier notice (reack: member_choice
+// with Offload already turned on), reads "I have read this"; a first
+// member_choice notice reads "Turn on Offload" / "Not now". Never "I
+// agree", "Accept" or "Consent".
+func RenderMLNotice(orgName string, retentionDays int, policy string, reack bool) MLNoticeView {
 	org := strings.TrimSpace(orgName)
 	if org == "" {
 		org = mlOrgFallback
@@ -169,6 +227,9 @@ func RenderMLNotice(orgName string, retentionDays int, policy string) MLNoticeVi
 	case fleet.MLPolicyMemberChoice:
 		n.PolicyText = mlNoticeMemberChoice
 		n.Actions = []string{MLNoticeActionTurnOn, MLNoticeActionNotNow}
+		if reack {
+			n.Actions = []string{MLNoticeActionRead}
+		}
 	case fleet.MLPolicyOn:
 		n.PolicyText = mlNoticeRequired
 		n.Actions = []string{MLNoticeActionRead}
@@ -177,7 +238,8 @@ func RenderMLNotice(orgName string, retentionDays int, policy string) MLNoticeVi
 }
 
 // PlainText joins the notice into paragraphs separated by a blank line:
-// heading, intro, each "Label Text", then the policy paragraph.
+// heading, intro, each "Label Text", the policy paragraph, then the
+// exclusions paragraph (when anything is excluded).
 func (n MLNoticeView) PlainText() string {
 	parts := []string{n.Heading, n.Intro}
 	for _, s := range n.Sections {
@@ -185,6 +247,9 @@ func (n MLNoticeView) PlainText() string {
 	}
 	if n.PolicyText != "" {
 		parts = append(parts, n.PolicyText)
+	}
+	if n.ExclusionsText != "" {
+		parts = append(parts, n.ExclusionsText)
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -337,6 +402,11 @@ type MLStatusView struct {
 	// LegacyExclusionNotes are the org's old free-text exclusions: display
 	// only, never matched.
 	LegacyExclusionNotes []string `json:"legacyExclusionNotes"`
+	// ExclusionsSummary is the exclusions paragraph Fleet's notice carries
+	// (MLExclusionsSummary of the fields above), "" when nothing is
+	// excluded. The panel shows it outside a notice; on the hub path it
+	// shows nothing of its own (the served body_text carries it).
+	ExclusionsSummary string `json:"exclusionsSummary"`
 
 	// FleetError is the last /me/ml read error ("" on success).
 	FleetError string `json:"fleetError,omitempty"`
@@ -376,7 +446,9 @@ func mlFill(v *MLStatusView, m fleet.MeML, fleetBaseURL string) {
 		// Never show the local (older) text for a newer required revision.
 		v.NoticeDashboardURL = mlDashboardConsentURL(fleetBaseURL)
 	} else {
-		n := RenderMLNotice(v.OrgName, m.RetentionDays, m.OrgPolicy)
+		n := RenderMLNotice(v.OrgName, m.RetentionDays, m.OrgPolicy, mlNoticeReack(m))
+		n.ExclusionsText = MLExclusionsSummary(m.Exclusions.Paths, m.Exclusions.Commands,
+			m.Exclusions.ExcludeBrowser, m.LegacyExclusionNotes)
 		v.Notice = &n
 		v.NoticeText = n.PlainText()
 	}
@@ -385,6 +457,25 @@ func mlFill(v *MLStatusView, m fleet.MeML, fleetBaseURL string) {
 	v.ExcludeBrowser = m.Exclusions.ExcludeBrowser
 	v.ExclusionsVersion = m.ExclusionsVersion
 	v.LegacyExclusionNotes = append([]string{}, m.LegacyExclusionNotes...)
+	v.ExclusionsSummary = MLExclusionsSummary(v.ExclusionPaths, v.ExclusionCommands, v.ExcludeBrowser,
+		v.LegacyExclusionNotes)
+}
+
+// mlNoticeReack reports whether a member_choice notice is a
+// re-acknowledgement: Offload is already on for the member, AND the ack owed
+// is for a NEWER notice than one they already acknowledged — an ack is
+// required, this version is not acked (notice_acked_at null), and Fleet
+// reports an earlier acknowledged text revision (acked_text_revision > 0).
+// Only then does the notice ask them to read the changed text ("I have read
+// this" → read) instead of turning Offload on. Anything else — including an
+// older Fleet that sends no acked_text_revision, where an earlier ack
+// cannot be proven — is a first Member Choice, which can only be turn_on.
+func mlNoticeReack(m fleet.MeML) bool {
+	return m.OrgPolicy == fleet.MLPolicyMemberChoice &&
+		m.UserWorkflowEventsOptedIn &&
+		m.NoticeAckRequired &&
+		m.NoticeAckedAt == nil &&
+		m.AckedTextRevision > 0
 }
 
 // mlBase builds the view's session/capability part and reports whether a
@@ -465,7 +556,8 @@ func applyHubNotice(v *MLStatusView, item PendingApprovalView) {
 }
 
 // FleetMLAckNotice implements SettingsAPI: acknowledges the notice version
-// the panel showed, with the text revision this harness rendered
+// the panel showed, through the notice button the member clicked (button:
+// MLNoticeActionTurnOn or MLNoticeActionRead; it picks the ack action), with the text revision this harness rendered
 // (localNoticeTextRevision). It first re-reads /me/ml: when Fleet requires
 // a NEWER notice text (NoticeNeedsDashboard) nothing is posted — that text
 // was never shown here — and the view is returned for the panel to route
@@ -474,7 +566,7 @@ func applyHubNotice(v *MLStatusView, item PendingApprovalView) {
 // A 409 policy_changed is not an error to the caller: the state is re-read
 // and returned with NoticeChanged set, so the panel shows the new notice
 // again.
-func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatusView, error) {
+func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int, button string) (MLStatusView, error) {
 	v, c, ok := a.mlBase(ctx)
 	if !ok {
 		return v, ErrMLNotWired
@@ -492,9 +584,17 @@ func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatus
 	if cur.NoticeTextRevision > 0 {
 		textRevision = localNoticeTextRevision
 	}
-	// ai_usage_epoch from the same fresh read (sent only while
-	// include_ai_usage); a stale one is a 409, handled below.
-	m, err := c.AckMLNotice(ctx, noticeVersion, textRevision, cur.AckAIUsageEpoch())
+	action, err := mlNoticeAckAction(cur.OrgPolicy, button, mlNoticeReack(cur))
+	if err != nil {
+		return base, err
+	}
+	// ai_usage_epoch from the same fresh read, echoed exactly as served
+	// whenever the notice includes the AI-usage section (include_ai_usage);
+	// a stale one is a 409, handled below. The epoch never turns the action
+	// into include_ai_usage — that is the AI-usage add-on control's alone.
+	// exclusions_template: the panel rendered the exclusions from this
+	// harness's own copy of Fleet's template (localExclusionsTemplate).
+	m, err := c.AckMLNotice(ctx, action, noticeVersion, textRevision, cur.AckAIUsageEpoch(), localExclusionsTemplate)
 	if errors.Is(err, fleet.ErrMLPolicyChanged) {
 		fresh, ferr := a.FleetMLStatus(ctx)
 		fresh.NoticeChanged = true
@@ -505,6 +605,27 @@ func (a *API) FleetMLAckNotice(ctx context.Context, noticeVersion int) (MLStatus
 	}
 	mlFill(&v, m, c.Profile().FleetBaseURL)
 	return v, nil
+}
+
+// mlNoticeAckAction maps the org_policy the notice was shown for, and the
+// notice button the member clicked, to the explicit notice-ack action
+// (legal, kameas-ai-11, 2026-10-16): member_choice "Turn on Offload" →
+// turn_on; on (required) "I have read this" → read; member_choice "I have
+// read this" → read ONLY when reack (mlNoticeReack of the fresh read: opt-in
+// already on and the ack is for a newer notice than one already acked). A
+// first Member Choice can only be turn_on. Any other pairing — a policy with
+// no notice button, or a button that state never shows — is refused and
+// nothing is acknowledged.
+func mlNoticeAckAction(policy, button string, reack bool) (string, error) {
+	switch {
+	case policy == fleet.MLPolicyMemberChoice && button == MLNoticeActionTurnOn:
+		return fleet.MLNoticeAckActionTurnOn, nil
+	case policy == fleet.MLPolicyOn && button == MLNoticeActionRead:
+		return fleet.MLNoticeAckActionRead, nil
+	case policy == fleet.MLPolicyMemberChoice && button == MLNoticeActionRead && reack:
+		return fleet.MLNoticeAckActionRead, nil
+	}
+	return "", fmt.Errorf("settings: ml notice: no acknowledgement action for org_policy %q, button %q (re-ack %v)", policy, button, reack)
 }
 
 // FleetSetWorkflowEventsOptIn implements SettingsAPI: writes the member's

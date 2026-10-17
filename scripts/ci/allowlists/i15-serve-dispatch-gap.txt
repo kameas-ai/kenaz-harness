@@ -202,7 +202,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 185 entries.
+# 186 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -536,6 +536,12 @@
 
 # Caller(s) SyncPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
+# Sync_ConfirmUploads added 2026-10-15 (provider-credentials-client-01PCCLI01
+# A2, owner ruling H1). Its other caller, the settings-sync-confirm provider
+# in lib/settingsIssues.ts, is desktopOnly, so the banner skips it in a
+# served build. Same disposition as the rest of the Sync_* family; owner:
+# whichever mission ports Sync_* to served mode deletes the whole block.
+"Sync_ConfirmUploads"
 "Sync_ForcePull"
 "Sync_ForcePush"
 "Sync_PendingMCPSecrets"
@@ -1388,3 +1394,31 @@
 # NotAvailableInServedMode instead.
 "Settings_GetModelCallTelemetry"
 "Settings_SetModelCallTelemetry"
+
+# CLASS: desktop-only-by-nature -- settings-sync review round, 2026-10-16.
+# 1 entries.
+#
+# Settings_ResetUnreadable: the "Reset settings" recovery for an unreadable
+# settings.json (moves it to settings.json.corrupt-<UTC timestamp>, writes
+# the defaults). The file is the desktop host's own; a served client has no
+# business resetting it. Its only caller is the "Settings sync is paused"
+# issue in lib/settingsIssues.ts, whose provider is desktopOnly, so the
+# banner skips it in a served build. Owner: alec; this line goes when the
+# Sync_* family ports to served mode and brings the recovery with it.
+"Settings_ResetUnreadable"
+
+# CLASS: boundary-panelled -- ml-producer-01MLPRD01 WP11, 2026-10-16.
+# 3 entries.
+#
+# Settings_GetMLLocalActivity / Settings_SetMLLocalActivityRetention /
+# Settings_DeleteMLLocalActivity: the "Local activity" block of the Cloud ML
+# panel (local activity store status, retention, "Delete local activity
+# data"). Their only caller is views/settings/CloudMLPanel.vue, mounted
+# only in SettingsView's Sync sub-tab, which is boundary-panelled
+# (NotAvailableInServedMode) in served mode — the Fleet_ML* disposition
+# above. The store is the desktop process's own file.
+#
+# Blocker: a served settings surface. Dated 2026-10-16. Owner: alec.
+"Settings_DeleteMLLocalActivity"
+"Settings_GetMLLocalActivity"
+"Settings_SetMLLocalActivityRetention"

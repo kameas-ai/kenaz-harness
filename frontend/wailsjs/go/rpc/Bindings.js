@@ -586,8 +586,8 @@ export function Fleet_GetTelemetryConsent() {
   return window['go']['rpc']['Bindings']['Fleet_GetTelemetryConsent']();
 }
 
-export function Fleet_MLAckNotice(arg1) {
-  return window['go']['rpc']['Bindings']['Fleet_MLAckNotice'](arg1);
+export function Fleet_MLAckNotice(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Fleet_MLAckNotice'](arg1, arg2);
 }
 
 export function Fleet_MLStatus() {
@@ -748,6 +748,10 @@ export function LLM_DeleteChain(arg1) {
 
 export function LLM_GetAttachmentLimits(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LLM_GetAttachmentLimits'](arg1, arg2);
+}
+
+export function LLM_ListCredentialKeys() {
+  return window['go']['rpc']['Bindings']['LLM_ListCredentialKeys']();
 }
 
 export function LLM_ListCustomTemplates() {
@@ -1378,6 +1382,10 @@ export function SetSettingsStore(arg1) {
   return window['go']['rpc']['Bindings']['SetSettingsStore'](arg1);
 }
 
+export function Settings_DeleteMLLocalActivity() {
+  return window['go']['rpc']['Bindings']['Settings_DeleteMLLocalActivity']();
+}
+
 export function Settings_FleetCapabilities() {
   return window['go']['rpc']['Bindings']['Settings_FleetCapabilities']();
 }
@@ -1498,6 +1506,10 @@ export function Settings_GetMCPAutoRestart() {
   return window['go']['rpc']['Bindings']['Settings_GetMCPAutoRestart']();
 }
 
+export function Settings_GetMLLocalActivity() {
+  return window['go']['rpc']['Bindings']['Settings_GetMLLocalActivity']();
+}
+
 export function Settings_GetMaxAgentTurns() {
   return window['go']['rpc']['Bindings']['Settings_GetMaxAgentTurns']();
 }
@@ -1566,6 +1578,10 @@ export function Settings_GetWebSearch() {
   return window['go']['rpc']['Bindings']['Settings_GetWebSearch']();
 }
 
+export function Settings_ResetUnreadable() {
+  return window['go']['rpc']['Bindings']['Settings_ResetUnreadable']();
+}
+
 export function Settings_Set(arg1) {
   return window['go']['rpc']['Bindings']['Settings_Set'](arg1);
 }
@@ -1628,6 +1644,10 @@ export function Settings_SetLocalRuntimeRAMOverrideGB(arg1) {
 
 export function Settings_SetMCPAutoRestart(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMCPAutoRestart'](arg1);
+}
+
+export function Settings_SetMLLocalActivityRetention(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMLLocalActivityRetention'](arg1);
 }
 
 export function Settings_SetMaxAgentTurns(arg1) {
@@ -1836,6 +1856,10 @@ export function Subagent_Resume(arg1) {
 
 export function Subagent_Steer(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Subagent_Steer'](arg1, arg2);
+}
+
+export function Sync_ConfirmUploads() {
+  return window['go']['rpc']['Bindings']['Sync_ConfirmUploads']();
 }
 
 export function Sync_ForcePull(arg1) {

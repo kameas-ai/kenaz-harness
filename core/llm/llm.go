@@ -82,8 +82,67 @@ func (d CapabilityDescriptor) Has(cap Capability) bool {
 type CredentialReference struct {
 	// Kind is one of: env | keychain | file | aws_profile | kms.
 	Kind string `json:"kind" yaml:"kind"`
-	// Locator is the kind-specific lookup key.
+	// Locator is the kind-specific lookup key. For a Fleet-sourced
+	// reference (Source org|team|user_sync) the locator is derived from
+	// Source + CredentialID at resolution time and this field is ignored
+	// (it may be empty).
 	Locator string `json:"locator" yaml:"locator"`
+	// Source says who owns the key this reference points at
+	// (provider-credentials-client-01PCCLI01 B1). Empty means
+	// CredSourceLocal, so every profile written before this field
+	// existed keeps its meaning and round-trips byte-identically
+	// (omitempty).
+	Source CredentialSource `json:"source,omitempty" yaml:"source,omitempty"`
+	// CredentialID is Fleet's credential id. Required for a Fleet source,
+	// rejected for a local one. It is an identifier, never key material.
+	CredentialID string `json:"credential_id,omitempty" yaml:"credential_id,omitempty"`
+}
+
+// CredentialSource is the ownership of a provider key
+// (provider-credentials-client-01PCCLI01 B1, §7a H2).
+type CredentialSource string
+
+// CredentialSource values. The zero value ("") means CredSourceLocal.
+const (
+	// CredSourceLocal is a key the user entered on this device; it lives
+	// at the keychain locator kenaz-harness/<profileID>.
+	CredSourceLocal CredentialSource = "local"
+	// CredSourceUserSync is one of the user's own keys synced end-to-end
+	// encrypted from their other devices (WP06).
+	CredSourceUserSync CredentialSource = "user_sync"
+	// CredSourceOrg is a key the user's organization delivers through
+	// Fleet (WP05).
+	CredSourceOrg CredentialSource = "org"
+	// CredSourceTeam is a key one of the user's teams delivers through
+	// Fleet (WP05).
+	CredSourceTeam CredentialSource = "team"
+)
+
+// Effective returns s with the zero value mapped to CredSourceLocal.
+func (s CredentialSource) Effective() CredentialSource {
+	if s == "" {
+		return CredSourceLocal
+	}
+	return s
+}
+
+// Valid reports whether s is empty or one of the four known sources.
+func (s CredentialSource) Valid() bool {
+	switch s {
+	case "", CredSourceLocal, CredSourceUserSync, CredSourceOrg, CredSourceTeam:
+		return true
+	}
+	return false
+}
+
+// IsFleet reports whether the key arrives through Fleet (org, team or a
+// synced user key) rather than being entered on this device.
+func (s CredentialSource) IsFleet() bool {
+	switch s {
+	case CredSourceUserSync, CredSourceOrg, CredSourceTeam:
+		return true
+	}
+	return false
 }
 
 // String returns a human-readable, redaction-safe rendering used in error
