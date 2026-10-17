@@ -86,6 +86,9 @@ func ApproveActionAllowed(method, path string) bool {
 // that a "Not now" on the Offload ML notice can never reach it.
 var kindBoundPaths = map[string]string{
 	ApprovePathMLOptInPromptDismissed: ApprovalKindMLOptInAvailable,
+	// "I have read this" on an exclusions change (legal, kameas-ai-11,
+	// 2026-10-16: the read acknowledgement is the only recorded action).
+	ApprovePathMLExclusionsSeen: ApprovalKindMLExclusionsChange,
 }
 
 // pathBoundKinds is the reverse binding: these kinds may carry ONLY their
@@ -93,7 +96,8 @@ var kindBoundPaths = map[string]string{
 // carrying, say, notice-ack or legal-acceptances must never turn that click
 // into a recorded acknowledgement or acceptance.
 var pathBoundKinds = map[string]string{
-	ApprovalKindMLOptInAvailable: ApprovePathMLOptInPromptDismissed,
+	ApprovalKindMLOptInAvailable:   ApprovePathMLOptInPromptDismissed,
+	ApprovalKindMLExclusionsChange: ApprovePathMLExclusionsSeen,
 }
 
 // ApproveActionAllowedFor is ApproveActionAllowed plus the two-way kind
