@@ -2,8 +2,14 @@ package serve
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"log/slog"
+	"net"
 	"net/url"
+	"strconv"
+	"syscall"
 	"time"
 
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
@@ -97,9 +103,11 @@ func HostProviders(get envprovider.Getenv, log *slog.Logger) []corellm.ProviderP
 	return []corellm.ProviderProfile{res.Profile(HostProviderProfileID)}
 }
 
-// hostProbeTimeout bounds the boot-time capability probe. The prober's own
-// per-step budget is 5s × 3 steps; this is the outer ceiling so a dead
-// endpoint cannot hold the served boot for longer than that.
+// hostProbeTimeout bounds the boot-time capability probe. The prober makes
+// two HTTP requests (step 1 streaming + streaming usage, step 2 tool
+// calling), each under its own 5s budget, so the worst case is ~10s; this
+// is the outer ceiling over both. The probe stays synchronous: a ~10s boot
+// delay against a dead endpoint is accepted (PR #310 review).
 const hostProbeTimeout = 20 * time.Second
 
 // ProbeHostProviders runs the custom-openai three-step capability probe
@@ -108,10 +116,13 @@ const hostProbeTimeout = 20 * time.Second
 // Desktop users get this from the Providers screen's Probe button; served
 // mode has no provider settings (LLM_ProbeCustomEndpoint is not a served
 // RPC — see scripts/ci/allowlists/i15-serve-dispatch-gap.txt), so the
-// served boot is the only place it can happen. Conventional kinds are returned untouched.
+// served boot is the only place it can happen. Conventional kinds are
+// returned untouched.
 //
 // Best-effort: an unreachable endpoint leaves the hints unset (the adapter
-// then operates conservatively) and the reason is logged once.
+// then operates conservatively) and a CLASSIFIED reason is logged once
+// (probeFailureReason) — never the error text, which can carry the request
+// URL or a server-echoed Authorization header.
 //
 // The credential (if the profile has one) is resolved through resolver —
 // the same credref path the registry uses per request — and borrowed only
@@ -139,7 +150,7 @@ func ProbeHostProviders(ctx context.Context, resolver *credref.Resolver, profile
 		if res.Err != nil {
 			if log != nil {
 				log.Warn("harness.serve.host_provider.probe_failed",
-					"profile_id", p.ID, "endpoint", logSafeEndpoint(p.Endpoint), "reason", res.Err.Error())
+					"profile_id", p.ID, "endpoint", logSafeEndpoint(p.Endpoint), "reason", probeFailureReason(res.Err))
 			}
 			continue
 		}
@@ -173,23 +184,63 @@ func applyHint(h map[corellm.Capability]bool, c corellm.Capability, v custom.Cap
 	}
 }
 
-// logSafeEndpoint renders a granted base URL for a log line with any
-// userinfo password masked (url.URL.Redacted). An operator can paste
-// http://user:key@host/v1 into KENAZ_HARNESS_BASE_URL; the boot log must
-// not become a second home for that key. An unparseable value is logged
-// as a fixed placeholder rather than verbatim, for the same reason.
+// logSafeEndpoint renders a granted base URL for a log line as scheme,
+// host and path only. An operator can paste http://user:key@host/v1,
+// https://<token>@host/v1 or https://host/v1?api_key=K into
+// KENAZ_HARNESS_BASE_URL; the boot log must not become a second home for
+// that key. Userinfo (password OR bare username) is masked, and the query
+// and fragment are dropped entirely. An unparseable value is logged as a
+// fixed placeholder rather than verbatim, for the same reason. Every log
+// line in this file that mentions the endpoint goes through here.
 func logSafeEndpoint(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "<unparseable>"
 	}
 	if u.User != nil {
-		if _, hasPw := u.User.Password(); !hasPw {
-			// A bare username can itself be a token (https://<key>@host).
-			u.User = url.User("xxxxx")
-		}
+		u.User = url.User("xxxxx")
 	}
-	return u.Redacted()
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	u.RawFragment = ""
+	return u.String()
+}
+
+// probeFailureReason maps a probe failure to a fixed vocabulary for the
+// boot log. It never returns err.Error(): an http.Client error embeds the
+// request URL (net/http strips only a password, so a bare-username token
+// or a query-string key survives), and a 401/403 verdict carries up to
+// 1 KiB of the server's body, which a proxy may use to echo Authorization.
+func probeFailureReason(err error) string {
+	var authErr *custom.ProbeAuthError
+	var dnsErr *net.DNSError
+	var opErr *net.OpError
+	var certErr *tls.CertificateVerificationError
+	var hostErr x509.HostnameError
+	var unknownCA x509.UnknownAuthorityError
+	var recErr tls.RecordHeaderError
+	var netErr net.Error
+	switch {
+	case errors.As(err, &authErr):
+		return "http_" + strconv.Itoa(authErr.Status)
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.As(err, &dnsErr):
+		return "dns"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connect_refused"
+	case errors.As(err, &certErr), errors.As(err, &hostErr), errors.As(err, &unknownCA), errors.As(err, &recErr):
+		return "tls"
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return "timeout"
+	case errors.As(err, &opErr):
+		return "connect_failed"
+	default:
+		return "probe_error"
+	}
 }
 
 // probeHostProfile runs the prober against one custom-openai profile,

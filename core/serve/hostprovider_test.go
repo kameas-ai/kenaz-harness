@@ -1,9 +1,12 @@
 package serve
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +15,7 @@ import (
 
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
+	"github.com/kameas-ai/kenaz-harness/core/llm/custom"
 	"github.com/kameas-ai/kenaz-harness/core/llm/envprovider"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
@@ -224,8 +228,10 @@ func TestLogSafeEndpoint_MasksUserinfo(t *testing.T) {
 	const key = "not-a-real-key-0123456789"
 	for in, want := range map[string]string{
 		"http://192.168.64.1:8081/v1":      "http://192.168.64.1:8081/v1",
-		"https://user:" + key + "@host/v1": "https://user:xxxxx@host/v1",
+		"https://user:" + key + "@host/v1": "https://xxxxx@host/v1",
 		"https://" + key + "@host/v1":      "https://xxxxx@host/v1",
+		"https://host/v1?api_key=" + key:   "https://host/v1",
+		"https://host/v1?#frag" + key:      "https://host/v1",
 		"http://[::1:8081/v1":              "<unparseable>",
 	} {
 		got := logSafeEndpoint(in)
@@ -284,5 +290,66 @@ func TestProbeHostProviders_BearerCredentialResolvesThroughCredref(t *testing.T)
 	again := ProbeHostProviders(context.Background(), credref.New(secrets.NewMemoryBackend()), HostProviders(getenvFrom(env), nil), nil)
 	if again[0].CapabilityHints != nil || auth() != "" {
 		t.Fatalf("an unresolvable credential must skip the probe, got hints=%+v (auth header sent: %t)", again[0].CapabilityHints, auth() != "")
+	}
+}
+
+// No secret in the granted base URL (bare-username token, query-string
+// key) or in a credential a misbehaving endpoint echoes back on a 401 may
+// reach the boot log — on the auth-failure path or the dial-failure path.
+func TestProbeHostProviders_NeverLogsEndpointSecrets(t *testing.T) {
+	const credVar = "KENAZ_TEST_HOST_PROBE_BEARER"
+	t.Setenv(credVar, "SECRET2")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A proxy that echoes the request's Authorization header in its
+		// 401 body — the prober reads up to 1 KiB of it.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":{"message":"bad key; you sent Authorization: `+r.Header.Get("Authorization")+`"}}`)
+	}))
+	defer srv.Close()
+
+	for name, base := range map[string]string{
+		"401 echoing Authorization": strings.Replace(srv.URL, "http://", "http://SECRETTOKEN@", 1) + "/v1?api_key=SECRET",
+		"failing dial":              "http://SECRETTOKEN@127.0.0.1:1/v1?api_key=SECRET",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			env := map[string]string{
+				EnvHostProvider: "custom-openai",
+				EnvHostBaseURL:  base,
+				EnvHostModel:    "m",
+				EnvHostCredVar:  credVar,
+				credVar:         "SECRET2",
+			}
+			profiles := HostProviders(getenvFrom(env), log)
+			if len(profiles) != 1 {
+				t.Fatalf("expected one host profile, got %+v (log: %s)", profiles, buf.String())
+			}
+			got := ProbeHostProviders(context.Background(), credref.New(secrets.NewMemoryBackend()), profiles, log)
+			if got[0].CapabilityHints != nil {
+				t.Fatalf("a failed probe must leave hints unset, got %+v", got[0].CapabilityHints)
+			}
+			out := buf.String()
+			if !strings.Contains(out, "probe_failed") {
+				t.Fatalf("expected a probe_failed line, got: %s", out)
+			}
+			if strings.Contains(out, "SECRET") {
+				t.Fatalf("boot log leaked a secret marker:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestProbeFailureReason_IsClassified(t *testing.T) {
+	if got := probeFailureReason(&custom.ProbeAuthError{Status: 401, Message: "SECRET"}); got != "http_401" {
+		t.Errorf("auth error → %q, want http_401", got)
+	}
+	if got := probeFailureReason(context.DeadlineExceeded); got != "timeout" {
+		t.Errorf("deadline → %q, want timeout", got)
+	}
+	if got := probeFailureReason(errors.New("SECRET")); got != "probe_error" {
+		t.Errorf("opaque error → %q, want probe_error", got)
 	}
 }

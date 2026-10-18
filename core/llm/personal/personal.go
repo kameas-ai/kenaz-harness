@@ -176,7 +176,9 @@ func (s *FileStore) List() ([]llm.ProviderProfile, error) {
 		return nil, err
 	}
 	out := make([]llm.ProviderProfile, len(shape.Providers))
-	copy(out, shape.Providers)
+	for i, p := range shape.Providers {
+		out[i] = llm.NormalizeAuthScheme(p)
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
@@ -191,7 +193,7 @@ func (s *FileStore) Get(id string) (llm.ProviderProfile, error) {
 	}
 	for _, p := range shape.Providers {
 		if p.ID == id {
-			return p, nil
+			return llm.NormalizeAuthScheme(p), nil
 		}
 	}
 	return llm.ProviderProfile{}, fmt.Errorf("%w: %q", ErrNotFound, id)
@@ -214,6 +216,7 @@ func (s *FileStore) Get(id string) (llm.ProviderProfile, error) {
 // empty keychain locator — no credential is required when the endpoint
 // does not authenticate. (custom-openai-compatible-endpoint-01KQ8VN0 WP02)
 func (s *FileStore) Add(p llm.ProviderProfile) error {
+	p = llm.NormalizeAuthScheme(p)
 	if !isCustomOpenAINoneAuth(p) {
 		if err := llm.ValidateProfile(p); err != nil {
 			return err
@@ -247,6 +250,7 @@ func (s *FileStore) Add(p llm.ProviderProfile) error {
 // Update implements Store. Validates the new profile, then replaces
 // the row with matching ID in place. Cred-kind validation matches Add.
 func (s *FileStore) Update(p llm.ProviderProfile) error {
+	p = llm.NormalizeAuthScheme(p)
 	if !isCustomOpenAINoneAuth(p) {
 		if err := llm.ValidateProfile(p); err != nil {
 			return err
@@ -310,10 +314,10 @@ func isCustomOpenAINoneAuth(p llm.ProviderProfile) bool {
 	if p.Kind != "custom-openai" {
 		return false
 	}
-	// Check Defaults map and top-level AuthScheme field.
-	if p.AuthScheme == "none" {
-		return true
-	}
+	// Defaults is the one source of truth (the adapter reads only it);
+	// callers pass profiles through llm.NormalizeAuthScheme first, which
+	// folds a top-level AuthScheme in.
+	p = llm.NormalizeAuthScheme(p)
 	if s, ok := p.Defaults["auth_scheme"].(string); ok && s == "none" {
 		return true
 	}

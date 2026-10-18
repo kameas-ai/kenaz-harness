@@ -128,7 +128,11 @@ endpoint and records the verdict on the profile's capability hints (logged as
 adapter operates conservatively until the next boot. A granted credential var
 that is empty at probe time logs `harness.serve.host_provider.probe_skipped`
 (the key is resolved through the same credential path chat requests use, and
-never logged; userinfo in the base URL is masked in every log line). There is no Probe button
+never logged). Boot log lines carry the endpoint as scheme, host and path
+only — userinfo is masked and any query string or fragment is dropped — and a
+failed probe logs a classified `reason` (`timeout`, `dns`, `connect_refused`,
+`connect_failed`, `tls`, `http_<status>`, `probe_error`), never the error text
+or the server's response body. There is no Probe button
 in served mode — restart the workbench to re-probe.
 
 ## Troubleshooting
