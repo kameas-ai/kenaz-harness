@@ -23,12 +23,14 @@ import (
 	"github.com/kameas-ai/kenaz-harness/cmd/servedfleet"
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	coremenus "github.com/kameas-ai/kenaz-harness/core/menu"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	updateview "github.com/kameas-ai/kenaz-harness/core/rpc/views/update"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 	coresentry "github.com/kameas-ai/kenaz-harness/core/sentry"
 	"github.com/kameas-ai/kenaz-harness/core/serve"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
@@ -485,7 +487,7 @@ func runServeMode(listenAddr string) {
 	// (Spec 078). Without this the served harness boots with an empty
 	// provider list and no in-VM way to add one.
 	api := rpc.New(c,
-		rpc.WithHostProviders(serve.ProbeHostProviders(context.Background(), os.Getenv, serve.HostProviders(os.Getenv, serveLog), serveLog)),
+		rpc.WithHostProviders(serve.ProbeHostProviders(context.Background(), credref.New(secrets.NewMemoryBackend()), serve.HostProviders(os.Getenv, serveLog), serveLog)),
 		rpc.WithServedConnectors(connSup),
 		rpc.WithConnectorTokens(connTokens))
 

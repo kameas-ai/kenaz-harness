@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // env builds a Getenv over a fixed map so no test mutates process state.
@@ -306,5 +308,65 @@ func TestResolve_CustomOpenAI_EmptyGrantedCredentialIsAnError(t *testing.T) {
 	}), customOpts)
 	if err == nil || !strings.Contains(err.Error(), "MY_KEY") {
 		t.Fatalf("a named-but-empty credential var must fail loudly, got %v", err)
+	}
+}
+
+func TestResolve_CustomOpenAI_CredentialSchemeWithoutCredentialIsAnError(t *testing.T) {
+	_, err := Resolve(env(map[string]string{
+		agentProviderVar: CustomOpenAIKind,
+		"T_AUTH_SCHEME":  "bearer",
+		"T_BASE_URL":     "http://127.0.0.1:8081/v1",
+		"T_MODEL":        "m",
+	}), customOpts)
+	if err == nil || !strings.Contains(err.Error(), agentCredVar) {
+		t.Fatalf("bearer with no credential must fail naming the credential var, got %v", err)
+	}
+}
+
+func TestResolve_CustomOpenAI_UnknownSchemeIsAnError(t *testing.T) {
+	_, err := Resolve(env(map[string]string{
+		agentProviderVar: CustomOpenAIKind,
+		"T_AUTH_SCHEME":  "basic",
+		"T_BASE_URL":     "http://127.0.0.1:8081/v1",
+		"T_MODEL":        "m",
+	}), customOpts)
+	if err == nil || !strings.Contains(err.Error(), "basic") {
+		t.Fatalf("unknown auth scheme must fail, got %v", err)
+	}
+}
+
+// TestResolve_CustomOpenAI_ProfilesPassValidateProfile closes the gap the
+// first cut of this kind shipped with: the auth-none profile was rejected
+// by llm.ValidateProfile (credential kind required), so the registry's
+// LoadProfiles refused the whole host-profile set at served boot. Every
+// profile Resolve renders must be loadable.
+func TestResolve_CustomOpenAI_ProfilesPassValidateProfile(t *testing.T) {
+	for name, vars := range map[string]map[string]string{
+		"auth none": {agentProviderVar: CustomOpenAIKind, "T_BASE_URL": "http://127.0.0.1:8081/v1", "T_MODEL": "m"},
+		"bearer":    {agentProviderVar: CustomOpenAIKind, agentCredVar: "MY_KEY", "MY_KEY": "k", "T_BASE_URL": "https://api.groq.com/openai/v1", "T_MODEL": "m"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, err := Resolve(env(vars), customOpts)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if err := llm.ValidateProfile(res.Profile("kenaz-host")); err != nil {
+				t.Fatalf("rendered profile fails ValidateProfile: %v", err)
+			}
+		})
+	}
+}
+
+func TestResolve_CustomOpenAI_CustomSchemeIsRefused(t *testing.T) {
+	_, err := Resolve(env(map[string]string{
+		agentProviderVar: CustomOpenAIKind,
+		agentCredVar:     "MY_KEY",
+		"MY_KEY":         "k",
+		"T_AUTH_SCHEME":  "custom",
+		"T_BASE_URL":     "http://127.0.0.1:8081/v1",
+		"T_MODEL":        "m",
+	}), customOpts)
+	if err == nil || !strings.Contains(err.Error(), "auth header") {
+		t.Fatalf("custom scheme cannot be granted (no header var), got %v", err)
 	}
 }

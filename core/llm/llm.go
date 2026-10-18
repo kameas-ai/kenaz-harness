@@ -145,6 +145,16 @@ func (s CredentialSource) IsFleet() bool {
 	return false
 }
 
+// IsZero reports whether the reference is entirely unset — no kind, no
+// locator, no source, no Fleet credential id. That is the shape of a
+// profile that needs no credential at all (a host-granted custom-openai
+// endpoint with auth_scheme=none). A reference with ANY field set is not
+// zero: a Fleet reference missing its kind must still reach the resolver
+// and fail there, rather than silently stream unauthenticated.
+func (r CredentialReference) IsZero() bool {
+	return r == CredentialReference{}
+}
+
 // String returns a human-readable, redaction-safe rendering used in error
 // messages and audit payloads. The locator is included because it is by
 // definition the *reference* not the secret value.

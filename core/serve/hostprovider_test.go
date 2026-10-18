@@ -6,10 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
 	"github.com/kameas-ai/kenaz-harness/core/llm/envprovider"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 func getenvFrom(kv map[string]string) envprovider.Getenv {
@@ -189,7 +193,7 @@ func TestProbeHostProviders_RecordsMatrixAsHints(t *testing.T) {
 	other := corellm.ProviderProfile{ID: "anth", Kind: "anthropic", Model: "x"}
 	profiles = append(profiles, other)
 
-	got := ProbeHostProviders(context.Background(), getenvFrom(env), profiles, nil)
+	got := ProbeHostProviders(context.Background(), nil, profiles, nil)
 	if len(got) != 2 {
 		t.Fatalf("want 2 profiles back, got %d", len(got))
 	}
@@ -208,8 +212,77 @@ func TestProbeHostProviders_UnreachableEndpointLeavesHintsUnset(t *testing.T) {
 		EnvHostBaseURL:  "http://127.0.0.1:1/v1",
 		EnvHostModel:    "m",
 	}
-	got := ProbeHostProviders(context.Background(), getenvFrom(env), HostProviders(getenvFrom(env), nil), nil)
+	got := ProbeHostProviders(context.Background(), nil, HostProviders(getenvFrom(env), nil), nil)
 	if len(got) != 1 || got[0].CapabilityHints != nil {
 		t.Fatalf("unreachable endpoint must leave hints unset (conservative), got %+v", got)
+	}
+}
+
+// The boot log names the granted endpoint; it must never carry a key an
+// operator embedded in the URL's userinfo.
+func TestLogSafeEndpoint_MasksUserinfo(t *testing.T) {
+	const key = "not-a-real-key-0123456789"
+	for in, want := range map[string]string{
+		"http://192.168.64.1:8081/v1":      "http://192.168.64.1:8081/v1",
+		"https://user:" + key + "@host/v1": "https://user:xxxxx@host/v1",
+		"https://" + key + "@host/v1":      "https://xxxxx@host/v1",
+		"http://[::1:8081/v1":              "<unparseable>",
+	} {
+		got := logSafeEndpoint(in)
+		if got != want {
+			t.Errorf("logSafeEndpoint(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A bearer grant: the probe resolves the env reference through credref
+// (the registry's own path) and the key reaches the endpoint as a bearer
+// header. A missing key var degrades to "no hints", never a panic or an
+// unauthenticated probe.
+func TestProbeHostProviders_BearerCredentialResolvesThroughCredref(t *testing.T) {
+	const credVar = "KENAZ_TEST_HOST_PROBE_KEY"
+	const key = "probe-test-not-a-real-key"
+	t.Setenv(credVar, key)
+
+	var mu sync.Mutex
+	var sawAuth string
+	auth := func() string { mu.Lock(); defer mu.Unlock(); return sawAuth }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		sawAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	env := map[string]string{
+		EnvHostProvider: "custom-openai",
+		EnvHostBaseURL:  srv.URL + "/v1",
+		EnvHostModel:    "m",
+		EnvHostCredVar:  credVar,
+		credVar:         key,
+	}
+	profiles := HostProviders(getenvFrom(env), nil)
+	if len(profiles) != 1 || profiles[0].Cred.Locator != credVar {
+		t.Fatalf("expected one bearer host profile, got %+v", profiles)
+	}
+	got := ProbeHostProviders(context.Background(), credref.New(secrets.NewMemoryBackend()), profiles, nil)
+	if a := auth(); !strings.HasPrefix(a, "Bearer ") || strings.TrimPrefix(a, "Bearer ") != key {
+		t.Fatalf("probe did not send the resolved key as a bearer token (got %d chars)", len(a))
+	}
+	if !got[0].CapabilityHints[corellm.CapStreaming] {
+		t.Fatalf("expected streaming hint from the fake endpoint, got %+v", got[0].CapabilityHints)
+	}
+
+	// Unresolvable: the var named by the profile is unset in the process.
+	t.Setenv(credVar, "")
+	mu.Lock()
+	sawAuth = ""
+	mu.Unlock()
+	again := ProbeHostProviders(context.Background(), credref.New(secrets.NewMemoryBackend()), HostProviders(getenvFrom(env), nil), nil)
+	if again[0].CapabilityHints != nil || auth() != "" {
+		t.Fatalf("an unresolvable credential must skip the probe, got hints=%+v (auth header sent: %t)", again[0].CapabilityHints, auth() != "")
 	}
 }

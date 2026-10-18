@@ -750,10 +750,14 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	// all (a host-granted custom-openai endpoint with auth_scheme=none)
 	// skips resolution: there is nothing to resolve, and the previous
 	// behaviour — failing on "unknown credential kind \"\"" — made such
-	// endpoints unusable. Profiles created through AddProvider always
-	// carry an indirect reference, so this changes nothing for them.
+	// endpoints unusable. The skip keys on the WHOLE reference being
+	// zero (IsZero), not on Kind alone: a Fleet reference (Source +
+	// CredentialID) with a missing kind is malformed and must still fail
+	// in credref, never degrade to an unauthenticated request. Profiles
+	// created through AddProvider always carry an indirect reference, so
+	// this changes nothing for them.
 	var credBytes []byte
-	if resolver != nil && prof.Cred.Kind != "" {
+	if resolver != nil && !prof.Cred.IsZero() {
 		s, rerr := resolver.Resolve(ctx, prof.ID, prof.Cred)
 		if rerr != nil {
 			_ = emitter.Error(ctx, req, prof, rerr)

@@ -134,7 +134,7 @@ type Options struct {
 	// (and never required) for the conventional kinds.
 	BaseURLVar string
 	// AuthSchemeVar names the env var carrying the custom-openai auth
-	// scheme (none|bearer|api-key-header|custom). Optional: defaults to
+	// scheme (none|bearer|api-key-header). Optional: defaults to
 	// "none" when no credential var is granted, "bearer" when one is.
 	AuthSchemeVar string
 	// NoCredentialHint is appended to ErrNoCredential so each caller can
@@ -315,10 +315,32 @@ func resolveCustom(get Getenv, lookup func(string) string, opts Options, credEnv
 			scheme = "bearer"
 		}
 	}
-	if scheme == "none" {
+	switch scheme {
+	case "none":
 		// A key against a none scheme is an operator mistake; drop the
 		// reference so no credential bytes are ever read for it.
 		credEnv = ""
+	case "custom":
+		// The custom scheme needs an auth_header name, and there is no
+		// grant var for one: the adapter would fail every request with
+		// "custom auth requires auth_header to be set". Refuse it at boot.
+		return Resolution{}, fmt.Errorf(
+			"no_model_endpoint: provider %q: auth scheme \"custom\" needs an auth header name, which a host grant cannot carry (want none|bearer|api-key-header)",
+			CustomOpenAIKind)
+	case "bearer", "api-key-header":
+		// A credential-sending scheme with no credential would load a
+		// profile llm.ValidateProfile rejects (only auth_scheme=none may
+		// carry no reference) and take the whole host-profile load down
+		// with it. Fail here, naming the var, instead.
+		if credEnv == "" {
+			return Resolution{}, fmt.Errorf(
+				"no_model_credential: provider %q auth scheme %q needs a credential; set %s",
+				CustomOpenAIKind, scheme, orPlaceholder(opts.CredVar, "the credential env var"))
+		}
+	default:
+		return Resolution{}, fmt.Errorf(
+			"no_model_endpoint: provider %q: unknown auth scheme %q (want none|bearer|api-key-header)",
+			CustomOpenAIKind, scheme)
 	}
 	return Resolution{
 		Kind:       CustomOpenAIKind,
