@@ -286,10 +286,10 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		}
 		// Log the non-2xx status + body snippet; classifyStatus decides
 		// retryability.
-		classified := classifyStatus(resp.StatusCode, bodySnippet)
+		classified := classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(endpoint, cred)...)
 		logging.L().Warn("openrouter.http.error",
 			"model", prof.Model, "status", resp.StatusCode,
-			"body", string(bodySnippet),
+			"body", llm.ProviderErrorMessage(bodySnippet, llm.RequestSecrets(endpoint, cred)...),
 			"retryable", llm.IsTransient(classified))
 		return nil, classified
 	}
@@ -389,7 +389,7 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyByteLimit))
-		return nil, classifyStatus(resp.StatusCode, body)
+		return nil, classifyStatus(resp.StatusCode, body, llm.RequestSecrets(url, cred)...)
 	}
 	var doc modelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
@@ -578,8 +578,8 @@ func modelsURL(chatURL string) string {
 // classifyStatus delegates to the canonical top-level
 // llm.ClassifyStatus (WP01 of provider-implementation-uniformity-01KQ8V4F).
 // Kept as a thin package-local alias; removed entirely in WP10.
-func classifyStatus(status int, body []byte) error {
-	return llm.ClassifyStatus(status, body)
+func classifyStatus(status int, body []byte, secrets ...string) error {
+	return llm.ClassifyStatus(status, body, secrets...)
 }
 
 // buildRequestBody constructs the JSON body for the chat-completions

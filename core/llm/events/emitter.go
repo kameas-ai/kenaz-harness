@@ -169,6 +169,7 @@ func (e *Emitter) CapabilityRejected(ctx context.Context, req llm.GenerationRequ
 
 // RetryAttempted records one retry boundary (US4 Acceptance 1).
 func (e *Emitter) RetryAttempted(ctx context.Context, req llm.GenerationRequest, prof llm.ProviderProfile, attempt int, plannedBackoffMS, actualMS int, errMsg string) error {
+	errMsg = llm.RedactCredentials(errMsg) // persisted; see Error below
 	return e.emit(ctx, KindRetryAttempted, Entry{
 		SessionID: req.SessionID, ProfileID: prof.ID,
 		Provider: prof.Kind, Model: prof.Model,
@@ -233,7 +234,12 @@ func (e *Emitter) Cancelled(ctx context.Context, req llm.GenerationRequest, prof
 func (e *Emitter) Error(ctx context.Context, req llm.GenerationRequest, prof llm.ProviderProfile, err error) error {
 	msg := ""
 	if err != nil {
-		msg = err.Error()
+		// Defence in depth: this payload is persisted. Adapters already
+		// scrub their own errors with the exact request secrets; this
+		// pass catches generic credential shapes (Bearer tokens,
+		// Authorization/x-api-key echoes, ?api_key= values, sk-/AIza/
+		// AKIA/JWT shapes) from any error path that was missed.
+		msg = llm.RedactCredentials(err.Error())
 	}
 	return e.emit(ctx, KindError, Entry{
 		SessionID: req.SessionID, ProfileID: prof.ID,

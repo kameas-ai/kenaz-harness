@@ -207,7 +207,7 @@ func (a *Adapter) Stream(
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		return nil, classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(endpoint, cred)...)
 	}
 
 	s := &azureChatStream{
@@ -297,7 +297,7 @@ func (a *Adapter) TestKey(ctx context.Context, host string, cred []byte) (TestKe
 	}
 
 	bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	err = classifyStatus(resp.StatusCode, bodySnippet)
+	err = classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(modURL, cred)...)
 	return TestKeyResult{OK: false, DeprecationWarning: deprecation}, err
 }
 
@@ -320,8 +320,8 @@ func countModelsInResponse(body []byte) int {
 
 // classifyStatus maps an HTTP error response to the connector taxonomy.
 // Identical classification logic as the openai adapter.
-func classifyStatus(status int, body []byte) error {
-	msg := extractErrorMessage(body)
+func classifyStatus(status int, body []byte, secrets ...string) error {
+	msg := llm.ScrubSecrets(extractErrorMessage(body), secrets...)
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
@@ -364,11 +364,8 @@ func extractErrorMessage(body []byte) string {
 		}
 		return env.Error.Message
 	}
-	s := strings.TrimSpace(string(body))
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	// Unknown shape: the shared bounded excerpt (HTML stripped, capped).
+	return llm.ExtractProviderMessage(body)
 }
 
 // buildRequestBody constructs the JSON body for the Azure Chat Completions

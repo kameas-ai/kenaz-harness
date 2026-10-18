@@ -150,7 +150,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		return nil, classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(endpointURL, cred)...)
 	}
 
 	s := &geminiStream{
@@ -233,7 +233,7 @@ func (a *Adapter) TestKey(ctx context.Context, cred []byte) error {
 		return nil
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return classifyStatus(resp.StatusCode, body)
+	return classifyStatus(resp.StatusCode, body, llm.RequestSecrets("", cred)...)
 }
 
 // ListModels implements llm.ModelLister. Lists available Gemini models
@@ -258,7 +258,7 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, classifyStatus(resp.StatusCode, body)
+		return nil, classifyStatus(resp.StatusCode, body, llm.RequestSecrets(u, cred)...)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB

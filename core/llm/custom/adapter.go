@@ -194,7 +194,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet, endpointSecrets(baseURL, cred)...)
+		return nil, classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(baseURL, cred)...)
 	}
 
 	s := &chatStream{
@@ -242,7 +242,7 @@ func (a *Adapter) ListModelsForEndpoint(ctx context.Context, baseURL string, sch
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, classifyStatus(resp.StatusCode, body, endpointSecrets(baseURL, cred)...)
+		return nil, classifyStatus(resp.StatusCode, body, llm.RequestSecrets(baseURL, cred)...)
 	}
 	var doc struct {
 		Data []struct {
@@ -297,57 +297,22 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 	return json.Marshal(body)
 }
 
-// classifyStatus maps HTTP error status codes to the connector taxonomy.
-// secrets are the request's exact credential material (see
-// endpointSecrets); any echo of them in the provider's message is
-// redacted, because the message reaches emitter.Error → persisted events.
+// classifyStatus maps HTTP error status codes to the connector taxonomy
+// via the shared llm.ClassifyStatus (same status table as before).
+// secrets are the request's exact secret material (llm.RequestSecrets);
+// any echo of them in the provider's message is redacted, because the
+// message reaches emitter.Error → persisted events.
 func classifyStatus(status int, body []byte, secrets ...string) error {
-	msg := llm.ScrubSecrets(extractErrorMessage(body), secrets...)
-	if msg == "" {
-		msg = http.StatusText(status)
-	}
-	switch {
-	case status == 401 || status == 403:
-		return &llm.ErrAuth{Status: status, Message: msg}
-	case status == 402:
-		// Insufficient credits — never retryable, and never "check the
-		// request shape" (undelivered-message-retry, 2026-10-07).
-		return &llm.ErrPaymentRequired{Status: status, Message: msg}
-	case status == 429:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	case status >= 500 && status < 600:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	case status == 408 || status == 425:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	default:
-		return &llm.ErrInvalidRequest{Status: status, Message: msg}
-	}
+	return llm.ClassifyStatus(status, body, secrets...)
 }
 
+// extractErrorMessage decodes the provider's error message from an error
+// body: every known envelope shape (nested OpenAI error, TGI's flat
+// string error, a top-level message, FastAPI's detail) and otherwise a
+// bounded excerpt — see llm.ExtractProviderMessage. Unscrubbed: callers
+// scrub (classifyStatus via llm.ClassifyStatus, Probe via scrubError).
 func extractErrorMessage(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	var env struct {
-		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
-		if env.Error.Type != "" {
-			return env.Error.Type + ": " + env.Error.Message
-		}
-		return env.Error.Message
-	}
-	// Only the structured OpenAI error envelope's message/type is kept
-	// (and it is credential-redacted by the caller). A raw, non-JSON
-	// body excerpt is dropped: a proxy or debug server in front of a
-	// custom endpoint commonly echoes the request — headers included —
-	// back in a plain-text error body, and the auth header name is
-	// user-configurable here, so a pattern redactor cannot be relied on
-	// to catch it. The status text stands in for the message.
-	return ""
+	return llm.ExtractProviderMessage(body)
 }
 
 // chatStream is the SSE consumer for custom endpoint streaming.
@@ -646,17 +611,6 @@ func (e *ErrCustomEndpointMissingCapability) Error() string {
 // in the stream error event and the persisted Error event.
 func streamReadErrText(err error) string {
 	return llm.RedactCredentials(llm.RedactURLError(err).Error())
-}
-
-// endpointSecrets is the exact secret material of one request — the
-// credential plus the endpoint URL's userinfo and query values — for
-// llm.ScrubSecrets over provider-echoed text.
-func endpointSecrets(baseURL string, cred []byte) []string {
-	out := llm.EndpointSecrets(baseURL)
-	if len(cred) > 0 {
-		out = append(out, string(cred))
-	}
-	return out
 }
 
 // CapabilityValue is the tri-state for probed capabilities.

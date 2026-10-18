@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,9 +12,13 @@ import (
 	"testing"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic"
 	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
 	"github.com/kameas-ai/kenaz-harness/core/llm/custom"
 	"github.com/kameas-ai/kenaz-harness/core/llm/events"
+	"github.com/kameas-ai/kenaz-harness/core/llm/ollama"
+	"github.com/kameas-ai/kenaz-harness/core/llm/openai"
+	"github.com/kameas-ai/kenaz-harness/core/llm/openrouter"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
@@ -52,18 +57,24 @@ func (s matrixStore) Get(context.Context, string) (*custom.CapabilityMatrix, err
 // every emitted entry, JSON-encoded as the event-log sink would persist it.
 func streamCustom(t *testing.T, endpoint string, store custom.CapabilityStore, req llm.GenerationRequest) (error, string) {
 	t.Helper()
+	opts := []custom.Option{}
+	if store != nil {
+		opts = append(opts, custom.WithCapabilityStore(store))
+	}
+	return streamVia(t, custom.New(opts...), "m", endpoint, req)
+}
+
+// streamVia is streamCustom for any adapter kind.
+func streamVia(t *testing.T, adapter llm.ProviderAdapter, model, endpoint string, req llm.GenerationRequest) (error, string) {
+	t.Helper()
 	const key = "TEST_REG_CUSTOM_REDACT_KEY"
 	t.Setenv(key, redactCred)
 
 	r, sink := newReg(t)
 	r.resolver = credref.New(secrets.NewMemoryBackend())
-	opts := []custom.Option{}
-	if store != nil {
-		opts = append(opts, custom.WithCapabilityStore(store))
-	}
-	r.RegisterAdapter(custom.New(opts...))
+	r.RegisterAdapter(adapter)
 	prof := llm.ProviderProfile{
-		ID: "custom-redact", Kind: custom.Kind, Model: "m",
+		ID: "redact-" + adapter.Kind(), Kind: adapter.Kind(), Model: model,
 		Endpoint:        endpoint,
 		Cred:            llm.CredentialReference{Kind: "env", Locator: key},
 		Retry:           &llm.RetryPolicy{MaxAttempts: 2, BaseMS: 1, MaxMS: 1, Jitter: "full"},
@@ -177,4 +188,51 @@ func TestCustomEndpoint_MissingCapabilityNeverLeaksEndpointSecrets(t *testing.T)
 	}
 	assertNoSecrets(t, "returned error", err.Error())
 	assertNoSecrets(t, "emitted events", emitted)
+}
+
+// echoBodies are error bodies a proxy/debug server in front of an
+// endpoint returns, echoing the request's credential and URL secrets.
+func echoBodies() map[string]string {
+	echo := "Authorization: Bearer " + redactCred + " url=/v1?api_key=" + redactQueryKey + " user=" + redactURLToken
+	return map[string]string{
+		"raw":      echo,
+		"json":     `{"error":{"type":"invalid_request_error","message":"bad request; you sent ` + echo + `"}}`,
+		"tgi":      `{"error":"you sent ` + echo + `","error_type":"validation"}`,
+		"fastapi":  `{"detail":[{"msg":"you sent ` + echo + `"}]}`,
+		"html":     `<html><body><h1>400</h1><pre>` + echo + `</pre></body></html>`,
+		"apikeyhd": "X-Custom-Key: " + redactCred,
+	}
+}
+
+// TestEveryAdapter_ErrorBodyEchoNeverLeaksSecrets: the same echo through
+// each adapter whose endpoint is user-configurable (prof.Endpoint), via
+// the real registry → emitter path.
+func TestEveryAdapter_ErrorBodyEchoNeverLeaksSecrets(t *testing.T) {
+	adapters := map[string]func() llm.ProviderAdapter{
+		"openai":     func() llm.ProviderAdapter { return openai.New() },
+		"anthropic":  func() llm.ProviderAdapter { return anthropic.New() },
+		"openrouter": func() llm.ProviderAdapter { return openrouter.New() },
+		"ollama":     func() llm.ProviderAdapter { return ollama.New() },
+		"custom":     func() llm.ProviderAdapter { return custom.New() },
+	}
+	models := map[string]string{"openai": "gpt-4o-mini", "anthropic": "claude-sonnet-4-5", "openrouter": "openai/gpt-4o-mini", "ollama": "llama3", "custom": "m"}
+	for an, mk := range adapters {
+		for bn, body := range echoBodies() {
+			t.Run(fmt.Sprintf("%s/%s", an, bn), func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(body))
+				}))
+				defer srv.Close()
+				endpoint := secretEndpoint(t, srv.URL)
+				err, emitted := streamVia(t, mk(), models[an], endpoint, llm.GenerationRequest{})
+				assertNoSecrets(t, "returned error", err.Error())
+				assertNoSecrets(t, "emitted events", emitted)
+				var inv *llm.ErrInvalidRequest
+				if !errors.As(err, &inv) || inv.Status != http.StatusBadRequest {
+					t.Fatalf("want *llm.ErrInvalidRequest status 400, got %T: %v", err, err)
+				}
+			})
+		}
+	}
 }

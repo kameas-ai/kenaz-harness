@@ -208,7 +208,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, snippet)
+		return nil, classifyStatus(resp.StatusCode, snippet, llm.RequestSecrets(base, cred)...)
 	}
 
 	s := &chatStream{resp: resp, cancel: cancel, events: make(chan llm.StreamEvent, 16), done: make(chan struct{}),
@@ -251,7 +251,7 @@ func (a *Adapter) listModelsAt(ctx context.Context, base string, cred []byte) ([
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, classifyStatus(resp.StatusCode, respBody)
+		return nil, classifyStatus(resp.StatusCode, respBody, llm.RequestSecrets(base, cred)...)
 	}
 	var doc ollamaTagsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
@@ -294,7 +294,7 @@ func (a *Adapter) probeShow(ctx context.Context, base, modelID string) (toolCall
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return false, false, classifyStatus(resp.StatusCode, respBody)
+		return false, false, classifyStatus(resp.StatusCode, respBody, llm.RequestSecrets(base, nil)...)
 	}
 	var doc ollamaShowResponse
 	if derr := json.NewDecoder(resp.Body).Decode(&doc); derr != nil {
@@ -384,8 +384,11 @@ var _ llm.EndpointCapabilitiesProvider = (*Adapter)(nil)
 // classifyStatus maps HTTP error status codes to the connector
 // taxonomy, mirroring core/llm/custom's classifyStatus (a private
 // function in a package this adapter does not import from).
-func classifyStatus(status int, body []byte) error {
-	msg := extractErrorMessage(body)
+//
+// secrets are the request's exact secret material (llm.RequestSecrets);
+// the message is scrubbed of them and of generic credential shapes.
+func classifyStatus(status int, body []byte, secrets ...string) error {
+	msg := llm.ScrubSecrets(extractErrorMessage(body), secrets...)
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
@@ -427,11 +430,8 @@ func extractErrorMessage(body []byte) string {
 	if err := json.Unmarshal(body, &nested); err == nil && nested.Error.Message != "" {
 		return nested.Error.Message
 	}
-	s := strings.TrimSpace(string(body))
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	// Unknown shape: the shared bounded excerpt (HTML stripped, capped).
+	return llm.ExtractProviderMessage(body)
 }
 
 // chatStream is the SSE consumer for Ollama streaming, identical in

@@ -320,7 +320,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		return nil, classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(endpoint, cred)...)
 	}
 
 	s := &chatStream{
@@ -337,8 +337,8 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 // classifyStatus delegates to the canonical top-level
 // llm.ClassifyStatus (WP01 of provider-implementation-uniformity-01KQ8V4F).
 // Kept as a thin package-local alias; removed entirely in WP10.
-func classifyStatus(status int, body []byte) error {
-	return llm.ClassifyStatus(status, body)
+func classifyStatus(status int, body []byte, secrets ...string) error {
+	return llm.ClassifyStatus(status, body, secrets...)
 }
 
 // useOpenAIWire reports whether the openaiwire body builder is active.
@@ -883,7 +883,7 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, classifyStatus(resp.StatusCode, body)
+		return nil, classifyStatus(resp.StatusCode, body, llm.RequestSecrets(url, cred)...)
 	}
 	var doc modelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {

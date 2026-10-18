@@ -84,7 +84,7 @@ func (p *Prober) Probe(ctx context.Context, req ProbeRequest) ProbeResult {
 		// can carry the server's error message, which may echo the
 		// credential (under a user-chosen header name) or the URL's
 		// userinfo/query — scrub the exact secret material out of it.
-		return ProbeResult{Matrix: matrix, Err: scrubError(authErr, endpointSecrets(req.BaseURL, req.Cred))}
+		return ProbeResult{Matrix: matrix, Err: scrubError(authErr, llm.RequestSecrets(req.BaseURL, req.Cred))}
 	}
 	matrix.Streaming = streaming
 	matrix.StreamingUsage = streamingUsage
@@ -136,6 +136,10 @@ func (p *Prober) probeStreaming(ctx context.Context, chatURL, model string, req 
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		msg := extractErrorMessage(body)
+		if msg == "" {
+			return CapabilityValueUnknown, CapabilityValueUnknown,
+				fmt.Errorf("custom-openai probe: auth failed (status=%d)", resp.StatusCode)
+		}
 		return CapabilityValueUnknown, CapabilityValueUnknown,
 			fmt.Errorf("custom-openai probe: auth failed (status=%d): %s", resp.StatusCode, msg)
 	}
