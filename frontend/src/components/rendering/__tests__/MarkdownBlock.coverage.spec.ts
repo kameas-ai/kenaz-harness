@@ -7,8 +7,8 @@
  * The perf assertion is intentionally generous (CI hardware varies);
  * a 500ms threshold catches catastrophic regressions without flaking.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { mount, flushPromises } from '@vue/test-utils';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils';
 import MarkdownBlock from '@/components/rendering/MarkdownBlock.vue';
 
 vi.mock('katex', () => ({
@@ -63,6 +63,16 @@ function add(a: number, b: number) { return a + b; }
 
 A file mention: @frontend/src/main.ts and @artifact:abc.
 `;
+
+
+// Unmount every wrapper after each test, and let any in-flight async
+// upgrade (dynamic imports of CodeBlock/FilenameChip/KaTeX) settle first,
+// so nothing in MarkdownBlock runs after the environment is torn down.
+enableAutoUnmount(afterEach);
+afterEach(async () => {
+  await vi.dynamicImportSettled();
+  await flushPromises();
+});
 
 describe('MarkdownBlock full-coverage sweep (WP08)', () => {
   it('renders every markdown construct in the fixture', async () => {
