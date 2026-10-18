@@ -164,16 +164,17 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 		EnrollGen: w.enrollGen.Load,
 	})
 
-	// A missing settings.json is handed to Retention as ErrSettingMissing:
-	// after a good read it is a failed read (keep the last good window),
-	// on a first run the default is a good read.
+	// A missing settings.json is handed to Retention as ErrSettingMissing,
+	// and the member's choice is recorded in activity.db (WithChoiceStore):
+	// a deleted or rewritten settings.json keeps the recorded choice; a
+	// genuine first run (nothing recorded) reads the default.
 	w.retention = activity.NewRetention(func() (int, error) {
 		days, err := settingsImpl.MLLocalActivityRetentionDays()
 		if errors.Is(err, settings.ErrSettingsMissing) {
 			return 0, activity.ErrSettingMissing
 		}
 		return days, err
-	}, nil)
+	}, nil).WithChoiceStore(w.rec.LocalStore)
 	w.pruner = activity.NewRetentionPruner(w.rec.LocalStore, w.retention, nil, logging.L())
 
 	settingsImpl.OnFleetSessionReset(w.onSessionReset)
@@ -485,6 +486,12 @@ func (a *API) SetMLLocalActivityRetention(ctx context.Context, days int) (MLLoca
 		return MLLocalActivityView{}, nil
 	}
 	if err := a.mlProducer.settings.SetMLLocalActivityRetentionDays(ctx, days); err != nil {
+		return MLLocalActivityView{}, err
+	}
+	// The member's explicit choice, recorded next to the data it governs
+	// (activity.Retention): a lost or rewritten settings.json then cannot
+	// change it.
+	if err := a.mlProducer.retention.Chose(days); err != nil {
 		return MLLocalActivityView{}, err
 	}
 	return a.mlProducer.localActivity(ctx)

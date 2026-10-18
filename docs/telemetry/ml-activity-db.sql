@@ -88,3 +88,9 @@ CREATE TABLE IF NOT EXISTS ml_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ml_events_ts ON ml_events (ts);
+
+CREATE TABLE IF NOT EXISTS harness_retention_choice (
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  days       INTEGER NOT NULL CHECK (days BETWEEN 1 AND 3650),
+  updated_at INTEGER NOT NULL
+);

@@ -82,7 +82,7 @@ const RetentionHold = "hold"
 const Producer = "harness"
 
 // SchemaVersion is the newest schema this build knows (see migrations).
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // Path returns <dataDir>/ml/activity.db, absolute when dataDir resolves.
 func Path(dataDir string) string {
@@ -154,6 +154,16 @@ var migrations = [][]string{
 			ts         INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_ml_events_ts ON ml_events (ts)`,
+	},
+	// v2: the member's retention choice, kept next to the data it governs
+	// so a lost or rewritten settings.json cannot change it (Retention).
+	// One row; effective days only (never 0).
+	{
+		`CREATE TABLE IF NOT EXISTS harness_retention_choice (
+			id         INTEGER PRIMARY KEY CHECK (id = 1),
+			days       INTEGER NOT NULL CHECK (days BETWEEN 1 AND 3650),
+			updated_at INTEGER NOT NULL
+		)`,
 	},
 }
 
@@ -542,6 +552,39 @@ func (s *Store) DeleteAll(ctx context.Context) error {
 	}
 	_, _ = s.db.ExecContext(ctx, `VACUUM`)
 	_, _ = s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+	return nil
+}
+
+// RetentionChoice is the persisted retention choice in effective days
+// (1..MaxRetentionDays); ok = false when none has been recorded.
+func (s *Store) RetentionChoice(ctx context.Context) (days int, ok bool, err error) {
+	if s == nil || s.db == nil {
+		return 0, false, errors.New("activity: no store")
+	}
+	err = s.db.QueryRowContext(ctx, `SELECT days FROM harness_retention_choice WHERE id = 1`).Scan(&days)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("activity: read retention choice: %w", err)
+	}
+	return days, true, nil
+}
+
+// SetRetentionChoice records the retention choice (effective days,
+// 1..MaxRetentionDays).
+func (s *Store) SetRetentionChoice(ctx context.Context, days int) error {
+	if s == nil || s.db == nil {
+		return errors.New("activity: no store")
+	}
+	if days < 1 || days > MaxRetentionDays {
+		return fmt.Errorf("activity: retention choice %d out of range", days)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO harness_retention_choice (id, days, updated_at)
+		VALUES (1, ?, CAST(unixepoch('subsec')*1000 AS INTEGER))
+		ON CONFLICT (id) DO UPDATE SET days = excluded.days, updated_at = excluded.updated_at`, days); err != nil {
+		return fmt.Errorf("activity: write retention choice: %w", err)
+	}
 	return nil
 }
 
