@@ -188,7 +188,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		return nil, &llm.ErrInvalidRequest{Status: 0, Message: llm.RedactURLError(err).Error()}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -202,7 +202,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	resp, err := a.httpc.Do(httpReq)
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+		return nil, llm.NewTransportError("", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -238,7 +238,7 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 func (a *Adapter) listModelsAt(ctx context.Context, base string, cred []byte) ([]llm.ModelInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/api/tags", nil)
 	if err != nil {
-		return nil, fmt.Errorf("ollama: build models request: %w", err)
+		return nil, fmt.Errorf("ollama: build models request: %w", llm.RedactURLError(err))
 	}
 	req.Header.Set("Accept", "application/json")
 	if len(cred) > 0 {
@@ -246,7 +246,7 @@ func (a *Adapter) listModelsAt(ctx context.Context, base string, cred []byte) ([
 	}
 	resp, err := a.httpc.Do(req)
 	if err != nil {
-		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+		return nil, llm.NewTransportError("", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -284,12 +284,12 @@ func (a *Adapter) probeShow(ctx context.Context, base, modelID string) (toolCall
 	reqBody, _ := json.Marshal(map[string]string{"name": modelID})
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/api/show", bytes.NewReader(reqBody))
 	if err != nil {
-		return false, false, fmt.Errorf("ollama: build /api/show request: %w", err)
+		return false, false, fmt.Errorf("ollama: build /api/show request: %w", llm.RedactURLError(err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := a.httpc.Do(httpReq)
 	if err != nil {
-		return false, false, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+		return false, false, llm.NewTransportError("", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {

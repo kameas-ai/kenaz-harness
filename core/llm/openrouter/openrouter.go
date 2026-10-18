@@ -325,7 +325,7 @@ func (a *Adapter) post(ctx context.Context, endpoint, model string, cred, body [
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		cancel()
-		return nil, nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		return nil, nil, &llm.ErrInvalidRequest{Status: 0, Message: llm.RedactURLError(err).Error()}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -346,9 +346,9 @@ func (a *Adapter) post(ctx context.Context, endpoint, model string, cred, body [
 		// (e.g. frontend disconnect on desktop focus loss) from a real
 		// network fault.
 		logging.L().Warn("openrouter.http.error",
-			"model", model, "endpoint", endpoint,
-			"err", err.Error(), "ctx_err", ctx.Err())
-		return nil, nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+			"model", model, "endpoint", llm.LogSafeEndpoint(endpoint),
+			"err", llm.RedactURLError(err).Error(), "ctx_err", ctx.Err())
+		return nil, nil, llm.NewTransportError("", err)
 	}
 	return resp, cancel, nil
 }
@@ -370,7 +370,7 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	url := modelsURL(a.endpoint)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("openrouter: build models request: %w", err)
+		return nil, fmt.Errorf("openrouter: build models request: %w", llm.RedactURLError(err))
 	}
 	if len(cred) > 0 {
 		req.Header.Set("Authorization", "Bearer "+string(cred))
@@ -384,7 +384,7 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	}
 	resp, err := a.httpc.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openrouter: list models: %w", err)
+		return nil, fmt.Errorf("openrouter: list models: %w", llm.RedactURLError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {

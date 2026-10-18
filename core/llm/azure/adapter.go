@@ -190,7 +190,7 @@ func (a *Adapter) Stream(
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		return nil, &llm.ErrInvalidRequest{Status: 0, Message: llm.RedactURLError(err).Error()}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -200,7 +200,7 @@ func (a *Adapter) Stream(
 	resp, err := a.httpc.Do(httpReq)
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrTransient{Status: 0, Message: "azure-openai: " + err.Error(), Cause: err}
+		return nil, llm.NewTransportError("azure-openai: ", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -277,14 +277,14 @@ func (a *Adapter) TestKey(ctx context.Context, host string, cred []byte) (TestKe
 
 	req, err := http.NewRequestWithContext(tCtx, http.MethodGet, modURL, nil)
 	if err != nil {
-		return TestKeyResult{}, &llm.ErrInvalidRequest{Status: 0, Message: "azure-openai: build models request: " + err.Error()}
+		return TestKeyResult{}, &llm.ErrInvalidRequest{Status: 0, Message: "azure-openai: build models request: " + llm.RedactURLError(err).Error()}
 	}
 	req.Header.Set("Accept", "application/json")
 	setAPIKeyHeader(req, cred)
 
 	resp, err := a.httpc.Do(req)
 	if err != nil {
-		return TestKeyResult{}, &llm.ErrTransient{Status: 0, Message: "azure-openai: " + err.Error(), Cause: err}
+		return TestKeyResult{}, llm.NewTransportError("azure-openai: ", err)
 	}
 	defer resp.Body.Close()
 
