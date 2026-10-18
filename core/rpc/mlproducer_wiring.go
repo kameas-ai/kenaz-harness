@@ -408,6 +408,11 @@ type MLLocalActivityView struct {
 // can quote the file.
 var errRetentionUnreadable = errors.New("local activity retention setting could not be read")
 
+// errRetentionChoiceNotRecorded: SetMLLocalActivityRetention saved the
+// setting (and this session applies it) but could not record its durable
+// copy in the activity store, so a lost settings.json would not keep it.
+var errRetentionChoiceNotRecorded = errors.New("local activity retention was saved to settings, but its durable copy in the activity store could not be written; it applies now, and saving again retries the copy")
+
 // retentionReader is the engine's spawn-time retention read, through the
 // shared fail-safe Retention: the fresh value, else the last good one,
 // else an error (the spawn env then sends activity.RetentionHold). nil without a
@@ -492,7 +497,9 @@ func (a *API) SetMLLocalActivityRetention(ctx context.Context, days int) (MLLoca
 	// (activity.Retention): a lost or rewritten settings.json then cannot
 	// change it.
 	if err := a.mlProducer.retention.Chose(days); err != nil {
-		return MLLocalActivityView{}, err
+		// Counts only: never the error text (it can quote the file).
+		logging.L().Warn("mlproducer.activity.retention_choice_record_failed")
+		return MLLocalActivityView{}, errRetentionChoiceNotRecorded
 	}
 	return a.mlProducer.localActivity(ctx)
 }

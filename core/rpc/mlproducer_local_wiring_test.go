@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -674,5 +675,87 @@ func TestMLProducerWiring_HandEditedRetentionAppliesAndRecords(t *testing.T) {
 	}
 	if d, ok, err := w.rec.LocalStore().RetentionChoice(ctx); err != nil || !ok || d != 30 {
 		t.Fatalf("recorded choice = %d/%v/%v; want 30", d, ok, err)
+	}
+}
+
+// breakRetentionChoice makes the recorded choice unreadable (a read
+// error, not an absent row) through a second connection to activity.db.
+func breakRetentionChoice(t *testing.T, dataDir string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+activityDBPath(dataDir)+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`DROP TABLE harness_retention_choice`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Re-review of #441: an unreadable recorded choice, after a restart, with
+// settings.json present but without the key, is a failed read — nothing
+// pruned and =hold — never the 90-day default.
+func TestMLProducerWiring_UnreadableChoiceAfterRestartHolds(t *testing.T) {
+	t.Parallel()
+	dataDir, settingsDir := t.TempDir(), t.TempDir()
+	a, store := newRetentionAPIAt(t, dataDir, settingsDir)
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	commitAgedActivity(t, a.mlProducer, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, a.mlProducer, "agent-400d", 400*24*time.Hour)
+	a.Shutdown()
+	if err := a.core.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.Path(), []byte(`{"lastRoute":"/x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	breakRetentionChoice(t, dataDir)
+	b, _ := newRetentionAPIAt(t, dataDir, settingsDir)
+	w := b.mlProducer
+	if ev, tk, err := w.pruner.PruneOnce(ctx); err != activity.ErrRetentionUnreadable || ev != 0 || tk != 0 {
+		t.Fatalf("prune with the choice unreadable = %d/%d, %v; want skipped", ev, tk, err)
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 2 || st.Tasks != 2 {
+		t.Fatalf("rows = %+v; want all kept", st)
+	}
+	if got := spawnRetentionEnv(t, b); len(got) != 1 || got[0] != activity.RetentionEnvVar+"="+activity.RetentionHold {
+		t.Fatalf("spawn env with the choice unreadable = %v; want =hold", got)
+	}
+	for i := 0; i < activity.BlockedPasses-1; i++ {
+		_, _, _ = w.pruner.PruneOnce(ctx)
+	}
+	if v, err := b.MLLocalActivity(ctx); err != nil || !v.RetentionBlocked || v.LastGoodRetentionDays != 0 {
+		t.Fatalf("status = %+v, %v; want blocked with no last good", v, err)
+	}
+}
+
+// The same with a last good value in this process: it applies (365, not
+// 90) and the read counts as a failure.
+func TestMLProducerWiring_UnreadableChoiceUsesLastGood(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	a, store := newRetentionAPIAt(t, dataDir, t.TempDir())
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, w, "agent-400d", 400*24*time.Hour)
+	breakRetentionChoice(t, dataDir)
+	if err := os.WriteFile(store.Path(), []byte(`{"lastRoute":"/x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ev, tk, err := w.pruner.PruneOnce(ctx); err != nil || ev != 1 || tk != 1 {
+		t.Fatalf("prune = %d/%d, %v; want only the 400-day row (last good 365)", ev, tk, err)
+	}
+	if h := w.retention.Health(); h.ConsecutiveFailedPasses != 1 || h.LastGoodDays != 365 {
+		t.Fatalf("health = %+v; want one failed pass over the last good 365", h)
+	}
+	if got := spawnRetentionEnv(t, a); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=365" {
+		t.Fatalf("spawn env = %v; want =365", got)
 	}
 }

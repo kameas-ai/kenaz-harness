@@ -34,6 +34,9 @@ import (
 //     read once a choice exists — the recorded one (also in a new
 //     process) or this process's — and that choice is the value kept;
 //     with none it is a good read of the default (a genuine first run).
+//   - A recorded choice that cannot be read (busy, timeout, IO) while the
+//     file is missing or says 0 is a failed read; only an absent row
+//     means "no choice".
 //
 // Safe for concurrent use.
 type Retention struct {
@@ -102,20 +105,18 @@ func (r *Retention) store() *Store {
 	return r.choiceStore()
 }
 
-// recordedChoice is the recorded choice; ok = false when there is none or
-// it cannot be read.
-func (r *Retention) recordedChoice() (int, bool) {
+// recordedChoice is the recorded choice. ok = false with a nil error
+// only when there is none (no row, or no store: with activity.db gone the
+// data is gone too). A read error (busy, timeout, IO) is returned, never
+// folded into "no choice": that would read as the default and prune.
+func (r *Retention) recordedChoice() (int, bool, error) {
 	st := r.store()
 	if st == nil {
-		return 0, false
+		return 0, false, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), choiceTimeout)
 	defer cancel()
-	days, ok, err := st.RetentionChoice(ctx)
-	if err != nil || !ok {
-		return 0, false
-	}
-	return days, true
+	return st.RetentionChoice(ctx)
 }
 
 // record records days (effective) as the choice, unless already recorded.
@@ -124,7 +125,7 @@ func (r *Retention) record(days int) error {
 	if st == nil {
 		return nil
 	}
-	if cur, ok := r.recordedChoice(); ok && cur == days {
+	if cur, ok, err := r.recordedChoice(); err == nil && ok && cur == days {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), choiceTimeout)
@@ -153,12 +154,13 @@ func (r *Retention) readCounted(pass bool) (int, bool, bool) {
 	unset := err == nil && days == 0
 	var choice int
 	var haveChoice bool
+	var choiceErr error
 	switch {
 	case explicit:
 		// Best effort: the value still applies when it cannot be recorded.
 		_ = r.record(EffectiveRetentionDays(days))
 	case unset || missing:
-		choice, haveChoice = r.recordedChoice()
+		choice, haveChoice, choiceErr = r.recordedChoice()
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -171,6 +173,9 @@ func (r *Retention) readCounted(pass bool) (int, bool, bool) {
 	switch {
 	case explicit:
 		return good(days, true)
+	case choiceErr != nil:
+		// The recorded choice cannot be read: a failed read (the last
+		// good value, else nothing), never the default.
 	case unset && haveChoice:
 		return good(choice, true)
 	case unset && r.haveStored:
